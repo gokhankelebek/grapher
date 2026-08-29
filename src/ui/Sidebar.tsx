@@ -12,6 +12,10 @@ interface Props {
   exprOpen: boolean
   snapFlash: { id: string; mask: boolean[]; key: number } | null
   shake: { id: string; key: number } | null
+  /** curveId -> the equation text, for typed curves. */
+  exprSources: Record<string, string>
+  /** curveId -> why its equation could not be restored on load. */
+  brokenExpr: Record<string, string>
   candidatesFor(id: string): FitResult[]
   onSelect(id: string | null): void
   onDelete(id: string): void
@@ -42,6 +46,8 @@ export function Sidebar({
   exprOpen,
   snapFlash,
   shake,
+  exprSources,
+  brokenExpr,
   candidatesFor,
   onSelect,
   onDelete,
@@ -95,6 +101,8 @@ export function Sidebar({
               snapMask={snapFlash && snapFlash.id === curve.id ? snapFlash.mask : null}
               snapKey={snapFlash && snapFlash.id === curve.id ? snapFlash.key : 0}
               shaking={shake !== null && shake.id === curve.id}
+              exprSource={exprSources[curve.id]}
+              brokenReason={brokenExpr[curve.id]}
               onSelect={() => onSelect(curve.id)}
               onDelete={() => onDelete(curve.id)}
               onDuplicate={() => onDuplicate(curve.id)}

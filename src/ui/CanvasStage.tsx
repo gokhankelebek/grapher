@@ -62,6 +62,8 @@ interface Props {
   onCurveEditEnd(curveId: string | null, skipSnap: boolean): void
   /** Abort the live edit bracket, reverting to the pre-edit state. */
   onCurveEditCancel(): void
+  /** Pan/zoom changed. Hot: must not trigger a React render on its own. */
+  onViewportChange?(): void
 }
 
 const MIN_PPU = 0.001
@@ -168,6 +170,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     onCurveEditStart,
     onCurveEditEnd,
     onCurveEditCancel,
+    onViewportChange,
   },
   handle,
 ) {
@@ -189,6 +192,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   const fadeRef = useRef<Fade | null>(null)
   const spaceRef = useRef(false)
   const hoverRef = useRef<HoverInfo | null>(null)
+  const viewportChangeRef = useRef(onViewportChange)
+  viewportChangeRef.current = onViewportChange
   const oversketchForRef = useRef<string | null>(null)
 
   const rafRef = useRef(0)
@@ -437,6 +442,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
         x: anchor.x - (pos.x - vp.widthPx / 2) / vp.pxPerUnit,
         y: anchor.y + (pos.y - vp.heightPx / 2) / vp.pxPerUnit,
       }
+      viewportChangeRef.current?.()
       scheduleRender()
     }
     canvas.addEventListener('wheel', onWheel, { passive: false })
@@ -958,6 +964,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       g.lastX = pos.x
       g.lastY = pos.y
       vp.center = { x: vp.center.x - dx / vp.pxPerUnit, y: vp.center.y + dy / vp.pxPerUnit }
+      viewportChangeRef.current?.()
       scheduleRender()
     } else if (g.type === 'dragHandle' && g.pointerId === e.pointerId) {
       g.moved += 1
@@ -1044,6 +1051,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
         x: g.startMathMid.x - (mid.x - vp.widthPx / 2) / ppu,
         y: g.startMathMid.y + (mid.y - vp.heightPx / 2) / ppu,
       }
+      viewportChangeRef.current?.()
       scheduleRender()
     }
   }

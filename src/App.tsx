@@ -10,15 +10,34 @@ import { CanvasStage } from './ui/CanvasStage'
 import type { CanvasStageHandle } from './ui/CanvasStage'
 import { Toolbar } from './ui/Toolbar'
 import { Sidebar } from './ui/Sidebar'
+import { DocMenu } from './ui/DocMenu'
+import type { SaveState } from './ui/DocMenu'
+import {
+  createDoc,
+  deserializeDoc,
+  docFromBoard,
+  emptyBoard,
+  serializeDoc,
+} from './core/persist'
+import type { BoardInput, DocMeta, HydratedBoard } from './core/persist'
+import {
+  listDocs,
+  readDocJSON,
+  readIndex,
+  removeDoc,
+  setCurrentDoc,
+  usedBytes,
+  writeDoc,
+} from './ui/storage'
 
 export type Mode = 'draw' | 'pan'
 
 /** Per-curve style extras FittedCurve doesn't carry (kept in a parallel map). */
-export interface CurveStyle {
-  dash?: number[]
-  opacity?: number
-}
-export type StyleMap = Record<string, CurveStyle>
+export type { CurveStyle, StyleMap } from './core/persist'
+import type { CurveStyle, StyleMap } from './core/persist'
+
+/** How long the board sits idle before it is written to storage. */
+const AUTOSAVE_MS = 400
 
 /** One undo/redo history entry. */
 interface Snapshot {
@@ -48,6 +67,25 @@ export default function App() {
   const [toast, setToast] = useState<{ msg: string; key: number } | null>(null)
   const [, bumpHistory] = useState(0)
 
+  // ---- documents / persistence
+  const [docMeta, setDocMeta] = useState<DocMeta>(() => ({
+    id: '',
+    name: 'Untitled',
+    createdAt: Date.now(),
+    modifiedAt: Date.now(),
+  }))
+  const [docs, setDocs] = useState<DocMeta[]>([])
+  const [saveState, setSaveState] = useState<SaveState>('saved')
+  /** Sticky banner for a failed save (quota) — must not be missable. */
+  const [saveError, setSaveError] = useState<string | null>(null)
+  /** Set when the last load lost or repaired something. */
+  const [loadNotice, setLoadNotice] = useState<{ problems: string[]; fatal: boolean } | null>(null)
+  /** curveId -> the equation text the user typed (rebuilt into models on load). */
+  const [exprSources, setExprSources] = useState<Record<string, string>>({})
+  /** curveId -> why its equation could not be restored. */
+  const [brokenExpr, setBrokenExpr] = useState<Record<string, string>>({})
+  const [dropActive, setDropActive] = useState(false)
+
   const curvesRef = useRef<FittedCurve[]>([])
   const stylesRef = useRef<StyleMap>({})
   const selectedRef = useRef<string | null>(null)
@@ -60,6 +98,13 @@ export default function App() {
   const snapTimerRef = useRef(0)
   const shakeTimerRef = useRef(0)
   const toastTimerRef = useRef(0)
+  const exprSourcesRef = useRef<Record<string, string>>({})
+  const docMetaRef = useRef<DocMeta>(docMeta)
+  const saveTimerRef = useRef(0)
+  /** Nothing may be written until the stored document has been read in. */
+  const hydratedRef = useRef(false)
+  /** Loading a document shouldn't immediately re-save what was just read. */
+  const skipAutosaveRef = useRef(false)
 
   const models = useMemo<Record<string, ModelSpec>>(
     () => ({ ...MODELS, ...extraModels }),
@@ -68,6 +113,8 @@ export default function App() {
   const modelsRef = useRef(models)
   modelsRef.current = models
   selectedRef.current = selectedId
+  const modeRef = useRef<Mode>(mode)
+  modeRef.current = mode
 
   const vpRef = useRef<Viewport>({
     center: { x: 0, y: 0 },
@@ -206,6 +253,298 @@ export default function App() {
     }
   }, [])
 
+  // ======================================================= documents / saving
+  const blankBoard = useCallback(
+    (): HydratedBoard => ({
+      curves: [],
+      styles: {},
+      candidates: new Map(),
+      extraModels: {},
+      exprSources: {},
+      brokenExpr: {},
+      viewport: { center: { x: 0, y: 0 }, pxPerUnit: 60 },
+      selectedId: null,
+      mode: 'draw',
+      exprCounter: 0,
+    }),
+    [],
+  )
+
+  /** Everything the serializer needs, read from the live refs. */
+  const currentBoardInput = useCallback(
+    (): BoardInput => ({
+      curves: curvesRef.current,
+      styles: stylesRef.current,
+      candidates: candidatesRef.current,
+      exprSources: exprSourcesRef.current,
+      viewport: { center: vpRef.current.center, pxPerUnit: vpRef.current.pxPerUnit },
+      selectedId: selectedRef.current,
+      mode: modeRef.current,
+    }),
+    [],
+  )
+
+  const saveNow = useCallback((): void => {
+    if (!hydratedRef.current) return
+    window.clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = 0
+    const meta = docMetaRef.current
+    if (!meta.id) return
+    const doc = docFromBoard(meta, currentBoardInput())
+    const outcome = writeDoc(doc)
+    if (outcome.ok) {
+      docMetaRef.current = { ...meta, modifiedAt: doc.modifiedAt }
+      setDocs(listDocs())
+      setSaveState('saved')
+      setSaveError(null)
+    } else {
+      // Never silent: the board is still in memory, but it is NOT on disk.
+      setSaveState('error')
+      const kb = Math.round(usedBytes() / 1024)
+      setSaveError(
+        outcome.quota
+          ? `${outcome.message} Grapher is using about ${kb}KB. Export this document to a file, or delete documents you no longer need, then edit again to retry.`
+          : outcome.message,
+      )
+    }
+  }, [currentBoardInput])
+
+  const scheduleSave = useCallback((): void => {
+    if (!hydratedRef.current) return
+    setSaveState('saving')
+    window.clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = window.setTimeout(saveNow, AUTOSAVE_MS)
+  }, [saveNow])
+
+  /** Swap the whole board over to a freshly loaded document. */
+  const applyHydrated = useCallback((meta: DocMeta, board: HydratedBoard): void => {
+    curvesRef.current = board.curves
+    stylesRef.current = board.styles
+    candidatesRef.current = board.candidates
+    exprSourcesRef.current = board.exprSources
+    selectedRef.current = board.selectedId
+    modeRef.current = board.mode
+    docMetaRef.current = meta
+    exprCounterRef.current = board.exprCounter
+    undoRef.current = []
+    redoRef.current = []
+    preEditRef.current = null
+    skipAutosaveRef.current = true
+
+    setCurves(board.curves)
+    setStyles(board.styles)
+    setExprSources(board.exprSources)
+    setBrokenExpr(board.brokenExpr)
+    setExtraModels(board.extraModels)
+    setSelectedId(board.selectedId)
+    setMode(board.mode)
+    setDocMeta(meta)
+    bumpHistory((v) => v + 1)
+
+    vpRef.current.center = { x: board.viewport.center.x, y: board.viewport.center.y }
+    vpRef.current.pxPerUnit = board.viewport.pxPerUnit
+    stageRef.current?.redraw()
+  }, [])
+
+  // Restore the last document on startup. Runs before any save is allowed.
+  useEffect(() => {
+    const index = readIndex()
+    const id = index.currentId ?? index.docs[0]?.id ?? null
+    if (id) {
+      const json = readDocJSON(id)
+      if (json !== null) {
+        const res = deserializeDoc(json)
+        if (res.meta && res.board) {
+          applyHydrated(res.meta, res.board)
+          if (res.problems.length > 0) {
+            setLoadNotice({ problems: res.problems, fatal: false })
+          }
+          hydratedRef.current = true
+          setCurrentDoc(res.meta.id)
+          setDocs(listDocs())
+          return
+        }
+        // Unreadable: keep the damaged record on disk (the user may want to
+        // recover or export it) and start a new document so work can continue.
+        setLoadNotice({ problems: res.problems, fatal: true })
+      }
+    }
+    const doc = createDoc('Untitled', emptyBoard())
+    const meta: DocMeta = {
+      id: doc.id,
+      name: doc.name,
+      createdAt: doc.createdAt,
+      modifiedAt: doc.modifiedAt,
+    }
+    docMetaRef.current = meta
+    setDocMeta(meta)
+    hydratedRef.current = true
+    setDocs(listDocs())
+  }, [applyHydrated])
+
+  // Autosave: any board change schedules a debounced write.
+  useEffect(() => {
+    if (!hydratedRef.current) return
+    if (skipAutosaveRef.current) {
+      skipAutosaveRef.current = false
+      return
+    }
+    scheduleSave()
+  }, [curves, styles, selectedId, mode, docMeta.name, scheduleSave])
+
+  // Don't lose the debounce window to a closing tab or a backgrounded phone.
+  useEffect(() => {
+    const flush = (): void => {
+      if (saveTimerRef.current) saveNow()
+    }
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'hidden') flush()
+    }
+    window.addEventListener('pagehide', flush)
+    window.addEventListener('beforeunload', flush)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.removeEventListener('pagehide', flush)
+      window.removeEventListener('beforeunload', flush)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [saveNow])
+
+  const renameDoc = useCallback((name: string): void => {
+    const next = { ...docMetaRef.current, name }
+    docMetaRef.current = next
+    setDocMeta(next)
+  }, [])
+
+  const newDocument = useCallback((): void => {
+    saveNow()
+    const doc = createDoc('Untitled', emptyBoard())
+    const meta: DocMeta = {
+      id: doc.id,
+      name: doc.name,
+      createdAt: doc.createdAt,
+      modifiedAt: doc.modifiedAt,
+    }
+    applyHydrated(meta, blankBoard())
+    setLoadNotice(null)
+    writeDoc(doc)
+    setCurrentDoc(meta.id)
+    setDocs(listDocs())
+  }, [applyHydrated, blankBoard, saveNow])
+
+  const openDocument = useCallback(
+    (id: string): void => {
+      if (id === docMetaRef.current.id) return
+      saveNow()
+      const json = readDocJSON(id)
+      const res = json === null ? null : deserializeDoc(json)
+      if (!res || !res.meta || !res.board) {
+        setLoadNotice({
+          problems: res?.problems ?? ['That document could not be found.'],
+          fatal: true,
+        })
+        return
+      }
+      applyHydrated(res.meta, res.board)
+      setLoadNotice(res.problems.length > 0 ? { problems: res.problems, fatal: false } : null)
+      setCurrentDoc(res.meta.id)
+      setDocs(listDocs())
+    },
+    [applyHydrated, saveNow],
+  )
+
+  const duplicateDocument = useCallback((): void => {
+    saveNow()
+    const src = docMetaRef.current
+    const doc = createDoc(`${src.name} copy`, emptyBoard())
+    const meta: DocMeta = {
+      id: doc.id,
+      name: doc.name,
+      createdAt: doc.createdAt,
+      modifiedAt: doc.modifiedAt,
+    }
+    // The board in memory is already the one being copied — just re-target it.
+    docMetaRef.current = meta
+    setDocMeta(meta)
+    writeDoc(docFromBoard(meta, currentBoardInput()))
+    setCurrentDoc(meta.id)
+    setDocs(listDocs())
+    setSaveState('saved')
+  }, [currentBoardInput, saveNow])
+
+  const deleteDocument = useCallback(
+    (id: string): void => {
+      removeDoc(id)
+      const remaining = listDocs()
+      setDocs(remaining)
+      if (id !== docMetaRef.current.id) return
+      const next = remaining[0]
+      if (next) {
+        const json = readDocJSON(next.id)
+        const res = json === null ? null : deserializeDoc(json)
+        if (res?.meta && res.board) {
+          applyHydrated(res.meta, res.board)
+          setLoadNotice(res.problems.length > 0 ? { problems: res.problems, fatal: false } : null)
+          setCurrentDoc(res.meta.id)
+          return
+        }
+      }
+      newDocument()
+    },
+    [applyHydrated, newDocument],
+  )
+
+  const exportDocument = useCallback((): void => {
+    const meta = docMetaRef.current
+    const json = serializeDoc(docFromBoard(meta, currentBoardInput()))
+    const blob = new Blob([json], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const safe = meta.name.replace(/[^\w\d\-. ]+/g, '_').trim() || 'grapher'
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${safe}.grapher.json`
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }, [currentBoardInput])
+
+  const importDocument = useCallback(
+    (file: File): void => {
+      file
+        .text()
+        .then((text) => {
+          const res = deserializeDoc(text)
+          if (!res.board || !res.meta) {
+            setLoadNotice({
+              problems: res.problems.length ? res.problems : ['That file could not be read.'],
+              fatal: true,
+            })
+            return
+          }
+          saveNow()
+          // Always mint a new id so an import can never overwrite a document
+          // that happens to share an id with the file.
+          const fallback = file.name.replace(/\.(grapher\.)?json$/i, '')
+          const fresh = createDoc(res.meta.name || fallback || 'Imported', emptyBoard())
+          const meta: DocMeta = {
+            id: fresh.id,
+            name: fresh.name,
+            createdAt: res.meta.createdAt || fresh.createdAt,
+            modifiedAt: Date.now(),
+          }
+          applyHydrated(meta, res.board)
+          setLoadNotice(res.problems.length > 0 ? { problems: res.problems, fatal: false } : null)
+          writeDoc(docFromBoard(meta, currentBoardInput()))
+          setCurrentDoc(meta.id)
+          setDocs(listDocs())
+          setSaveState('saved')
+        })
+        .catch(() => {
+          setLoadNotice({ problems: ['That file could not be read.'], fatal: true })
+        })
+    },
+    [applyHydrated, currentBoardInput, saveNow],
+  )
+
   // -------------------------------------------------------------- curve CRUD
   const pickColor = useCallback((): string => {
     const used = new Set(curvesRef.current.map((c) => c.color))
@@ -242,6 +581,14 @@ export default function App() {
   const deleteCurve = useCallback(
     (id: string): void => {
       const { [id]: _gone, ...restStyles } = stylesRef.current
+      const { [id]: _src, ...restSources } = exprSourcesRef.current
+      exprSourcesRef.current = restSources
+      setExprSources(restSources)
+      setBrokenExpr((prev) => {
+        if (!(id in prev)) return prev
+        const { [id]: _b, ...rest } = prev
+        return rest
+      })
       commitState({ curves: curvesRef.current.filter((c) => c.id !== id), styles: restStyles })
       setSelectedId((sel) => (sel === id ? null : sel))
     },
@@ -250,6 +597,9 @@ export default function App() {
 
   const clearAll = useCallback((): void => {
     if (curvesRef.current.length === 0) return
+    exprSourcesRef.current = {}
+    setExprSources({})
+    setBrokenExpr({})
     commitState({ curves: [], styles: {} })
     setSelectedId(null)
   }, [commitState])
@@ -422,6 +772,11 @@ export default function App() {
       }
       const cands = candidatesRef.current.get(id)
       if (cands) candidatesRef.current.set(copy.id, cands)
+      const srcExpr = exprSourcesRef.current[id]
+      if (srcExpr !== undefined) {
+        exprSourcesRef.current = { ...exprSourcesRef.current, [copy.id]: srcExpr }
+        setExprSources(exprSourcesRef.current)
+      }
       const st = stylesRef.current[id]
       commitState({
         curves: [...curvesRef.current, copy],
@@ -494,6 +849,10 @@ export default function App() {
         visible: true,
         error: 0,
       }
+      // Keep the source text: it is the only thing that can rebuild this
+      // curve's model closure after a reload.
+      exprSourcesRef.current = { ...exprSourcesRef.current, [curve.id]: src }
+      setExprSources(exprSourcesRef.current)
       commitState({ curves: [...curvesRef.current, curve] })
       setSelectedId(curve.id)
       return null
@@ -502,18 +861,23 @@ export default function App() {
   )
 
   // ---------------------------------------------------------------- viewport
-  const zoomBy = useCallback((factor: number): void => {
-    const vp = vpRef.current
-    vp.pxPerUnit = clampPpu(vp.pxPerUnit * factor)
-    stageRef.current?.redraw()
-  }, [])
+  const zoomBy = useCallback(
+    (factor: number): void => {
+      const vp = vpRef.current
+      vp.pxPerUnit = clampPpu(vp.pxPerUnit * factor)
+      stageRef.current?.redraw()
+      scheduleSave()
+    },
+    [scheduleSave],
+  )
 
   const resetView = useCallback((): void => {
     const vp = vpRef.current
     vp.center = { x: 0, y: 0 }
     vp.pxPerUnit = 60
     stageRef.current?.redraw()
-  }, [])
+    scheduleSave()
+  }, [scheduleSave])
 
   // ------------------------------------------------------------------ export
   const exportPNG = useCallback((): void => {
@@ -615,6 +979,8 @@ export default function App() {
         exprOpen={exprOpen}
         snapFlash={snapFlash}
         shake={shake}
+        exprSources={exprSources}
+        brokenExpr={brokenExpr}
         candidatesFor={candidatesFor}
         onSelect={setSelectedId}
         onDelete={deleteCurve}
@@ -638,7 +1004,26 @@ export default function App() {
         <div className="scrim" onClick={() => setSidebarOpen(false)} aria-hidden="true" />
       )}
 
-      <main className="canvas-area">
+      <main
+        className="canvas-area"
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes('Files')) {
+            e.preventDefault()
+            e.dataTransfer.dropEffect = 'copy'
+            if (!dropActive) setDropActive(true)
+          }
+        }}
+        onDragLeave={(e) => {
+          if (e.currentTarget === e.target) setDropActive(false)
+        }}
+        onDrop={(e) => {
+          const file = e.dataTransfer.files?.[0]
+          if (!file) return
+          e.preventDefault()
+          setDropActive(false)
+          importDocument(file)
+        }}
+      >
         <CanvasStage
           ref={stageRef}
           curves={curves}
@@ -658,6 +1043,7 @@ export default function App() {
           onCurveEditStart={editStart}
           onCurveEditEnd={commitWithSnap}
           onCurveEditCancel={editCancel}
+          onViewportChange={scheduleSave}
         />
 
         <Toolbar
@@ -666,6 +1052,21 @@ export default function App() {
           canUndo={canUndo}
           canRedo={canRedo}
           hasCurves={curves.length > 0}
+          docMenu={
+            <DocMenu
+              name={docMeta.name}
+              currentId={docMeta.id}
+              docs={docs}
+              saveState={saveState}
+              onRename={renameDoc}
+              onNew={newDocument}
+              onOpen={openDocument}
+              onDuplicate={duplicateDocument}
+              onDelete={deleteDocument}
+              onExport={exportDocument}
+              onImport={importDocument}
+            />
+          }
           onMode={setMode}
           onToggleSidebar={() => setSidebarOpen((o) => !o)}
           onUndo={undo}
@@ -680,11 +1081,57 @@ export default function App() {
           </div>
         )}
 
-        {curves.length === 0 && !drawingActive && (
+        {saveError && (
+          <div className="banner banner-error" role="alert">
+            <div className="banner-body">
+              <strong className="banner-title">Not saved</strong>
+              <span className="banner-text">{saveError}</span>
+            </div>
+            <button className="banner-action" onClick={exportDocument}>
+              Export to file
+            </button>
+            <button className="banner-action" onClick={saveNow}>
+              Retry
+            </button>
+          </div>
+        )}
+
+        {loadNotice && (
+          <div className={`banner${loadNotice.fatal ? ' banner-error' : ' banner-warn'}`} role="alert">
+            <div className="banner-body">
+              <strong className="banner-title">
+                {loadNotice.fatal ? 'Couldn’t open that document' : 'Document restored with changes'}
+              </strong>
+              <span className="banner-text">{loadNotice.problems.slice(0, 3).join(' ')}</span>
+            </div>
+            <button className="banner-action" onClick={() => setLoadNotice(null)}>
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        {curves.length === 0 && !drawingActive && !loadNotice?.fatal && (
           <div className="empty-hint" aria-hidden="true">
             <div className="empty-glyph">∿</div>
             <div className="empty-title">Draw anything — a wave, a circle, a heart…</div>
             <div className="empty-sub">Every stroke becomes a live equation — or press + to type one</div>
+          </div>
+        )}
+
+        {curves.length === 0 && !drawingActive && loadNotice?.fatal && (
+          <div className="empty-hint empty-hint-error">
+            <div className="empty-glyph empty-glyph-error">⚠</div>
+            <div className="empty-title">This board is empty because a document couldn’t be opened</div>
+            <div className="empty-sub">
+              The damaged document was left untouched in storage — nothing was overwritten. You can
+              open another document from the menu, or import a file you exported earlier.
+            </div>
+          </div>
+        )}
+
+        {dropActive && (
+          <div className="drop-overlay" aria-hidden="true">
+            <div className="drop-inner">Drop a .json document to open it</div>
           </div>
         )}
 

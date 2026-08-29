@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import type { Mode } from '../App'
 
 interface Props {
@@ -6,6 +7,8 @@ interface Props {
   canUndo: boolean
   canRedo: boolean
   hasCurves: boolean
+  /** Document name + save state + documents menu. */
+  docMenu?: ReactNode
   onMode(mode: Mode): void
   onToggleSidebar(): void
   onUndo(): void
@@ -20,6 +23,7 @@ export function Toolbar({
   canUndo,
   canRedo,
   hasCurves,
+  docMenu,
   onMode,
   onToggleSidebar,
   onUndo,
@@ -44,6 +48,13 @@ export function Toolbar({
       <div className="brand" title="Grapher — sketch to math">
         Grapher
       </div>
+
+      {docMenu && (
+        <>
+          <div className="tb-sep" />
+          {docMenu}
+        </>
+      )}
 
       <div className="tb-sep" />
 

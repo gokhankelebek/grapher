@@ -15,6 +15,10 @@ interface Props {
   snapKey: number
   /** Brief shake after a failed oversketch. */
   shaking: boolean
+  /** The equation the user typed, when this curve came from one. */
+  exprSource?: string
+  /** Set when that equation could not be rebuilt after a reload. */
+  brokenReason?: string
   onSelect(): void
   onDelete(): void
   onDuplicate(): void
@@ -70,6 +74,8 @@ export function CurveCard({
   snapMask,
   snapKey,
   shaking,
+  exprSource,
+  brokenReason,
   onSelect,
   onDelete,
   onDuplicate,
@@ -87,6 +93,8 @@ export function CurveCard({
 }: Props) {
   const spec: ModelSpec | undefined = models[curve.modelId]
   const isExpression = curve.modelId.startsWith('expr_')
+  /** A typed curve whose model couldn't be rebuilt: shown, but inert. */
+  const broken = Boolean(brokenReason)
 
   // Inline coefficient editing.
   const [editing, setEditing] = useState<{ index: number; text: string; bad: boolean } | null>(
@@ -148,7 +156,7 @@ export function CurveCard({
     <div
       className={`card${selected ? ' card-selected' : ''}${curve.visible ? '' : ' card-hidden'}${
         shaking ? ' card-shake' : ''
-      }`}
+      }${broken ? ' card-broken-state' : ''}`}
       style={{ '--curve': curve.color } as CSSProperties}
       role="button"
       tabIndex={0}
@@ -228,8 +236,12 @@ export function CurveCard({
       </div>
 
       <div className="card-sub">
-        <span className="model-name">{modelName}</span>
-        {isExpression ? (
+        <span className="model-name">{broken ? 'Equation' : modelName}</span>
+        {broken ? (
+          <span className="err-badge err-badge-bad" title={brokenReason}>
+            can’t restore
+          </span>
+        ) : isExpression ? (
           <span className="err-badge" title="Typed expression">
             typed
           </span>
@@ -239,6 +251,16 @@ export function CurveCard({
           </span>
         )}
       </div>
+
+      {broken && (
+        <div className="card-broken">
+          <code className="card-broken-src">{exprSource}</code>
+          <span className="card-broken-why">
+            This equation couldn’t be rebuilt when the document was opened ({brokenReason}). Its
+            place is kept here so nothing is lost — retype it to restore the curve.
+          </span>
+        </div>
+      )}
 
       {selected && (
         <div className="card-body" onClick={(e) => e.stopPropagation()}>
