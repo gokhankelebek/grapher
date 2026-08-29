@@ -669,6 +669,8 @@ const GRAB_WEIGHT = 16
 const ANCHOR_COUNT = 24
 const RIDGE = 0.01
 const DRAG_ITERS = 12
+/** Most any point may move, as a multiple of the drag distance. */
+const DISPLACEMENT_CAP = 1.05
 
 export function dragCurvePoint(
   curve: FittedCurve,
@@ -724,9 +726,68 @@ export function dragCurvePoint(
 
   const res = levenbergMarquardt(residuals, p0, DRAG_ITERS)
   if (!res || !res.params.every(Number.isFinite)) return p0
+  let out = res.params
+
+  // A drag must never move part of the curve further than the grabbed point.
+  //
+  // Families with few global parameters have no local degree of freedom: a
+  // sinusoid spanning several periods can only reach the cursor by sliding
+  // phase and frequency, which whips the far side of the wave — measured at up
+  // to 137% of the drag, so the curve ran away from the hand that moved it.
+  // Regularizing the solve cannot fix this without also stiffening families
+  // that localize perfectly well, so the invariant is imposed on the result
+  // instead: shorten the parameter step until the worst displacement anywhere
+  // on the curve is within CAP of the drag. Well-behaved drags never reach the
+  // cap and are returned untouched.
+  const drag = Math.hypot(target.x - grab.x, target.y - grab.y)
+  if (drag > 0) {
+    const limit = DISPLACEMENT_CAP * drag
+    if (worstDisplacement(geom, p0, out, limit) > limit) {
+      let lo = 0
+      let hi = 1
+      for (let i = 0; i < 12; i++) {
+        const mid = (lo + hi) / 2
+        const trial = p0.map((v, j) => v + mid * (out[j] - v))
+        if (worstDisplacement(geom, p0, trial, limit) <= limit) lo = mid
+        else hi = mid
+      }
+      out = p0.map((v, j) => v + lo * (out[j] - v))
+    }
+  }
+
   // integer params (rose petal count) must never drift
-  if (curve.modelId === 'polarRose') res.params[1] = Math.round(p0[1])
-  return res.params
+  if (curve.modelId === 'polarRose') out[1] = Math.round(p0[1])
+  return out
+}
+
+/**
+ * Largest distance any sampled point of the curve moves between two parameter
+ * sets. Returns early once `bail` is exceeded — callers only ever ask whether
+ * the displacement is within a limit.
+ */
+function worstDisplacement(
+  geom: Geometry,
+  from: number[],
+  to: number[],
+  bail: number,
+): number {
+  const [t0, t1] = geom.dom
+  const span = t1 - t0
+  const N = 48
+  const step = span / (geom.cyclic ? N : N - 1)
+  let worst = 0
+  for (let i = 0; i < N; i++) {
+    const t = t0 + i * step
+    const a = geom.fn(from, t)
+    const b = geom.fn(to, t)
+    if (!Number.isFinite(b.x) || !Number.isFinite(b.y)) continue
+    const d = Math.hypot(b.x - a.x, b.y - a.y)
+    if (d > worst) {
+      worst = d
+      if (worst > bail) return worst
+    }
+  }
+  return worst
 }
 
 // ---------------------------------------------------------------------------

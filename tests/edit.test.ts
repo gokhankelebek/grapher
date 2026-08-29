@@ -469,25 +469,69 @@ describe('dragCurvePoint — locality', () => {
     expect(np[1]).toBe(3)
   })
 
-  it('DOCUMENTS: a MULTI-period sinusoid does not localize a drag', () => {
-    // types.ts promises dragCurvePoint "soft-anchors the rest of the curve".
-    // A sinusoid has only 4 global knobs (a, b, c, d), so when the view spans
-    // several periods the anchors cannot be satisfied: dragging one point by
-    // 1.0 moves an interior point by MORE than 1.0. Reported as a limitation;
-    // this test pins the current behaviour so a fix shows up here.
+  it('a drag never moves any point more than the grabbed point itself', () => {
+    // A sinusoid has only 4 global knobs (a, b, c, d), so across several
+    // periods it has no local degree of freedom — some global response to the
+    // drag is unavoidable and correct. What is NOT acceptable is amplification:
+    // the far side of the wave moving further than the point under the cursor.
+    // That used to happen (up to 137% of the drag) because the solver satisfied
+    // the grab by sliding phase and frequency, which the ridge priced as cheap.
+    // Charging parameters for their far-field influence removed it. Since the
+    // grabbed point moves by exactly the drag distance, the bound below is the
+    // statement "nothing moves more than your cursor did".
+    const ev = MODELS.sine.evalExplicit!
     const params = [1.5, 1.2, 0.3, 0.4]
     const domain: [number, number] = [-7, 7]   // ~2.7 periods
-    const c = curve('sine', params, domain)
-    const ev = MODELS.sine.evalExplicit!
-    const np = dragCurvePoint(c, MODELS, { x: 0, y: ev(params, 0) }, { x: 0, y: ev(params, 0) + 1 })
-    let worst = 0
-    for (let i = 0; i <= 400; i++) {
-      const x = domain[0] + (14 * i) / 400
-      worst = Math.max(worst, Math.abs(ev(np, x) - ev(params, x)))
+
+    for (const grabX of [0, 3.5]) {
+      const c = curve('sine', params, domain)
+      const from = { x: grabX, y: ev(params, grabX) }
+      const np = dragCurvePoint(c, MODELS, from, { x: grabX, y: from.y + 1 })
+      let worst = 0
+      for (let i = 0; i <= 400; i++) {
+        const x = domain[0] + (14 * i) / 400
+        worst = Math.max(worst, Math.abs(ev(np, x) - ev(params, x)))
+      }
+      expect(worst, `grab at x=${grabX}`).toBeLessThan(1.1)
+      expect(np.every(Number.isFinite)).toBe(true)
     }
-    expect(worst).toBeGreaterThan(1)   // the defect: >100% of the drag distance
-    expect(worst).toBeLessThan(2)      // but still bounded — no blow-up
-    expect(np.every(Number.isFinite)).toBe(true)
+  })
+
+  it('costs cursor tracking only where the curve would otherwise run away', () => {
+    // The displacement cap trades a little grab accuracy for the no-runaway
+    // invariant, and it must charge that price ONLY in the pathological case.
+    const ev = MODELS.sine.evalExplicit!
+
+    // Gentle curve: the cap never engages, so tracking stays tight.
+    const calm = [1.5, 0.5, 0.3, 0.4]
+    const cc = curve('sine', calm, [-6, 6])
+    const cFrom = { x: 0, y: ev(calm, 0) }
+    const cTarget = { x: 0, y: cFrom.y + 1 }
+    const cNp = dragCurvePoint(cc, MODELS, cFrom, cTarget)
+    expect(nearestOnCurve(curve('sine', cNp, [-6, 6]), MODELS, cTarget).dist).toBeLessThan(0.02)
+
+    // Multi-period sine: reaching the cursor exactly would whip the far side,
+    // so the step is shortened. The grab still lands most of the way there.
+    const wild = [1.5, 1.2, 0.3, 0.4]
+    const wc = curve('sine', wild, [-7, 7])
+    const wFrom = { x: 3.5, y: ev(wild, 3.5) }
+    const wTarget = { x: 3.5, y: wFrom.y + 1 }
+    const wNp = dragCurvePoint(wc, MODELS, wFrom, wTarget)
+    expect(nearestOnCurve(curve('sine', wNp, [-7, 7]), MODELS, wTarget).dist).toBeLessThan(0.25)
+  })
+
+  it('leaves families that already localize well untouched', () => {
+    // gauss and fourier localize naturally (their parameters act near the grab).
+    // The influence ridge must not disturb that.
+    const gp = [2, 0.4, 0.8, 0]
+    const gc = curve('gauss', gp, [-3, 3])
+    const gev = MODELS.gauss.evalExplicit!
+    const gnp = dragCurvePoint(gc, MODELS, { x: 0.4, y: gev(gp, 0.4) }, { x: 0.4, y: gev(gp, 0.4) + 0.5 })
+    let farMotion = 0
+    for (const x of [-3, -2.5, -2, 2, 2.5, 3]) {
+      farMotion = Math.max(farMotion, Math.abs(gev(gnp, x) - gev(gp, x)))
+    }
+    expect(farMotion).toBeLessThan(0.05)   // <10% of the 0.5 drag, out in the tails
   })
 
   it('every family survives a drag with finite params', () => {
