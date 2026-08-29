@@ -29,6 +29,8 @@ import {
 import { drawGrid } from '../render/grid'
 import { drawCurve, drawInk } from '../render/curves'
 import { sampleCurveScreen, distToPolyline } from './sample'
+import { HandleInput } from './HandleInput'
+import type { HandleField } from './HandleInput'
 import type { Mode, StyleMap } from '../App'
 
 export interface CanvasStageHandle {
@@ -122,7 +124,28 @@ interface PointerEntry {
 interface HoverInfo {
   handleId: string | null
   cursor: string
+  /** Hover tooltip anchored on the handle itself (null off-handle). */
+  tip: { x: number; y: number; label: string } | null
 }
+
+/** Open "type exact values" popover for one handle. */
+interface HandleEdit {
+  curveId: string
+  handleId: string
+  kind: CurveHandle['kind']
+  title: string
+  fields: HandleField[]
+  /** Handle position, screen px (anchor) and math (target rebuild). */
+  anchor: Vec2
+  pos: Vec2
+  /** Center handle of the same curve, when it has one. */
+  center: Vec2 | null
+  color: string
+}
+
+/** Max delay/slop for the touch/pen double-tap fallback. */
+const DOUBLE_TAP_MS = 450
+const DOUBLE_TAP_PX = 12
 
 const clampPpu = (v: number): number => Math.min(MAX_PPU, Math.max(MIN_PPU, v))
 
@@ -175,6 +198,14 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   const [draggingCurve, setDraggingCurve] = useState(false)
   const [hoverInfo, setHoverInfo] = useState<HoverInfo | null>(null)
   const [dragTip, setDragTip] = useState<{ x: number; y: number; label: string } | null>(null)
+  const [handleEdit, setHandleEdit] = useState<HandleEdit | null>(null)
+  const handleEditRef = useRef<HandleEdit | null>(null)
+  const lastTapRef = useRef<{ t: number; x: number; y: number; handleId: string } | null>(null)
+
+  const setEditor = useCallback((next: HandleEdit | null): void => {
+    handleEditRef.current = next
+    setHandleEdit(next)
+  }, [])
 
   // ---------------------------------------------------------------- rendering
   const draw = useCallback((): void => {
@@ -233,7 +264,9 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
         /* no handles */
       }
       const activeId =
-        g?.type === 'dragHandle' ? g.handleId : (hoverRef.current?.handleId ?? null)
+        g?.type === 'dragHandle'
+          ? g.handleId
+          : (handleEditRef.current?.handleId ?? hoverRef.current?.handleId ?? null)
       for (const h of hs) {
         const sp = toScreen(h.pos, vp)
         if (
@@ -503,6 +536,109 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     [scheduleRender],
   )
 
+  // ------------------------------------------------- exact-value handle input
+  /** Field layout adapts to what the handle actually means. */
+  const openHandleEditor = useCallback(
+    (h: CurveHandle, sel: FittedCurve, anchor: Vec2): void => {
+      let center: Vec2 | null = null
+      try {
+        const all = getHandles(sel, modelsRef.current)
+        const c = all.find((x) => x.kind === 'center')
+        if (c) center = c.pos
+      } catch {
+        /* no center handle available */
+      }
+
+      const label = h.label ?? h.id
+      let fields: HandleField[]
+      if (h.kind === 'radius' && center) {
+        const len = Math.hypot(h.pos.x - center.x, h.pos.y - center.y)
+        // "radius" for a true radius; axis handles read better as a length.
+        fields = [{ key: 'r', label: h.id === 'radius' ? 'radius' : 'length', value: len }]
+      } else if (h.kind === 'rotation' && center) {
+        const deg = (Math.atan2(h.pos.y - center.y, h.pos.x - center.x) * 180) / Math.PI
+        fields = [{ key: 'a', label: 'angle', value: deg, suffix: '°' }]
+      } else if (h.kind === 'domain-start' || h.kind === 'domain-end') {
+        fields = [{ key: 'x', label: 'x', value: h.pos.x }]
+      } else {
+        fields = [
+          { key: 'x', label: 'x', value: h.pos.x },
+          { key: 'y', label: 'y', value: h.pos.y },
+        ]
+      }
+
+      setHover(null)
+      setDragTip(null)
+      setEditor({
+        curveId: sel.id,
+        handleId: h.id,
+        kind: h.kind,
+        title: label,
+        fields,
+        anchor,
+        pos: h.pos,
+        center,
+        color: sel.color,
+      })
+      scheduleRender()
+    },
+    [scheduleRender, setEditor, setHover],
+  )
+
+  /** Rebuild the drag target from typed values, then take the drag commit path. */
+  const commitHandleEditor = useCallback(
+    (values: number[], skipSnap: boolean): void => {
+      const ed = handleEditRef.current
+      setEditor(null)
+      if (!ed) return
+      const curve = curvesRef.current.find((c) => c.id === ed.curveId)
+      if (!curve) return
+
+      let target: Vec2
+      if (ed.kind === 'radius' && ed.center) {
+        let ux = ed.pos.x - ed.center.x
+        let uy = ed.pos.y - ed.center.y
+        const len = Math.hypot(ux, uy)
+        if (len < 1e-12) {
+          ux = 1
+          uy = 0
+        } else {
+          ux /= len
+          uy /= len
+        }
+        target = { x: ed.center.x + values[0] * ux, y: ed.center.y + values[0] * uy }
+      } else if (ed.kind === 'rotation' && ed.center) {
+        const rr = Math.hypot(ed.pos.x - ed.center.x, ed.pos.y - ed.center.y) || 1
+        const th = (values[0] * Math.PI) / 180
+        target = { x: ed.center.x + rr * Math.cos(th), y: ed.center.y + rr * Math.sin(th) }
+      } else if (ed.kind === 'domain-start' || ed.kind === 'domain-end') {
+        target = { x: values[0], y: ed.pos.y }
+      } else {
+        target = { x: values[0], y: values[1] }
+      }
+
+      let res: { params: number[]; domain: [number, number] | null }
+      try {
+        res = applyHandleDrag(curve, modelsRef.current, ed.handleId, target)
+      } catch {
+        scheduleRender()
+        return
+      }
+      // Same bracket as a drag: one undo entry, and snapParams runs on commit
+      // unless Alt was held (matching the "Alt at release keeps it exact" rule).
+      onCurveEditStart()
+      onHandleDrag(ed.curveId, res.params, res.domain)
+      onCurveEditEnd(ed.curveId, skipSnap)
+      scheduleRender()
+    },
+    [onCurveEditEnd, onCurveEditStart, onHandleDrag, scheduleRender, setEditor],
+  )
+
+  const cancelHandleEditor = useCallback((): void => {
+    setEditor(null)
+    scheduleRender()
+  }, [scheduleRender, setEditor])
+
   // ------------------------------------------------------------ stroke finish
   const finishStroke = useCallback(
     (tapPos: Vec2 | null): void => {
@@ -642,6 +778,12 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   }, [onCurveEditCancel, onDrawingChange])
 
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>): void => {
+    // A press on the canvas dismisses an open editor, and is swallowed so that
+    // dismissing can never also start a stroke, pan, or drag.
+    if (handleEditRef.current) {
+      cancelHandleEditor()
+      return
+    }
     const canvas = e.currentTarget
     try {
       canvas.setPointerCapture(e.pointerId)
@@ -688,6 +830,29 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       // 1. Handle grab beats everything (any mode) when a curve is selected.
       const h = handleAt(pos)
       const sel = selectedVisible()
+
+      // 1a. Double-click/tap a handle: type exact values instead of dragging.
+      if (h && sel) {
+        const prev = lastTapRef.current
+        const isDouble =
+          e.detail >= 2 ||
+          (prev !== null &&
+            prev.handleId === h.id &&
+            now - prev.t < DOUBLE_TAP_MS &&
+            Math.hypot(pos.x - prev.x, pos.y - prev.y) < DOUBLE_TAP_PX)
+        lastTapRef.current = { t: now, x: pos.x, y: pos.y, handleId: h.id }
+        if (isDouble) {
+          lastTapRef.current = null
+          // Never leave the first click's gesture (or its pointer entry) behind.
+          cancelActiveGesture()
+          pointersRef.current.clear()
+          openHandleEditor(h, sel, toScreen(h.pos, vpRef.current))
+          return
+        }
+      } else {
+        lastTapRef.current = null
+      }
+
       if (h && sel) {
         gestureRef.current = {
           type: 'dragHandle',
@@ -757,14 +922,21 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
 
     // Idle hover: handle hover-grow + cursor, or 'move' near the selected curve.
     if (!g) {
-      if (!spaceRef.current) {
+      if (!spaceRef.current && !handleEditRef.current) {
         const h = handleAt(pos)
         if (h) {
-          setHover({ handleId: h.id, cursor: h.cursor ?? 'grab' })
+          const sp = toScreen(h.pos, vp)
+          setHover({
+            handleId: h.id,
+            cursor: h.cursor ?? 'grab',
+            tip: { x: sp.x, y: sp.y, label: h.label ?? h.id },
+          })
         } else {
           const near = nearestOnSelected(pos)
           setHover(
-            near && near.distPx <= HIT_RADIUS ? { handleId: null, cursor: 'move' } : null,
+            near && near.distPx <= HIT_RADIUS
+              ? { handleId: null, cursor: 'move', tip: null }
+              : null,
           )
         }
       } else {
@@ -953,6 +1125,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     }
   }
 
+  const hoverTip = handleEdit ? null : (hoverInfo?.tip ?? null)
+
   const cursor = drawing
     ? 'crosshair'
     : draggingCurve
@@ -978,10 +1152,29 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
         onLostPointerCapture={onLostCapture}
         onContextMenu={(e) => e.preventDefault()}
       />
-      {dragTip && (
+      {dragTip ? (
         <div className="handle-tip" style={{ left: dragTip.x + 14, top: dragTip.y + 14 }}>
           {dragTip.label}
         </div>
+      ) : (
+        hoverTip && (
+          <div className="handle-tip" style={{ left: hoverTip.x + 14, top: hoverTip.y + 14 }}>
+            {hoverTip.label}
+            <span className="handle-tip-hint">double-click to type</span>
+          </div>
+        )
+      )}
+      {handleEdit && (
+        <HandleInput
+          key={`${handleEdit.curveId}:${handleEdit.handleId}`}
+          title={handleEdit.title}
+          fields={handleEdit.fields}
+          anchor={handleEdit.anchor}
+          bounds={{ w: vpRef.current.widthPx, h: vpRef.current.heightPx }}
+          color={handleEdit.color}
+          onCommit={commitHandleEditor}
+          onCancel={cancelHandleEditor}
+        />
       )}
     </div>
   )

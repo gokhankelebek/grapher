@@ -1149,3 +1149,116 @@ button.param-value:hover {
     opacity: 1;
   }
 }
+
+/* ------------------------------------------------- exact-value handle input */
+
+/* subtle affordance appended to the hover tooltip */
+.handle-tip-hint {
+  margin-left: 6px;
+  padding-left: 6px;
+  border-left: 1px solid var(--border);
+  color: var(--faint);
+  font-family: var(--font);
+  font-size: 10px;
+}
+
+.handle-pop {
+  position: absolute;
+  z-index: 14;
+  padding: 8px 9px 7px;
+  border-radius: 8px;
+  background: rgba(19, 23, 34, 0.96);
+  border: 1px solid color-mix(in srgb, var(--curve, var(--accent)) 40%, var(--border));
+  box-shadow:
+    inset 2px 0 0 var(--curve, var(--accent)),
+    var(--shadow);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  animation: pop-in 0.14s var(--ease) both;
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.handle-pop-title {
+  margin-bottom: 6px;
+  padding-left: 2px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.handle-pop-fields {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.handle-pop-field {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.handle-pop-label {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.handle-pop-input {
+  width: 68px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  outline: none;
+  transition:
+    border-color 0.15s var(--ease),
+    box-shadow 0.15s var(--ease);
+}
+
+.handle-pop-input:focus {
+  border-color: color-mix(in srgb, var(--curve, var(--accent)) 60%, var(--border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--curve, var(--accent)) 18%, transparent);
+}
+
+.handle-pop-input:focus-visible {
+  outline: none;
+}
+
+.handle-pop-input-bad,
+.handle-pop-input-bad:focus {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 2px rgba(249, 95, 98, 0.16);
+  animation: bad-flash 0.3s var(--ease);
+}
+
+.handle-pop-suffix {
+  margin-left: -2px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.handle-pop-hint {
+  max-width: 176px;
+  margin-top: 6px;
+  padding-left: 2px;
+  color: var(--faint);
+  font-size: 10px;
+  line-height: 1.45;
+}
