@@ -28,7 +28,11 @@ const N_EFF = 30         // effective sample count (resampled points correlate)
 /** Per-family penalty weight: familiarity prior. Simple, canonical shapes win ties. */
 const PENALTY: Record<string, number> = {
   line: 3,
-  poly2: 4,
+  // A parabola is as canonical as a line or a sinusoid; rating it less familiar
+  // than `sine` made their complexity terms tie exactly (2·3·4 == 2·4·3), so
+  // hand jitter alone decided every parabola — and a sine hump tracks a
+  // parabolic arc to well within it. At parity its lower parameter count wins.
+  poly2: 3,
   poly3: 6,
   poly4: 8,
   sine: 3,

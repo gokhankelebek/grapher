@@ -393,17 +393,40 @@ describe('recognize — degenerate / vertical strokes', () => {
   })
 })
 
-describe('recognize — known scoring weakness (documented, not asserted as correct)', () => {
-  it('DOCUMENTS: parabola vs sinusoid is decided by a hair', () => {
-    // scoreOf(): poly2 has k=3 params and penalty weight 4 -> 2*3*4 = 24;
-    // sine has k=4 and weight 3 -> 2*4*3 = 24. The complexity terms are
-    // IDENTICAL, so the winner is decided purely by rms, and a sine hump
-    // tracks a parabolic arc to within hand-jitter. Across seeds the winner
-    // flips (~60/40). See the report; this test only pins the observation so
-    // that a future penalty-table fix shows up here.
+describe('recognize — parabola vs sinusoid scoring margin', () => {
+  // Regression guard. poly2 used to carry penalty weight 4 against sine's 3,
+  // which made their complexity terms tie exactly (2*3*4 == 2*4*3 == 24) and
+  // left hand jitter to decide every parabola — a sine hump tracks a parabolic
+  // arc to well within it, so sinusoids stole ~40% of them. poly2 now sits at
+  // weight 3 (a parabola is as canonical as a line or a sine) and wins on its
+  // lower parameter count. These tests fail if that prior drifts back.
+
+  it('a parabola beats a sinusoid by a comfortable margin', () => {
     const res = drawAndRecognize(explicitPath(x => 0.4 * x * x - 1), -5, 5, makeRng(1003))
     const p2 = candidate(res, 'poly2')!
     const sn = candidate(res, 'sine')!
-    expect(Math.abs(p2.score - sn.score)).toBeLessThan(5)
+    expect(p2.score).toBeLessThan(sn.score)
+    expect(sn.score - p2.score).toBeGreaterThan(5)
+  })
+
+  it('parabolas win across shapes and seeds, not just favourable ones', () => {
+    const shapes: Array<[(x: number) => number, number, number]> = [
+      [x => 0.4 * x * x - 1, -5, 5],
+      [x => 0.5 * x * x - 2, -3, 3],
+      [x => -0.3 * x * x + 2, -4, 4],
+      [x => 0.25 * x * x + 0.5 * x, -5, 3],
+      [x => -0.6 * x * x + x + 1, -2, 3.5],
+    ]
+    let wins = 0
+    let total = 0
+    for (const [f, a, b] of shapes) {
+      for (let i = 0; i < 12; i++) {
+        total++
+        if (winner(drawAndRecognize(explicitPath(f), a, b, makeRng(1000 + i * 7))).modelId === 'poly2') {
+          wins++
+        }
+      }
+    }
+    expect(wins).toBe(total)
   })
 })
