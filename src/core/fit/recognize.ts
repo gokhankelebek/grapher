@@ -40,6 +40,15 @@ const PENALTY: Record<string, number> = {
   exp: 3,
   abs: 3,
   logistic: 3.5,
+  // Roots are as canonical as an exponential or a V, and their fixed exponents
+  // make them cheap: they must be able to beat `exp`/`logistic`, which imitate
+  // them loosely, on their own shapes.
+  sqrt: 3,
+  cbrt: 3,
+  // A free exponent can imitate poly2 (p=2), abs (p=1) and sqrt (p=1/2), so it
+  // is rated far less familiar: at 4 params it needs ~40% lower rms than a
+  // fixed-exponent rival to win, which only a genuine odd power achieves.
+  power: 4,
   vline: 1,
   circle: 1,
   ellipse: 1.5,
@@ -284,6 +293,184 @@ function fitAbs(pts: Vec2[]): { params: number[]; rms: number } | null {
   const spec = MODELS.abs
   if (!spec.evalExplicit) return null
   return lmRefineExplicit(pts, spec.evalExplicit.bind(spec), [a0, b0, c0])
+}
+
+/**
+ * Root/power families share one trick: with the branch point b fixed, the model
+ * y = a·g(x − b) + c is LINEAR in (a, c). So sweep b over a grid, solve (a, c)
+ * exactly at each, keep the best, then polish all parameters with LM. Far more
+ * reliable than linearizing (y − c)² = a²(x − b), which needs c up front.
+ */
+function fitByBranchPoint(
+  pts: Vec2[],
+  g: (u: number) => number,
+  bGrid: number[],
+  evalF: (p: number[], x: number) => number,
+): { params: number[]; rms: number } | null {
+  const n = pts.length
+  let best: { params: number[]; rss: number } | null = null
+  for (const b of bGrid) {
+    const rows: number[][] = []
+    const ys: number[] = []
+    let ok = true
+    for (const pt of pts) {
+      const u = g(pt.x - b)
+      if (!Number.isFinite(u)) { ok = false; break }
+      rows.push([u, 1])
+      ys.push(pt.y)
+    }
+    if (!ok) continue
+    const sol = linearLeastSquares(rows, ys)
+    if (!sol) continue
+    const [a, c] = sol
+    if (!Number.isFinite(a) || !Number.isFinite(c)) continue
+    let rss = 0
+    for (let i = 0; i < n; i++) {
+      const r = pts[i].y - (a * rows[i][0] + c)
+      rss += r * r
+    }
+    if (Number.isFinite(rss) && (!best || rss < best.rss)) best = { params: [a, b, c], rss }
+  }
+  if (!best) return null
+  const refined = lmRefineExplicit(pts, evalF, best.params)
+  const coarse = { params: best.params, rms: Math.sqrt(best.rss / n) }
+  if (refined && Number.isFinite(refined.rms) && refined.rms <= coarse.rms) return refined
+  return coarse
+}
+
+/** y = a·sqrt(x − b) + c. The branch point sits at or left of the drawn ink. */
+function fitSqrt(pts: Vec2[]): { params: number[]; rms: number } | null {
+  const n = pts.length
+  if (n < 4) return null
+  let minX = Infinity, maxX = -Infinity
+  for (const p of pts) { if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x }
+  const w = maxX - minX
+  if (!(w > 0)) return null
+  // b ranges from a full stroke-width left of the ink up to just inside its
+  // left end (the branch point may sit marginally inside, under hand jitter)
+  const grid: number[] = []
+  const STEPS = 48
+  const lo = minX - w
+  const hi = minX + 0.02 * w
+  for (let i = 0; i <= STEPS; i++) {
+    // denser near the left end, where the interesting branch points live
+    const u = i / STEPS
+    grid.push(hi - (hi - lo) * u * u)
+  }
+  const spec = MODELS.sqrt
+  if (!spec.evalExplicit) return null
+  const ev = spec.evalExplicit.bind(spec)
+  const fit = fitByBranchPoint(
+    pts,
+    u => (u < 0 ? Number.NaN : Math.sqrt(u)),
+    grid,
+    // LM must see a finite residual surface: clamp instead of NaN while fitting
+    (p, x) => p[0] * Math.sqrt(Math.max(x - p[1], 0)) + p[2],
+  )
+  if (!fit) return null
+  let [a, b, c] = fit.params
+  // The branch point must sit at or left of the ink, or part of the stroke
+  // falls outside the curve's own domain. LM can nudge b a hair inside while
+  // chasing jitter, so clamp it back and re-solve (a, c) exactly there.
+  if (b > minX) {
+    b = minX
+    const rows: number[][] = []
+    for (const pt of pts) rows.push([Math.sqrt(Math.max(pt.x - b, 0)), 1])
+    const sol = linearLeastSquares(rows, pts.map(pt => pt.y))
+    if (!sol) return null
+    a = sol[0]
+    c = sol[1]
+  }
+  const params = [a, b, c]
+  // now every ink x is ≥ b, so the true (NaN-outside) evaluator is finite
+  const rms = rmsExplicit(pts, x => ev(params, x))
+  if (!Number.isFinite(rms)) return null
+  return { params, rms }
+}
+
+/** y = a·cbrt(x − b) + c — defined everywhere, inflection at the branch point. */
+function fitCbrt(pts: Vec2[]): { params: number[]; rms: number } | null {
+  const n = pts.length
+  if (n < 4) return null
+  let minX = Infinity, maxX = -Infinity
+  for (const p of pts) { if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x }
+  const w = maxX - minX
+  if (!(w > 0)) return null
+  // What makes a curve a CUBE root rather than a generic concave arc is the odd
+  // inflection at the branch point: the curve turns over there. If b falls
+  // outside the drawn span that signature was never drawn, and the ink is
+  // really a one-sided root — sqrt/power territory. So keep b inside the ink.
+  const margin = 0.1 * w
+  const lo = minX - margin
+  const hi = maxX + margin
+  const grid: number[] = []
+  const STEPS = 60
+  for (let i = 0; i <= STEPS; i++) grid.push(lo + ((hi - lo) * i) / STEPS)
+  const spec = MODELS.cbrt
+  if (!spec.evalExplicit) return null
+  const fit = fitByBranchPoint(pts, u => Math.cbrt(u), grid, spec.evalExplicit.bind(spec))
+  if (!fit) return null
+  const b = fit.params[1]
+  if (b < lo || b > hi) return null
+  // and the inflection must actually have been DRAWN: with the branch point at
+  // the edge of the ink only one arm exists, which every root family fits
+  // equally well — the cube root has no claim there.
+  let left = 0
+  for (const p of pts) if (p.x < b) left++
+  const leftFrac = left / n
+  if (leftFrac < 0.15 || leftFrac > 0.85) return null
+  return fit
+}
+
+/**
+ * y = a·|x − b|^p + c with the exponent fitted. Powerful but imitative — it can
+ * mimic a parabola (p = 2), a V (p = 1) or a square root (p = 1/2), so it is
+ * scored with a much heavier complexity penalty and only reported when it is
+ * decisively better than the fixed-exponent families.
+ */
+function fitPower(pts: Vec2[]): { params: number[]; rms: number } | null {
+  const n = pts.length
+  if (n < 5) return null
+  let minX = Infinity, maxX = -Infinity
+  for (const p of pts) { if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x }
+  const w = maxX - minX
+  if (!(w > 0)) return null
+  const spec = MODELS.power
+  if (!spec.evalExplicit) return null
+  const ev = spec.evalExplicit.bind(spec)
+
+  // coarse 2-D sweep over (b, p); (a, c) stay exact by linear solve
+  const bs: number[] = []
+  for (let i = 0; i <= 40; i++) bs.push(minX - 0.6 * w + (2.2 * w * i) / 40)
+  const ps = [0.2, 0.25, 1 / 3, 0.4, 0.5, 2 / 3, 0.75, 1.25, 1.5, 1.75, 2, 2.5, 3]
+  let best: { params: number[]; rss: number } | null = null
+  for (const pExp of ps) {
+    for (const b of bs) {
+      const rows: number[][] = []
+      for (const pt of pts) rows.push([Math.pow(Math.abs(pt.x - b), pExp), 1])
+      const sol = linearLeastSquares(rows, pts.map(pt => pt.y))
+      if (!sol) continue
+      let rss = 0
+      for (let i = 0; i < n; i++) {
+        const r = pts[i].y - (sol[0] * rows[i][0] + sol[1])
+        rss += r * r
+      }
+      if (Number.isFinite(rss) && (!best || rss < best.rss)) {
+        best = { params: [sol[0], b, sol[1], pExp], rss }
+      }
+    }
+  }
+  if (!best) return null
+  const refined = lmRefineExplicit(pts, ev, best.params)
+  const chosen =
+    refined && Number.isFinite(refined.rms) && refined.rms <= Math.sqrt(best.rss / n)
+      ? refined
+      : { params: best.params, rms: Math.sqrt(best.rss / n) }
+  const pExp = chosen.params[3]
+  // keep the exponent in a sane band, and away from 1 (that is a line or a V)
+  if (!(pExp > 0.12 && pExp < 4)) return null
+  if (Math.abs(pExp - 1) < 0.06) return null
+  return chosen
 }
 
 function fitLogistic(pts: Vec2[]): { params: number[]; rms: number } | null {
@@ -741,6 +928,8 @@ function recognizeInto(stroke: ProcessedStroke, out: FitResult[]): void {
       ['exp', () => fitExp(pts), 3],
       ['abs', () => fitAbs(pts), 3],
       ['logistic', () => fitLogistic(pts), 4],
+      ['cbrt', () => fitCbrt(pts), 3],
+      ['power', () => fitPower(pts), 4],
     ]
     for (const [id, fitFn, k] of nonlinear) {
       try {
@@ -748,6 +937,16 @@ function recognizeInto(stroke: ProcessedStroke, out: FitResult[]): void {
         if (fit) push(makeCandidate(id, fit.params, 'explicit', domain, fit.rms, diag, k))
       } catch { /* skip */ }
     }
+
+    // sqrt carries its own domain: the curve does not exist left of the branch
+    // point, so the renderer must never be asked to draw there
+    try {
+      const fit = fitSqrt(pts)
+      if (fit) {
+        const sqrtDomain: [number, number] = [fit.params[1], stroke.bbox.max.x + padX]
+        push(makeCandidate('sqrt', fit.params, 'explicit', sqrtDomain, fit.rms, diag, 3))
+      }
+    } catch { /* skip */ }
   }
 
   // ---- closed -> circle, ellipse, Fourier -----------------------------------

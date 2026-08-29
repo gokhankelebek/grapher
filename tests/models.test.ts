@@ -27,6 +27,9 @@ const SAMPLES: Record<string, number[][]> = {
   exp: [[0.4, 0.6, -1], [1, 1, 0], [-2, -0.5, 3]],
   abs: [[1.2, 0.7, -2], [1, 0, 0], [-1, -1, -1]],
   logistic: [[4, 1.8, 0.5, -2], [1, 1, 0, 0], [-1, -2, -1, 1]],
+  sqrt: [[1, 0, 0], [2, -1.5, 0.5], [-1.4, 1, -0.5], [1, -4, 0]],
+  cbrt: [[1, 0, 0], [1.7, 1, -0.5], [-1, -2, 1]],
+  power: [[1, 0, 0, 2 / 3], [0.8, 1.2, -1, 0.25], [-2, -1, 0.5, 1.5]],
   vline: [[2], [0], [-1.5]],
   circle: [[0, 0, 2.5], [1, -2, 3], [0, 0, 1]],
   ellipse: [
@@ -45,6 +48,18 @@ const SAMPLES: Record<string, number[][]> = {
 
 /** Families for which translation is not a meaningful operation. */
 const NO_TRANSLATE = new Set(['polarRose', 'limacon', 'spiral'])
+
+/**
+ * Families that are only defined on part of the x axis. `sqrt` genuinely does
+ * not exist left of its branch point b, and says so with NaN — recognition
+ * pairs it with a domain starting at b so the renderer never asks. These get
+ * the finiteness invariant applied WHERE DEFINED, plus an explicit check that
+ * the undefined side really is undefined (see the dedicated test below).
+ */
+const PARTIAL_DOMAIN: Record<string, (p: number[], x: number) => boolean> = {
+  // defined for x >= b
+  sqrt: (p, x) => x >= p[1],
+}
 
 const IDS = Object.keys(MODELS)
 
@@ -96,7 +111,9 @@ describe.each(IDS)('MODELS.%s', (id) => {
   it('evaluates to finite values on sensible inputs', () => {
     for (const p of sets) {
       if (spec.evalExplicit) {
+        const defined = PARTIAL_DOMAIN[id]
         for (const x of SAMPLE_XS) {
+          if (defined && !defined(p, x)) continue // legitimately outside the domain
           const v = spec.evalExplicit(p, x)
           expect(Number.isFinite(v), `${id} f(${x}) = ${v} for params ${p}`).toBe(true)
         }
@@ -208,6 +225,11 @@ describe('MODELS — translate() is exact', () => {
         for (const x of SAMPLE_XS) {
           const want = spec.evalExplicit!(p, x - dx) + dy
           const got = spec.evalExplicit!(q, x)
+          if (!Number.isFinite(want)) {
+            // a partial-domain family must stay undefined at the shifted point
+            expect(Number.isFinite(got), `${id}: x=${x} should still be undefined`).toBe(false)
+            continue
+          }
           expect(got, `${id} params=${p} d=(${dx},${dy}) x=${x}`)
             .toBeCloseTo(want, 9)
         }
@@ -303,6 +325,85 @@ describe('MODELS — translate() is exact', () => {
         const before = p.slice()
         spec.translate(p, 1.5, -2.5)
         expect(p, `${id} mutated its params`).toEqual(before)
+      }
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Root / power families — the branch point is what makes them what they are.
+// ---------------------------------------------------------------------------
+
+describe('MODELS — root families', () => {
+  it('sqrt is undefined left of its branch point and finite at/right of it', () => {
+    const p = [2, 1, -0.5] // y = 2*sqrt(x - 1) - 0.5
+    const ev = MODELS.sqrt.evalExplicit!
+    for (const x of [0.999, 0.5, -3, -100]) {
+      expect(Number.isFinite(ev(p, x)), `sqrt should be undefined at x=${x}`).toBe(false)
+    }
+    expect(ev(p, 1)).toBeCloseTo(-0.5, 12)   // exactly at the branch point
+    expect(ev(p, 2)).toBeCloseTo(1.5, 12)    // 2*1 - 0.5
+    expect(ev(p, 5)).toBeCloseTo(3.5, 12)    // 2*2 - 0.5
+  })
+
+  it('sqrt handles a downward branch (a < 0)', () => {
+    const ev = MODELS.sqrt.evalExplicit!
+    const p = [-1.5, 0, 2]
+    expect(ev(p, 0)).toBeCloseTo(2, 12)
+    expect(ev(p, 4)).toBeCloseTo(-1, 12)
+    expect(ev(p, 1)).toBeLessThan(ev(p, 0)) // decreasing
+  })
+
+  it('cbrt is defined on both sides and is odd about its branch point', () => {
+    const ev = MODELS.cbrt.evalExplicit!
+    const p = [1.7, 1, -0.5]
+    for (const d of [0.5, 2, 8, 27]) {
+      const up = ev(p, 1 + d) - -0.5
+      const dn = ev(p, 1 - d) - -0.5
+      expect(up).toBeCloseTo(-dn, 12) // odd symmetry about (b, c)
+      expect(Number.isFinite(ev(p, 1 - d))).toBe(true)
+    }
+    expect(ev(p, 1)).toBeCloseTo(-0.5, 12)
+    expect(ev(p, 9)).toBeCloseTo(1.7 * 2 - 0.5, 12) // cbrt(8) = 2
+  })
+
+  it('power evaluates the fitted exponent symmetrically about the branch point', () => {
+    const ev = MODELS.power.evalExplicit!
+    const p = [1, 0.5, -1, 2 / 3]
+    expect(ev(p, 0.5)).toBeCloseTo(-1, 12)
+    // |x - b|^p is even about b (the cusp a hand actually draws)
+    expect(ev(p, 0.5 + 1.3)).toBeCloseTo(ev(p, 0.5 - 1.3), 12)
+    // p = 2 degenerates to a parabola
+    expect(ev([2, 0, 0, 2], 3)).toBeCloseTo(18, 12)
+  })
+
+  it('root latex renders the right radical and formats signs cleanly', () => {
+    expect(MODELS.sqrt.latex([1, 0, 0])).toBe('y = \\sqrt{x}')
+    expect(MODELS.sqrt.latex([2, 1, -0.5])).toBe('y = 2\\sqrt{x - 1} - 0.5')
+    expect(MODELS.sqrt.latex([-1.4, -2, 0])).toBe('y = -1.4\\sqrt{x + 2}')
+    expect(MODELS.cbrt.latex([1, 0, 0])).toBe('y = \\sqrt[3]{x}')
+    expect(MODELS.cbrt.latex([1.7, 1, -0.5])).toBe('y = 1.7\\sqrt[3]{x - 1} - 0.5')
+    // a fitted exponent lands on 0.6667 and should read as a fraction
+    expect(MODELS.power.latex([1, 0, 0, 0.6667])).toBe('y = \\left|x\\right|^{\\frac{2}{3}}')
+    expect(MODELS.power.latex([1, 0, 0, 0.25])).toBe('y = \\left|x\\right|^{\\frac{1}{4}}')
+  })
+
+  it('root families translate exactly: b += dx, c += dy', () => {
+    for (const id of ['sqrt', 'cbrt', 'power']) {
+      const spec = MODELS[id]
+      for (const p of SAMPLES[id]) {
+        const q = spec.translate!(p, 1.5, -2.5)
+        expect(q[0], `${id} scale changed`).toBeCloseTo(p[0], 12)
+        expect(q[1], `${id} branch point`).toBeCloseTo(p[1] + 1.5, 12)
+        expect(q[2], `${id} offset`).toBeCloseTo(p[2] - 2.5, 12)
+        if (id === 'power') expect(q[3], 'exponent changed').toBeCloseTo(p[3], 12)
+        // and the translated curve is the original curve, shifted
+        const ev = spec.evalExplicit!
+        for (const x of [2, 3.5, 6]) {
+          const want = ev(p, x - 1.5) - 2.5
+          if (!Number.isFinite(want)) continue
+          expect(ev(q, x), `${id} at x=${x}`).toBeCloseTo(want, 10)
+        }
       }
     }
   })

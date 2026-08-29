@@ -12,6 +12,7 @@ import { describe, it, expect } from 'vitest'
 import type { FitResult, Vec2 } from '../src/core/types'
 import { processStroke } from '../src/core/stroke'
 import { recognize } from '../src/core/fit/recognize'
+import { MODELS } from '../src/core/fit/models'
 import {
   VP, JITTER, makeRng, makeGauss, trace, drawStroke, drawAndRecognize,
   explicitPath, polarPath, winner, candidate, ranking, relErr,
@@ -428,5 +429,128 @@ describe('recognize — parabola vs sinusoid scoring margin', () => {
       }
     }
     expect(wins).toBe(total)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Root families. Before these existed a hand-drawn sqrt came back `exp` and a
+// cube root came back `logistic`, both at 5-15x the noise floor.
+// ---------------------------------------------------------------------------
+
+describe('recognize — root families', () => {
+  it('a hand-drawn square root is a sqrt, not an exponential', () => {
+    const res = drawAndRecognize(explicitPath(x => Math.sqrt(x)), 0, 9, makeRng(4242))
+    const w = expectWinner(res, 'sqrt')
+    // params [a, b, c] -> a·sqrt(x - b) + c
+    expect(relErr(w.params[0], 1)).toBeLessThan(0.15)
+    expect(Math.abs(w.params[1])).toBeLessThan(0.35)  // branch point at the origin
+    expect(Math.abs(w.params[2])).toBeLessThan(0.35)
+    expect(w.error).toBeLessThan(2 * JITTER)
+    expect(w.score).toBeLessThan(candidate(res, 'exp')!.score)
+  })
+
+  it('a scaled square root recovers its amplitude', () => {
+    const res = drawAndRecognize(explicitPath(x => 2 * Math.sqrt(x)), 0, 9, makeRng(4243))
+    const w = expectWinner(res, 'sqrt')
+    expect(relErr(w.params[0], 2)).toBeLessThan(0.15)
+    expect(w.error).toBeLessThan(2 * JITTER)
+  })
+
+  it('a shifted square root locates its branch point', () => {
+    const res = drawAndRecognize(
+      explicitPath(x => Math.sqrt(x - 1) + 0.5), 1, 9, makeRng(4244),
+    )
+    const w = expectWinner(res, 'sqrt')
+    expect(Math.abs(w.params[1] - 1)).toBeLessThan(0.4)
+    expect(w.error).toBeLessThan(2 * JITTER)
+  })
+
+  it('a downward square root is a sqrt with a negative coefficient', () => {
+    const res = drawAndRecognize(explicitPath(x => -Math.sqrt(x)), 0, 9, makeRng(4245))
+    const w = expectWinner(res, 'sqrt')
+    expect(w.params[0]).toBeLessThan(0)
+    expect(relErr(Math.abs(w.params[0]), 1)).toBeLessThan(0.15)
+  })
+
+  it('the sqrt domain starts at the branch point, so nothing is drawn left of it', () => {
+    const res = drawAndRecognize(
+      explicitPath(x => Math.sqrt(x - 1) + 0.5), 1, 9, makeRng(4246),
+    )
+    const w = expectWinner(res, 'sqrt')
+    expect(w.domain, 'sqrt must carry a domain').not.toBeNull()
+    expect(w.domain![0]).toBeCloseTo(w.params[1], 9)
+    expect(w.domain![1]).toBeGreaterThan(w.domain![0])
+    // and the model is genuinely undefined just left of it
+    const ev = MODELS.sqrt.evalExplicit!(w.params, w.domain![0] - 0.5)
+    expect(Number.isFinite(ev)).toBe(false)
+  })
+
+  it('a hand-drawn cube root is a cbrt, not a logistic', () => {
+    const res = drawAndRecognize(explicitPath(x => Math.cbrt(x)), -8, 8, makeRng(4247))
+    const w = expectWinner(res, 'cbrt')
+    expect(relErr(w.params[0], 1)).toBeLessThan(0.2)
+    expect(Math.abs(w.params[1])).toBeLessThan(0.5) // inflection at the origin
+    expect(w.error).toBeLessThan(2 * JITTER)
+    expect(w.score).toBeLessThan(candidate(res, 'logistic')!.score)
+  })
+
+  it('a cube root is defined on both sides of its inflection', () => {
+    const res = drawAndRecognize(
+      explicitPath(x => 1.7 * Math.cbrt(x - 1)), -6, 8, makeRng(4248),
+    )
+    const w = expectWinner(res, 'cbrt')
+    expect(Math.abs(w.params[1] - 1)).toBeLessThan(0.6)
+    expect(relErr(Math.abs(w.params[0]), 1.7)).toBeLessThan(0.2)
+  })
+
+  it('x^(2/3) — a cusp — is a power curve with the exponent recovered', () => {
+    const res = drawAndRecognize(
+      explicitPath(x => Math.cbrt(x * x)), -4, 4, makeRng(4249),
+    )
+    const w = expectWinner(res, 'power')
+    // params [a, b, c, p] -> a·|x - b|^p + c
+    expect(relErr(w.params[3], 2 / 3)).toBeLessThan(0.12)
+    expect(Math.abs(w.params[1])).toBeLessThan(0.35) // cusp at the origin
+    expect(w.error).toBeLessThan(2 * JITTER)
+    expect(w.score).toBeLessThan(candidate(res, 'abs')!.score)
+  })
+
+  it('the free exponent steals nothing: parabolas, lines and exponentials still win', () => {
+    // a genuine parabola — `power` can imitate it exactly at p = 2 and must lose
+    const par = drawAndRecognize(explicitPath(x => 0.7 * x * x - 1), -3, 3, makeRng(4250))
+    expectWinner(par, 'poly2')
+    // a V — power imitates it at p = 1
+    const v = drawAndRecognize(
+      explicitPath(x => 1.5 * Math.abs(x - 0.5) - 1), -2.5, 3.5, makeRng(4251),
+    )
+    expectWinner(v, 'abs')
+    // an exponential
+    const e = drawAndRecognize(
+      explicitPath(x => 0.5 * Math.exp(0.9 * x) + 0.3), -2, 2.5, makeRng(4252),
+    )
+    expectWinner(e, 'exp')
+    // a plain square root — the fixed exponent must beat the fitted one
+    const s = drawAndRecognize(explicitPath(x => Math.sqrt(x)), 0, 9, makeRng(4253))
+    expectWinner(s, 'sqrt')
+  })
+
+  it('root families win across seeds, not just favourable ones', () => {
+    const shapes: Array<[string, (x: number) => number, number, number]> = [
+      ['sqrt', x => Math.sqrt(x), 0, 9],
+      ['sqrt', x => 2 * Math.sqrt(x), 0, 9],
+      ['sqrt', x => -1.5 * Math.sqrt(x + 1) + 2, -1, 7],
+      ['cbrt', x => Math.cbrt(x), -8, 8],
+      ['cbrt', x => 1.7 * Math.cbrt(x - 1), -6, 8],
+      ['power', x => Math.cbrt(x * x), -4, 4],
+    ]
+    for (const [want, fn, s0, s1] of shapes) {
+      let wins = 0
+      const SEEDS = 12
+      for (let s = 0; s < SEEDS; s++) {
+        const res = drawAndRecognize(explicitPath(fn), s0, s1, makeRng(5300 + s * 137))
+        if (winner(res).modelId === want) wins++
+      }
+      expect(wins, `${want} won only ${wins}/${SEEDS}`).toBeGreaterThanOrEqual(SEEDS - 1)
+    }
   })
 })

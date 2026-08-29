@@ -44,6 +44,9 @@ const FAMILY_FIXTURES: Array<[string, number[], [number, number] | null]> = [
   ['exp', [0.4, 0.6, -1], [-6, 4]],
   ['abs', [1.2, 0.7, -2], [-5, 6]],
   ['logistic', [4, 1.8, 0.5, -2], [-6, 7]],
+  ['sqrt', [2, -1, 0.5], [-1, 8]],
+  ['cbrt', [1.7, 1, -0.5], [-6, 8]],
+  ['power', [1, 0, 0, 2 / 3], [-4, 4]],
   ['vline', [2], [-4, 4]],
   ['circle', [0, 0, 2.5], null],
   ['ellipse', [0.2052, -0.3197, 0.331, 0.0001, 0.001, -0.8638], null],
@@ -91,14 +94,24 @@ describe('getHandles', () => {
   })
 
   it('explicit families expose both domain trim handles at the domain ends', () => {
+    // `sqrt` is the exception: its domain STARTS at the branch point, which is
+    // already draggable as the "branch" handle. A domain-start handle there
+    // would offer to trim into a region where the curve does not exist.
+    const NO_DOMAIN_START = new Set(['sqrt'])
     for (const [id, params, domain] of FAMILY_FIXTURES) {
       const spec = MODELS[id]
       if (spec.kind !== 'explicit' || !domain) continue
       const hs = getHandles(curve(id, params, domain), MODELS)
       const s = hs.find(h => h.id === 'domain-start')
       const e = hs.find(h => h.id === 'domain-end')
-      expect(s, `${id}: no domain-start`).toBeDefined()
       expect(e, `${id}: no domain-end`).toBeDefined()
+      expect(e!.pos.x).toBeCloseTo(domain[1], 9)
+      if (NO_DOMAIN_START.has(id)) {
+        expect(s, `${id}: should not offer domain-start`).toBeUndefined()
+        expect(e!.pos.y).toBeCloseTo(spec.evalExplicit!(params, domain[1]), 9)
+        continue
+      }
+      expect(s, `${id}: no domain-start`).toBeDefined()
       expect(s!.pos.x).toBeCloseTo(domain[0], 9)
       expect(e!.pos.x).toBeCloseTo(domain[1], 9)
       expect(s!.pos.y).toBeCloseTo(spec.evalExplicit!(params, domain[0]), 9)
@@ -815,5 +828,84 @@ describe('nearestOnCurve', () => {
     const bogus = { ...curve('circle', [0, 0, 2], null), modelId: 'nope' }
     const near = nearestOnCurve(bogus, MODELS, { x: 1, y: 1 })
     expect(near.dist).toBe(Infinity)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Root families: the branch point is the handle that matters.
+// ---------------------------------------------------------------------------
+
+describe('root-family handles', () => {
+  it('every root family exposes a branch-point handle sitting at (b, c)', () => {
+    for (const [id, params, dom] of [
+      ['sqrt', [2, -1, 0.5], [-1, 8]],
+      ['cbrt', [1.7, 1, -0.5], [-6, 8]],
+      ['power', [1, 0, 0, 2 / 3], [-4, 4]],
+    ] as Array<[string, number[], [number, number]]>) {
+      const hs = getHandles(curve(id, params, dom), MODELS)
+      const branch = hs.find(h => h.id === 'branch')
+      expect(branch, `${id} has no branch handle`).toBeDefined()
+      expect(branch!.pos.x).toBeCloseTo(params[1], 9)
+      expect(branch!.pos.y).toBeCloseTo(params[2], 9)
+    }
+  })
+
+  it('sqrt offers no domain-start handle — the curve begins at its branch point', () => {
+    const hs = getHandles(curve('sqrt', [2, -1, 0.5], [-1, 8]), MODELS)
+    expect(hs.find(h => h.id === 'domain-start')).toBeUndefined()
+    expect(hs.find(h => h.id === 'domain-end')).toBeDefined()
+    // cbrt is two-sided, so it keeps both
+    const cb = getHandles(curve('cbrt', [1.7, 1, -0.5], [-6, 8]), MODELS)
+    expect(cb.find(h => h.id === 'domain-start')).toBeDefined()
+    expect(cb.find(h => h.id === 'domain-end')).toBeDefined()
+  })
+
+  it('dragging the branch point translates the curve rigidly, domain included', () => {
+    for (const [id, params] of [
+      ['sqrt', [2, -1, 0.5]],
+      ['cbrt', [1.7, 1, -0.5]],
+      ['power', [1, 0, 0, 2 / 3]],
+    ] as Array<[string, number[]]>) {
+      const c = curve(id, params, [params[1], params[1] + 6])
+      const res = applyHandleDrag(c, MODELS, 'branch', { x: params[1] + 1.5, y: params[2] - 2 })
+      expect(res.params[1]).toBeCloseTo(params[1] + 1.5, 9)
+      expect(res.params[2]).toBeCloseTo(params[2] - 2, 9)
+      expect(res.params[0], `${id} scale changed`).toBeCloseTo(params[0], 9)
+      expect(res.domain![0]).toBeCloseTo(c.domain![0] + 1.5, 9)
+      // the shape itself is unchanged, just moved
+      const ev = MODELS[id].evalExplicit!
+      for (const d of [0.5, 2, 4]) {
+        const before = ev(params, params[1] + d)
+        const after = ev(res.params, params[1] + 1.5 + d)
+        expect(after).toBeCloseTo(before - 2, 9)
+      }
+    }
+  })
+
+  it('dragging the scale handle sets the coefficient in closed form', () => {
+    const params = [2, -1, 0.5] // y = 2*sqrt(x + 1) + 0.5
+    const c = curve('sqrt', params, [-1, 8])
+    const hs = getHandles(c, MODELS)
+    const scale = hs.find(h => h.id === 'scale')!
+    // drag it to a point whose exact coefficient we can compute by hand
+    const u = Math.sqrt(scale.pos.x - params[1])
+    const wantA = 3.3
+    const target = { x: scale.pos.x, y: params[2] + wantA * u }
+    const res = applyHandleDrag(c, MODELS, 'scale', target)
+    expect(res.params[0]).toBeCloseTo(wantA, 9)
+    expect(res.params[1], 'branch point moved').toBeCloseTo(params[1], 12)
+    expect(res.params[2], 'offset moved').toBeCloseTo(params[2], 12)
+  })
+
+  it('trimming a sqrt never exposes the region left of the branch point', () => {
+    const c = curve('sqrt', [2, -1, 0.5], [-1, 8])
+    // try to drag the end far past the branch point, to the left
+    const res = applyHandleDrag(c, MODELS, 'domain-end', { x: -9, y: 0 })
+    expect(res.domain![0]).toBeGreaterThanOrEqual(res.params[1] - 1e-12)
+    expect(res.domain![1]).toBeGreaterThan(res.domain![0])
+    // the whole reported domain is inside the model's real domain
+    const ev = MODELS.sqrt.evalExplicit!
+    expect(Number.isFinite(ev(res.params, res.domain![0]))).toBe(true)
+    expect(Number.isFinite(ev(res.params, res.domain![1]))).toBe(true)
   })
 })

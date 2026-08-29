@@ -337,6 +337,33 @@ export function getHandles(
       addExplicitDomainHandles()
       break
     }
+    case 'sqrt':
+    case 'cbrt':
+    case 'power': {
+      // The branch point (b, c) is the whole story for a root curve: it is
+      // where the tangent goes vertical and, for sqrt, where the curve begins.
+      out.push(handle('branch', { x: p[1], y: p[2] }, 'feature', 'branch point', 'move'))
+      if (spec.evalExplicit) {
+        const [x0, x1] = explicitDomain()
+        // a scale handle partway along the drawn arm sets the steepness
+        const xs = curve.modelId === 'sqrt' ? Math.max(x0, p[1]) : x0
+        const xScale = xs + 0.6 * (x1 - xs)
+        const yScale = spec.evalExplicit(p, xScale)
+        if (Number.isFinite(yScale)) {
+          out.push(handle('scale', { x: xScale, y: yScale }, 'feature', 'steepness', 'ns-resize'))
+        }
+      }
+      if (curve.modelId === 'sqrt') {
+        // the curve does not exist left of b, so only the far end trims
+        if (spec.evalExplicit) {
+          const [, x1] = explicitDomain()
+          out.push(handle('domain-end', { x: x1, y: spec.evalExplicit(p, x1) }, 'domain-end', 'trim end', 'ew-resize'))
+        }
+      } else {
+        addExplicitDomainHandles()
+      }
+      break
+    }
     case 'circle': {
       const [a, b, r] = p
       out.push(handle('center', { x: a, y: b }, 'center', 'center', 'move'))
@@ -566,6 +593,45 @@ export function applyHandleDrag(
       if (handleId === 'vertex') {
         params[1] = target.x
         params[2] = target.y
+        return { params, domain }
+      }
+      break
+    }
+    case 'sqrt':
+    case 'cbrt':
+    case 'power': {
+      if (handleId === 'domain-start' || handleId === 'domain-end') {
+        const trimmed = trimExplicit()
+        // sqrt starts AT its branch point — never let a trim expose empty space
+        if (curve.modelId === 'sqrt' && trimmed.domain) {
+          trimmed.domain = [
+            Math.max(trimmed.domain[0], params[1]),
+            Math.max(trimmed.domain[1], params[1] + minSpan),
+          ]
+        }
+        return trimmed
+      }
+      if (handleId === 'branch') {
+        // move the branch point: an exact rigid translation of the whole curve
+        const dx = target.x - params[1]
+        const dy = target.y - params[2]
+        const np = spec.translate ? spec.translate(params, dx, dy) : params
+        const nd: [number, number] | null = domain ? [domain[0] + dx, domain[1] + dx] : null
+        return { params: np, domain: nd }
+      }
+      if (handleId === 'scale') {
+        // closed form: with b and c pinned, a is linear in the dragged y
+        const b = params[1]
+        const c = params[2]
+        const u = target.x - b
+        let basis: number
+        if (curve.modelId === 'sqrt') basis = u > 0 ? Math.sqrt(u) : 0
+        else if (curve.modelId === 'cbrt') basis = Math.cbrt(u)
+        else basis = Math.pow(Math.abs(u), params[3])
+        if (Math.abs(basis) > 1e-9) {
+          const a = (target.y - c) / basis
+          if (Number.isFinite(a) && Math.abs(a) > 1e-12) params[0] = a
+        }
         return { params, domain }
       }
       break

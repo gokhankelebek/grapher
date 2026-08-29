@@ -74,6 +74,25 @@ function shifted(variable: string, center: number): string {
     : `${variable} + ${fmt(-center)}`
 }
 
+/**
+ * Exponent label: a fitted exponent lands on values like 0.667, which reads far
+ * better as \frac{2}{3}. Snap to a simple fraction (denominator ≤ 6) when it is
+ * within 0.5%, otherwise print the decimal.
+ */
+function expLatex(e: number): string {
+  if (!Number.isFinite(e)) return '0'
+  for (let den = 2; den <= 6; den++) {
+    const num = Math.round(e * den)
+    if (num === 0) continue
+    if (num % den === 0) continue // integral — handled by the plain path below
+    if (Math.abs(e - num / den) <= 0.005 * Math.abs(e)) {
+      const sign = num < 0 ? '-' : ''
+      return `${sign}\\frac{${Math.abs(num)}}{${den}}`
+    }
+  }
+  return fmt(e)
+}
+
 /** "(x - 1.2)^2" -> "\left(x - 1.2\right)^{2}" or "x^{2}" when centered. */
 function shiftedSq(variable: string, center: number): string {
   const inner = shifted(variable, center)
@@ -215,6 +234,59 @@ export const MODELS: Record<string, ModelSpec> = {
       const a2 = p[0] * Math.exp(-p[1] * dx)
       return [Number.isFinite(a2) ? a2 : p[0], p[1], p[2] + dy]
     },
+  },
+
+  sqrt: {
+    id: 'sqrt',
+    kind: 'explicit',
+    name: 'Square root',
+    // params: [a, b, c] -> a·sqrt(x − b) + c, undefined left of the branch point
+    evalExplicit: (p, x) => {
+      const u = x - p[1]
+      return u < 0 ? Number.NaN : p[0] * Math.sqrt(u) + p[2]
+    },
+    latex: p => {
+      const [a, b, c] = p
+      return `y = ${termSum([a, c], [`\\sqrt{${shifted('x', b)}}`, ''])}`
+    },
+    paramMeta: p => centeredMeta(['a', 'b', 'c'], p),
+    translate: (p, dx, dy) => [p[0], p[1] + dx, p[2] + dy],
+  },
+
+  cbrt: {
+    id: 'cbrt',
+    kind: 'explicit',
+    name: 'Cube root',
+    // params: [a, b, c] -> a·cbrt(x − b) + c, defined for every x
+    evalExplicit: (p, x) => p[0] * Math.cbrt(x - p[1]) + p[2],
+    latex: p => {
+      const [a, b, c] = p
+      return `y = ${termSum([a, c], [`\\sqrt[3]{${shifted('x', b)}}`, ''])}`
+    },
+    paramMeta: p => centeredMeta(['a', 'b', 'c'], p),
+    translate: (p, dx, dy) => [p[0], p[1] + dx, p[2] + dy],
+  },
+
+  power: {
+    id: 'power',
+    kind: 'explicit',
+    name: 'Power curve',
+    // params: [a, b, c, p] -> a·|x − b|^p + c. The absolute value makes the
+    // family even about the branch point, which is what a hand-drawn cusp
+    // (x^{2/3} and friends) actually looks like on both sides of x = b.
+    evalExplicit: (p, x) => p[0] * Math.pow(Math.abs(x - p[1]), p[3]) + p[2],
+    latex: p => {
+      const [a, b, c, e] = p
+      const body = `\\left|${shifted('x', b)}\\right|^{${expLatex(e)}}`
+      return `y = ${termSum([a, c], [body, ''])}`
+    },
+    paramMeta: p => [
+      metaFor('a', p[0] ?? 1),
+      metaFor('b', p[1] ?? 0),
+      metaFor('c', p[2] ?? 0),
+      { name: 'p', min: 0.1, max: 4, step: 0.01 },
+    ],
+    translate: (p, dx, dy) => [p[0], p[1] + dx, p[2] + dy, p[3]],
   },
 
   abs: {
