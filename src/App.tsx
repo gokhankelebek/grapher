@@ -3,9 +3,10 @@ import type { FitResult, FittedCurve, ModelSpec, ProcessedStroke, Viewport } fro
 import { CURVE_COLORS, DARK_THEME, nextId } from './core/types'
 import { MODELS } from './core/fit/models'
 import { parseExpression } from './core/parse'
-import { snapParams } from './core/fit/edit'
+import { applyFeatureEdit, snapParams } from './core/fit/edit'
 import { analyzeCurve } from './core/analyze'
-import type { SpecialPoint } from './core/types'
+import type { FeatureEditResult, SpecialPoint } from './core/types'
+import { describePoints } from './ui/featureEdit'
 import { drawGrid } from './render/grid'
 import { drawCurve } from './render/curves'
 import { CanvasStage } from './ui/CanvasStage'
@@ -125,6 +126,23 @@ export default function App() {
   const [showAnalysis, setShowAnalysis] = useState<boolean>(() => readPrefs().showAnalysis)
   /** Index into the analysis array whose marker should be emphasised. */
   const [highlight, setHighlight] = useState<number | null>(null)
+  /**
+   * The board's answer to the last feature edit. A refusal is the solver's own
+   * sentence, shown verbatim and left up until it is dismissed or superseded; a
+   * side-effect report says what else moved and fades on its own. Never modal —
+   * the teacher keeps typing either way.
+   */
+  const [featureNote, setFeatureNote] = useState<
+    | {
+        kind: 'refused'
+        key: number
+        reason: string
+        nearest?: { curveId: string; params: number[]; domain: [number, number] | null }
+      }
+    | { kind: 'moved'; key: number; text: string }
+    | null
+  >(null)
+  const featureNoteTimerRef = useRef(0)
 
   const curvesRef = useRef<FittedCurve[]>([])
   const stylesRef = useRef<StyleMap>({})
@@ -191,6 +209,8 @@ export default function App() {
       }`
     : ''
 
+  const analysisRef = useRef<SpecialPoint[]>([])
+
   const analysis = useMemo<SpecialPoint[]>(() => {
     if (!selectedCurve) return []
     try {
@@ -203,6 +223,7 @@ export default function App() {
     // selectedCurve is intentionally tracked through analysisKey, not identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analysisKey, models])
+  analysisRef.current = analysis
 
   const vpRef = useRef<Viewport>({
     center: { x: 0, y: 0 },
@@ -259,6 +280,9 @@ export default function App() {
   const undo = useCallback((): void => {
     const stack = undoRef.current
     if (stack.length === 0) return
+    // Any answer on screen was about the state we are leaving.
+    window.clearTimeout(featureNoteTimerRef.current)
+    setFeatureNote(null)
     const prev = stack[stack.length - 1]
     undoRef.current = stack.slice(0, -1)
     redoRef.current = [...redoRef.current, takeSnapshot()]
@@ -270,6 +294,8 @@ export default function App() {
   const redo = useCallback((): void => {
     const stack = redoRef.current
     if (stack.length === 0) return
+    window.clearTimeout(featureNoteTimerRef.current)
+    setFeatureNote(null)
     const next = stack[stack.length - 1]
     redoRef.current = stack.slice(0, -1)
     undoRef.current = [...undoRef.current, takeSnapshot()]
@@ -960,6 +986,8 @@ export default function App() {
   const oversketchFail = useCallback((id: string): void => {
     window.clearTimeout(shakeTimerRef.current)
     window.clearTimeout(toastTimerRef.current)
+    window.clearTimeout(featureNoteTimerRef.current)
+    setFeatureNote(null)
     const key = Date.now()
     setShake({ id, key })
     setToast({ msg: 'Couldn’t blend that stroke', key })
@@ -980,6 +1008,151 @@ export default function App() {
     },
     [commitState],
   )
+
+  // -------------------------------------------------------- feature editing
+  //
+  // "Put this zero at x = −2." The teacher states a fact about the curve and
+  // the solver decides whether the family can honour it. Three outcomes, all of
+  // which must reach the teacher:
+  //   ok            — one undoable commit, and NO snapParams (see below).
+  //   ok + alsoMoved— the same commit, plus a report of what else shifted.
+  //   refused       — nothing changes; the solver's own sentence is shown.
+
+  /** Only one answer is on screen at a time — both reply to the last action. */
+  const showFeatureNote = useCallback(
+    (note: typeof featureNote): void => {
+      window.clearTimeout(featureNoteTimerRef.current)
+      window.clearTimeout(toastTimerRef.current)
+      setToast(null)
+      setFeatureNote(note)
+      if (note && note.kind === 'moved') {
+        featureNoteTimerRef.current = window.setTimeout(() => setFeatureNote(null), 5200)
+      }
+    },
+    [],
+  )
+
+  /**
+   * Returns true when the curve actually changed (the caller closes its editor)
+   * and false when it did not, so a refusal leaves the typed value on screen.
+   */
+  const applyFeature = useCallback(
+    (curveId: string, point: SpecialPoint, to: { x?: number; y?: number }): boolean => {
+      const curve = curvesRef.current.find((c) => c.id === curveId)
+      if (!curve) return true
+
+      const refuse = (reason: string): boolean => {
+        showFeatureNote({ kind: 'refused', key: Date.now(), reason })
+        return false
+      }
+
+      /**
+       * Hold the point's SIBLINGS OF THE SAME KIND still.
+       *
+       * Without this, "set the zeros to −2, 1, 3" never converges: each edit is
+       * free to slide the other two, so fixing the second undoes the first and
+       * the teacher chases the numbers around forever. Same-kind is the pin rule
+       * a teacher already has in their head — "these zeros stay, move this one" —
+       * and it is the only one that makes the three-in-a-row workflow terminate.
+       * Cross-kind pinning is deliberately NOT attempted: a cubic's maximum,
+       * minimum and inflection are not independent, and pretending otherwise
+       * would manufacture refusals the family never actually earned. The solver
+       * drops the pins itself when honouring them would over-determine the curve.
+       */
+      // analysisRef holds the SELECTED curve's points only, so pin from it only
+      // when that is the curve being edited.
+      const pinned =
+        curveId === selectedRef.current
+          ? analysisRef.current.filter((p) => p !== point && p.kind === point.kind)
+          : []
+
+      let res: FeatureEditResult
+      try {
+        res = applyFeatureEdit(curve, modelsRef.current, {
+          point,
+          to,
+          ...(pinned.length > 0 ? { pinned } : {}),
+        })
+      } catch {
+        return refuse('That change couldn’t be worked out for this curve.')
+      }
+      if (!res || typeof res !== 'object' || typeof res.ok !== 'boolean') {
+        return refuse('That change couldn’t be worked out for this curve.')
+      }
+
+      if (!res.ok) {
+        // The reason is written for a teacher and is shown WORD FOR WORD; the
+        // fallback exists only for a solver that returned no sentence at all.
+        const reason =
+          typeof res.reason === 'string' && res.reason.trim() !== ''
+            ? res.reason
+            : 'That isn’t something this curve can do.'
+        const near = res.nearest
+        showFeatureNote({
+          kind: 'refused',
+          key: Date.now(),
+          reason,
+          // Offered as a choice, never applied behind the teacher's back.
+          ...(near && Array.isArray(near.params)
+            ? { nearest: { curveId, params: near.params.slice(), domain: near.domain } }
+            : {}),
+        })
+        return false
+      }
+
+      if (!Array.isArray(res.params) || res.params.some((p) => !Number.isFinite(p))) {
+        return refuse('That change couldn’t be worked out for this curve.')
+      }
+
+      // ONE undo entry, and deliberately no snapParams: the teacher stated an
+      // exact fact, exactly as with a typed coordinate. Magnetizing "x = −2" to
+      // something rounder would destroy the very thing that was just asserted —
+      // the same inversion HandleInput.tsx documents for typed values.
+      commitState({
+        curves: curvesRef.current.map((c) =>
+          c.id === curveId ? { ...c, params: res.params.slice(), domain: res.domain } : c,
+        ),
+      })
+
+      const moved = Array.isArray(res.alsoMoved) ? res.alsoMoved : []
+      const parts: string[] = []
+      if (moved.length > 0) {
+        const text = describePoints(moved)
+        if (text) parts.push(`Also moved: ${text}`)
+      }
+      if (res.exact === false) parts.push('Placed as closely as this family allows.')
+      showFeatureNote(
+        parts.length > 0 ? { kind: 'moved', key: Date.now(), text: parts.join(' · ') } : null,
+      )
+      return true
+    },
+    [commitState, showFeatureNote],
+  )
+
+  /** Card readout path: the index is into the selected curve's analysis. */
+  const applyFeatureByIndex = useCallback(
+    (curveId: string, index: number, to: { x?: number; y?: number }): boolean => {
+      if (curveId !== selectedRef.current) return true
+      const point = analysisRef.current[index]
+      if (!point) return true
+      return applyFeature(curveId, point, to)
+    },
+    [applyFeature],
+  )
+
+  /** The explicit "yes, take the nearest one" — its own undo entry. */
+  const applyNearestFeature = useCallback((): void => {
+    const note = featureNote
+    if (!note || note.kind !== 'refused' || !note.nearest) return
+    const { curveId, params, domain } = note.nearest
+    setFeatureNote(null)
+    if (!curvesRef.current.some((c) => c.id === curveId)) return
+    commitState({
+      curves: curvesRef.current.map((c) =>
+        c.id === curveId ? { ...c, params: params.slice(), domain } : c,
+      ),
+    })
+  }, [commitState, featureNote])
 
   /** Keyboard nudge of the selected curve; returns true if it moved. */
   const nudgeSelected = useCallback(
@@ -1290,6 +1463,7 @@ export default function App() {
         brokenExpr={brokenExpr}
         analysis={analysis}
         onAnalysisHover={setHighlight}
+        onFeatureEdit={applyFeatureByIndex}
         candidatesFor={candidatesFor}
         onSelect={setSelectedId}
         onDelete={deleteCurve}
@@ -1354,6 +1528,7 @@ export default function App() {
           onViewportChange={scheduleSave}
           analysis={showAnalysis ? analysis : EMPTY_ANALYSIS}
           analysisHighlight={highlight}
+          onFeatureEdit={applyFeature}
         />
 
         <Toolbar
@@ -1390,6 +1565,42 @@ export default function App() {
         {toast && (
           <div key={toast.key} className="toast" role="status">
             {toast.msg}
+          </div>
+        )}
+
+        {featureNote && (
+          <div
+            key={featureNote.key}
+            className={`feature-note${
+              featureNote.kind === 'refused' ? ' feature-note-refused' : ''
+            }`}
+            role={featureNote.kind === 'refused' ? 'alert' : 'status'}
+          >
+            <span className="feature-note-text">
+              {featureNote.kind === 'refused' ? featureNote.reason : featureNote.text}
+            </span>
+            {featureNote.kind === 'refused' && featureNote.nearest && (
+              <button className="feature-note-action" onClick={applyNearestFeature}>
+                Use nearest achievable
+              </button>
+            )}
+            {featureNote.kind === 'refused' && (
+              <button
+                className="feature-note-close"
+                title="Dismiss"
+                aria-label="Dismiss"
+                onClick={() => setFeatureNote(null)}
+              >
+                <svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path
+                    d="M4 4l8 8M12 4l-8 8"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              </button>
+            )}
           </div>
         )}
 

@@ -31,6 +31,8 @@ import { drawGrid } from '../render/grid'
 import { drawCurve, drawInk } from '../render/curves'
 import { sampleCurveScreen, distToPolyline } from './sample'
 import { formatCoord } from './numeric'
+import { axesPhrase, axisKeys, featureAxes } from './featureEdit'
+import type { FeatureAxes } from './featureEdit'
 import { HandleInput } from './HandleInput'
 import type { HandleField } from './HandleInput'
 import type { Mode, StyleMap } from '../App'
@@ -70,6 +72,12 @@ interface Props {
   analysis: SpecialPoint[]
   /** Index into `analysis` to emphasise (hovered in the card readout). */
   analysisHighlight: number | null
+  /**
+   * State an exact position for one special point (double-clicked marker).
+   * False means it was refused — the popover stays open, and the board is
+   * already showing the solver's reason.
+   */
+  onFeatureEdit(curveId: string, point: SpecialPoint, to: { x?: number; y?: number }): boolean
 }
 
 const MIN_PPU = 0.001
@@ -77,6 +85,12 @@ const MAX_PPU = 100000
 const FADE_MS = 250
 const HIT_RADIUS = 8
 const HANDLE_HIT_RADIUS = 10
+/**
+ * Strictly smaller than HANDLE_HIT_RADIUS, and only ever consulted after
+ * handleAt() has already missed: an edit handle keeps first refusal on the
+ * pointer everywhere the two vocabularies meet.
+ */
+const MARKER_HIT_RADIUS = 9
 const OVERSKETCH_RADIUS = 12
 /** dragPoint → ink conversion threshold (stroke ran away from the curve). */
 const ESCAPE_PX = 28
@@ -131,12 +145,14 @@ interface PointerEntry {
 
 interface HoverInfo {
   handleId: string | null
+  /** Index into `analysis` when the pointer is over an editable marker. */
+  markerIndex: number | null
   cursor: string
-  /** Hover tooltip anchored on the handle itself (null off-handle). */
-  tip: { x: number; y: number; label: string } | null
+  /** Hover tooltip anchored on the handle/marker itself (null elsewhere). */
+  tip: { x: number; y: number; label: string; hint: string } | null
 }
 
-/** Open "type exact values" popover for one handle. */
+/** Open "type exact values" popover for one handle, or one analysis feature. */
 interface HandleEdit {
   curveId: string
   handleId: string
@@ -149,6 +165,12 @@ interface HandleEdit {
   /** Center handle of the same curve, when it has one. */
   center: Vec2 | null
   color: string
+  /**
+   * Set when this popover is editing an analysis feature rather than a control
+   * handle: the commit goes to the feature solver, not applyHandleDrag, and it
+   * is never snapped.
+   */
+  feature?: { point: SpecialPoint; index: number; axes: FeatureAxes }
 }
 
 /** Max delay/slop for the touch/pen double-tap fallback. */
@@ -160,11 +182,25 @@ const clampPpu = (v: number): number => Math.min(MAX_PPU, Math.max(MIN_PPU, v))
 // ---------------------------------------------------------------------------
 // Analysis markers.
 //
-// These are INFORMATIONAL — unlike the edit handles they carry no pointer
-// interaction at all, so they can never steal a handle's hit radius. They are
-// also drawn smaller and lighter than handles, and are suppressed wherever they
-// would sit under one (a parabola's vertex is both a handle and a minimum), so
-// the two vocabularies stay legible side by side.
+// Markers are now editable too (double-click one to state its exact position),
+// so "interactive vs informational" no longer separates them from the edit
+// handles. The distinction that replaces it is GESTURE, and it is deliberate:
+//
+//   handles are controls — permanently filled, larger, grabbed with a single
+//     press and dragged continuously; they change the curve while you move.
+//   markers are values — the hollow ring / diamond / faint dot vocabulary the
+//     reader already learned, unchanged at rest, and never draggable. They
+//     answer to a double-click only, which opens the same typed editor.
+//
+// So the canvas at rest still reads as a graph with its features labelled
+// rather than a control panel studded with grab points; a marker's editability
+// is revealed on approach instead (dashed halo + cursor + tooltip on hover).
+//
+// The priority rule is unchanged and enforced in two places: markers are
+// suppressed wherever a handle sits within HANDLE_HIT_RADIUS (a parabola's
+// vertex is both a handle and a minimum), and markerAt() applies the same mask,
+// so a marker that isn't drawn can never be clicked and a handle always wins
+// the pointer. Handles are hit-tested first regardless.
 // ---------------------------------------------------------------------------
 
 const TEXT_COLOR = '#e6eaf5'
@@ -261,6 +297,30 @@ function drawMarker(
   }
 }
 
+/**
+ * The affordance a marker only shows on approach: dashed while hovered, solid
+ * while its editor is open. Deliberately a ring AROUND the glyph rather than a
+ * change to the glyph, so the marker's own shape — which encodes what kind of
+ * feature it is — stays exactly as it reads at rest.
+ */
+function drawMarkerHalo(
+  ctx: CanvasRenderingContext2D,
+  sx: number,
+  sy: number,
+  color: string,
+  open: boolean,
+): void {
+  ctx.save()
+  ctx.beginPath()
+  ctx.arc(sx, sy, 10, 0, TWO_PI)
+  ctx.strokeStyle = color
+  ctx.globalAlpha = open ? 0.92 : 0.5
+  ctx.lineWidth = open ? 1.6 : 1.2
+  if (!open) ctx.setLineDash([2.5, 3])
+  ctx.stroke()
+  ctx.restore()
+}
+
 function drawAnalysis(
   ctx: CanvasRenderingContext2D,
   vp: Viewport,
@@ -268,6 +328,8 @@ function drawAnalysis(
   points: SpecialPoint[],
   handles: CurveHandle[],
   highlight: number | null,
+  openIdx: number | null,
+  hoverIdx: number | null,
 ): void {
   if (points.length === 0) return
 
@@ -281,7 +343,7 @@ function drawAnalysis(
     if (s.x < -30 || s.y < -30 || s.x > vp.widthPx + 30 || s.y > vp.heightPx + 30) continue
     // Yield the spot to an interactive handle, unless this is the one the user
     // is pointing at in the readout.
-    if (i !== highlight) {
+    if (i !== highlight && i !== openIdx) {
       let masked = false
       for (const hp of handlePts) {
         if (Math.hypot(hp.x - s.x, hp.y - s.y) <= HANDLE_HIT_RADIUS) {
@@ -296,7 +358,11 @@ function drawAnalysis(
   if (shown.length === 0) return
 
   for (const m of shown) {
-    drawMarker(ctx, m.p, m.sx, m.sy, curve.color, m.i === highlight ? 2.5 : 0)
+    const emphasised = m.i === highlight || m.i === openIdx
+    if (m.i === openIdx || m.i === hoverIdx) {
+      drawMarkerHalo(ctx, m.sx, m.sy, curve.color, m.i === openIdx)
+    }
+    drawMarker(ctx, m.p, m.sx, m.sy, curve.color, emphasised ? 2.5 : m.i === hoverIdx ? 1.2 : 0)
   }
 
   // --- labels, only while they can still be read
@@ -307,9 +373,11 @@ function drawAnalysis(
   const placed: { x: number; y: number; w: number; h: number }[] = []
   let lastX = -Infinity
 
+  const emph = (i: number): boolean => i === highlight || i === openIdx
+
   for (const m of ordered) {
     // crowded neighbours: keep the markers, drop the text
-    if (m.i !== highlight && m.sx - lastX < MIN_LABEL_GAP) continue
+    if (!emph(m.i) && m.sx - lastX < MIN_LABEL_GAP) continue
     const text = labelFor(m.p)
     const w = ctx.measureText(text).width + 10
     const h = 16
@@ -336,9 +404,9 @@ function drawAnalysis(
     ctx.fill()
     ctx.globalAlpha = 1
     ctx.lineWidth = 1
-    ctx.strokeStyle = m.i === highlight ? curve.color : DARK_THEME.gridMajor
+    ctx.strokeStyle = emph(m.i) ? curve.color : DARK_THEME.gridMajor
     ctx.stroke()
-    ctx.fillStyle = m.i === highlight ? curve.color : TEXT_COLOR
+    ctx.fillStyle = emph(m.i) ? curve.color : TEXT_COLOR
     ctx.fillText(text, box.x + 5, box.y + h / 2)
 
     placed.push(box)
@@ -371,6 +439,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     onViewportChange,
     analysis,
     analysisHighlight,
+    onFeatureEdit,
   },
   handle,
 ) {
@@ -407,7 +476,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   const [dragTip, setDragTip] = useState<{ x: number; y: number; label: string } | null>(null)
   const [handleEdit, setHandleEdit] = useState<HandleEdit | null>(null)
   const handleEditRef = useRef<HandleEdit | null>(null)
-  const lastTapRef = useRef<{ t: number; x: number; y: number; handleId: string } | null>(null)
+  /** Double-tap tracking. `key` is "h:<handleId>" or "m:<markerIndex>". */
+  const lastTapRef = useRef<{ t: number; x: number; y: number; key: string } | null>(null)
 
   const setEditor = useCallback((next: HandleEdit | null): void => {
     handleEditRef.current = next
@@ -473,7 +543,17 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
 
       // Analysis markers go UNDER the handles: handles are interactive and must
       // stay visually dominant (and unobstructed) wherever the two coincide.
-      drawAnalysis(ctx, vp, sel, analysisRef.current, hs, highlightRef.current)
+      const openFeature = handleEditRef.current?.feature
+      drawAnalysis(
+        ctx,
+        vp,
+        sel,
+        analysisRef.current,
+        hs,
+        highlightRef.current,
+        openFeature && handleEditRef.current?.curveId === sel.id ? openFeature.index : null,
+        hoverRef.current?.markerIndex ?? null,
+      )
 
       const activeId =
         g?.type === 'dragHandle'
@@ -578,6 +658,16 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     highlightRef.current = analysisHighlight
     scheduleRender()
   }, [curves, styles, models, selectedId, mode, inkColor, analysis, analysisHighlight, scheduleRender])
+
+  // A feature popover is bound to one special point. The moment the point list
+  // is rebuilt — the curve reshaped, or markers switched off — that binding is
+  // stale, so close it rather than let it edit whatever now sits at that index.
+  const analysisIdentityRef = useRef(analysis)
+  useEffect(() => {
+    if (analysisIdentityRef.current === analysis) return
+    analysisIdentityRef.current = analysis
+    if (handleEditRef.current?.feature) setEditor(null)
+  }, [analysis, setEditor])
 
   // ------------------------------------------------------------------- sizing
   useEffect(() => {
@@ -749,6 +839,46 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     [selectedVisible, vpRef],
   )
 
+  /**
+   * Nearest editable analysis marker within MARKER_HIT_RADIUS.
+   *
+   * Only ever called once handleAt() has come back empty, and it independently
+   * refuses any marker sitting under a handle — the same mask drawAnalysis uses
+   * to suppress it — so a marker that is not on screen can never be clicked.
+   */
+  const markerAt = useCallback(
+    (pos: Vec2): { point: SpecialPoint; index: number } | null => {
+      const points = analysisRef.current
+      if (points.length === 0) return null
+      const sel = selectedVisible()
+      if (!sel) return null
+      const vp = vpRef.current
+      let handlePts: Vec2[] = []
+      try {
+        handlePts = getHandles(sel, modelsRef.current).map((h) => toScreen(h.pos, vp))
+      } catch {
+        /* no handles — nothing masks the markers */
+      }
+      let best: { point: SpecialPoint; index: number } | null = null
+      let bestD = MARKER_HIT_RADIUS
+      for (let i = 0; i < points.length; i++) {
+        const p = points[i]
+        if (!p || !p.pos || !Number.isFinite(p.pos.x) || !Number.isFinite(p.pos.y)) continue
+        const sp = toScreen(p.pos, vp)
+        const d = Math.hypot(sp.x - pos.x, sp.y - pos.y)
+        if (d > bestD) continue
+        const masked = handlePts.some(
+          (hp) => Math.hypot(hp.x - sp.x, hp.y - sp.y) <= HANDLE_HIT_RADIUS,
+        )
+        if (masked) continue
+        bestD = d
+        best = { point: p, index: i }
+      }
+      return best
+    },
+    [selectedVisible, vpRef],
+  )
+
   /** Closest point of the selected curve to pos, with screen-px distance. */
   const nearestOnSelected = useCallback(
     (pos: Vec2): { curve: FittedCurve; distPx: number; mathPos: Vec2 } | null => {
@@ -781,6 +911,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
         (prev !== null &&
           info !== null &&
           prev.handleId === info.handleId &&
+          prev.markerIndex === info.markerIndex &&
           prev.cursor === info.cursor)
       if (!same) {
         hoverRef.current = info
@@ -840,12 +971,61 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     [scheduleRender, setEditor, setHover],
   )
 
+  /**
+   * The same popover, anchored on an analysis marker. Which fields it shows is
+   * derived from the point's KIND (a zero has no y to choose), never from the
+   * curve's family.
+   */
+  const openFeatureEditor = useCallback(
+    (point: SpecialPoint, index: number, sel: FittedCurve, anchor: Vec2): void => {
+      const axes = featureAxes(point.kind)
+      const fields: HandleField[] = axisKeys(axes).map((k) => ({
+        key: k,
+        label: k,
+        value: point.pos[k],
+      }))
+      setHover(null)
+      setDragTip(null)
+      setEditor({
+        curveId: sel.id,
+        handleId: `feature:${index}`,
+        kind: 'feature',
+        title: point.label,
+        fields,
+        anchor,
+        pos: point.pos,
+        center: null,
+        color: sel.color,
+        feature: { point, index, axes },
+      })
+      scheduleRender()
+    },
+    [scheduleRender, setEditor, setHover],
+  )
+
   /** Rebuild the drag target from typed values, then take the drag commit path. */
   const commitHandleEditor = useCallback(
     (values: number[], skipSnap: boolean): void => {
       const ed = handleEditRef.current
+      if (!ed) {
+        setEditor(null)
+        return
+      }
+
+      // Feature edit: state the fact, let the solver decide. A refusal leaves
+      // the popover open (and its typed text intact) so the next attempt costs
+      // one keystroke, while the board shows the solver's own reason.
+      if (ed.feature) {
+        const to: { x?: number; y?: number } = {}
+        axisKeys(ed.feature.axes).forEach((k, i) => {
+          to[k] = values[i]
+        })
+        if (onFeatureEdit(ed.curveId, ed.feature.point, to)) setEditor(null)
+        scheduleRender()
+        return
+      }
+
       setEditor(null)
-      if (!ed) return
       const curve = curvesRef.current.find((c) => c.id === ed.curveId)
       if (!curve) return
 
@@ -886,7 +1066,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       onCurveEditEnd(ed.curveId, skipSnap)
       scheduleRender()
     },
-    [onCurveEditEnd, onCurveEditStart, onHandleDrag, scheduleRender, setEditor],
+    [onCurveEditEnd, onCurveEditStart, onFeatureEdit, onHandleDrag, scheduleRender, setEditor],
   )
 
   const cancelHandleEditor = useCallback((): void => {
@@ -1083,30 +1263,43 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
 
     if (e.button === 0 && !spaceRef.current) {
       // 1. Handle grab beats everything (any mode) when a curve is selected.
+      //    Markers are only consulted where no handle answered.
       const h = handleAt(pos)
       const sel = selectedVisible()
+      const marker = h ? null : markerAt(pos)
 
-      // 1a. Double-click/tap a handle: type exact values instead of dragging.
-      if (h && sel) {
+      // 1a. Double-click/tap a handle OR a marker: type exact values.
+      const tapKey = h ? `h:${h.id}` : marker ? `m:${marker.index}` : null
+      if (tapKey && sel) {
         const prev = lastTapRef.current
         const isDouble =
           e.detail >= 2 ||
           (prev !== null &&
-            prev.handleId === h.id &&
+            prev.key === tapKey &&
             now - prev.t < DOUBLE_TAP_MS &&
             Math.hypot(pos.x - prev.x, pos.y - prev.y) < DOUBLE_TAP_PX)
-        lastTapRef.current = { t: now, x: pos.x, y: pos.y, handleId: h.id }
+        lastTapRef.current = { t: now, x: pos.x, y: pos.y, key: tapKey }
         if (isDouble) {
           lastTapRef.current = null
           // Never leave the first click's gesture (or its pointer entry) behind.
           cancelActiveGesture()
           pointersRef.current.clear()
-          openHandleEditor(h, sel, toScreen(h.pos, vpRef.current))
+          if (h) openHandleEditor(h, sel, toScreen(h.pos, vpRef.current))
+          else if (marker) {
+            openFeatureEditor(
+              marker.point,
+              marker.index,
+              sel,
+              toScreen(marker.point.pos, vpRef.current),
+            )
+          }
           return
         }
       } else {
         lastTapRef.current = null
       }
+      // A single press on a marker deliberately falls through: the marker sits
+      // ON the curve, and dragging the curve there must keep working.
 
       if (h && sel) {
         gestureRef.current = {
@@ -1179,18 +1372,34 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     if (!g) {
       if (!spaceRef.current && !handleEditRef.current) {
         const h = handleAt(pos)
+        const marker = h ? null : markerAt(pos)
         if (h) {
           const sp = toScreen(h.pos, vp)
           setHover({
             handleId: h.id,
+            markerIndex: null,
             cursor: h.cursor ?? 'grab',
-            tip: { x: sp.x, y: sp.y, label: h.label ?? h.id },
+            tip: { x: sp.x, y: sp.y, label: h.label ?? h.id, hint: 'double-click to type' },
+          })
+        } else if (marker) {
+          const sp = toScreen(marker.point.pos, vp)
+          setHover({
+            handleId: null,
+            markerIndex: marker.index,
+            // Not 'grab': a marker is never dragged, only stated.
+            cursor: 'pointer',
+            tip: {
+              x: sp.x,
+              y: sp.y,
+              label: marker.point.label,
+              hint: `double-click to set ${axesPhrase(featureAxes(marker.point.kind))}`,
+            },
           })
         } else {
           const near = nearestOnSelected(pos)
           setHover(
             near && near.distPx <= HIT_RADIUS
-              ? { handleId: null, cursor: 'move', tip: null }
+              ? { handleId: null, markerIndex: null, cursor: 'move', tip: null }
               : null,
           )
         }
@@ -1417,7 +1626,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
         hoverTip && (
           <div className="handle-tip" style={{ left: hoverTip.x + 14, top: hoverTip.y + 14 }}>
             {hoverTip.label}
-            <span className="handle-tip-hint">double-click to type</span>
+            <span className="handle-tip-hint">{hoverTip.hint}</span>
           </div>
         )
       )}
@@ -1429,6 +1638,13 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
           anchor={handleEdit.anchor}
           bounds={{ w: vpRef.current.widthPx, h: vpRef.current.heightPx }}
           color={handleEdit.color}
+          hint={
+            handleEdit.feature
+              ? // No ⌥Enter: a stated feature is never magnetized to a rounder
+                // number, so offering the modifier would be a lie.
+                `Enter puts the ${handleEdit.title} exactly here · Esc cancels`
+              : undefined
+          }
           onCommit={commitHandleEditor}
           onCancel={cancelHandleEditor}
         />

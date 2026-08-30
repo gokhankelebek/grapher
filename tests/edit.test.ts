@@ -9,7 +9,10 @@ import { MODELS } from '../src/core/fit/models'
 import { conicToCenterForm } from '../src/core/fit/optimize'
 import {
   getHandles, applyHandleDrag, dragCurvePoint, oversketch, snapParams, nearestOnCurve,
+  applyFeatureEdit,
 } from '../src/core/fit/edit'
+import { analyzeCurve } from '../src/core/analyze'
+import type { SpecialPoint, SpecialPointKind } from '../src/core/types'
 import { makeRng, makeGauss } from './helpers'
 
 const SQRT_LN2 = Math.sqrt(Math.LN2)
@@ -1008,5 +1011,458 @@ describe('dragCurvePoint — the displacement cap survives narrow features', () 
       const { worst } = trueWorstDisplacement(c, params, np, 8000)
       expect(worst / drag, `${id}: worst ${worst} for drag ${drag}`).toBeLessThanOrEqual(1.05 + 1e-6)
     }
+  })
+})
+
+// ===========================================================================
+// applyFeatureEdit
+//
+// Everything here is checked against closed-form truth — the expanded
+// coefficients of a(x−r₁)(x−r₂)(x−r₃), the exact vertex form, the cubic's
+// point-symmetry — never against what the solver happens to return.
+// ===========================================================================
+
+/** Ascending coefficients of a·∏(x − rᵢ). */
+function fromRoots(a: number, roots: number[]): number[] {
+  let c = [a]
+  for (const r of roots) {
+    const out = new Array<number>(c.length + 1).fill(0)
+    for (let i = 0; i < c.length; i++) {
+      out[i] += -r * c[i]
+      out[i + 1] += c[i]
+    }
+    c = out
+  }
+  return c
+}
+
+function evAt(id: string, p: number[], x: number): number {
+  return MODELS[id].evalExplicit!(p, x)
+}
+
+/** Exact derivative of an ascending-coefficient polynomial. */
+function dPoly(c: number[], x: number): number {
+  let s = 0
+  for (let k = 1; k < c.length; k++) s += k * c[k] * Math.pow(x, k - 1)
+  return s
+}
+
+function featuresOf(c: FittedCurve, kind: SpecialPointKind): SpecialPoint[] {
+  return analyzeCurve(c, MODELS).filter(p => p.kind === kind)
+}
+
+function feat(c: FittedCurve, kind: SpecialPointKind, idx = 0): SpecialPoint {
+  const list = featuresOf(c, kind)
+  expect(list.length, `expected ${kind} #${idx} to exist`).toBeGreaterThan(idx)
+  return list[idx]
+}
+
+describe('applyFeatureEdit — polynomial zeros are exact', () => {
+  it('a cubic takes three exact integer zeros, set one at a time', () => {
+    // a hand-drawn-looking cubic whose roots are nowhere near integers
+    let c = curve('poly3', fromRoots(0.5, [-1.7, 0.62, 2.43]), [-5, 5])
+    const want = [-2, 1, 3]
+    for (let i = 0; i < 3; i++) {
+      const res = applyFeatureEdit(c, MODELS, { point: feat(c, 'zero', i), to: { x: want[i] } })
+      expect(res.ok, `edit ${i}: ${res.ok ? '' : res.reason}`).toBe(true)
+      if (!res.ok) return
+      expect(res.exact, 'a polynomial zero is a closed-form edit').toBe(true)
+      expect(res.params.every(Number.isFinite)).toBe(true)
+      c = { ...c, params: res.params, domain: res.domain }
+    }
+    const zeros = featuresOf(c, 'zero').map(p => p.pos.x)
+    expect(zeros.length).toBe(3)
+    for (let i = 0; i < 3; i++) expect(zeros[i]).toBeCloseTo(want[i], 9)
+
+    // and the curve really IS a(x+2)(x−1)(x−3): compare against the expansion
+    const a = c.params[3]
+    expect(a).toBeGreaterThan(0)
+    expect(a).toBeLessThan(4) // the drawn curve had a = 0.5; nothing blew up
+    const truth = fromRoots(a, want)
+    for (let k = 0; k < 4; k++) {
+      expect(c.params[k], `coefficient ${k}`).toBeCloseTo(truth[k], 10)
+    }
+  })
+
+  it('moving one zero of a cubic leaves the other two exactly where they were', () => {
+    const c = curve('poly3', fromRoots(0.8, [-3, 0.5, 2]), [-5, 5])
+    const res = applyFeatureEdit(c, MODELS, { point: feat(c, 'zero', 1), to: { x: 1 } })
+    expect(res.ok).toBe(true)
+    if (!res.ok) return
+    const after = featuresOf({ ...c, params: res.params, domain: res.domain }, 'zero')
+    expect(after.map(p => p.pos.x)[0]).toBeCloseTo(-3, 10)
+    expect(after.map(p => p.pos.x)[1]).toBeCloseTo(1, 10)
+    expect(after.map(p => p.pos.x)[2]).toBeCloseTo(2, 10)
+    // the turning points did move, and the result says so
+    const moved = res.alsoMoved ?? []
+    expect(moved.some(p => p.kind === 'maximum' || p.kind === 'minimum')).toBe(true)
+    expect(moved.some(p => p.kind === 'zero'), 'no zero should be reported as moved').toBe(false)
+  })
+
+  it('a parabola takes both of its zeros exactly', () => {
+    let c = curve('poly2', fromRoots(-1.3, [-0.4, 2.9]), [-5, 5])
+    for (const [i, x] of [-1, 2].entries()) {
+      const res = applyFeatureEdit(c, MODELS, { point: feat(c, 'zero', i), to: { x } })
+      expect(res.ok).toBe(true)
+      if (!res.ok) return
+      c = { ...c, params: res.params, domain: res.domain }
+    }
+    const a = c.params[2]
+    expect(a).toBeLessThan(0)
+    const truth = fromRoots(a, [-1, 2])
+    for (let k = 0; k < 3; k++) expect(c.params[k]).toBeCloseTo(truth[k], 10)
+  })
+
+  it('a line takes its zero exactly, keeping its slope', () => {
+    const c = curve('line', [-1, 0.8], [-6, 6])
+    const res = applyFeatureEdit(c, MODELS, { point: feat(c, 'zero'), to: { x: 3 } })
+    expect(res.ok).toBe(true)
+    if (!res.ok) return
+    expect(evAt('line', res.params, 3)).toBeCloseTo(0, 12)
+  })
+})
+
+describe('applyFeatureEdit — vertices, turning points and inflections', () => {
+  it('a parabola of width a = 0.5 put at (2, −1) is exactly 0.5(x−2)² − 1', () => {
+    const c = curve('poly2', [3.5, -1, 0.5], [-5, 5]) // 0.5(x−1)² + 3
+    const res = applyFeatureEdit(c, MODELS, { point: feat(c, 'minimum'), to: { x: 2, y: -1 } })
+    expect(res.ok).toBe(true)
+    if (!res.ok) return
+    expect(res.exact).toBe(true)
+    // 0.5(x−2)² − 1 = 0.5x² − 2x + 1
+    expect(res.params[2]).toBeCloseTo(0.5, 12)
+    expect(res.params[1]).toBeCloseTo(-2, 12)
+    expect(res.params[0]).toBeCloseTo(1, 12)
+  })
+
+  it('a cubic maximum put at (−1, 5) keeps the point-symmetry invariant', () => {
+    const c = curve('poly3', [1, -2, -0.3, 0.5], [-5, 5])
+    const res = applyFeatureEdit(c, MODELS, { point: feat(c, 'maximum'), to: { x: -1, y: 5 } })
+    expect(res.ok, res.ok ? '' : res.reason).toBe(true)
+    if (!res.ok) return
+    expect(res.exact).toBe(true)
+    const p = res.params
+    expect(dPoly(p, -1)).toBeCloseTo(0, 9)
+    expect(evAt('poly3', p, -1)).toBeCloseTo(5, 9)
+    // the leading coefficient — the curve's scale — is untouched
+    expect(p[3]).toBeCloseTo(0.5, 12)
+
+    const after = { ...c, params: p, domain: res.domain }
+    const mx = feat(after, 'maximum')
+    const mn = feat(after, 'minimum')
+    const inf = feat(after, 'inflection')
+    expect(mx.pos.x).toBeCloseTo(-1, 9)
+    expect(mx.pos.y).toBeCloseTo(5, 9)
+    expect(inf.pos.x, 'inflection is the midpoint of the two extrema')
+      .toBeCloseTo((mx.pos.x + mn.pos.x) / 2, 9)
+    expect(inf.pos.y, 'and the midpoint of their heights, by point symmetry')
+      .toBeCloseTo((mx.pos.y + mn.pos.y) / 2, 9)
+  })
+
+  it('a cubic takes a maximum and a pinned minimum together, exactly', () => {
+    const c = curve('poly3', [1, -2, -0.3, 0.5], [-5, 5])
+    const min = feat(c, 'minimum')
+    const res = applyFeatureEdit(c, MODELS, {
+      point: feat(c, 'maximum'),
+      to: { x: -1, y: 5 },
+      pinned: [{ ...min, pos: { x: 2, y: -3 } }],
+    })
+    expect(res.ok, res.ok ? '' : res.reason).toBe(true)
+    if (!res.ok) return
+    const p = res.params
+    expect(dPoly(p, -1)).toBeCloseTo(0, 9)
+    expect(dPoly(p, 2)).toBeCloseTo(0, 9)
+    expect(evAt('poly3', p, -1)).toBeCloseTo(5, 9)
+    expect(evAt('poly3', p, 2)).toBeCloseTo(-3, 9)
+    // two critical points determine a cubic uniquely: f'' = 6c₃x + 2c₂ = 0 at
+    // the midpoint x = 0.5
+    const after = { ...c, params: p, domain: res.domain }
+    expect(feat(after, 'inflection').pos.x).toBeCloseTo(0.5, 9)
+  })
+
+  it('a cubic inflection move is a rigid slide of the whole curve', () => {
+    const c = curve('poly3', [1, -2, -0.3, 0.5], [-5, 5])
+    const before = feat(c, 'inflection')
+    const res = applyFeatureEdit(c, MODELS, { point: before, to: { x: 1, y: 2 } })
+    expect(res.ok).toBe(true)
+    if (!res.ok) return
+    const after = { ...c, params: res.params, domain: res.domain }
+    const inf = feat(after, 'inflection')
+    expect(inf.pos.x).toBeCloseTo(1, 9)
+    expect(inf.pos.y).toBeCloseTo(2, 9)
+    expect(res.params[3], 'the cubic keeps its scale').toBeCloseTo(0.5, 12)
+    // a slide preserves the gap between the turning points
+    const gap = (cc: FittedCurve) =>
+      feat(cc, 'minimum').pos.x - feat(cc, 'maximum').pos.x
+    expect(gap(after)).toBeCloseTo(gap(c), 9)
+  })
+
+  it('a sine crest goes exactly where it is asked', () => {
+    const c = curve('sine', [1.5, 1.2, 0.3, 0.4], [-7, 7])
+    const res = applyFeatureEdit(c, MODELS, { point: feat(c, 'maximum'), to: { x: 1, y: 4 } })
+    expect(res.ok, res.ok ? '' : res.reason).toBe(true)
+    if (!res.ok) return
+    expect(res.exact).toBe(true)
+    expect(evAt('sine', res.params, 1)).toBeCloseTo(4, 12)
+    expect(res.params[1], 'the wavelength is left alone').toBeCloseTo(1.2, 12)
+    expect(res.params[3], 'and so is the midline').toBeCloseTo(0.4, 12)
+    // it is a crest, not a trough
+    expect(evAt('sine', res.params, 1.05)).toBeLessThan(4)
+    expect(evAt('sine', res.params, 0.95)).toBeLessThan(4)
+  })
+
+  it('a gaussian peak goes exactly where it is asked', () => {
+    const c = curve('gauss', [3, 0.5, 1.2, -1], [-6, 7])
+    const res = applyFeatureEdit(c, MODELS, { point: feat(c, 'maximum'), to: { x: 2, y: 5 } })
+    expect(res.ok, res.ok ? '' : res.reason).toBe(true)
+    if (!res.ok) return
+    expect(res.exact).toBe(true)
+    expect(res.params[1]).toBeCloseTo(2, 12)
+    expect(evAt('gauss', res.params, 2)).toBeCloseTo(5, 12)
+    expect(res.params[2], 'the width is left alone').toBeCloseTo(1.2, 12)
+  })
+
+  it('an absolute-value corner goes exactly where it is asked', () => {
+    const c = curve('abs', [1.2, 0.7, -2], [-5, 6])
+    const res = applyFeatureEdit(c, MODELS, { point: feat(c, 'minimum'), to: { x: -1, y: 1 } })
+    expect(res.ok).toBe(true)
+    if (!res.ok) return
+    expect(res.params[1]).toBeCloseTo(-1, 12)
+    expect(res.params[2]).toBeCloseTo(1, 12)
+  })
+
+  it('a y-intercept edit is a pure vertical slide', () => {
+    for (const [id, params, domain] of FAMILY_FIXTURES) {
+      const c = curve(id, params, domain)
+      const yi = featuresOf(c, 'y-intercept')[0]
+      if (!yi) continue
+      const res = applyFeatureEdit(c, MODELS, { point: yi, to: { y: yi.pos.y + 1.5 } })
+      expect(res.ok, `${id}: ${res.ok ? '' : res.reason}`).toBe(true)
+      if (!res.ok) continue
+      expect(evAt(id, res.params, 0), `${id}: f(0)`).toBeCloseTo(yi.pos.y + 1.5, 9)
+      // a slide keeps the shape: the SPACING of the zeros is unchanged in x
+      // only for polys, so check the cheap invariant instead — the curve moved
+      // by exactly 1.5 everywhere
+      const x = (domain![0] + domain![1]) / 2 + 0.37
+      expect(evAt(id, res.params, x) - evAt(id, params, x), `${id}: at x=${x}`)
+        .toBeCloseTo(1.5, 9)
+    }
+  })
+
+  it('a circle zero moves without disturbing the other crossing', () => {
+    const c = curve('circle', [0, 0, 2.5], null)
+    const zeros = featuresOf(c, 'zero')
+    expect(zeros.length).toBe(2)
+    const res = applyFeatureEdit(c, MODELS, { point: zeros[1], to: { x: 4 } })
+    expect(res.ok, res.ok ? '' : res.reason).toBe(true)
+    if (!res.ok) return
+    const after = featuresOf({ ...c, params: res.params, domain: res.domain }, 'zero')
+    expect(after[0].pos.x).toBeCloseTo(-2.5, 9)
+    expect(after[1].pos.x).toBeCloseTo(4, 9)
+  })
+})
+
+describe('applyFeatureEdit — refusals a teacher can read', () => {
+  const zeroAt = (x: number): SpecialPoint =>
+    ({ kind: 'zero', pos: { x, y: 0 }, label: 'zero', exact: true })
+
+  it('a parabola cannot be given three zeros', () => {
+    const params = fromRoots(1, [-1, 2])
+    const c = curve('poly2', params, [-5, 5])
+    const res = applyFeatureEdit(c, MODELS, {
+      point: feat(c, 'zero', 0),
+      to: { x: -3 },
+      pinned: [zeroAt(2), zeroAt(4)],
+    })
+    expect(res.ok).toBe(false)
+    if (res.ok) return
+    expect(res.reason.length).toBeGreaterThan(0)
+    expect(res.reason).toMatch(/parabola/i)
+    expect(c.params).toEqual(params) // nothing mutated
+  })
+
+  it('a gaussian cannot be given a second extremum', () => {
+    const params = [3, 0.5, 1.2, -1]
+    const c = curve('gauss', params, [-6, 7])
+    const bogus: SpecialPoint = {
+      kind: 'maximum', pos: { x: 4.5, y: 0.2 }, label: 'max', exact: false,
+    }
+    const res = applyFeatureEdit(c, MODELS, { point: bogus, to: { x: 5, y: 2 } })
+    expect(res.ok).toBe(false)
+    if (res.ok) return
+    expect(res.reason).toMatch(/gaussian has exactly one turning point/i)
+    expect(c.params).toEqual(params)
+  })
+
+  it('a gaussian cannot hold two peaks at once', () => {
+    const params = [3, 0.5, 1.2, -1]
+    const c = curve('gauss', params, [-6, 7])
+    const peak = feat(c, 'maximum')
+    const res = applyFeatureEdit(c, MODELS, {
+      point: peak,
+      to: { x: 2, y: 5 },
+      pinned: [{ ...peak, pos: { x: -3, y: 1 } }],
+    })
+    expect(res.ok).toBe(false)
+    if (res.ok) return
+    expect(res.reason).toMatch(/one turning point/i)
+    expect(c.params).toEqual(params)
+  })
+
+  it('a cubic cannot have three zeros AND a chosen maximum', () => {
+    const params = fromRoots(0.5, [-2, 1, 3])
+    const c = curve('poly3', params, [-5, 5])
+    const res = applyFeatureEdit(c, MODELS, {
+      point: feat(c, 'maximum'),
+      to: { x: -1 },
+      pinned: [zeroAt(-2), zeroAt(1), zeroAt(3)],
+    })
+    expect(res.ok).toBe(false)
+    if (res.ok) return
+    expect(res.reason).toMatch(/three zeros already fix a cubic/i)
+    expect(c.params).toEqual(params)
+  })
+
+  it('too many pinned features are refused, with the count', () => {
+    const params = [1, -2, -0.3, 0.5]
+    const c = curve('poly3', params, [-5, 5])
+    const res = applyFeatureEdit(c, MODELS, {
+      point: feat(c, 'zero', 0),
+      to: { x: -3 },
+      pinned: [feat(c, 'maximum'), feat(c, 'minimum'), feat(c, 'inflection')],
+    })
+    expect(res.ok).toBe(false)
+    if (res.ok) return
+    expect(res.reason).toMatch(/conditions at once/i)
+    expect(c.params).toEqual(params)
+  })
+
+  it('a cubic maximum cannot be asked to sit below its minimum', () => {
+    const params = [1, -2, -0.3, 0.5]
+    const c = curve('poly3', params, [-5, 5])
+    const min = feat(c, 'minimum')
+    const res = applyFeatureEdit(c, MODELS, {
+      point: feat(c, 'maximum'),
+      to: { x: -1, y: -4 },
+      pinned: [{ ...min, pos: { x: 2, y: 3 } }],
+    })
+    expect(res.ok).toBe(false)
+    if (res.ok) return
+    expect(res.reason).toMatch(/maximum is always the higher/i)
+    expect(c.params).toEqual(params)
+  })
+
+  it('a cubic inflection off the midpoint of the extrema is refused', () => {
+    const params = [1, -2, -0.3, 0.5]
+    const c = curve('poly3', params, [-5, 5])
+    const min = feat(c, 'minimum')
+    const inf = feat(c, 'inflection')
+    const res = applyFeatureEdit(c, MODELS, {
+      point: feat(c, 'maximum'),
+      to: { x: -1, y: 5 },
+      pinned: [
+        { ...min, pos: { x: 2, y: -3 } },
+        { ...inf, pos: { x: 1, y: 0 } },
+      ],
+    })
+    expect(res.ok).toBe(false)
+    if (res.ok) return
+    expect(res.reason).toMatch(/point-symmetric/i)
+    expect(res.reason).toMatch(/0\.5/)
+    expect(c.params).toEqual(params)
+  })
+
+  it('a zero cannot be moved where the curve has none', () => {
+    const params = [3, 0, 1, 1] // a gaussian sitting entirely above the axis
+    const c = curve('gauss', params, [-6, 6])
+    expect(featuresOf(c, 'zero').length).toBe(0)
+    const res = applyFeatureEdit(c, MODELS, { point: zeroAt(2), to: { x: 3 } })
+    expect(res.ok).toBe(false)
+    if (res.ok) return
+    expect(res.reason).toMatch(/never crosses the x-axis/i)
+    expect(c.params).toEqual(params)
+  })
+
+  it('a zero far from any real zero of the curve is refused, not snapped', () => {
+    const params = fromRoots(0.5, [-2, 1, 3])
+    const c = curve('poly3', params, [-6, 6])
+    const res = applyFeatureEdit(c, MODELS, { point: zeroAt(5.5), to: { x: 5 } })
+    expect(res.ok).toBe(false)
+    if (res.ok) return
+    expect(res.reason).toMatch(/no zero near/i)
+    expect(c.params).toEqual(params)
+  })
+
+  it('a zero cannot be lifted off the x-axis, and a y-intercept cannot move sideways', () => {
+    const c = curve('poly3', fromRoots(0.5, [-2, 1, 3]), [-6, 6])
+    const a = applyFeatureEdit(c, MODELS, { point: feat(c, 'zero'), to: { y: 2 } })
+    expect(a.ok).toBe(false)
+    if (!a.ok) expect(a.reason).toMatch(/y is always 0/i)
+    const b = applyFeatureEdit(c, MODELS, { point: feat(c, 'y-intercept'), to: { x: 2 } })
+    expect(b.ok).toBe(false)
+    if (!b.ok) expect(b.reason).toMatch(/up and down/i)
+  })
+
+  it('an absolute-value graph has no inflection to move', () => {
+    const c = curve('abs', [1.2, 0.7, -2], [-5, 6])
+    const bogus: SpecialPoint = {
+      kind: 'inflection', pos: { x: 0.7, y: -2 }, label: 'inflection', exact: false,
+    }
+    const res = applyFeatureEdit(c, MODELS, { point: bogus, to: { x: 1 } })
+    expect(res.ok).toBe(false)
+    if (res.ok) return
+    expect(res.reason.length).toBeGreaterThan(0)
+  })
+})
+
+describe('applyFeatureEdit — never produces a broken curve', () => {
+  it('every family, every feature, every target: finite params or an honest refusal', () => {
+    for (const [id, params, domain] of FAMILY_FIXTURES) {
+      const c = curve(id, params, domain)
+      const pts = analyzeCurve(c, MODELS)
+      for (const pt of pts) {
+        const targets = [
+          { x: pt.pos.x + 0.7 },
+          { y: pt.pos.y - 0.9 },
+          { x: pt.pos.x - 1.3, y: pt.pos.y + 2.2 },
+          { x: pt.pos.x + 24 },
+          { x: pt.pos.x, y: pt.pos.y },
+        ]
+        for (const to of targets) {
+          const res = applyFeatureEdit(c, MODELS, { point: pt, to })
+          const where = `${id}/${pt.kind}@${pt.pos.x.toFixed(2)} -> ${JSON.stringify(to)}`
+          if (res.ok) {
+            expect(res.params.every(Number.isFinite), `${where}: params ${res.params}`).toBe(true)
+            expect(res.params.length, where).toBe(params.length)
+            if (res.domain) {
+              expect(res.domain.every(Number.isFinite), where).toBe(true)
+              expect(res.domain[1] > res.domain[0], where).toBe(true)
+            }
+            for (const q of res.alsoMoved ?? []) {
+              expect(Number.isFinite(q.pos.x) && Number.isFinite(q.pos.y), where).toBe(true)
+            }
+          } else {
+            expect(typeof res.reason, where).toBe('string')
+            expect(res.reason.length, where).toBeGreaterThan(0)
+            if (res.nearest) {
+              expect(res.nearest.params.every(Number.isFinite), where).toBe(true)
+            }
+          }
+          expect(c.params, `${where}: params must not be mutated`).toEqual(params)
+        }
+      }
+    }
+  })
+
+  it('runs comfortably inside a typed commit, and fast enough to drag', () => {
+    const c = curve('poly3', fromRoots(0.5, [-2, 1, 3]), [-6, 6])
+    const pt = feat(c, 'zero', 1)
+    const N = 200
+    const t0 = performance.now()
+    for (let i = 0; i < N; i++) {
+      applyFeatureEdit(c, MODELS, { point: pt, to: { x: 1 + i / 1000 } })
+    }
+    const per = (performance.now() - t0) / N
+    expect(per, `${per.toFixed(3)} ms per edit`).toBeLessThan(10)
   })
 })

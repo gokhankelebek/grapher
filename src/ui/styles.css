@@ -1123,6 +1123,77 @@ button.param-value:hover {
   }
 }
 
+/* The board's answer to a feature edit. Sits where the toast does — the two are
+   both replies to the last action and are never shown together — but this one
+   can carry buttons, so it is not pointer-events:none. */
+.feature-note {
+  position: absolute;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(560px, calc(100% - 32px));
+  padding: 8px 8px 8px 13px;
+  border-radius: 9px;
+  background: rgba(19, 23, 34, 0.96);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  animation: toast-in 0.18s var(--ease) both;
+}
+
+.feature-note-refused {
+  border-color: rgba(249, 95, 98, 0.5);
+  box-shadow:
+    inset 2px 0 0 var(--danger),
+    var(--shadow);
+}
+
+.feature-note-text {
+  min-width: 0;
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.feature-note-action {
+  flex: 0 0 auto;
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font-size: 12px;
+  white-space: nowrap;
+  transition: background 0.15s var(--ease);
+}
+
+.feature-note-action:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.feature-note-close {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  color: var(--muted);
+  transition:
+    background 0.15s var(--ease),
+    color 0.15s var(--ease);
+}
+
+.feature-note-close:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
 /* ------------------------------------------------------------ mobile scrim */
 
 /* desktop/tablet: inert. phones (drawer mode): tap outside to dismiss */
@@ -1769,10 +1840,71 @@ button.param-value:hover {
     color 0.15s var(--ease);
 }
 
+/* The values are editable: a text caret, matching the coefficient readouts. */
+button.an-value {
+  cursor: text;
+}
+
 .an-value:hover,
 .an-value:focus-visible {
   background: color-mix(in srgb, var(--curve, var(--accent)) 22%, transparent);
   color: #fff;
+}
+
+/* inline "state this feature exactly" editor, in place of the value */
+.an-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.an-edit-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.an-edit-punct {
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.an-edit-input {
+  width: 52px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, var(--curve, var(--accent)) 55%, var(--border));
+  background: var(--bg);
+  color: var(--text);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  outline: none;
+  transition:
+    border-color 0.15s var(--ease),
+    box-shadow 0.15s var(--ease);
+}
+
+.an-edit-input:focus {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--curve, var(--accent)) 18%, transparent);
+}
+
+.an-edit-input:focus-visible {
+  outline: none;
+}
+
+/* Two identical rules, alternated on each rejected commit: the flash animation
+   only restarts when the class name actually changes, so a second bad Enter
+   would otherwise land in silence. */
+.an-edit-bad-a,
+.an-edit-bad-b,
+.an-edit-bad-a:focus,
+.an-edit-bad-b:focus {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 2px rgba(249, 95, 98, 0.16);
+  animation: bad-flash 0.3s var(--ease);
 }
 
 .an-note {

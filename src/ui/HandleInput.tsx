@@ -28,7 +28,15 @@ interface Props {
    */
   onCommit(values: number[], skipSnap: boolean): void
   onCancel(): void
+  /**
+   * Footer text. Defaults to the handle-drag wording. Callers that never snap
+   * (an analysis feature is a stated fact, not a dragged approximation) must
+   * pass their own, or the popover would promise a modifier that does nothing.
+   */
+  hint?: string
 }
+
+const DEFAULT_HINT = 'Enter to set exactly · ⌥Enter snaps · Esc cancels'
 
 const GAP = 12
 const EDGE = 6
@@ -37,7 +45,16 @@ const EDGE = 6
  * Small floating editor anchored to a control handle: type exact values for
  * whatever the handle means (x/y, a radius, an angle, a domain end).
  */
-export function HandleInput({ title, fields, anchor, bounds, color, onCommit, onCancel }: Props) {
+export function HandleInput({
+  title,
+  fields,
+  anchor,
+  bounds,
+  color,
+  onCommit,
+  onCancel,
+  hint = DEFAULT_HINT,
+}: Props) {
   const boxRef = useRef<HTMLDivElement>(null)
   const inputsRef = useRef<(HTMLInputElement | null)[]>([])
   const [texts, setTexts] = useState<string[]>(() => fields.map((f) => formatSig(f.value)))
@@ -152,7 +169,7 @@ export function HandleInput({ title, fields, anchor, bounds, color, onCommit, on
           </label>
         ))}
       </div>
-      <div className="handle-pop-hint">Enter to set exactly · ⌥Enter snaps · Esc cancels</div>
+      <div className="handle-pop-hint">{hint}</div>
     </div>
   )
 }

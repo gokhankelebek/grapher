@@ -10,7 +10,8 @@ import type {
 } from '../core/types'
 import type { CurveStyle } from '../App'
 import { Latex } from './Latex'
-import { formatCoord } from './numeric'
+import { formatCoord, formatSig, parseNumeric } from './numeric'
+import { axisKeys, featureAxes } from './featureEdit'
 
 interface Props {
   curve: FittedCurve
@@ -31,6 +32,12 @@ interface Props {
   analysis: SpecialPoint[]
   /** Hovering a value emphasises the matching marker on canvas. */
   onAnalysisHover(index: number | null): void
+  /**
+   * State an exact position for one special point. Returns true when the curve
+   * actually changed; false leaves the editor open (the solver refused, and its
+   * reason is being shown elsewhere) so the teacher can try another value.
+   */
+  onFeatureEdit(index: number, to: { x?: number; y?: number }): boolean
   onSelect(): void
   onDelete(): void
   onDuplicate(): void
@@ -168,6 +175,7 @@ export function CurveCard({
   brokenReason,
   analysis,
   onAnalysisHover,
+  onFeatureEdit,
   onSelect,
   onDelete,
   onDuplicate,
@@ -199,6 +207,35 @@ export function CurveCard({
   }, [editing?.index])
   useEffect(() => {
     if (!selected && editing) setEditing(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected])
+
+  // Inline editing of an analysis value ("put this zero at x = −2").
+  //
+  // `bad` is per-field so only the field that failed to parse turns red, and
+  // `flash` is bumped on every rejected commit: the red-flash animation only
+  // fires when the class name changes, so a second bad Enter has to land on a
+  // different (identical) class or it would silently do nothing.
+  const [featureEdit, setFeatureEdit] = useState<{
+    index: number
+    texts: string[]
+    bad: boolean[]
+    flash: number
+  } | null>(null)
+  const featureInputsRef = useRef<(HTMLInputElement | null)[]>([])
+  useEffect(() => {
+    if (!featureEdit) return
+    const first = featureInputsRef.current[0]
+    first?.focus()
+    first?.select()
+    // Only on open — re-running on every keystroke would fight the caret.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [featureEdit?.index])
+  useEffect(() => {
+    if (!selected && featureEdit) {
+      setFeatureEdit(null)
+      onAnalysisHover(null)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected])
 
@@ -271,6 +308,72 @@ export function CurveCard({
 
   const activeDashKey =
     DASH_STYLES.find((d) => JSON.stringify(d.dash) === JSON.stringify(style?.dash))?.key ?? 'solid'
+
+  // The special points are recomputed whenever the curve's shape changes, so an
+  // open editor would end up pointing at a different point than the one that was
+  // clicked. Close it instead of letting it edit something else.
+  const analysisIdentityRef = useRef(analysis)
+  useEffect(() => {
+    if (analysisIdentityRef.current === analysis) return
+    analysisIdentityRef.current = analysis
+    if (featureEdit) {
+      setFeatureEdit(null)
+      onAnalysisHover(null)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [analysis])
+
+  const openFeatureEdit = (index: number): void => {
+    const point = analysis[index]
+    if (!point) return
+    const keys = axisKeys(featureAxes(point.kind))
+    // The button is replaced by inputs, so its own mouseleave can never fire.
+    // Ownership of the marker emphasis passes to the editor: held while it is
+    // open (the point being edited stays lit on canvas), released when it shuts.
+    onAnalysisHover(index)
+    setFeatureEdit({
+      index,
+      texts: keys.map((k) => formatSig(point.pos[k])),
+      bad: keys.map(() => false),
+      flash: 0,
+    })
+  }
+
+  const closeFeatureEdit = (): void => {
+    setFeatureEdit(null)
+    onAnalysisHover(null)
+  }
+
+  /**
+   * Enter on an analysis value. A malformed field keeps the editor open and red;
+   * a value the family cannot honour also keeps it open — the solver's own
+   * reason is surfaced by the board, and the teacher is one keystroke from a
+   * different answer.
+   */
+  const commitFeatureEdit = (): void => {
+    const ed = featureEdit
+    if (!ed) return
+    const point = analysis[ed.index]
+    if (!point) {
+      closeFeatureEdit()
+      return
+    }
+    const keys = axisKeys(featureAxes(point.kind))
+    const parsed = ed.texts.map(parseNumeric)
+    const nextBad = parsed.map((v) => v === null)
+    if (nextBad.some(Boolean)) {
+      setFeatureEdit({ ...ed, bad: nextBad, flash: ed.flash + 1 })
+      const firstBad = nextBad.indexOf(true)
+      featureInputsRef.current[firstBad]?.focus()
+      featureInputsRef.current[firstBad]?.select()
+      return
+    }
+    const to: { x?: number; y?: number } = {}
+    keys.forEach((k, i) => {
+      to[k] = parsed[i] as number
+    })
+    if (onFeatureEdit(ed.index, to)) closeFeatureEdit()
+  }
 
   const commitInlineEdit = (): void => {
     if (!editing) return
@@ -517,23 +620,90 @@ export function CurveCard({
                       {g.items.length > 1 ? (g.plural ?? g.label) : g.label}
                     </span>
                     <span className="an-values">
-                      {g.items.map(({ point, index }, n) => (
-                        <button
-                          key={index}
-                          className="an-value"
-                          title="Highlight this point on the graph"
-                          onMouseEnter={() => onAnalysisHover(index)}
-                          onMouseLeave={() => onAnalysisHover(null)}
-                          onFocus={() => onAnalysisHover(index)}
-                          onBlur={() => onAnalysisHover(null)}
-                        >
-                          {point.kind === 'zero'
-                            ? formatCoord(point.pos.x)
-                            : `(${formatCoord(point.pos.x)}, ${formatCoord(point.pos.y)})`}
-                          {point.tangent && <span className="an-note">touches</span>}
-                          {n < g.items.length - 1 && <span className="an-sep">,</span>}
-                        </button>
-                      ))}
+                      {g.items.map(({ point, index }, n) => {
+                        const keys = axisKeys(featureAxes(point.kind))
+                        const pair = keys.length > 1
+                        if (featureEdit?.index === index) {
+                          return (
+                            <span
+                              className="an-edit"
+                              key={index}
+                              onBlur={(e) => {
+                                // Tabbing between x and y must not close it.
+                                if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+                                  closeFeatureEdit()
+                                }
+                              }}
+                            >
+                              {pair && <span className="an-edit-punct">(</span>}
+                              {keys.map((k, i) => (
+                                <span className="an-edit-cell" key={k}>
+                                  {i > 0 && <span className="an-edit-punct">,</span>}
+                                  <input
+                                    ref={(el) => {
+                                      featureInputsRef.current[i] = el
+                                    }}
+                                    className={`an-edit-input${
+                                      featureEdit.bad[i]
+                                        ? featureEdit.flash % 2 === 0
+                                          ? ' an-edit-bad-a'
+                                          : ' an-edit-bad-b'
+                                        : ''
+                                    }`}
+                                    type="text"
+                                    inputMode="decimal"
+                                    spellCheck={false}
+                                    autoComplete="off"
+                                    aria-label={`${point.label} ${k}`}
+                                    aria-invalid={featureEdit.bad[i] || undefined}
+                                    value={featureEdit.texts[i]}
+                                    onChange={(e) => {
+                                      const texts = featureEdit.texts.slice()
+                                      texts[i] = e.target.value
+                                      const bad = featureEdit.bad.slice()
+                                      bad[i] = false
+                                      setFeatureEdit({ ...featureEdit, texts, bad })
+                                    }}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') {
+                                        e.preventDefault()
+                                        commitFeatureEdit()
+                                      } else if (e.key === 'Escape') {
+                                        e.preventDefault()
+                                        closeFeatureEdit()
+                                      }
+                                    }}
+                                  />
+                                </span>
+                              ))}
+                              {pair && <span className="an-edit-punct">)</span>}
+                              {n < g.items.length - 1 && <span className="an-sep">,</span>}
+                            </span>
+                          )
+                        }
+                        return (
+                          <button
+                            key={index}
+                            className="an-value"
+                            title={
+                              pair
+                                ? `Click to set this ${point.label} to exact coordinates`
+                                : `Click to set this ${point.label} to an exact ${keys[0]}`
+                            }
+                            onMouseEnter={() => onAnalysisHover(index)}
+                            onMouseLeave={() => onAnalysisHover(null)}
+                            onFocus={() => onAnalysisHover(index)}
+                            onBlur={() => onAnalysisHover(null)}
+                            onClick={() => openFeatureEdit(index)}
+                          >
+                            {point.kind === 'zero'
+                              ? formatCoord(point.pos.x)
+                              : `(${formatCoord(point.pos.x)}, ${formatCoord(point.pos.y)})`}
+                            {point.tangent && <span className="an-note">touches</span>}
+                            {n < g.items.length - 1 && <span className="an-sep">,</span>}
+                          </button>
+                        )
+                      })}
                     </span>
                   </div>
                 ))}

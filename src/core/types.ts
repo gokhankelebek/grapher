@@ -237,3 +237,54 @@ export interface SpecialPoint {
    */
   tangent?: boolean
 }
+
+// ============================================================================
+// Editable analysis (src/core/fit/edit.ts) — state a feature, not a parameter.
+//
+//   export function applyFeatureEdit(
+//     curve: FittedCurve,
+//     models: Record<string, ModelSpec>,
+//     edit: FeatureEdit,
+//   ): FeatureEditResult
+//
+// "Put this zero at x = 2." "Put the maximum at (-1, 5)." The curve changes to
+// satisfy the constraint while moving as little as possible otherwise.
+//
+// Some requests are impossible and must be refused with a reason a teacher can
+// read, never silently approximated: a parabola cannot have three zeros, and a
+// cubic's maximum and minimum are not independent — its inflection sits exactly
+// at their midpoint, because a cubic is point-symmetric about it.
+// ============================================================================
+
+export interface FeatureEdit {
+  /** The feature being moved, exactly as returned by analyzeCurve(). */
+  point: SpecialPoint
+  /**
+   * Desired new position. Either coordinate may be omitted to leave it free —
+   * "put the zero at x = 2" fixes x only; a zero's y is 0 by definition.
+   */
+  to: { x?: number; y?: number }
+  /**
+   * Other features to hold fixed while this one moves, if the family has the
+   * freedom. Ignored when honouring them all would over-determine the curve.
+   */
+  pinned?: SpecialPoint[]
+}
+
+export type FeatureEditResult =
+  | {
+      ok: true
+      params: number[]
+      domain: [number, number] | null
+      /** true when the constraint is satisfied in closed form rather than numerically */
+      exact: boolean
+      /** features that moved as a side effect, for the UI to report honestly */
+      alsoMoved?: SpecialPoint[]
+    }
+  | {
+      ok: false
+      /** plain-language reason, shown to the user verbatim */
+      reason: string
+      /** nearest achievable result, when one exists and is worth offering */
+      nearest?: { params: number[]; domain: [number, number] | null }
+    }

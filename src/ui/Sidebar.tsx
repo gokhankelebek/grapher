@@ -20,6 +20,8 @@ interface Props {
   analysis: SpecialPoint[]
   /** Hovering a listed value emphasises its marker on canvas. */
   onAnalysisHover(index: number | null): void
+  /** Type an exact position for a special point. False = refused, keep editing. */
+  onFeatureEdit(id: string, index: number, to: { x?: number; y?: number }): boolean
   candidatesFor(id: string): FitResult[]
   onSelect(id: string | null): void
   onDelete(id: string): void
@@ -57,6 +59,7 @@ export function Sidebar({
   brokenExpr,
   analysis,
   onAnalysisHover,
+  onFeatureEdit,
   candidatesFor,
   onSelect,
   onDelete,
@@ -114,6 +117,7 @@ export function Sidebar({
               brokenReason={brokenExpr[curve.id]}
               analysis={curve.id === selectedId ? analysis : EMPTY_ANALYSIS}
               onAnalysisHover={onAnalysisHover}
+              onFeatureEdit={(i, to) => onFeatureEdit(curve.id, i, to)}
               onSelect={() => onSelect(curve.id)}
               onDelete={() => onDelete(curve.id)}
               onDuplicate={() => onDuplicate(curve.id)}
