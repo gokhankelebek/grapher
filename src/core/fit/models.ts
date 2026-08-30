@@ -31,15 +31,57 @@ export function fmt(v: number, sig = 4): string {
 
 const NEGLIGIBLE = 1e-12
 
+/** Default significant digits. */
+const SIG = 4
+
+// ---------------------------------------------------------------------------
+// Scale-aware digit counts
+//
+// Four significant figures is a fixed RELATIVE error. That is exactly right for
+// a number whose own magnitude sets the curve's scale (an amplitude, a radius,
+// a leading coefficient) and exactly wrong for one that merely LOCATES a
+// feature much smaller than itself. A circle of radius 2 centred at x = 12345
+// prints its centre as 12350 and no longer meets the drawn circle; a parabola
+// five screens right of the origin has its coefficients cancel to a curve whose
+// own y-range is 9 while each rounding costs ~10; a sinusoid's phase drifts
+// until the printed wave is inverted. The printed equation has to agree with
+// the curve being plotted, so the digit count is chosen from the size of the
+// feature the number locates, not from the number itself.
+// ---------------------------------------------------------------------------
+
+/** Significant digits that keep the rounding error of `v` near `absTol`. */
+function digitsForAbs(v: number, absTol: number): number {
+  const a = Math.abs(v)
+  if (!Number.isFinite(a) || a === 0) return SIG
+  if (!(absTol > 0) || !Number.isFinite(absTol)) return SIG
+  return Math.min(16, Math.max(SIG, Math.ceil(Math.log10(a / absTol))))
+}
+
+/**
+ * Digits for a coordinate that locates a feature of size `ref` (a centre next
+ * to a radius, a peak next to a width). Below 10·ref the default already
+ * resolves the feature, so ordinary near-origin curves print exactly as before.
+ */
+function digitsFor(v: number, ref: number): number {
+  const r = Number.isFinite(ref) && ref > 0 ? ref : 1
+  if (!(Math.abs(v) > 10 * r)) return SIG
+  return digitsForAbs(v, 1e-4 * r)
+}
+
+/** fmt() with the digit count that keeps |Δv| small next to `ref`. */
+function fmtRel(v: number, ref: number): string {
+  return fmt(v, digitsFor(v, ref))
+}
+
 /**
  * Format one term `±coef·body`. `leading` renders "-2.3x"/"2.3x", otherwise
  * " + 2.3x"/" - 2.3x". Drops "1·" (renders "x" not "1x"). Returns '' when the
  * coefficient is negligible (unless it is a lone constant and `keepZero`).
  */
-function term(v: number, body: string, leading: boolean): string {
-  if (Math.abs(v) < NEGLIGIBLE) return ''
+function term(v: number, body: string, leading: boolean, sig = SIG, floor = NEGLIGIBLE): string {
+  if (Math.abs(v) < floor) return ''
   const av = Math.abs(v)
-  const avStr = fmt(av)
+  const avStr = fmt(av, sig)
   const isOne = avStr === '1'
   const core = body === '' ? avStr : isOne ? body : `${avStr}${body}`
   if (leading) return v < 0 ? `-${core}` : core
@@ -47,31 +89,119 @@ function term(v: number, body: string, leading: boolean): string {
 }
 
 /** Sum of terms; bodies[i] pairs with coeffs[i]. Falls back to '0'. */
-function termSum(coeffs: number[], bodies: string[]): string {
+function termSum(
+  coeffs: number[], bodies: string[], sigs?: number[], floors?: number[],
+): string {
   let out = ''
   for (let i = 0; i < coeffs.length; i++) {
-    out += term(coeffs[i], bodies[i], out === '')
+    out += term(coeffs[i], bodies[i], out === '', sigs?.[i] ?? SIG, floors?.[i] ?? NEGLIGIBLE)
   }
   return out === '' ? '0' : out
 }
 
-/** Ascending coefficients -> "y = c_n x^{n} + ... + c_0". */
-function polyLatex(c: number[]): string {
+// ---------------------------------------------------------------------------
+// Polynomials — the family where rounding hurts most, because the terms cancel
+// ---------------------------------------------------------------------------
+
+/** p(x) = Σ b_k (x − x0)^k, exact, by repeated synthetic division. */
+function shiftPolyCoeffs(c: number[], x0: number): number[] {
+  const out: number[] = []
+  let a = c.slice()
+  while (a.length > 0) {
+    const m = a.length - 1
+    if (m === 0) { out.push(a[0]); break }
+    const q = new Array<number>(m).fill(0)
+    q[m - 1] = a[m]
+    for (let i = m - 1; i >= 1; i--) q[i - 1] = a[i] + x0 * q[i]
+    out.push(a[0] + x0 * q[0])
+    a = q
+  }
+  return out
+}
+
+/**
+ * The window a polynomial's own shape occupies: centred on its centre of
+ * symmetry x0 = −c_{n−1}/(n·c_n), half-width W from the largest root magnitude
+ * of the shifted coefficients, and R the y-range the shape spans there. The
+ * constant term is deliberately left out of both — it is a vertical offset, not
+ * a scale, and letting a curve drawn high above the axis widen its own error
+ * budget is the vertical twin of the bug being fixed.
+ */
+function polyScale(c: number[], n: number): { x0: number; W: number; R: number } {
+  const raw = -c[n - 1] / (n * c[n])
+  const x0 = Number.isFinite(raw) ? raw : 0
+  const b = shiftPolyCoeffs(c, x0)
+  let W = 0
+  for (let k = 1; k < n; k++) {
+    const q = Math.abs(b[k] / b[n])
+    if (q > 0 && Number.isFinite(q)) W = Math.max(W, Math.pow(q, 1 / (n - k)))
+  }
+  if (!(W > 0) || !Number.isFinite(W)) W = 1 // a pure monomial sets no x-scale
+  let R = 0
+  for (let k = 1; k <= n; k++) R += Math.abs(b[k]) * Math.pow(W, k)
+  if (!(R > 0) || !Number.isFinite(R)) R = 1
+  return { x0, W, R }
+}
+
+function polyTermsLatex(
+  c: number[], sigs: number[], body: (i: number) => string, floors?: number[],
+): string {
   const coeffs: number[] = []
   const bodies: string[] = []
+  const ss: number[] = []
+  const fs: number[] = []
   for (let i = c.length - 1; i >= 0; i--) {
     coeffs.push(c[i] ?? 0)
-    bodies.push(i === 0 ? '' : i === 1 ? 'x' : `x^{${i}}`)
+    bodies.push(body(i))
+    ss.push(sigs[i] ?? SIG)
+    fs.push(floors?.[i] ?? NEGLIGIBLE)
   }
-  return `y = ${termSum(coeffs, bodies)}`
+  return `y = ${termSum(coeffs, bodies, ss, fs)}`
+}
+
+/** Ascending coefficients -> "y = c_n x^{n} + ... + c_0". */
+function polyLatex(c: number[]): string {
+  let n = c.length - 1
+  while (n > 0 && !(Math.abs(c[n]) > NEGLIGIBLE)) n--
+  const plainBody = (i: number) => (i === 0 ? '' : i === 1 ? 'x' : `x^{${i}}`)
+  if (n < 1 || !c.every(Number.isFinite)) {
+    return polyTermsLatex(c, c.map(() => SIG), plainBody)
+  }
+
+  const head = c.slice(0, n + 1)
+  const { x0, W, R } = polyScale(head, n)
+  // over the window, x reaches |x0| + W, so coefficient k is levered by that
+  // much; give each one the digits its own lever demands
+  const X = Math.abs(x0) + W
+  const sigs = head.map((v, k) => digitsForAbs(v, (1e-4 * R) / Math.pow(X, k)))
+  if (Math.max(...sigs) <= 10) return polyTermsLatex(head, sigs, plainBody)
+
+  // The expanded form has stopped surviving rounding at any readable length:
+  // print about the centre instead, where every coefficient is commensurate
+  // with the curve's own scale and the shift itself is exact.
+  const x0d = digitsFor(x0, W)
+  const x0r = Number(x0.toPrecision(x0d))
+  const b = shiftPolyCoeffs(head, x0r)
+  const tol = b.map((_, k) => (1e-4 * R) / Math.pow(W, k))
+  const bSigs = b.map((v, k) => digitsForAbs(v, tol[k]))
+  const inner = shifted('x', x0r, W)
+  const wrapped = inner === 'x' ? 'x' : `\\left(${inner}\\right)`
+  // Re-expanding coefficients that themselves cancelled leaves dust: a cubic
+  // whose quadratic term is exactly zero comes back as 1.5e-5. Drop a term the
+  // window cannot see rather than printing arithmetic noise as mathematics.
+  return polyTermsLatex(
+    b, bSigs,
+    i => (i === 0 ? '' : i === 1 ? wrapped : `${wrapped}^{${i}}`),
+    tol,
+  )
 }
 
 /** "(x - 1.2)" style inner expression, collapsing when the shift is ~0. */
-function shifted(variable: string, center: number): string {
+function shifted(variable: string, center: number, ref = 1): string {
   if (Math.abs(center) < NEGLIGIBLE) return variable
   return center > 0
-    ? `${variable} - ${fmt(center)}`
-    : `${variable} + ${fmt(-center)}`
+    ? `${variable} - ${fmtRel(center, ref)}`
+    : `${variable} + ${fmtRel(-center, ref)}`
 }
 
 /**
@@ -94,8 +224,8 @@ function expLatex(e: number): string {
 }
 
 /** "(x - 1.2)^2" -> "\left(x - 1.2\right)^{2}" or "x^{2}" when centered. */
-function shiftedSq(variable: string, center: number): string {
-  const inner = shifted(variable, center)
+function shiftedSq(variable: string, center: number, ref = 1): string {
+  const inner = shifted(variable, center, ref)
   return inner === variable ? `${variable}^{2}` : `\\left(${inner}\\right)^{2}`
 }
 
@@ -190,9 +320,17 @@ export const MODELS: Record<string, ModelSpec> = {
     evalExplicit: (p, x) => p[0] * Math.sin(p[1] * x + p[2]) + p[3],
     latex: p => {
       const [a, b, c, d] = p
-      const inner = termSum([b, c], ['x', ''])
+      // The phase is measured in radians: 4 significant figures of 1e5 is a
+      // whole radian out, which prints a wave inverted against the one drawn.
+      // The frequency is worse: its error is levered by how far the wave sits
+      // from the origin (x ≈ −c/b), plus the few periods it spans there.
+      const ab = Math.abs(b)
+      const reach = ab > 0 ? Math.abs(c / b) + (8 * Math.PI) / ab : 1
+      const inner = termSum(
+        [b, c], ['x', ''], [digitsForAbs(b, 1e-3 / reach), digitsFor(c, 1)],
+      )
       const sinTerm = `\\sin\\left(${inner}\\right)`
-      return `y = ${termSum([a, d], [sinTerm, ''])}`
+      return `y = ${termSum([a, d], [sinTerm, ''], [SIG, digitsFor(d, Math.abs(a))])}`
     },
     paramMeta: p => centeredMeta(['a', 'b', 'c', 'd'], p),
     // a·sin(b(x−dx) + c) + d + dy
@@ -210,8 +348,8 @@ export const MODELS: Record<string, ModelSpec> = {
     },
     latex: p => {
       const [a, b, c, d] = p
-      const expTerm = `e^{-\\left(\\frac{${shifted('x', b)}}{${fmt(c)}}\\right)^{2}}`
-      return `y = ${termSum([a, d], [expTerm, ''])}`
+      const expTerm = `e^{-\\left(\\frac{${shifted('x', b, Math.abs(c))}}{${fmt(c)}}\\right)^{2}}`
+      return `y = ${termSum([a, d], [expTerm, ''], [SIG, digitsFor(d, Math.abs(a))])}`
     },
     paramMeta: p => centeredMeta(['a', 'b', 'c', 'd'], p),
     translate: (p, dx, dy) => [p[0], p[1] + dx, p[2], p[3] + dy],
@@ -226,7 +364,13 @@ export const MODELS: Record<string, ModelSpec> = {
     latex: p => {
       const [a, b, c] = p
       const expTerm = `e^{${term(b, 'x', true) || '0'}}`
-      return `y = ${termSum([a, c], [expTerm, ''])}`
+      // a·e^{bx} translated right by dx becomes (a·e^{−b·dx})·e^{bx}: the
+      // amplitude of a perfectly ordinary curve drawn 120 units out is 1e-23.
+      // Dropping it as "negligible" would print the asymptote instead of the
+      // curve, so only an exactly-zero amplitude removes the term.
+      const head = term(a, expTerm, true, SIG, 1e-300)
+      const tail = term(c, '', head === '', digitsFor(c, Math.abs(a)))
+      return `y = ${head + tail || '0'}`
     },
     paramMeta: p => centeredMeta(['a', 'b', 'c'], p),
     // a·e^{b(x−dx)} + c + dy  =  (a·e^{−b·dx})·e^{bx} + (c + dy), exact
@@ -247,7 +391,9 @@ export const MODELS: Record<string, ModelSpec> = {
     },
     latex: p => {
       const [a, b, c] = p
-      return `y = ${termSum([a, c], [`\\sqrt{${shifted('x', b)}}`, ''])}`
+      return `y = ${termSum(
+        [a, c], [`\\sqrt{${shifted('x', b)}}`, ''], [SIG, digitsFor(c, Math.abs(a))],
+      )}`
     },
     paramMeta: p => centeredMeta(['a', 'b', 'c'], p),
     translate: (p, dx, dy) => [p[0], p[1] + dx, p[2] + dy],
@@ -261,7 +407,9 @@ export const MODELS: Record<string, ModelSpec> = {
     evalExplicit: (p, x) => p[0] * Math.cbrt(x - p[1]) + p[2],
     latex: p => {
       const [a, b, c] = p
-      return `y = ${termSum([a, c], [`\\sqrt[3]{${shifted('x', b)}}`, ''])}`
+      return `y = ${termSum(
+        [a, c], [`\\sqrt[3]{${shifted('x', b)}}`, ''], [SIG, digitsFor(c, Math.abs(a))],
+      )}`
     },
     paramMeta: p => centeredMeta(['a', 'b', 'c'], p),
     translate: (p, dx, dy) => [p[0], p[1] + dx, p[2] + dy],
@@ -278,7 +426,7 @@ export const MODELS: Record<string, ModelSpec> = {
     latex: p => {
       const [a, b, c, e] = p
       const body = `\\left|${shifted('x', b)}\\right|^{${expLatex(e)}}`
-      return `y = ${termSum([a, c], [body, ''])}`
+      return `y = ${termSum([a, c], [body, ''], [SIG, digitsFor(c, Math.abs(a))])}`
     },
     paramMeta: p => [
       metaFor('a', p[0] ?? 1),
@@ -298,7 +446,7 @@ export const MODELS: Record<string, ModelSpec> = {
     latex: p => {
       const [a, b, c] = p
       const absTerm = `\\left|${shifted('x', b)}\\right|`
-      return `y = ${termSum([a, c], [absTerm, ''])}`
+      return `y = ${termSum([a, c], [absTerm, ''], [SIG, digitsFor(c, Math.abs(a))])}`
     },
     paramMeta: p => centeredMeta(['a', 'b', 'c'], p),
     translate: (p, dx, dy) => [p[0], p[1] + dx, p[2] + dy],
@@ -312,12 +460,14 @@ export const MODELS: Record<string, ModelSpec> = {
     evalExplicit: (p, x) => p[0] / (1 + Math.exp(-p[1] * (x - p[2]))) + p[3],
     latex: p => {
       const [a, b, c, d] = p
-      const inner = shifted('x', c)
+      // the midpoint c only matters to within a fraction of the transition
+      // width 1/|b|; further out the logistic is flat and the equation lies
+      const inner = shifted('x', c, Math.abs(b) > 0 ? 1 / Math.abs(b) : 1)
       const bAbs = fmt(Math.abs(b))
       const bCoef = bAbs === '1' ? '' : bAbs
       const sign = b >= 0 ? '-' : ''
       const frac = `\\frac{${fmt(a)}}{1 + e^{${sign}${bCoef}\\left(${inner}\\right)}}`
-      const tail = term(d, '', false)
+      const tail = term(d, '', false, digitsFor(d, Math.abs(a)))
       return `y = ${frac}${tail}`
     },
     paramMeta: p => centeredMeta(['a', 'b', 'c', 'd'], p),
@@ -331,7 +481,7 @@ export const MODELS: Record<string, ModelSpec> = {
     name: 'Vertical line',
     // params: [a] -> t ↦ (a, t)
     evalParametric: (p, t): Vec2 => ({ x: p[0], y: t }),
-    latex: p => `x = ${fmt(p[0])}`,
+    latex: p => `x = ${fmtRel(p[0], 1)}`,
     paramMeta: p => centeredMeta(['a'], p),
     translate: (p, dx, _dy) => [p[0] + dx],
   },
@@ -348,7 +498,9 @@ export const MODELS: Record<string, ModelSpec> = {
     },
     latex: p => {
       const [a, b, r] = p
-      return `${shiftedSq('x', a)} + ${shiftedSq('y', b)} = ${fmt(r * r)}`
+      // the centre is only meaningful to within a fraction of the radius
+      const ref = Math.abs(r)
+      return `${shiftedSq('x', a, ref)} + ${shiftedSq('y', b, ref)} = ${fmt(r * r)}`
     },
     paramMeta: p => {
       const r = Math.abs(p[2] ?? 1)
@@ -375,20 +527,34 @@ export const MODELS: Record<string, ModelSpec> = {
       if (axisAligned) {
         const cf = conicToCenterForm([A, 0, C, D, E, F])
         if (cf) {
+          const ref = Math.min(cf.rx, cf.ry)
           return (
-            `\\frac{${shiftedSq('x', cf.cx)}}{${fmt(cf.rx * cf.rx)}} + ` +
-            `\\frac{${shiftedSq('y', cf.cy)}}{${fmt(cf.ry * cf.ry)}} = 1`
+            `\\frac{${shiftedSq('x', cf.cx, ref)}}{${fmt(cf.rx * cf.rx)}} + ` +
+            `\\frac{${shiftedSq('y', cf.cy, ref)}}{${fmt(cf.ry * cf.ry)}} = 1`
           )
         }
       }
       // general conic form; scale so the largest quadratic coefficient is 1
       const scale = Math.max(Math.abs(A), Math.abs(B), Math.abs(C)) || 1
       const s = (A >= 0 ? 1 : -1) / scale
+      // A coefficient of the degree-k monomial is levered by L^k, and moving Q
+      // by δ moves the curve by δ/|∇Q| ≈ δ/(2·r_min) in the scaled form. Ask
+      // each coefficient for the digits that keep the curve within 0.1% of its
+      // own minor radius — a rotated ellipse far from the origin otherwise
+      // rounds into a conic with no real solutions at all.
+      const cf = conicToCenterForm(p)
+      const m = cf ? Math.min(cf.rx, cf.ry) : 0
+      const L = cf
+        ? Math.max(Math.abs(cf.cx) + cf.rx, Math.abs(cf.cy) + cf.ry, 1)
+        : 1
+      const tol0 = m > 0 ? 1e-5 * m * m : 0
+      const sigAt = (k: number, v: number) => digitsForAbs(v, tol0 / Math.pow(L, k))
       const lhs = termSum(
         [A * s, B * s, C * s, D * s, E * s],
         ['x^{2}', 'xy', 'y^{2}', 'x', 'y'],
+        [sigAt(2, A * s), sigAt(2, B * s), sigAt(2, C * s), sigAt(1, D * s), sigAt(1, E * s)],
       )
-      return `${lhs} = ${fmt(-F * s)}`
+      return `${lhs} = ${fmt(-F * s, sigAt(0, F * s))}`
     },
     paramMeta: p => centeredMeta(['A', 'B', 'C', 'D', 'E', 'F'], p),
     // Q'(x, y) = Q(x − dx, y − dy), expanded exactly
@@ -419,7 +585,7 @@ export const MODELS: Record<string, ModelSpec> = {
       const inner =
         Math.abs(c) < 1e-4
           ? `${kStr}\\theta`
-          : `${kStr}\\theta ${c > 0 ? '+' : '-'} ${fmt(Math.abs(c))}`
+          : `${kStr}\\theta ${c > 0 ? '+' : '-'} ${fmtRel(Math.abs(c), 1)}`
       return `r = ${term(p[0], `\\cos\\left(${inner}\\right)`, true) || '0'}`
     },
     paramMeta: p => {
@@ -438,7 +604,10 @@ export const MODELS: Record<string, ModelSpec> = {
     name: 'Limaçon',
     // params: [a, b] -> r = a + b·cos(θ)
     evalPolar: (p, theta) => p[0] + p[1] * Math.cos(theta),
-    latex: p => `r = ${termSum([p[0], p[1]], ['', '\\cos\\theta'])}`,
+    // the constant only matters against the size of the variation it offsets
+    latex: p => `r = ${termSum(
+      [p[0], p[1]], ['', '\\cos\\theta'], [digitsFor(p[0], Math.abs(p[1])), SIG],
+    )}`,
     paramMeta: p => centeredMeta(['a', 'b'], p),
   },
 
@@ -448,7 +617,10 @@ export const MODELS: Record<string, ModelSpec> = {
     name: 'Spiral',
     // params: [a, b] -> r = a + b·θ
     evalPolar: (p, theta) => p[0] + p[1] * theta,
-    latex: p => `r = ${termSum([p[0], p[1]], ['', '\\theta'])}`,
+    latex: p => `r = ${termSum(
+      [p[0], p[1]], ['', '\\theta'],
+      [digitsFor(p[0], Math.abs(p[1]) * 2 * Math.PI), SIG],
+    )}`,
     paramMeta: p => centeredMeta(['a', 'b'], p),
   },
 
@@ -476,8 +648,12 @@ export const MODELS: Record<string, ModelSpec> = {
       if (N < 1) return `\\text{Fourier}(0)`
       const [cx, cy, ax, bx, ay, by] = p
       const dots = N > 1 ? ' + \\cdots' : ''
-      const xPart = termSum([cx, ax, bx], ['', '\\cos t', '\\sin t'])
-      const yPart = termSum([cy, ay, by], ['', '\\cos t', '\\sin t'])
+      // the centre only locates a shape whose size is set by the harmonics
+      let amp = 0
+      for (let i = 2; i < p.length; i++) amp = Math.max(amp, Math.abs(p[i]))
+      const cSig = (v: number) => digitsFor(v, amp)
+      const xPart = termSum([cx, ax, bx], ['', '\\cos t', '\\sin t'], [cSig(cx), SIG, SIG])
+      const yPart = termSum([cy, ay, by], ['', '\\cos t', '\\sin t'], [cSig(cy), SIG, SIG])
       return (
         `\\text{Fourier}(N{=}${N}):\\; ` +
         `x \\approx ${xPart}${dots},\\;\\; y \\approx ${yPart}${dots}`

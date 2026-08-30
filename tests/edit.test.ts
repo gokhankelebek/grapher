@@ -909,3 +909,104 @@ describe('root-family handles', () => {
     expect(Number.isFinite(ev(res.params, res.domain![1]))).toBe(true)
   })
 })
+
+// ---------------------------------------------------------------------------
+// P1: the displacement cap must hold against the CURVE, not against a grid.
+//
+// The cap was enforced by sampling the displacement at 48 places. Any feature
+// narrower than the resulting spacing hides between samples: a gaussian of
+// width 1 on [-10, 10] has 0.426 between samples and its peak sits at x = 0,
+// which is not one of them. The drag below measured 0.96x of the drag distance
+// at every sample while the peak actually grew from 2 to 3.58 — 1.66x, a third
+// again past a cap that reads 1.05. The guard now brackets with the grid and
+// maximises properly inside each bracket.
+// ---------------------------------------------------------------------------
+
+/** True worst-case displacement anywhere on the curve, densely sampled. */
+function trueWorstDisplacement(
+  c: FittedCurve, oldParams: number[], newParams: number[], n = 20000,
+): { worst: number; at: number } {
+  const spec = MODELS[c.modelId]
+  const dom = c.domain ?? (spec.kind === 'explicit' ? [-10, 10] : [0, 2 * Math.PI])
+  const span = dom[1] - dom[0]
+  let worst = 0
+  let at = dom[0]
+  for (let i = 0; i <= n; i++) {
+    const t = dom[0] + (span * i) / n
+    let d: number
+    if (spec.evalExplicit) {
+      d = Math.abs(spec.evalExplicit(newParams, t) - spec.evalExplicit(oldParams, t))
+    } else if (spec.evalPolar) {
+      const ra = spec.evalPolar(oldParams, t)
+      const rb = spec.evalPolar(newParams, t)
+      d = Math.hypot(rb * Math.cos(t) - ra * Math.cos(t), rb * Math.sin(t) - ra * Math.sin(t))
+    } else if (spec.evalParametric) {
+      const a = spec.evalParametric(oldParams, t)
+      const b = spec.evalParametric(newParams, t)
+      d = Math.hypot(b.x - a.x, b.y - a.y)
+    } else {
+      const cfA = conicToCenterForm(oldParams)
+      const cfB = conicToCenterForm(newParams)
+      if (!cfA || !cfB) continue
+      const at2 = (cf: NonNullable<ReturnType<typeof conicToCenterForm>>) => ({
+        x: cf.cx + cf.rx * Math.cos(t) * Math.cos(cf.angle) - cf.ry * Math.sin(t) * Math.sin(cf.angle),
+        y: cf.cy + cf.rx * Math.cos(t) * Math.sin(cf.angle) + cf.ry * Math.sin(t) * Math.cos(cf.angle),
+      })
+      const a = at2(cfA)
+      const b = at2(cfB)
+      d = Math.hypot(b.x - a.x, b.y - a.y)
+    }
+    if (Number.isFinite(d) && d > worst) { worst = d; at = t }
+  }
+  return { worst, at }
+}
+
+describe('dragCurvePoint — the displacement cap survives narrow features', () => {
+  it('a gaussian peak between two samples does not slip past the cap', () => {
+    // the exact case from the audit: drag 0.954, peak displacement used to be
+    // 1.584 (1.66x) because x = 0 is not one of 48 samples on [-10, 10]
+    const params = [2, 0, 1, 0]
+    const c = curve('gauss', params, [-10, 10])
+    const grab = { x: -2.9369, y: 0.00035894 }
+    const target = { x: -3.0344, y: 0.9498 }
+    const np = dragCurvePoint(c, MODELS, grab, target)
+    const drag = Math.hypot(target.x - grab.x, target.y - grab.y)
+    const { worst, at } = trueWorstDisplacement(c, params, np)
+    expect(at, 'the worst displacement is at the peak, between samples').toBeCloseTo(0, 1)
+    expect(worst / drag, `worst ${worst} for drag ${drag}`).toBeLessThanOrEqual(1.05 + 1e-9)
+  })
+
+  it('holds for narrow features anywhere in a wide domain', () => {
+    // sweep the gaussian's centre so the peak lands on, beside and between the
+    // grid points of any fixed sampling
+    for (const b of [0, 0.1234, 1.7, -4.3211, 6.05]) {
+      for (const width of [0.35, 1, 2.5]) {
+        const params = [2, b, width, 0]
+        const c = curve('gauss', params, [-10, 10])
+        const ev = MODELS.gauss.evalExplicit!
+        const gx = b - 3 * width
+        const grab = { x: gx, y: ev(params, gx) }
+        const target = { x: gx - 0.1, y: grab.y + 0.95 }
+        const np = dragCurvePoint(c, MODELS, grab, target)
+        const drag = Math.hypot(target.x - grab.x, target.y - grab.y)
+        const { worst } = trueWorstDisplacement(c, params, np)
+        expect(
+          worst / drag, `gauss b=${b} width=${width}: worst ${worst} for drag ${drag}`,
+        ).toBeLessThanOrEqual(1.05 + 1e-6)
+      }
+    }
+  })
+
+  it('every family respects the cap on a drag from one of its own handles', () => {
+    for (const [id, params, domain] of FAMILY_FIXTURES) {
+      const c = curve(id, params, domain)
+      const h = getHandles(c, MODELS).find(x => x.kind === 'feature' || x.kind === 'radius')
+      if (!h) continue
+      const target = { x: h.pos.x + 0.9, y: h.pos.y - 0.6 }
+      const np = dragCurvePoint(c, MODELS, h.pos, target)
+      const drag = Math.hypot(target.x - h.pos.x, target.y - h.pos.y)
+      const { worst } = trueWorstDisplacement(c, params, np, 8000)
+      expect(worst / drag, `${id}: worst ${worst} for drag ${drag}`).toBeLessThanOrEqual(1.05 + 1e-6)
+    }
+  })
+})

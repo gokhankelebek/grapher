@@ -826,10 +826,49 @@ export function dragCurvePoint(
   return out
 }
 
+/** Golden-section MAXIMUM of g on [a, b] — derivative free, so a cusp or a
+ *  branch point does not derail it. */
+function goldenMax(g: (t: number) => number, a: number, b: number): number {
+  const phi = 0.6180339887498949
+  let lo = a
+  let hi = b
+  let x1 = hi - (hi - lo) * phi
+  let x2 = lo + (hi - lo) * phi
+  let f1 = g(x1)
+  let f2 = g(x2)
+  for (let i = 0; i < 60; i++) {
+    if (!Number.isFinite(f1) || !Number.isFinite(f2)) break
+    if (f1 > f2) {
+      hi = x2; x2 = x1; f2 = f1
+      x1 = hi - (hi - lo) * phi
+      f1 = g(x1)
+    } else {
+      lo = x1; x1 = x2; f1 = f2
+      x2 = lo + (hi - lo) * phi
+      f2 = g(x2)
+    }
+    if (hi - lo < 1e-12 * Math.max(1, Math.abs(lo))) break
+  }
+  return 0.5 * (lo + hi)
+}
+
+/** How many places the displacement is sampled at before local refinement. */
+const DISPLACEMENT_SAMPLES = 192
+/** How many sampled peaks get golden-section refined. */
+const DISPLACEMENT_PEAKS = 6
+
 /**
- * Largest distance any sampled point of the curve moves between two parameter
- * sets. Returns early once `bail` is exceeded — callers only ever ask whether
- * the displacement is within a limit.
+ * Largest distance any point of the curve moves between two parameter sets.
+ * Returns early once `bail` is exceeded — callers only ever ask whether the
+ * displacement is within a limit.
+ *
+ * A fixed grid alone does not answer that question. Any feature narrower than
+ * the sample spacing hides between samples: a gaussian of width 1 on [-10, 10]
+ * sampled 48 times has its peak 0.21 away from the nearest sample, so a drag
+ * that grew the peak from 2 to 3.58 — 1.66x the drag distance, well past the
+ * cap — measured 0.96x and was let through unshortened. So the grid is used to
+ * BRACKET the maxima, and each candidate peak is then maximised properly; the
+ * cap is enforced against the curve's real worst displacement, not the grid's.
  */
 function worstDisplacement(
   geom: Geometry,
@@ -839,15 +878,47 @@ function worstDisplacement(
 ): number {
   const [t0, t1] = geom.dom
   const span = t1 - t0
-  const N = 48
+  const N = DISPLACEMENT_SAMPLES
   const step = span / (geom.cyclic ? N : N - 1)
-  let worst = 0
-  for (let i = 0; i < N; i++) {
-    const t = t0 + i * step
+  const disp = (t: number): number => {
     const a = geom.fn(from, t)
     const b = geom.fn(to, t)
-    if (!Number.isFinite(b.x) || !Number.isFinite(b.y)) continue
-    const d = Math.hypot(b.x - a.x, b.y - a.y)
+    if (!Number.isFinite(a.x) || !Number.isFinite(a.y)) return 0
+    if (!Number.isFinite(b.x) || !Number.isFinite(b.y)) return 0
+    return Math.hypot(b.x - a.x, b.y - a.y)
+  }
+
+  const ds = new Array<number>(N)
+  let worst = 0
+  for (let i = 0; i < N; i++) {
+    const d = disp(t0 + i * step)
+    ds[i] = d
+    if (d > worst) {
+      worst = d
+      if (worst > bail) return worst
+    }
+  }
+
+  // refine the tallest sampled peaks; a hidden feature shows up as the peak of
+  // its own shoulder even when the sample on top of it reads low
+  const peaks: number[] = []
+  for (let i = 0; i < N; i++) {
+    const prev = i > 0 ? ds[i - 1] : geom.cyclic ? ds[N - 1] : ds[i]
+    const next = i + 1 < N ? ds[i + 1] : geom.cyclic ? ds[0] : ds[i]
+    if (ds[i] >= prev && ds[i] >= next) peaks.push(i)
+  }
+  peaks.sort((a, b) => ds[b] - ds[a])
+  const limit = Math.min(peaks.length, DISPLACEMENT_PEAKS)
+  for (let k = 0; k < limit; k++) {
+    const i = peaks[k]
+    let a = t0 + (i - 1) * step
+    let b = t0 + (i + 1) * step
+    if (!geom.cyclic) {
+      a = Math.max(t0, a)
+      b = Math.min(t1, b)
+    }
+    if (!(b > a)) continue
+    const d = disp(goldenMax(disp, a, b))
     if (d > worst) {
       worst = d
       if (worst > bail) return worst

@@ -2,6 +2,7 @@
 // tests/models.test.ts — MODELS registry invariants, applied to EVERY family.
 //   * the eval* matching `kind` exists and produces finite values
 //   * latex() is non-empty, brace-balanced, artifact-free
+//   * latex() PRINTS THE CURVE: re-reading the rendered equation reproduces it
 //   * paramMeta() is one usable slider per parameter
 //   * translate(), where implemented, is EXACT
 // ============================================================================
@@ -9,7 +10,9 @@
 import { describe, it, expect } from 'vitest'
 import type { ModelSpec, Vec2 } from '../src/core/types'
 import { MODELS } from '../src/core/fit/models'
+import { centerFormToConic, conicToCenterForm } from '../src/core/fit/optimize'
 import { makeRng } from './helpers'
+import { compileFourier, compileImplicit, compileRhs } from './latexEval'
 
 // ---------------------------------------------------------------------------
 // Representative parameter sets per family. Each family gets several, chosen
@@ -405,6 +408,249 @@ describe('MODELS — root families', () => {
           expect(ev(q, x), `${id} at x=${x}`).toBeCloseTo(want, 10)
         }
       }
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// P0: the printed equation must BE the curve.
+//
+// fmt() used to round every number to 4 significant figures independently. That
+// is a fixed RELATIVE error, and it is the wrong quantity twice over: the terms
+// of a polynomial CANCEL, and a coordinate far from the origin carries its own
+// magnitude, not the size of the feature it locates. So a parabola five screens
+// right of the origin printed an equation deviating 10.3 units from a curve
+// whose whole y-range was 9; a circle of radius 2 centred at 12345 printed a
+// centre of 12350, a circle that does not meet the drawn one; a far ellipse
+// printed a conic with no real solutions at all.
+//
+// The test below is the invariant, not the implementation: RENDER the latex,
+// READ IT BACK (tests/latexEval.ts), and require the equation a student would
+// copy off the screen to agree with the plotted curve to inside 1% of that
+// curve's own y-range, over that curve's own domain.
+// ---------------------------------------------------------------------------
+
+const TWO_PI = 2 * Math.PI
+
+interface Case { params: number[]; domain: [number, number] }
+
+/** One representative, deliberately un-round curve per family. */
+const FIDELITY_BASE: Record<string, Case[]> = {
+  line: [{ params: [0.4321, 1.2345], domain: [-5, 5] }],
+  poly2: [{ params: [0.4321, -1.2345, 0.7654], domain: [-4, 4] }],
+  poly3: [{ params: [0.4321, -1.2345, 0.7654, 0.1234], domain: [-5, 5] }],
+  poly4: [{ params: [0.4321, -1.2345, 0.7654, 0.1234, -0.0432], domain: [-4, 4] }],
+  sine: [{ params: [1.2345, 1.4321, 0.3456, 0.4321], domain: [-6, 6] }],
+  gauss: [{ params: [2.3456, 0.4321, 1.2345, -0.5432], domain: [-6, 6] }],
+  exp: [{ params: [1.2345, 0.4321, -0.7654], domain: [-3, 4] }],
+  // domain starts right of the branch point, where the family is defined
+  sqrt: [{ params: [1.7654, -1.2345, 0.4321], domain: [-0.7345, 8] }],
+  cbrt: [{ params: [1.7654, 0.4321, -0.5432], domain: [-5, 6] }],
+  power: [{ params: [1.2345, 0.4321, -0.7654, 0.6667], domain: [-4, 5] }],
+  abs: [{ params: [1.2345, 0.4321, -0.7654], domain: [-5, 5] }],
+  logistic: [{ params: [3.4321, 1.2345, 0.4321, -0.7654], domain: [-6, 6] }],
+  vline: [{ params: [1.2345], domain: [-5, 5] }],
+  circle: [{ params: [0.4321, -0.7654, 2.3456], domain: [0, TWO_PI] }],
+  ellipse: [
+    { params: centerFormToConic({ cx: 0.4321, cy: -0.7654, rx: 3.2345, ry: 2.1234, angle: 0 })!, domain: [0, TWO_PI] },
+    { params: centerFormToConic({ cx: 0.4321, cy: -0.7654, rx: 3.2345, ry: 2.1234, angle: 0.4 })!, domain: [0, TWO_PI] },
+  ],
+  // polar families have no translate(); their far-from-origin case is a large
+  // constant next to a small variation, which is the same cancellation
+  polarRose: [
+    { params: [2.3456, 3, 0.4321], domain: [0, TWO_PI] },
+    { params: [2.3456, 3, 1234.5678], domain: [0, TWO_PI] },
+  ],
+  limacon: [
+    { params: [1.2345, 1.7654], domain: [0, TWO_PI] },
+    { params: [12345.6789, 1.7654], domain: [0, TWO_PI] },
+  ],
+  spiral: [
+    { params: [0.4321, 0.7654], domain: [0, TWO_PI] },
+    { params: [12345.6789, 0.7654], domain: [0, TWO_PI] },
+  ],
+  fourier: [
+    // N = 1: for N > 1 the latex deliberately abbreviates with "+ \cdots"
+    { params: [0.4321, -0.7654, 1.2345, 0.3456, -0.4321, 1.1234], domain: [0, TWO_PI] },
+  ],
+}
+
+/** How far the drawn curve sits from the origin, in math units. */
+const FIDELITY_SHIFTS: Array<[number, number]> = [
+  [0, 0],
+  [123.456, 0],
+  [12345.6789, 0],
+  [0, 12345.6789],
+  [98765.4321, -54321.9876],
+  [1234567.89, 0],
+]
+
+/**
+ * An exponential cannot be carried far in x at all: translating a·e^{bx} by dx
+ * scales a by e^{−b·dx}, which underflows to zero past dx ≈ 700/b — the curve
+ * itself stops being representable, never mind its equation. So it gets
+ * horizontal shifts inside that range, and the full vertical ones.
+ */
+const EXP_SHIFTS: Array<[number, number]> = [
+  [0, 0], [30, 0], [120, 0], [0, 12345.6789], [0, -54321.9876], [120, 98765.4321],
+]
+
+/**
+ * How far a polynomial can be carried before its own STORAGE, not its
+ * equation, loses the curve. Params are ascending coefficients, so evaluating a
+ * cubic centred at 1.2e6 sums four terms of ~1e17 that cancel to ~100: at
+ * double precision that arithmetic is worth about ±200, which no amount of
+ * printed precision can recover. Measured horner noise over the fixture
+ * windows: poly3 is 9e-2 at 1e5 and 2e2 at 1.2e6; poly4 is 2e-4 at 1.2e3 and
+ * 6.9e-1 at 1.2e4. These caps keep each degree inside its representable range,
+ * so a failure here means the FORMATTER lost the curve.
+ */
+const MAX_SHIFT: Record<string, number> = { poly3: 1e5, poly4: 2e3 }
+
+function fidelityCases(id: string): Case[] {
+  const base = FIDELITY_BASE[id]
+  const spec = MODELS[id]
+  const cap = MAX_SHIFT[id] ?? Infinity
+  const shifts = (id === 'exp' ? EXP_SHIFTS : FIDELITY_SHIFTS)
+    .filter(([dx]) => Math.abs(dx) <= cap)
+  const out: Case[] = []
+  for (const c of base) {
+    if (!spec.translate) { out.push(c); continue }
+    for (const [dx, dy] of shifts) {
+      const params = spec.translate(c.params, dx, dy)
+      // an explicit family's domain travels with it; a closed or parametric
+      // one is swept over the same parameter interval wherever it sits
+      const domain: [number, number] = spec.kind === 'explicit'
+        ? [c.domain[0] + dx, c.domain[1] + dx]
+        : c.domain
+      out.push({ params, domain })
+    }
+  }
+  return out
+}
+
+function extentY(pts: Vec2[]): number {
+  let lo = Infinity
+  let hi = -Infinity
+  for (const p of pts) {
+    if (!Number.isFinite(p.y)) continue
+    lo = Math.min(lo, p.y)
+    hi = Math.max(hi, p.y)
+  }
+  return hi > lo ? hi - lo : 0
+}
+
+/** Geometric distance from (x, y) to the printed conic Q = 0: |Q| / |grad Q|. */
+function conicDistance(Q: (x: number, y: number) => number, x: number, y: number): number {
+  const hx = 1e-6 * Math.max(1, Math.abs(x))
+  const hy = 1e-6 * Math.max(1, Math.abs(y))
+  const q = Q(x, y)
+  const gx = (Q(x + hx, y) - Q(x - hx, y)) / (2 * hx)
+  const gy = (Q(x, y + hy) - Q(x, y - hy)) / (2 * hy)
+  const g = Math.hypot(gx, gy)
+  return g > 0 ? Math.abs(q) / g : Infinity
+}
+
+/** max deviation of the PRINTED equation from the true curve, and the curve's y-range. */
+function fidelity(id: string, c: Case): { dev: number; range: number; tex: string } {
+  const spec = MODELS[id]
+  const tex = spec.latex(c.params)
+  const [lo, hi] = c.domain
+  const n = 400
+  const at = (i: number) => lo + ((hi - lo) * i) / n
+
+  if (spec.evalExplicit) {
+    const printed = compileRhs(tex)
+    const pts: Vec2[] = []
+    let dev = 0
+    for (let i = 0; i <= n; i++) {
+      const x = at(i)
+      const yTrue = spec.evalExplicit(c.params, x)
+      if (!Number.isFinite(yTrue)) continue
+      pts.push({ x, y: yTrue })
+      const yPrinted = printed(x, 0, 0)
+      // undefined where the true curve exists is an infinite deviation
+      dev = Math.max(dev, Number.isFinite(yPrinted) ? Math.abs(yPrinted - yTrue) : Infinity)
+    }
+    return { dev, range: extentY(pts), tex }
+  }
+
+  if (spec.evalPolar) {
+    const printed = compileRhs(tex)
+    const pts: Vec2[] = []
+    let dev = 0
+    for (let i = 0; i <= n; i++) {
+      const t = at(i)
+      const rTrue = spec.evalPolar(c.params, t)
+      const rPrinted = printed(0, 0, t)
+      pts.push({ x: rTrue * Math.cos(t), y: rTrue * Math.sin(t) })
+      dev = Math.max(dev, Number.isFinite(rPrinted) ? Math.abs(rPrinted - rTrue) : Infinity)
+    }
+    return { dev, range: extentY(pts), tex }
+  }
+
+  if (id === 'vline') {
+    const printed = compileRhs(tex)(0, 0, 0)
+    return { dev: Math.abs(printed - c.params[0]), range: hi - lo, tex }
+  }
+
+  if (id === 'fourier') {
+    const printed = compileFourier(tex)
+    const pts: Vec2[] = []
+    let dev = 0
+    for (let i = 0; i <= n; i++) {
+      const t = at(i)
+      const a = spec.evalParametric!(c.params, t)
+      const b = printed(t)
+      pts.push(a)
+      dev = Math.max(dev, Math.hypot(b.x - a.x, b.y - a.y))
+    }
+    return { dev, range: extentY(pts), tex }
+  }
+
+  // implicit conics: the deviation is how far the drawn curve lies from the
+  // curve the printed equation describes
+  const Q = compileImplicit(tex)
+  const pts: Vec2[] = []
+  if (id === 'circle') {
+    const [a, b, r] = c.params
+    for (let i = 0; i <= n; i++) {
+      const t = at(i)
+      pts.push({ x: a + r * Math.cos(t), y: b + r * Math.sin(t) })
+    }
+  } else {
+    const cf = conicToCenterForm(c.params)
+    if (!cf) throw new Error(`${id}: conicToCenterForm refused ${c.params}`)
+    const co = Math.cos(cf.angle)
+    const si = Math.sin(cf.angle)
+    for (let i = 0; i <= n; i++) {
+      const t = at(i)
+      const u = cf.rx * Math.cos(t)
+      const v = cf.ry * Math.sin(t)
+      pts.push({ x: cf.cx + u * co - v * si, y: cf.cy + u * si + v * co })
+    }
+  }
+  let dev = 0
+  for (const p of pts) dev = Math.max(dev, conicDistance(Q, p.x, p.y))
+  return { dev, range: extentY(pts), tex }
+}
+
+describe('MODELS — the printed equation IS the curve', () => {
+  it('every family has a fidelity fixture', () => {
+    for (const id of IDS) {
+      expect(FIDELITY_BASE[id], `no fidelity fixture for new model "${id}"`).toBeDefined()
+    }
+  })
+
+  it.each(IDS)('%s: the rendered latex reproduces the curve within 1%% of its y-range', (id) => {
+    for (const c of fidelityCases(id)) {
+      const { dev, range, tex } = fidelity(id, c)
+      expect(range, `${id}: degenerate fixture, no y-range`).toBeGreaterThan(0)
+      expect(
+        dev / range,
+        `${id} params=[${c.params.map(v => String(v)).join(', ')}] domain=[${c.domain}]\n` +
+        `  printed: ${tex}\n  deviation ${dev} vs y-range ${range}`,
+      ).toBeLessThan(0.01)
     }
   })
 })

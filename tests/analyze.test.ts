@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest'
 import type { FittedCurve, ModelSpec, SpecialPoint, SpecialPointKind } from '../src/core/types'
 import { MODELS } from '../src/core/fit/models'
 import { analyzeCurve } from '../src/core/analyze'
+import { centerFormToConic, conicToCenterForm } from '../src/core/fit/optimize'
 
 function curve(
   modelId: string,
@@ -773,6 +774,122 @@ describe('analyzeCurve — robustness', () => {
       for (let i = 0; i < REPS; i++) analyzeCurve(c, models)
       const ms = (performance.now() - t0) / REPS
       expect(ms, `${c.modelId} took ${ms.toFixed(3)}ms`).toBeLessThan(2)
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// P0: a root sitting ON a domain endpoint.
+//
+// The bracketing scan pairs sample i with sample i + 1, so the LAST sample of a
+// run was never a left endpoint and a root there was silently dropped; and the
+// "is this sample already a root" test was `y === 0`, which cos(-pi/2) — 6.1e-17
+// — fails. Between them, cos(x) on [-pi/2, pi/2] reported no x-intercepts at
+// all. Users type exact endpoints, so every one of these is reachable.
+// ---------------------------------------------------------------------------
+
+describe('analyzeCurve — roots exactly at a domain endpoint', () => {
+  const endpointCases: Array<[string, (x: number) => number, [number, number], number[]]> = [
+    ['x^2 - 9 on [-3, 3]', x => x * x - 9, [-3, 3], [-3, 3]],
+    ['x^3 - 4x on [-2, 2]', x => x ** 3 - 4 * x, [-2, 2], [-2, 0, 2]],
+    ['cos(x) on [-pi/2, pi/2]', Math.cos, [-Math.PI / 2, Math.PI / 2], [-Math.PI / 2, Math.PI / 2]],
+    ['sin(x) on [0, 2pi]', Math.sin, [0, 2 * Math.PI], [0, Math.PI, 2 * Math.PI]],
+    ['x on [0, 5]', x => x, [0, 5], [0]],
+    ['5 - x on [-5, 5]', x => 5 - x, [-5, 5], [5]],
+  ]
+
+  it.each(endpointCases)('%s', (label, f, domain, want) => {
+    const models = { fn: fnModel('fn', f) }
+    const zeros = xsOf(analyzeCurve(curve('fn', [], domain), models), 'zero')
+    expect(zeros, `${label}: got ${zeros}`).toHaveLength(want.length)
+    for (let i = 0; i < want.length; i++) expect(zeros[i]).toBeCloseTo(want[i], 6)
+  })
+
+  it('an endpoint that merely comes close is not a root', () => {
+    // f(3) = 0.5, two thirds of the way up the curve's own range — nowhere near
+    const models = { fn: fnModel('fn', x => x * x - 8.5) }
+    const zeros = xsOf(analyzeCurve(curve('fn', [], [-3, 3]), models), 'zero')
+    expect(zeros).toHaveLength(2)
+    for (const z of zeros) expect(Math.abs(z)).toBeCloseTo(Math.sqrt(8.5), 6)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// P1: the zero tolerance has to be the curve's OWN magnitude.
+//
+// `1e-7 * max(1, scale)` put an absolute floor under a relative test, so any
+// curve living below 1e-7 was declared to be zero everywhere it dipped. Both
+// halves have to keep working: a tolerance loose enough to invent roots is as
+// wrong as one tight enough to report a pole as a root.
+// ---------------------------------------------------------------------------
+
+describe('analyzeCurve — the zero tolerance scales with the curve', () => {
+  it('a curve that never reaches zero has no zeros, however small it is', () => {
+    for (const eps of [1e-4, 1e-8, 1e-12]) {
+      // min |f| = eps, at y = eps; the curve never touches the axis
+      const models = { fn: fnModel('fn', x => eps * Math.cos(x) + 2 * eps) }
+      const pts = analyzeCurve(curve('fn', [], [-10, 10]), models)
+      expect(xsOf(pts, 'zero'), `eps=${eps}`).toHaveLength(0)
+    }
+  })
+
+  it('a tiny curve that DOES cross still reports its crossings', () => {
+    for (const eps of [1e-4, 1e-8, 1e-12]) {
+      const models = { fn: fnModel('fn', x => eps * (x - 1.5)) }
+      const zeros = xsOf(analyzeCurve(curve('fn', [], [-4, 4]), models), 'zero')
+      expect(zeros, `eps=${eps}`).toHaveLength(1)
+      expect(zeros[0]).toBeCloseTo(1.5, 8)
+    }
+  })
+
+  it('poles are still not roots, and genuine roots beside them survive', () => {
+    const inv = { fn: fnModel('fn', x => 1 / x) }
+    expect(xsOf(analyzeCurve(curve('fn', [], [-10, 10]), inv), 'zero')).toHaveLength(0)
+
+    const rational = { fn: fnModel('fn', x => (x * x - 1) / (x - 2)) }
+    const zeros = xsOf(analyzeCurve(curve('fn', [], [-5, 5]), rational), 'zero')
+    expect(zeros).toHaveLength(2)
+    expect(zeros[0]).toBeCloseTo(-1, 6)
+    expect(zeros[1]).toBeCloseTo(1, 6)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// P0: a conic far from the origin is still an ellipse.
+//
+// fitConic normalises the conic to unit length, so an ellipse centred 3e4 out
+// has A, C ~ 1e-9 and 4AC - B^2 ~ 1e-17. The absolute 1e-16 degeneracy floor
+// called that a degenerate conic, so analysis returned nothing, the handles
+// vanished, and the printed equation solved to imaginary radii — while marching
+// squares kept drawing a perfectly good ellipse and recognition reported a
+// healthy fit. MIN_PPU = 0.001 means 1.2e6 units fit across one screen, so
+// every distance below is somewhere a student can actually draw.
+// ---------------------------------------------------------------------------
+
+describe('analyzeCurve — ellipses far from the origin', () => {
+  const distances = [3e4, 2e5, 1e6]
+  const angles = [0, 0.4]
+
+  it.each(distances)('an ellipse centred %d units out still analyses', (d) => {
+    for (const angle of angles) {
+      const cf = { cx: d, cy: -d / 3, rx: 3, ry: 2, angle }
+      const conic = centerFormToConic(cf)!
+      const back = conicToCenterForm(conic)
+      expect(back, `d=${d} angle=${angle}: centre form refused`).not.toBeNull()
+      expect(back!.cx).toBeCloseTo(cf.cx, 0)
+      expect(back!.cy).toBeCloseTo(cf.cy, 0)
+      // semi-axes to within 0.1%, whichever eigenvalue ordering came out
+      const got = [back!.rx, back!.ry].sort((p, q) => p - q)
+      expect(got[0] / 2 - 1, `d=${d} angle=${angle}: minor axis ${got[0]}`).toBeCloseTo(0, 3)
+      expect(got[1] / 3 - 1, `d=${d} angle=${angle}: major axis ${got[1]}`).toBeCloseTo(0, 3)
+
+      const pts = analyzeCurve(curve('ellipse', conic, null), MODELS)
+      const extremes = of(pts, 'extreme')
+      expect(extremes, `d=${d} angle=${angle}: no extremes`).toHaveLength(4)
+      for (const p of extremes) {
+        expect(Math.hypot(p.pos.x - cf.cx, p.pos.y - cf.cy)).toBeLessThan(3.01)
+        expect(Math.hypot(p.pos.x - cf.cx, p.pos.y - cf.cy)).toBeGreaterThan(1.99)
+      }
     }
   })
 })

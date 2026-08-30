@@ -238,7 +238,11 @@ function analyzeExplicitNumeric(
     ys[i] = y
   }
   const scale = robustScale(ys)
-  const zeroTol = 1e-7 * Math.max(1, scale)
+  // The pole guard's "is |f| actually small here?" test has to be relative to
+  // the curve's OWN magnitude. An absolute floor of 1e-7 declares every value
+  // of 1e-8·cos(x) + 2e-8 to be zero, so a curve whose minimum |f| is 1e-8 and
+  // which never crosses the axis reports four roots drawn at y = 0.
+  const zeroTol = 1e-7 * scale
   const runs = findRuns(xs, ys, scale)
 
   for (const run of runs) {
@@ -246,6 +250,21 @@ function analyzeExplicitNumeric(
 
     // ---- zeros: sign changes, then tangencies -----------------------------
     if (opts.zeros) {
+      // A root sitting ON a run's endpoint has no bracket to be found in: the
+      // scan below pairs sample i with i + 1, so the last index of the run is
+      // never a left endpoint, and at a DOMAIN end there is no sample beyond it
+      // to change sign against. Users type exact endpoints — cos(x) on
+      // [-pi/2, pi/2] is two of them — so test the ends directly, and by
+      // tolerance rather than equality: cos(-pi/2) evaluates to 6.1e-17, not 0.
+      // A run boundary produced by a pole has |y| enormous there, so it cannot
+      // be mistaken for one of these.
+      for (const i of i0 === i1 ? [i0] : [i0, i1]) {
+        const y = ys[i]
+        if (Number.isFinite(y) && Math.abs(y) <= zeroTol) {
+          const p = pt('zero', xs[i], 0, 'zero', false)
+          if (p) out.push(p)
+        }
+      }
       for (let i = i0; i < i1; i++) {
         const ya = ys[i]
         const yb = ys[i + 1]
@@ -777,8 +796,12 @@ function analyzeEllipse(curve: FittedCurve): SpecialPoint[] {
   add(ys[0], 'bottom')
   add(ys[1], 'top')
   // x-axis crossings: set y = 0 in the conic -> A x^2 + D x + F = 0
-  const [A, , , D, , F] = curve.params
-  if (Math.abs(A) > 1e-15) {
+  // conic params are unit-normalised, so A shrinks like 1/|centre|² as the
+  // ellipse moves away from the origin: an absolute floor here would stop
+  // reporting x-intercepts long before A stopped being meaningful
+  const [A, B, C, D, , F] = curve.params
+  const quad = Math.max(Math.abs(A), Math.abs(B), Math.abs(C))
+  if (quad > 0 && Math.abs(A) > 1e-12 * quad) {
     const disc = D * D - 4 * A * F
     if (disc > 0) {
       const s = Math.sqrt(disc)

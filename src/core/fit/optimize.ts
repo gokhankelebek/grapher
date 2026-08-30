@@ -321,11 +321,28 @@ export interface EllipseCenterForm {
 export function conicToCenterForm(c: number[]): EllipseCenterForm | null {
   if (c.length < 6) return null
   const [A, B, C, D, E, F] = c
+  if (!c.slice(0, 6).every(Number.isFinite)) return null
   const det = 4 * A * C - B * B
-  if (!(det > 1e-16)) return null // parabola/hyperbola/degenerate
+  // Degeneracy is a RATIO, not a magnitude. fitConic normalises the whole
+  // 6-vector to unit length, so a conic far from the origin carries its size in
+  // F and leaves the quadratic part tiny: an ellipse centred 3e4 out has
+  // A, C ~ 1e-9 and det ~ 1e-17, which an absolute 1e-16 floor rejects as
+  // "degenerate" while the curve itself is perfectly ordinary. Comparing det
+  // against the quadratic part's own scale is invariant to that normalisation
+  // (det/(A²+B²+C²) is O(1) for any circle, and ~4(r_min/r_max)² for an
+  // ellipse), so the test means the same thing at every distance and zoom.
+  const quad2 = A * A + B * B + C * C
+  if (!(quad2 > 0)) return null
+  if (!(det > 1e-12 * quad2)) return null // parabola/hyperbola/degenerate
   const cx = (B * E - 2 * C * D) / det
   const cy = (B * D - 2 * A * E) / det
-  const Q0 = A * cx * cx + B * cx * cy + C * cy * cy + D * cx + E * cy + F
+  // Q0 = Q(cx, cy). Evaluating the quadratic at a far-off centre subtracts
+  // O(cx²) terms to land on a value of order the (tiny) normalised scale; the
+  // closed form below is the same quantity with the largest cancelling product
+  // done once instead of three times:
+  //   Q0 = F + (D·cx + E·cy)/2 = F + (BDE − CD² − AE²)/det
+  const Q0 = F + (B * D * E - C * D * D - A * E * E) / det
+  if (!Number.isFinite(cx) || !Number.isFinite(cy) || !Number.isFinite(Q0)) return null
   // translated conic: A u² + B uv + C v² = −Q0
 
   if (Math.abs(B) < 1e-9 * (Math.abs(A) + Math.abs(C) + 1e-300)) {
