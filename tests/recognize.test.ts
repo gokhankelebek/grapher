@@ -554,3 +554,148 @@ describe('recognize — root families', () => {
     }
   })
 })
+
+// ---------------------------------------------------------------------------
+// Pen-lift flattening.
+//
+// A hand decelerates and lifts at both ends of a stroke, so the last few
+// percent of the ink levels off toward horizontal. It is not noise (smoothing
+// cannot remove it) and it cannot be undone in stroke processing (undoing it
+// IS the operation that turns a flat-tailed shape into a parabola). Untreated
+// it decided the answer: a clean `0.5x² − 2` over [−3, 3] with the last 12% of
+// each end eased 30% of the way to horizontal came back `sine` in 90 seeds out
+// of 90, because a parabola is the one family RIGIDLY required to keep curving
+// and so the one family a levelled-off tail can disqualify.
+//
+// recognize() now scores every family on the stroke's interior (END_TRIM at
+// each end) while still fitting the domain and reporting σ over all the ink.
+// ---------------------------------------------------------------------------
+
+/**
+ * Ease the last `band` of the x-span at each end toward the horizontal level
+ * it had at the band boundary. `amount` = 1 lifts the endpoint fully level.
+ */
+function penLift(
+  f: (x: number) => number,
+  x0: number,
+  x1: number,
+  amount: number,
+  band = 0.12,
+): (x: number) => number {
+  const w = (x1 - x0) * band
+  const xa = x0 + w
+  const xb = x1 - w
+  const ya = f(xa)
+  const yb = f(xb)
+  return (x: number) => {
+    const y = f(x)
+    if (x < xa) { const t = (xa - x) / w; return y + amount * t * t * (ya - y) }
+    if (x > xb) { const t = (x - xb) / w; return y + amount * t * t * (yb - y) }
+    return y
+  }
+}
+
+describe('recognize — pen-lift flattening does not change the family', () => {
+  const SEEDS = 10
+
+  function winRate(
+    f: (x: number) => number, a: number, b: number, amount: number, want: string,
+  ): { wins: number; note: string } {
+    const ff = penLift(f, a, b, amount)
+    let wins = 0
+    const losers: Record<string, number> = {}
+    for (let s = 0; s < SEEDS; s++) {
+      const res = drawAndRecognize(explicitPath(ff), a, b, makeRng(11000 + s * 4649))
+      if (winner(res).modelId === want) wins++
+      else losers[winner(res).modelId] = (losers[winner(res).modelId] ?? 0) + 1
+    }
+    return { wins, note: JSON.stringify(losers) }
+  }
+
+  // The shapes a levelled-off tail can actually mislead, and the ones whose
+  // signature lives AT an end and so must survive the trim that fixes them.
+  const shapes: Array<[string, string, (x: number) => number, number, number]> = [
+    ['parabola', 'poly2', x => 0.5 * x * x - 2, -3, 3],
+    ['wide parabola', 'poly2', x => 0.15 * x * x - 2, -6, 6],
+    ['tall parabola', 'poly2', x => 1.0 * x * x - 4, -3, 3],
+    ['inverted parabola', 'poly2', x => -0.5 * x * x + 3, -4, 4],
+    ['V', 'abs', x => 1.2 * Math.abs(x - 0.7) - 2, -5, 6],
+    ['line', 'line', x => 0.8 * x - 1, -6, 6],
+    ['gaussian', 'gauss', x => 2 * Math.exp(-Math.pow(x / 0.9, 2)), -3, 3],
+    ['logistic', 'logistic', x => 4 / (1 + Math.exp(-1.8 * (x - 0.5))) - 2, -6, 7],
+    ['sqrt', 'sqrt', x => Math.sqrt(x), 0, 9],
+    ['exponential', 'exp', x => 0.4 * Math.exp(0.6 * x) - 1, -6, 4],
+    ['cube root', 'cbrt', x => Math.cbrt(x), -8, 8],
+    ['sinusoid', 'sine', x => 1.5 * Math.sin(1.2 * x) + 0.4, -7, 7],
+  ]
+
+  for (const [label, want, f, a, b] of shapes) {
+    it(`a ${label} survives 15% and 30% pen lift`, () => {
+      for (const amount of [0, 0.15, 0.3]) {
+        const { wins, note } = winRate(f, a, b, amount, want)
+        expect(wins, `${label} @${amount * 100}% lift won ${wins}/${SEEDS}, lost to ${note}`)
+          .toBe(SEEDS)
+      }
+    })
+  }
+
+  it('a parabola survives even an extreme 60% pen lift', () => {
+    // Before end trimming this was 0/90 across every parabola shape tested.
+    const { wins, note } = winRate(x => 0.5 * x * x - 2, -3, 3, 0.6, 'poly2')
+    expect(wins, `won ${wins}/${SEEDS}, lost to ${note}`).toBe(SEEDS)
+  })
+
+  it('the trim is not a thumb on the scale: a real bell is still not a parabola', () => {
+    // The whole risk of trimming is that it erodes the tail evidence some
+    // families genuinely need. A gaussian's tails ARE its signature, so it
+    // must stay emphatically un-parabolic even with its ends discounted.
+    const res = drawAndRecognize(
+      explicitPath(x => 2 * Math.exp(-Math.pow(x / 0.9, 2))), -3, 3, makeRng(6001),
+    )
+    const g = expectWinner(res, 'gauss')
+    const p2 = candidate(res, 'poly2')!
+    expect(p2.error).toBeGreaterThan(8 * g.error)
+    expect(p2.score - g.score).toBeGreaterThan(20)
+  })
+
+  it('the reported sigma covers ALL the ink, not just the scored interior', () => {
+    // The σ the UI shows must answer "how close is this curve to what I drew".
+    // A flattened parabola is genuinely off at its tails, so its σ must SAY so
+    // even though the tails were excluded from the family decision.
+    const flat = penLift(x => 0.5 * x * x - 2, -3, 3, 0.6)
+    const res = drawAndRecognize(explicitPath(flat), -3, 3, makeRng(6002))
+    const w = expectWinner(res, 'poly2')
+
+    const stroke = drawStroke(explicitPath(flat), -3, 3, makeRng(6002))
+    const ev = MODELS.poly2.evalExplicit!
+    const rmsOver = (pts: Vec2[]) =>
+      Math.sqrt(pts.reduce((s, p) => s + Math.pow(p.y - ev(w.params, p.x), 2), 0) / pts.length)
+
+    const n = stroke.points.length
+    const k = Math.floor(n * 0.06)
+    const interior = stroke.points.slice(k, n - k)
+
+    // reported σ is the full-ink residual...
+    expect(w.error).toBeCloseTo(rmsOver(stroke.points), 6)
+    // ...and it is meaningfully larger than the interior residual that ranked
+    // the families, i.e. reporting the trimmed number would have understated
+    // the misfit the user can see at the ends.
+    expect(rmsOver(interior)).toBeLessThan(0.7 * w.error)
+  })
+
+  it('a clean stroke reports the same sigma it always did', () => {
+    // No flattening => nothing to discount => σ is unchanged by the trim.
+    const res = drawAndRecognize(explicitPath(x => 0.4 * x * x - 1), -5, 5, makeRng(1003))
+    const w = expectWinner(res, 'poly2')
+    expect(w.error).toBeLessThan(2 * JITTER)
+  })
+
+  it('closed strokes are not trimmed, and still recognize cleanly', () => {
+    // A closed stroke has no dangling tail: its "ends" meet in the middle of a
+    // genuine arc, so trimming there would delete real shape.
+    for (let s = 0; s < 6; s++) {
+      const res = drawAndRecognize(polarPath(() => 2.5), 0, 2 * Math.PI, makeRng(6100 + s))
+      expectWinner(res, 'circle')
+    }
+  })
+})

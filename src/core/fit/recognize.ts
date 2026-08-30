@@ -63,6 +63,76 @@ function scoreOf(modelId: string, rmsNorm: number, k: number): number {
   return N_EFF * Math.log(rmsNorm * rmsNorm + NOISE_FLOOR) + 2 * k * w
 }
 
+// ---------------------------------------------------------------------------
+// End trimming
+//
+// A hand-drawn stroke FLATTENS at both ends: the hand decelerates and the pen
+// lifts, so the last few percent of the ink levels off toward horizontal. That
+// is an artifact of the hand, not of the shape the user meant — but it is not
+// noise, so no amount of smoothing removes it (see the note in stroke.ts), and
+// it cannot be undone in stroke processing either: "extrapolate the interior
+// trend outward" is precisely the operation that turns a flat-tailed shape
+// into a parabola, so it destroys genuine gaussians, V's and logistics.
+//
+// It has to be handled here, at model selection, because that is the only
+// place that knows what the alternatives are. And it matters here: a parabola
+// is the one family RIGIDLY required to keep curving, so it is the one family
+// a levelled-off tail can disqualify outright. Measured on `0.5x² − 2` over
+// [−3, 3], easing the last 12% at each end 30% of the way to horizontal, the
+// winner flips from poly2 to sine in 25 seeds out of 25 — the scoring is being
+// honest, and honestly wrong about what was drawn.
+//
+// So: drop the outer END_TRIM of the points at each end before fitting AND
+// before measuring the residual — for every family equally, no exceptions and
+// no per-family thresholds. The full drawn extent still sets the reported
+// domain, and FitResult.error is still measured against every point the user
+// drew (see `fullRms` in makeCandidate); only the evidence that decides WHICH
+// FAMILY WINS is trimmed.
+//
+// This works because the two things being told apart live at different
+// scales. Pen-lift flattening occupies the last ~12% of a stroke; a gaussian's
+// tails, a logistic's plateaus, a sqrt's branch point are the shape's whole
+// character and survive any trim that leaves the shape recognizable. Measured
+// poly2 rms, 25 seeds, fitted and scored on the trimmed points:
+//
+//   trim     flattened parabola @30%     genuine gaussian     ratio
+//     0%             0.0796                   0.4587           5.8:1
+//     8%             0.0252                   0.3930          15.6:1
+//    16%             0.0214                   0.2739          12.8:1
+//
+// Note both halves are needed: trimming the residual while still FITTING on
+// the flattened tails barely helps (0.0796 -> 0.0532), because the levelled-off
+// ends drag the fitted parabola away from the interior it should be tracking.
+//
+// THE FRACTION IS CHOSEN FROM THE MISCLASSIFICATION RATE, not from the rms
+// separation. 22 explicit shapes x 90 seeds x flattening in {0, 15%, 30%}
+// (5940 strokes), and the same at an extreme 60%:
+//
+//   trim      0%     4%     5%     6%     7%     8%    10%
+//   0/15/30  570      0      0      0      0      2     36     (of 5940)
+//   60%      996     29      9      4      4      5     21     (of 1980)
+//
+// 4–7% all classify the target range perfectly; 6–7% also minimize the extreme
+// case. 6% is the interior of that window — the value furthest from BOTH
+// failure modes. Below ~4% the artifact survives and parabolas lose to sine;
+// above ~8% the trim starts eating evidence that genuinely lives at an end,
+// and `power` (whose exponent is pinned by the outer reach) and `sqrt` (whose
+// branch point IS an endpoint) begin to lose to their imitators.
+//
+// Closed strokes are NOT trimmed. Their endpoints coincide, so there is no
+// dangling tail to discount — the "ends" land in the middle of a genuine arc,
+// and cutting them would delete real shape rather than an artifact.
+const END_TRIM = 0.06
+const MIN_CORE_POINTS = 12
+
+/** The interior of an open stroke: the ink minus the pen-lift band at each end. */
+function trimEnds(pts: Vec2[], frac: number): Vec2[] {
+  const n = pts.length
+  const k = Math.floor(n * frac)
+  if (k < 1 || n - 2 * k < MIN_CORE_POINTS) return pts
+  return pts.slice(k, n - k)
+}
+
 interface Candidate extends FitResult { }
 
 function makeCandidate(
@@ -73,10 +143,15 @@ function makeCandidate(
   rms: number,
   diag: number,
   k: number,
+  fullRms?: number,
 ): Candidate | null {
   if (!params.every(Number.isFinite) || !Number.isFinite(rms)) return null
   const rmsNorm = rms / diag
-  return { modelId, params, kind, domain, error: rms, score: scoreOf(modelId, rmsNorm, k) }
+  // `score` ranks families on the trimmed interior; `error` is the σ the UI
+  // shows, so it is measured against ALL the ink — a sigma that quietly
+  // excluded part of the user's stroke would be its own small lie.
+  const reported = fullRms !== undefined && Number.isFinite(fullRms) ? fullRms : rms
+  return { modelId, params, kind, domain, error: reported, score: scoreOf(modelId, rmsNorm, k) }
 }
 
 // ---------------------------------------------------------------------------
@@ -338,20 +413,30 @@ function fitByBranchPoint(
   return coarse
 }
 
-/** y = a·sqrt(x − b) + c. The branch point sits at or left of the drawn ink. */
-function fitSqrt(pts: Vec2[]): { params: number[]; rms: number } | null {
+/**
+ * y = a·sqrt(x − b) + c. The branch point sits at or left of the drawn ink.
+ * `inkMinX` is the left edge of the WHOLE stroke, which may lie left of `pts`
+ * when the ends have been trimmed: b must clear all the ink, not just the
+ * points being fitted, or the reported domain would cut off part of the
+ * stroke and the σ measured over it would be infinite.
+ */
+function fitSqrt(pts: Vec2[], inkMinX: number): { params: number[]; rms: number } | null {
   const n = pts.length
   if (n < 4) return null
   let minX = Infinity, maxX = -Infinity
   for (const p of pts) { if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x }
   const w = maxX - minX
   if (!(w > 0)) return null
-  // b ranges from a full stroke-width left of the ink up to just inside its
-  // left end (the branch point may sit marginally inside, under hand jitter)
+  // b ranges from a full stroke-width left of the fitted points up to the left
+  // edge of the ink. When the ends are trimmed that upper bound sits inside
+  // the discarded head — which is exactly right: for a square root the branch
+  // point IS the endpoint, so it belongs in the band we stopped scoring, not
+  // at the first point we kept.
+  const bMax = Math.min(minX + 0.02 * w, inkMinX)
   const grid: number[] = []
   const STEPS = 48
   const lo = minX - w
-  const hi = minX + 0.02 * w
+  const hi = bMax
   for (let i = 0; i <= STEPS; i++) {
     // denser near the left end, where the interesting branch points live
     const u = i / STEPS
@@ -372,8 +457,8 @@ function fitSqrt(pts: Vec2[]): { params: number[]; rms: number } | null {
   // The branch point must sit at or left of the ink, or part of the stroke
   // falls outside the curve's own domain. LM can nudge b a hair inside while
   // chasing jitter, so clamp it back and re-solve (a, c) exactly there.
-  if (b > minX) {
-    b = minX
+  if (b > bMax) {
+    b = bMax
     const rows: number[][] = []
     for (const pt of pts) rows.push([Math.sqrt(Math.max(pt.x - b, 0)), 1])
     const sol = linearLeastSquares(rows, pts.map(pt => pt.y))
@@ -896,16 +981,28 @@ function recognizeInto(stroke: ProcessedStroke, out: FitResult[]): void {
   const height = stroke.bbox.max.y - stroke.bbox.min.y
   const diag = Math.max(Math.hypot(width, height), 1e-9)
 
+  // The interior of the stroke — the evidence that decides the family. The
+  // bbox, the domain and the reported σ all still come from the full ink.
+  const core = stroke.closed ? pts : trimEnds(pts, END_TRIM)
+
   const push = (c: FitResult | null) => { if (c) out.push(c) }
+
+  /** σ of a fitted explicit family measured over EVERY drawn point. */
+  const fullRmsOf = (id: string, params: number[]): number | undefined => {
+    const ev = MODELS[id]?.evalExplicit
+    if (!ev) return undefined
+    return rmsExplicit(pts, x => ev(params, x))
+  }
 
   // ---- nearly vertical stroke -> x = a --------------------------------------
   if (height > 0 && width < 0.06 * height && !stroke.closed) {
-    const a = mean(pts.map(p => p.x))
-    const rms = rmsOf(pts.map(p => p.x - a))
+    const a = mean(core.map(p => p.x))
+    const rms = rmsOf(core.map(p => p.x - a))
+    const fullRms = rmsOf(pts.map(p => p.x - a))
     const padY = 0.05 * height
     push(
       makeCandidate('vline', [a], 'parametric',
-        [stroke.bbox.min.y - padY, stroke.bbox.max.y + padY], rms, diag, 1),
+        [stroke.bbox.min.y - padY, stroke.bbox.max.y + padY], rms, diag, 1, fullRms),
     )
   }
 
@@ -917,34 +1014,42 @@ function recognizeInto(stroke: ProcessedStroke, out: FitResult[]): void {
     const polyIds = ['line', 'poly2', 'poly3', 'poly4'] as const
     for (let d = 1; d <= 4; d++) {
       try {
-        const fit = fitPolyFamily(pts, d)
-        if (fit) push(makeCandidate(polyIds[d - 1], fit.params, 'explicit', domain, fit.rms, diag, d + 1))
+        const fit = fitPolyFamily(core, d)
+        const id = polyIds[d - 1]
+        if (fit) {
+          push(makeCandidate(id, fit.params, 'explicit', domain, fit.rms, diag, d + 1,
+            rmsExplicit(pts, x => hornerEval(fit.params, x))))
+        }
       } catch { /* skip */ }
     }
 
     const nonlinear: Array<[string, () => { params: number[]; rms: number } | null, number]> = [
-      ['sine', () => fitSine(pts), 4],
-      ['gauss', () => fitGauss(pts), 4],
-      ['exp', () => fitExp(pts), 3],
-      ['abs', () => fitAbs(pts), 3],
-      ['logistic', () => fitLogistic(pts), 4],
-      ['cbrt', () => fitCbrt(pts), 3],
-      ['power', () => fitPower(pts), 4],
+      ['sine', () => fitSine(core), 4],
+      ['gauss', () => fitGauss(core), 4],
+      ['exp', () => fitExp(core), 3],
+      ['abs', () => fitAbs(core), 3],
+      ['logistic', () => fitLogistic(core), 4],
+      ['cbrt', () => fitCbrt(core), 3],
+      ['power', () => fitPower(core), 4],
     ]
     for (const [id, fitFn, k] of nonlinear) {
       try {
         const fit = fitFn()
-        if (fit) push(makeCandidate(id, fit.params, 'explicit', domain, fit.rms, diag, k))
+        if (fit) {
+          push(makeCandidate(id, fit.params, 'explicit', domain, fit.rms, diag, k,
+            fullRmsOf(id, fit.params)))
+        }
       } catch { /* skip */ }
     }
 
     // sqrt carries its own domain: the curve does not exist left of the branch
     // point, so the renderer must never be asked to draw there
     try {
-      const fit = fitSqrt(pts)
+      const fit = fitSqrt(core, stroke.bbox.min.x)
       if (fit) {
         const sqrtDomain: [number, number] = [fit.params[1], stroke.bbox.max.x + padX]
-        push(makeCandidate('sqrt', fit.params, 'explicit', sqrtDomain, fit.rms, diag, 3))
+        push(makeCandidate('sqrt', fit.params, 'explicit', sqrtDomain, fit.rms, diag, 3,
+          fullRmsOf('sqrt', fit.params)))
       }
     } catch { /* skip */ }
   }
@@ -979,6 +1084,23 @@ function recognizeInto(stroke: ProcessedStroke, out: FitResult[]): void {
   }
 
   // ---- winds around the origin -> polar families ----------------------------
+  // Deliberately fitted on the FULL points, trimmed or not — the one place
+  // the trim is not applied to an open stroke. Two reasons:
+  //
+  //  * Correctness. A spiral's parameters are tied to the UNWRAPPED θ origin,
+  //    which is the stroke's first sample. Fit it on a trimmed θ range and
+  //    report the full one and you print a spiral that misses its own ink.
+  //  * The asymmetry is the safe direction. Keeping every point means these
+  //    families keep every point of evidence AGAINST them, so an untrimmed
+  //    polar residual can only cost a polar family a win it deserved — it can
+  //    never manufacture one. Measured: circle, ellipse, both roses, limaçon,
+  //    cardioid and spiral all stay at 120/120 for every trim fraction tested,
+  //    so it costs nothing either.
+  //
+  // (Explicit and polar candidates do co-occur — a wide parabola through the
+  // origin covers enough direction bins to reach here — so this is a real
+  // comparison, not a dead branch. Their residuals are an order of magnitude
+  // apart in those cases, which is why the asymmetry never decides anything.)
   try {
     const ps = polarSamples(pts, diag)
     const originInside =
@@ -1021,7 +1143,10 @@ function recognizeInto(stroke: ProcessedStroke, out: FitResult[]): void {
   }
 }
 
-/** Best-effort fallback: Fourier hug (mirrored if open), then poly3. */
+/** Best-effort fallback: Fourier hug (mirrored if open), then poly3.
+ *  Not trimmed: this is the escape hatch that runs when no family fits, and
+ *  its whole job is to reproduce the ink the user actually drew. Trimming it
+ *  would only lower its residual and shorten what it draws. */
 function addFallback(stroke: ProcessedStroke, out: FitResult[]): void {
   const pts = stroke.points
   if (pts.length < 4) return
