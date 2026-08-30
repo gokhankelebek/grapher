@@ -7,6 +7,8 @@ interface Props {
   canUndo: boolean
   canRedo: boolean
   hasCurves: boolean
+  showAnalysis: boolean
+  onToggleAnalysis(): void
   /** Document name + save state + documents menu. */
   docMenu?: ReactNode
   onMode(mode: Mode): void
@@ -23,6 +25,8 @@ export function Toolbar({
   canUndo,
   canRedo,
   hasCurves,
+  showAnalysis,
+  onToggleAnalysis,
   docMenu,
   onMode,
   onToggleSidebar,
@@ -91,6 +95,31 @@ export function Toolbar({
           Pan
         </button>
       </div>
+
+      <div className="tb-sep" />
+
+      <button
+        className={`tb-btn tb-toggle${showAnalysis ? ' tb-toggle-on' : ''}`}
+        onClick={onToggleAnalysis}
+        aria-pressed={showAnalysis}
+        title={
+          showAnalysis
+            ? 'Hide zeros, extrema and inflections (A)'
+            : 'Show zeros, extrema and inflections (A)'
+        }
+      >
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path
+            d="M3 17c3.5 0 5-10 9-10s5.5 5 9 5"
+            stroke="currentColor"
+            strokeWidth="1.7"
+            strokeLinecap="round"
+          />
+          <circle cx="7.6" cy="12.4" r="2.1" fill="currentColor" />
+          <circle cx="16.4" cy="9.6" r="2.1" fill="currentColor" />
+        </svg>
+        Analysis
+      </button>
 
       <div className="tb-sep" />
 

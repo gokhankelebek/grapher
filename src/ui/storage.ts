@@ -16,6 +16,7 @@ import { serializeDoc } from '../core/persist'
 
 const PREFIX = 'grapher.v1'
 const INDEX_KEY = `${PREFIX}.index`
+const PREFS_KEY = `${PREFIX}.prefs`
 const docKey = (id: string): string => `${PREFIX}.doc.${id}`
 
 export interface DocIndex {
@@ -180,6 +181,45 @@ export function removeDoc(id: string): void {
 export function setCurrentDoc(id: string | null): void {
   const index = readIndex()
   writeIndex({ ...index, currentId: id })
+}
+
+// ------------------------------------------------------------- preferences
+//
+// View preferences belong to the person, not to the lesson: a teacher who
+// hides the analysis markers wants them hidden in every document, and an
+// imported file must never silently flip their setting. So preferences live
+// under their own key, outside the document schema — which also means no
+// schema bump and no risk to documents already on disk.
+
+export interface Prefs {
+  showAnalysis: boolean
+}
+
+export const DEFAULT_PREFS: Prefs = { showAnalysis: true }
+
+export function readPrefs(): Prefs {
+  const s = storage()
+  if (!s) return { ...DEFAULT_PREFS }
+  try {
+    const raw = s.getItem(PREFS_KEY)
+    if (!raw) return { ...DEFAULT_PREFS }
+    const parsed: unknown = JSON.parse(raw)
+    if (!isObj(parsed)) return { ...DEFAULT_PREFS }
+    return {
+      showAnalysis:
+        typeof parsed.showAnalysis === 'boolean'
+          ? parsed.showAnalysis
+          : DEFAULT_PREFS.showAnalysis,
+    }
+  } catch {
+    return { ...DEFAULT_PREFS }
+  }
+}
+
+export function writePrefs(prefs: Prefs): void {
+  // A preference failing to save must never surface as a "work not saved"
+  // alarm — it is not the user's work.
+  write(PREFS_KEY, JSON.stringify(prefs))
 }
 
 /** Rough bytes used by this app's keys — shown when storage runs out. */

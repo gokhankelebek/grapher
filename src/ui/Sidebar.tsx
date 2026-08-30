@@ -1,4 +1,4 @@
-import type { FitResult, FittedCurve, ModelSpec } from '../core/types'
+import type { FitResult, FittedCurve, ModelSpec, SpecialPoint } from '../core/types'
 import type { StyleMap } from '../App'
 import { CurveCard } from './CurveCard'
 import { ExprInput } from './ExprInput'
@@ -16,6 +16,10 @@ interface Props {
   exprSources: Record<string, string>
   /** curveId -> why its equation could not be restored on load. */
   brokenExpr: Record<string, string>
+  /** Special points of the selected curve, in analyzeCurve() order. */
+  analysis: SpecialPoint[]
+  /** Hovering a listed value emphasises its marker on canvas. */
+  onAnalysisHover(index: number | null): void
   candidatesFor(id: string): FitResult[]
   onSelect(id: string | null): void
   onDelete(id: string): void
@@ -37,6 +41,9 @@ interface Props {
   onExprSubmit(src: string): string | null
 }
 
+/** Stable empty array for the cards that aren't selected. */
+const EMPTY_ANALYSIS: SpecialPoint[] = []
+
 export function Sidebar({
   open,
   curves,
@@ -48,6 +55,8 @@ export function Sidebar({
   shake,
   exprSources,
   brokenExpr,
+  analysis,
+  onAnalysisHover,
   candidatesFor,
   onSelect,
   onDelete,
@@ -103,6 +112,8 @@ export function Sidebar({
               shaking={shake !== null && shake.id === curve.id}
               exprSource={exprSources[curve.id]}
               brokenReason={brokenExpr[curve.id]}
+              analysis={curve.id === selectedId ? analysis : EMPTY_ANALYSIS}
+              onAnalysisHover={onAnalysisHover}
               onSelect={() => onSelect(curve.id)}
               onDelete={() => onDelete(curve.id)}
               onDuplicate={() => onDuplicate(curve.id)}

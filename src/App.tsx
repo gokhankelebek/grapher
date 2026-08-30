@@ -4,6 +4,8 @@ import { CURVE_COLORS, DARK_THEME, nextId } from './core/types'
 import { MODELS } from './core/fit/models'
 import { parseExpression } from './core/parse'
 import { snapParams } from './core/fit/edit'
+import { analyzeCurve } from './core/analyze'
+import type { SpecialPoint } from './core/types'
 import { drawGrid } from './render/grid'
 import { drawCurve } from './render/curves'
 import { CanvasStage } from './ui/CanvasStage'
@@ -24,10 +26,12 @@ import {
   listDocs,
   readDocJSON,
   readIndex,
+  readPrefs,
   removeDoc,
   setCurrentDoc,
   usedBytes,
   writeDoc,
+  writePrefs,
 } from './ui/storage'
 
 export type Mode = 'draw' | 'pan'
@@ -38,6 +42,9 @@ import type { CurveStyle, StyleMap } from './core/persist'
 
 /** How long the board sits idle before it is written to storage. */
 const AUTOSAVE_MS = 400
+
+/** Stable identity — avoids re-rendering the canvas when markers are hidden. */
+const EMPTY_ANALYSIS: SpecialPoint[] = []
 
 /** One undo/redo history entry. */
 interface Snapshot {
@@ -86,6 +93,11 @@ export default function App() {
   const [brokenExpr, setBrokenExpr] = useState<Record<string, string>>({})
   const [dropActive, setDropActive] = useState(false)
 
+  // ---- curve analysis (zeros, extrema, inflections)
+  const [showAnalysis, setShowAnalysis] = useState<boolean>(() => readPrefs().showAnalysis)
+  /** Index into the analysis array whose marker should be emphasised. */
+  const [highlight, setHighlight] = useState<number | null>(null)
+
   const curvesRef = useRef<FittedCurve[]>([])
   const stylesRef = useRef<StyleMap>({})
   const selectedRef = useRef<string | null>(null)
@@ -115,6 +127,32 @@ export default function App() {
   selectedRef.current = selectedId
   const modeRef = useRef<Mode>(mode)
   modeRef.current = mode
+
+  const selectedCurve = useMemo(
+    () => curves.find((c) => c.id === selectedId) ?? null,
+    [curves, selectedId],
+  )
+
+  // Value-based key: re-analyze only when the curve's shape actually changes,
+  // so unrelated re-renders (hover, save state, toasts) never pay the cost.
+  const analysisKey = selectedCurve
+    ? `${selectedCurve.id}|${selectedCurve.modelId}|${selectedCurve.params.join(',')}|${
+        selectedCurve.domain ? selectedCurve.domain.join(',') : ''
+      }`
+    : ''
+
+  const analysis = useMemo<SpecialPoint[]>(() => {
+    if (!selectedCurve) return []
+    try {
+      const pts = analyzeCurve(selectedCurve, models)
+      return Array.isArray(pts) ? pts : []
+    } catch {
+      // An un-analyzable family must never take the board down.
+      return []
+    }
+    // selectedCurve is intentionally tracked through analysisKey, not identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [analysisKey, models])
 
   const vpRef = useRef<Viewport>({
     center: { x: 0, y: 0 },
@@ -493,6 +531,14 @@ export default function App() {
     },
     [applyHydrated, newDocument],
   )
+
+  const toggleAnalysis = useCallback((): void => {
+    setShowAnalysis((v) => {
+      const next = !v
+      writePrefs({ showAnalysis: next })
+      return next
+    })
+  }, [])
 
   const exportDocument = useCallback((): void => {
     const meta = docMetaRef.current
@@ -951,6 +997,12 @@ export default function App() {
         setMode('draw')
       } else if (key === 'p' && !meta) {
         setMode('pan')
+      } else if (key === 'a' && !meta) {
+        setShowAnalysis((v) => {
+          const next = !v
+          writePrefs({ showAnalysis: next })
+          return next
+        })
       }
     }
     const onKeyUp = (e: KeyboardEvent): void => {
@@ -981,6 +1033,8 @@ export default function App() {
         shake={shake}
         exprSources={exprSources}
         brokenExpr={brokenExpr}
+        analysis={analysis}
+        onAnalysisHover={setHighlight}
         candidatesFor={candidatesFor}
         onSelect={setSelectedId}
         onDelete={deleteCurve}
@@ -1044,6 +1098,8 @@ export default function App() {
           onCurveEditEnd={commitWithSnap}
           onCurveEditCancel={editCancel}
           onViewportChange={scheduleSave}
+          analysis={showAnalysis ? analysis : EMPTY_ANALYSIS}
+          analysisHighlight={highlight}
         />
 
         <Toolbar
@@ -1052,6 +1108,8 @@ export default function App() {
           canUndo={canUndo}
           canRedo={canRedo}
           hasCurves={curves.length > 0}
+          showAnalysis={showAnalysis}
+          onToggleAnalysis={toggleAnalysis}
           docMenu={
             <DocMenu
               name={docMeta.name}

@@ -194,3 +194,46 @@ export interface CurveHandle {
   label?: string       // tooltip: "amplitude", "vertex", ...
   cursor?: string      // CSS cursor hint
 }
+
+// ============================================================================
+// Curve analysis (src/core/analyze.ts) — the features a student is asked to
+// find: where it crosses, turns, and changes concavity.
+//
+//   export function analyzeCurve(
+//     curve: FittedCurve,
+//     models: Record<string, ModelSpec>,
+//   ): SpecialPoint[]
+//
+// Points are returned in left-to-right order (by x) for explicit families, and
+// restricted to the curve's own domain. Never throws: an un-analyzable family
+// returns an empty array. Must be fast enough to re-run while a slider is
+// being dragged (< 2ms for a typical curve).
+// ============================================================================
+
+export type SpecialPointKind =
+  | 'zero'         // f(x) = 0 — an x-intercept / root
+  | 'maximum'      // local maximum
+  | 'minimum'      // local minimum
+  | 'inflection'   // concavity changes
+  | 'y-intercept'  // f(0)
+  | 'extreme'      // closed/polar curves: leftmost, rightmost, top, bottom
+  | 'petal-tip'    // polar: local maximum of |r|
+
+export interface SpecialPoint {
+  kind: SpecialPointKind
+  pos: Vec2
+  /** short human label for the readout, e.g. "zero", "max", "inflection" */
+  label: string
+  /**
+   * True when the location is known in closed form (a line's root, a
+   * parabola's vertex) rather than located numerically. Lets the UI avoid
+   * implying more precision than was actually computed.
+   */
+  exact: boolean
+  /**
+   * True when the point is a tangency — the curve touches zero (or a critical
+   * value) without crossing, e.g. a double root. Worth flagging because it is
+   * the case naive sign-change root finding silently misses.
+   */
+  tangent?: boolean
+}

@@ -41,6 +41,19 @@ export function parseNumeric(src: string): number | null {
   return Number.isFinite(plain) ? plain : null
 }
 
+/**
+ * 4-significant-digit coordinate for analysis readouts — keeps trailing zeros
+ * so a column of values lines up (1.009, 3.002, −1.990), and uses a real minus
+ * sign rather than a hyphen.
+ */
+export function formatCoord(v: number): string {
+  if (!Number.isFinite(v)) return '—'
+  if (v === 0) return '0'
+  const abs = Math.abs(v)
+  const s = abs >= 1e5 || abs < 1e-3 ? v.toExponential(2) : v.toPrecision(4)
+  return s.replace('-', '−')
+}
+
 /** Compact 4-significant-digit rendering for pre-filled input values. */
 export function formatSig(v: number): string {
   if (!Number.isFinite(v)) return '0'

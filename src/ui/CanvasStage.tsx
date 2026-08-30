@@ -13,6 +13,7 @@ import type {
   FittedCurve,
   ModelSpec,
   ProcessedStroke,
+  SpecialPoint,
   Vec2,
   Viewport,
 } from '../core/types'
@@ -29,6 +30,7 @@ import {
 import { drawGrid } from '../render/grid'
 import { drawCurve, drawInk } from '../render/curves'
 import { sampleCurveScreen, distToPolyline } from './sample'
+import { formatCoord } from './numeric'
 import { HandleInput } from './HandleInput'
 import type { HandleField } from './HandleInput'
 import type { Mode, StyleMap } from '../App'
@@ -64,6 +66,10 @@ interface Props {
   onCurveEditCancel(): void
   /** Pan/zoom changed. Hot: must not trigger a React render on its own. */
   onViewportChange?(): void
+  /** Special points of the selected curve. Empty when markers are hidden. */
+  analysis: SpecialPoint[]
+  /** Index into `analysis` to emphasise (hovered in the card readout). */
+  analysisHighlight: number | null
 }
 
 const MIN_PPU = 0.001
@@ -151,6 +157,198 @@ const DOUBLE_TAP_PX = 12
 
 const clampPpu = (v: number): number => Math.min(MAX_PPU, Math.max(MIN_PPU, v))
 
+// ---------------------------------------------------------------------------
+// Analysis markers.
+//
+// These are INFORMATIONAL — unlike the edit handles they carry no pointer
+// interaction at all, so they can never steal a handle's hit radius. They are
+// also drawn smaller and lighter than handles, and are suppressed wherever they
+// would sit under one (a parabola's vertex is both a handle and a minimum), so
+// the two vocabularies stay legible side by side.
+// ---------------------------------------------------------------------------
+
+const TEXT_COLOR = '#e6eaf5'
+const LABEL_FONT = '11px "SF Mono", Menlo, Consolas, monospace'
+/** Above this many on-screen points, labels would be an unreadable pile. */
+const MAX_LABELS = 8
+/** Two labels closer than this along the curve collapse to markers only. */
+const MIN_LABEL_GAP = 28
+
+function labelFor(p: SpecialPoint): string {
+  if (p.kind === 'zero') {
+    return `${formatCoord(p.pos.x)}${p.tangent ? ' (touches)' : ''}`
+  }
+  return `(${formatCoord(p.pos.x)}, ${formatCoord(p.pos.y)})`
+}
+
+function roundRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number,
+): void {
+  ctx.beginPath()
+  ctx.moveTo(x + r, y)
+  ctx.arcTo(x + w, y, x + w, y + h, r)
+  ctx.arcTo(x + w, y + h, x, y + h, r)
+  ctx.arcTo(x, y + h, x, y, r)
+  ctx.arcTo(x, y, x + w, y, r)
+  ctx.closePath()
+}
+
+function drawMarker(
+  ctx: CanvasRenderingContext2D,
+  p: SpecialPoint,
+  sx: number,
+  sy: number,
+  color: string,
+  grow: number,
+): void {
+  const ring = (r: number, lw: number): void => {
+    ctx.beginPath()
+    ctx.arc(sx, sy, r, 0, TWO_PI)
+    ctx.fillStyle = DARK_THEME.bg
+    ctx.fill()
+    ctx.lineWidth = lw
+    ctx.strokeStyle = color
+    ctx.stroke()
+  }
+  const dot = (r: number, alpha: number): void => {
+    ctx.globalAlpha = alpha
+    ctx.beginPath()
+    ctx.arc(sx, sy, r, 0, TWO_PI)
+    ctx.fillStyle = color
+    ctx.fill()
+    ctx.lineWidth = 1.5
+    ctx.strokeStyle = DARK_THEME.bg
+    ctx.stroke()
+    ctx.globalAlpha = 1
+  }
+
+  switch (p.kind) {
+    case 'zero':
+      // hollow ring, sitting on the axis
+      ring(4 + grow, 1.8)
+      break
+    case 'maximum':
+    case 'minimum':
+      dot(3.5 + grow, 1)
+      break
+    case 'inflection': {
+      // diamond — deliberately not a circle, so concavity reads at a glance
+      const d = 4.6 + grow
+      ctx.beginPath()
+      ctx.moveTo(sx, sy - d)
+      ctx.lineTo(sx + d, sy)
+      ctx.lineTo(sx, sy + d)
+      ctx.lineTo(sx - d, sy)
+      ctx.closePath()
+      ctx.fillStyle = DARK_THEME.bg
+      ctx.fill()
+      ctx.lineWidth = 1.7
+      ctx.strokeStyle = color
+      ctx.stroke()
+      break
+    }
+    case 'y-intercept':
+      dot(2.6 + grow, 0.62)
+      break
+    default:
+      dot(3 + grow, 0.74)
+      break
+  }
+}
+
+function drawAnalysis(
+  ctx: CanvasRenderingContext2D,
+  vp: Viewport,
+  curve: FittedCurve,
+  points: SpecialPoint[],
+  handles: CurveHandle[],
+  highlight: number | null,
+): void {
+  if (points.length === 0) return
+
+  const handlePts = handles.map((h) => toScreen(h.pos, vp))
+  const shown: { p: SpecialPoint; sx: number; sy: number; i: number }[] = []
+
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i]
+    if (!p || !p.pos || !Number.isFinite(p.pos.x) || !Number.isFinite(p.pos.y)) continue
+    const s = toScreen(p.pos, vp)
+    if (s.x < -30 || s.y < -30 || s.x > vp.widthPx + 30 || s.y > vp.heightPx + 30) continue
+    // Yield the spot to an interactive handle, unless this is the one the user
+    // is pointing at in the readout.
+    if (i !== highlight) {
+      let masked = false
+      for (const hp of handlePts) {
+        if (Math.hypot(hp.x - s.x, hp.y - s.y) <= HANDLE_HIT_RADIUS) {
+          masked = true
+          break
+        }
+      }
+      if (masked) continue
+    }
+    shown.push({ p, sx: s.x, sy: s.y, i })
+  }
+  if (shown.length === 0) return
+
+  for (const m of shown) {
+    drawMarker(ctx, m.p, m.sx, m.sy, curve.color, m.i === highlight ? 2.5 : 0)
+  }
+
+  // --- labels, only while they can still be read
+  if (shown.length > MAX_LABELS) return
+  const ordered = shown.slice().sort((a, b) => a.sx - b.sx)
+  ctx.font = LABEL_FONT
+  ctx.textBaseline = 'middle'
+  const placed: { x: number; y: number; w: number; h: number }[] = []
+  let lastX = -Infinity
+
+  for (const m of ordered) {
+    // crowded neighbours: keep the markers, drop the text
+    if (m.i !== highlight && m.sx - lastX < MIN_LABEL_GAP) continue
+    const text = labelFor(m.p)
+    const w = ctx.measureText(text).width + 10
+    const h = 16
+    // try above-right first, then a few vertical nudges
+    const candidates = [m.sy - 14, m.sy - 30, m.sy + 16, m.sy + 32, m.sy - 46]
+    let box: { x: number; y: number; w: number; h: number } | null = null
+    for (const cy of candidates) {
+      const x = Math.min(Math.max(m.sx + 8, 2), vp.widthPx - w - 2)
+      const y = cy - h / 2
+      if (y < 2 || y + h > vp.heightPx - 2) continue
+      const clash = placed.some(
+        (r) => x < r.x + r.w && x + w > r.x && y < r.y + r.h && y + h > r.y,
+      )
+      if (!clash) {
+        box = { x, y, w, h }
+        break
+      }
+    }
+    if (!box) continue
+
+    ctx.globalAlpha = 0.86
+    roundRect(ctx, box.x, box.y, box.w, box.h, 4)
+    ctx.fillStyle = DARK_THEME.bg
+    ctx.fill()
+    ctx.globalAlpha = 1
+    ctx.lineWidth = 1
+    ctx.strokeStyle = m.i === highlight ? curve.color : DARK_THEME.gridMajor
+    ctx.stroke()
+    ctx.fillStyle = m.i === highlight ? curve.color : TEXT_COLOR
+    ctx.fillText(text, box.x + 5, box.y + h / 2)
+
+    placed.push(box)
+    lastX = m.sx
+  }
+  ctx.textBaseline = 'alphabetic'
+}
+
+
+
 export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasStage(
   {
     curves,
@@ -171,6 +369,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     onCurveEditEnd,
     onCurveEditCancel,
     onViewportChange,
+    analysis,
+    analysisHighlight,
   },
   handle,
 ) {
@@ -194,6 +394,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   const hoverRef = useRef<HoverInfo | null>(null)
   const viewportChangeRef = useRef(onViewportChange)
   viewportChangeRef.current = onViewportChange
+  const analysisRef = useRef<SpecialPoint[]>(analysis)
+  const highlightRef = useRef<number | null>(analysisHighlight)
   const oversketchForRef = useRef<string | null>(null)
 
   const rafRef = useRef(0)
@@ -268,6 +470,11 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       } catch {
         /* no handles */
       }
+
+      // Analysis markers go UNDER the handles: handles are interactive and must
+      // stay visually dominant (and unobstructed) wherever the two coincide.
+      drawAnalysis(ctx, vp, sel, analysisRef.current, hs, highlightRef.current)
+
       const activeId =
         g?.type === 'dragHandle'
           ? g.handleId
@@ -367,8 +574,10 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     selectedRef.current = selectedId
     modeRef.current = mode
     inkColorRef.current = inkColor
+    analysisRef.current = analysis
+    highlightRef.current = analysisHighlight
     scheduleRender()
-  }, [curves, styles, models, selectedId, mode, inkColor, scheduleRender])
+  }, [curves, styles, models, selectedId, mode, inkColor, analysis, analysisHighlight, scheduleRender])
 
   // ------------------------------------------------------------------- sizing
   useEffect(() => {

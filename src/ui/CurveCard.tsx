@@ -1,8 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
-import type { FitResult, FittedCurve, ModelSpec, ParamMeta } from '../core/types'
+import type {
+  FitResult,
+  FittedCurve,
+  ModelSpec,
+  ParamMeta,
+  SpecialPoint,
+  SpecialPointKind,
+} from '../core/types'
 import type { CurveStyle } from '../App'
 import { Latex } from './Latex'
+import { formatCoord } from './numeric'
 
 interface Props {
   curve: FittedCurve
@@ -19,6 +27,10 @@ interface Props {
   exprSource?: string
   /** Set when that equation could not be rebuilt after a reload. */
   brokenReason?: string
+  /** Special points for this curve (only the selected card receives them). */
+  analysis: SpecialPoint[]
+  /** Hovering a value emphasises the matching marker on canvas. */
+  onAnalysisHover(index: number | null): void
   onSelect(): void
   onDelete(): void
   onDuplicate(): void
@@ -41,6 +53,17 @@ const DASH_STYLES: { key: string; label: string; title: string; dash: number[] |
   { key: 'solid', label: '━', title: 'Solid line', dash: undefined },
   { key: 'dashed', label: '╍ ╍', title: 'Dashed line', dash: [8, 6] },
   { key: 'dotted', label: '· · ·', title: 'Dotted line', dash: [2, 5] },
+]
+
+/** Readout order: what a student is asked to find, in the order they find it. */
+const ANALYSIS_ROWS: { kind: SpecialPointKind; label: string; plural?: string }[] = [
+  { kind: 'zero', label: 'Zero', plural: 'Zeros' },
+  { kind: 'maximum', label: 'Maximum', plural: 'Maxima' },
+  { kind: 'minimum', label: 'Minimum', plural: 'Minima' },
+  { kind: 'inflection', label: 'Inflection', plural: 'Inflections' },
+  { kind: 'y-intercept', label: 'y-intercept' },
+  { kind: 'extreme', label: 'Extreme', plural: 'Extremes' },
+  { kind: 'petal-tip', label: 'Petal tip', plural: 'Petal tips' },
 ]
 
 export function formatError(err: number): string {
@@ -76,6 +99,8 @@ export function CurveCard({
   shaking,
   exprSource,
   brokenReason,
+  analysis,
+  onAnalysisHover,
   onSelect,
   onDelete,
   onDuplicate,
@@ -137,6 +162,18 @@ export function CurveCard({
       return curve.modelId
     }
   })()
+
+  // Group the special points by kind, keeping each point's original index so
+  // hovering a value can address the right marker on canvas.
+  const analysisGroups = useMemo(() => {
+    if (analysis.length === 0) return []
+    return ANALYSIS_ROWS.map((row) => ({
+      ...row,
+      items: analysis
+        .map((point, index) => ({ point, index }))
+        .filter(({ point }) => point.kind === row.kind),
+    })).filter((g) => g.items.length > 0)
+  }, [analysis])
 
   const activeDashKey =
     DASH_STYLES.find((d) => JSON.stringify(d.dash) === JSON.stringify(style?.dash))?.key ?? 'solid'
@@ -373,6 +410,40 @@ export function CurveCard({
               onChange={(e) => onOpacity(Number(e.target.value))}
             />
           </div>
+
+          {analysisGroups.length > 0 && (
+            <div className="an-section">
+              <div className="an-title">Analysis</div>
+              <div className="an-table">
+                {analysisGroups.map((g) => (
+                  <div className="an-row" key={g.kind}>
+                    <span className="an-label">
+                      {g.items.length > 1 ? (g.plural ?? g.label) : g.label}
+                    </span>
+                    <span className="an-values">
+                      {g.items.map(({ point, index }, n) => (
+                        <button
+                          key={index}
+                          className="an-value"
+                          title="Highlight this point on the graph"
+                          onMouseEnter={() => onAnalysisHover(index)}
+                          onMouseLeave={() => onAnalysisHover(null)}
+                          onFocus={() => onAnalysisHover(index)}
+                          onBlur={() => onAnalysisHover(null)}
+                        >
+                          {point.kind === 'zero'
+                            ? formatCoord(point.pos.x)
+                            : `(${formatCoord(point.pos.x)}, ${formatCoord(point.pos.y)})`}
+                          {point.tangent && <span className="an-note">touches</span>}
+                          {n < g.items.length - 1 && <span className="an-sep">,</span>}
+                        </button>
+                      ))}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {!isExpression && candidates.length > 1 && (
             <div className="cand-section">
