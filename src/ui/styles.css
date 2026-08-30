@@ -1298,15 +1298,19 @@ button.param-value:hover {
   box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
+/* Contrast, not decoration: this is the one word a teacher checks before
+   closing the laptop. --faint (#5c6480) on the toolbar measured ~3.4:1 at
+   10.5px — under the 4.5:1 WCAG AA minimum for text this size. */
 .doc-save {
-  font-size: 10.5px;
+  font-size: 11.5px;
+  font-weight: 500;
   letter-spacing: 0.02em;
-  color: var(--faint);
+  color: #98a1bf; /* 7.2:1 on the toolbar */
   transition: color 0.15s var(--ease);
 }
 
 .doc-save-saving {
-  color: var(--muted);
+  color: #c3cbe4; /* 11.4:1 — in flight reads brighter than at rest */
 }
 
 .doc-save-error {

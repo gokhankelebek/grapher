@@ -23,8 +23,10 @@ import {
 } from './core/persist'
 import type { BoardInput, DocMeta, HydratedBoard } from './core/persist'
 import {
+  isGrapherKey,
   listDocs,
   readDocJSON,
+  readDocStamp,
   readIndex,
   readPrefs,
   removeDoc,
@@ -33,6 +35,7 @@ import {
   writeDoc,
   writePrefs,
 } from './ui/storage'
+import type { SaveOutcome } from './ui/storage'
 
 export type Mode = 'draw' | 'pan'
 
@@ -46,10 +49,31 @@ const AUTOSAVE_MS = 400
 /** Stable identity — avoids re-rendering the canvas when markers are hidden. */
 const EMPTY_ANALYSIS: SpecialPoint[] = []
 
-/** One undo/redo history entry. */
+/**
+ * One undo/redo history entry.
+ *
+ * exprSources/brokenExpr/candidates belong in here, not beside it: a typed
+ * equation's source text is the ONLY thing that can rebuild its model closure
+ * after a reload, so a snapshot that restored the curve but not its source
+ * produced a curve that looked fine until the next load and then came back dead
+ * (labelled "expr_1", drawing nothing, with no warning — persist.ts only renders
+ * its "can't restore" card when a source IS present).
+ */
 interface Snapshot {
   curves: FittedCurve[]
   styles: StyleMap
+  exprSources: Record<string, string>
+  brokenExpr: Record<string, string>
+  candidates: Map<string, FitResult[]>
+}
+
+/** The board-state slice any mutation may change; omitted keys are untouched. */
+interface StatePatch {
+  curves?: FittedCurve[]
+  styles?: StyleMap
+  exprSources?: Record<string, string>
+  brokenExpr?: Record<string, string>
+  candidates?: Map<string, FitResult[]>
 }
 
 const MIN_PPU = 0.001
@@ -87,6 +111,10 @@ export default function App() {
   const [saveError, setSaveError] = useState<string | null>(null)
   /** Set when the last load lost or repaired something. */
   const [loadNotice, setLoadNotice] = useState<{ problems: string[]; fatal: boolean } | null>(null)
+  /** Another tab changed or deleted the document this tab has open. */
+  const [conflict, setConflict] = useState<'stale' | 'deleted' | null>(null)
+  /** Set when a document switch was refused because this board isn't saved. */
+  const [switchBlocked, setSwitchBlocked] = useState<string | null>(null)
   /** curveId -> the equation text the user typed (rebuilt into models on load). */
   const [exprSources, setExprSources] = useState<Record<string, string>>({})
   /** curveId -> why its equation could not be restored. */
@@ -111,12 +139,34 @@ export default function App() {
   const shakeTimerRef = useRef(0)
   const toastTimerRef = useRef(0)
   const exprSourcesRef = useRef<Record<string, string>>({})
+  const brokenExprRef = useRef<Record<string, string>>({})
   const docMetaRef = useRef<DocMeta>(docMeta)
   const saveTimerRef = useRef(0)
   /** Nothing may be written until the stored document has been read in. */
   const hydratedRef = useRef(false)
-  /** Loading a document shouldn't immediately re-save what was just read. */
+  /**
+   * True once the open document actually exists in storage (loaded from it, or
+   * written at least once). Only then can "the record is gone" mean another tab
+   * deleted it rather than "we haven't saved it yet".
+   */
+  const docStoredRef = useRef(false)
+  /** Skips the one autosave run that happens in the same pass as a load. */
   const skipAutosaveRef = useRef(false)
+  /**
+   * The exact state a load put on the board. While the board is still identical
+   * to it, autosave stays quiet: re-writing a document just because it was
+   * opened bumped its modifiedAt for no reason, which — now that writes are
+   * checked against the stored stamp — made merely opening a second tab report
+   * a conflict in the first.
+   */
+  const loadedStateRef = useRef<{
+    curves: FittedCurve[]
+    styles: StyleMap
+    exprSources: Record<string, string>
+    selectedId: string | null
+    mode: Mode
+    name: string
+  } | null>(null)
 
   const models = useMemo<Record<string, ModelSpec>>(
     () => ({ ...MODELS, ...extraModels }),
@@ -164,11 +214,17 @@ export default function App() {
 
   // ------------------------------------------------------------ state/history
   const takeSnapshot = useCallback(
-    (): Snapshot => ({ curves: curvesRef.current, styles: stylesRef.current }),
+    (): Snapshot => ({
+      curves: curvesRef.current,
+      styles: stylesRef.current,
+      exprSources: exprSourcesRef.current,
+      brokenExpr: brokenExprRef.current,
+      candidates: candidatesRef.current,
+    }),
     [],
   )
 
-  const applyState = useCallback((s: { curves?: FittedCurve[]; styles?: StyleMap }): void => {
+  const applyState = useCallback((s: StatePatch): void => {
     if (s.curves) {
       curvesRef.current = s.curves
       setCurves(s.curves)
@@ -177,11 +233,21 @@ export default function App() {
       stylesRef.current = s.styles
       setStyles(s.styles)
     }
+    if (s.exprSources) {
+      exprSourcesRef.current = s.exprSources
+      setExprSources(s.exprSources)
+    }
+    if (s.brokenExpr) {
+      brokenExprRef.current = s.brokenExpr
+      setBrokenExpr(s.brokenExpr)
+    }
+    // Replaced wholesale, never mutated in place, so snapshots stay immutable.
+    if (s.candidates) candidatesRef.current = s.candidates
   }, [])
 
   /** Apply new state and push the previous snapshot onto the undo stack. */
   const commitState = useCallback(
-    (s: { curves?: FittedCurve[]; styles?: StyleMap }): void => {
+    (s: StatePatch): void => {
       undoRef.current = [...undoRef.current.slice(-(HISTORY_LIMIT - 1)), takeSnapshot()]
       redoRef.current = []
       applyState(s)
@@ -322,30 +388,64 @@ export default function App() {
     [],
   )
 
-  const saveNow = useCallback((): void => {
-    if (!hydratedRef.current) return
+  /**
+   * Write the board now. Returns the outcome — callers that are about to
+   * REPLACE the board must not proceed on a failure, or the only copy of the
+   * unsaved work is gone.
+   */
+  const saveNow = useCallback((): SaveOutcome => {
+    if (!hydratedRef.current) return { ok: true }
     window.clearTimeout(saveTimerRef.current)
     saveTimerRef.current = 0
     const meta = docMetaRef.current
-    if (!meta.id) return
+    if (!meta.id) return { ok: true }
     const doc = docFromBoard(meta, currentBoardInput())
-    const outcome = writeDoc(doc)
+    // Once the record exists, every write is conditional on nothing else having
+    // touched it since we last read or wrote it.
+    const outcome = writeDoc(
+      doc,
+      docStoredRef.current ? { expectModifiedAt: meta.modifiedAt } : {},
+    )
     if (outcome.ok) {
       docMetaRef.current = { ...meta, modifiedAt: doc.modifiedAt }
+      docStoredRef.current = true
       setDocs(listDocs())
       setSaveState('saved')
       setSaveError(null)
-    } else {
-      // Never silent: the board is still in memory, but it is NOT on disk.
-      setSaveState('error')
-      const kb = Math.round(usedBytes() / 1024)
-      setSaveError(
-        outcome.quota
-          ? `${outcome.message} Grapher is using about ${kb}KB. Export this document to a file, or delete documents you no longer need, then edit again to retry.`
-          : outcome.message,
-      )
+      setSwitchBlocked(null)
+      setConflict(null)
+      return outcome
     }
+    // Never silent: the board is still in memory, but it is NOT on disk.
+    setSaveState('error')
+    if ('conflict' in outcome) {
+      setConflict(outcome.conflict)
+      setSaveError(null)
+      return outcome
+    }
+    const kb = Math.round(usedBytes() / 1024)
+    setSaveError(
+      outcome.quota
+        ? `${outcome.message} Grapher is using about ${kb}KB. Export this document to a file, or delete documents you no longer need, then edit again to retry.`
+        : outcome.message,
+    )
+    return outcome
   }, [currentBoardInput])
+
+  /**
+   * Save before swapping the board away. False means the swap must be
+   * abandoned: the work on screen exists nowhere else.
+   */
+  const saveBeforeSwitch = useCallback((): boolean => {
+    const res = saveNow()
+    if (res.ok) return true
+    setSwitchBlocked(
+      'conflict' in res
+        ? `${res.message} Nothing was switched, so this board is still here. Export it to a file, or reload the other tab’s version, before moving on.`
+        : 'This document could not be saved, so switching would have thrown the work away. Export it to a file first.',
+    )
+    return false
+  }, [saveNow])
 
   const scheduleSave = useCallback((): void => {
     if (!hydratedRef.current) return
@@ -356,14 +456,24 @@ export default function App() {
 
   /** Swap the whole board over to a freshly loaded document. */
   const applyHydrated = useCallback((meta: DocMeta, board: HydratedBoard): void => {
+    loadedStateRef.current = {
+      curves: board.curves,
+      styles: board.styles,
+      exprSources: board.exprSources,
+      selectedId: board.selectedId,
+      mode: board.mode,
+      name: meta.name,
+    }
     curvesRef.current = board.curves
     stylesRef.current = board.styles
     candidatesRef.current = board.candidates
     exprSourcesRef.current = board.exprSources
+    brokenExprRef.current = board.brokenExpr
     selectedRef.current = board.selectedId
     modeRef.current = board.mode
     docMetaRef.current = meta
     exprCounterRef.current = board.exprCounter
+    docStoredRef.current = false
     undoRef.current = []
     redoRef.current = []
     preEditRef.current = null
@@ -394,6 +504,7 @@ export default function App() {
         const res = deserializeDoc(json)
         if (res.meta && res.board) {
           applyHydrated(res.meta, res.board)
+          docStoredRef.current = true
           if (res.problems.length > 0) {
             setLoadNotice({ problems: res.problems, fatal: false })
           }
@@ -417,18 +528,39 @@ export default function App() {
     docMetaRef.current = meta
     setDocMeta(meta)
     hydratedRef.current = true
+    // Not written yet — but claim it as current now, so a reload doesn't guess
+    // from index order which document this tab was working on.
+    docStoredRef.current = false
+    setCurrentDoc(meta.id)
     setDocs(listDocs())
   }, [applyHydrated])
 
-  // Autosave: any board change schedules a debounced write.
+  // Autosave: any board change schedules a debounced write. A board that is
+  // still exactly what was just loaded is not a change.
   useEffect(() => {
     if (!hydratedRef.current) return
+    // The load happens inside an effect, so this effect runs once more with the
+    // pre-load values still in scope; that run is not a change either.
     if (skipAutosaveRef.current) {
       skipAutosaveRef.current = false
       return
     }
+    const loaded = loadedStateRef.current
+    if (
+      loaded &&
+      loaded.curves === curves &&
+      loaded.styles === styles &&
+      loaded.exprSources === exprSources &&
+      loaded.selectedId === selectedId &&
+      loaded.mode === mode &&
+      loaded.name === docMeta.name
+    ) {
+      loadedStateRef.current = null
+      return
+    }
+    loadedStateRef.current = null
     scheduleSave()
-  }, [curves, styles, selectedId, mode, docMeta.name, scheduleSave])
+  }, [curves, styles, exprSources, selectedId, mode, docMeta.name, scheduleSave])
 
   // Don't lose the debounce window to a closing tab or a backgrounded phone.
   useEffect(() => {
@@ -448,6 +580,45 @@ export default function App() {
     }
   }, [saveNow])
 
+  /** Throw away what's in memory and take the stored version of this document. */
+  const reloadCurrentDoc = useCallback((): void => {
+    const id = docMetaRef.current.id
+    const json = id ? readDocJSON(id) : null
+    const res = json === null ? null : deserializeDoc(json)
+    if (!res || !res.meta || !res.board) {
+      setLoadNotice({
+        problems: res?.problems ?? ['That document is no longer in storage.'],
+        fatal: true,
+      })
+      return
+    }
+    applyHydrated(res.meta, res.board)
+    docStoredRef.current = true
+    setConflict(null)
+    setSwitchBlocked(null)
+    setSaveState('saved')
+    setSaveError(null)
+    setDocs(listDocs())
+  }, [applyHydrated])
+
+  // Cross-tab awareness. localStorage is shared, so another tab can save over,
+  // or delete, the document this one is showing. Without this the Documents
+  // list went stale (listing deleted documents, missing new ones) and a tab
+  // could sit on a board that exists nowhere while its badge read "saved".
+  useEffect(() => {
+    const onStorage = (e: StorageEvent): void => {
+      if (!isGrapherKey(e.key)) return
+      setDocs(listDocs())
+      const meta = docMetaRef.current
+      if (!meta.id || !docStoredRef.current) return
+      const stamp = readDocStamp(meta.id)
+      if (!stamp.exists) setConflict('deleted')
+      else if (stamp.modifiedAt > meta.modifiedAt) setConflict('stale')
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
+
   const renameDoc = useCallback((name: string): void => {
     const next = { ...docMetaRef.current, name }
     docMetaRef.current = next
@@ -455,7 +626,8 @@ export default function App() {
   }, [])
 
   const newDocument = useCallback((): void => {
-    saveNow()
+    // Refuse to replace the board when the work on it isn't on disk.
+    if (!saveBeforeSwitch()) return
     const doc = createDoc('Untitled', emptyBoard())
     const meta: DocMeta = {
       id: doc.id,
@@ -465,15 +637,16 @@ export default function App() {
     }
     applyHydrated(meta, blankBoard())
     setLoadNotice(null)
-    writeDoc(doc)
+    setConflict(null)
+    docStoredRef.current = writeDoc(doc).ok
     setCurrentDoc(meta.id)
     setDocs(listDocs())
-  }, [applyHydrated, blankBoard, saveNow])
+  }, [applyHydrated, blankBoard, saveBeforeSwitch])
 
   const openDocument = useCallback(
     (id: string): void => {
       if (id === docMetaRef.current.id) return
-      saveNow()
+      if (!saveBeforeSwitch()) return
       const json = readDocJSON(id)
       const res = json === null ? null : deserializeDoc(json)
       if (!res || !res.meta || !res.board) {
@@ -484,31 +657,56 @@ export default function App() {
         return
       }
       applyHydrated(res.meta, res.board)
+      docStoredRef.current = true
+      setConflict(null)
       setLoadNotice(res.problems.length > 0 ? { problems: res.problems, fatal: false } : null)
       setCurrentDoc(res.meta.id)
       setDocs(listDocs())
     },
-    [applyHydrated, saveNow],
+    [applyHydrated, saveBeforeSwitch],
+  )
+
+  /**
+   * Re-target the board in memory at a brand-new document record and write it.
+   * Used both by Duplicate and by the "save a copy" escape from a cross-tab
+   * conflict, where the current record must not be overwritten.
+   */
+  const saveBoardAsNewDoc = useCallback(
+    (name: string): boolean => {
+      const fresh = createDoc(name, emptyBoard())
+      const meta: DocMeta = {
+        id: fresh.id,
+        name: fresh.name,
+        createdAt: fresh.createdAt,
+        modifiedAt: fresh.modifiedAt,
+      }
+      const doc = docFromBoard(meta, currentBoardInput())
+      const res = writeDoc(doc)
+      if (!res.ok) {
+        setSaveState('error')
+        if (!('conflict' in res)) setSaveError(res.message)
+        return false
+      }
+      // Keep the stamp we just wrote, or the next autosave reads storage as
+      // "newer than us" and reports a conflict against our own write.
+      docMetaRef.current = { ...meta, modifiedAt: doc.modifiedAt }
+      docStoredRef.current = true
+      setDocMeta(meta)
+      setCurrentDoc(meta.id)
+      setDocs(listDocs())
+      setSaveState('saved')
+      setSaveError(null)
+      setConflict(null)
+      setSwitchBlocked(null)
+      return true
+    },
+    [currentBoardInput],
   )
 
   const duplicateDocument = useCallback((): void => {
-    saveNow()
-    const src = docMetaRef.current
-    const doc = createDoc(`${src.name} copy`, emptyBoard())
-    const meta: DocMeta = {
-      id: doc.id,
-      name: doc.name,
-      createdAt: doc.createdAt,
-      modifiedAt: doc.modifiedAt,
-    }
-    // The board in memory is already the one being copied — just re-target it.
-    docMetaRef.current = meta
-    setDocMeta(meta)
-    writeDoc(docFromBoard(meta, currentBoardInput()))
-    setCurrentDoc(meta.id)
-    setDocs(listDocs())
-    setSaveState('saved')
-  }, [currentBoardInput, saveNow])
+    if (!saveBeforeSwitch()) return
+    saveBoardAsNewDoc(`${docMetaRef.current.name} copy`)
+  }, [saveBeforeSwitch, saveBoardAsNewDoc])
 
   const deleteDocument = useCallback(
     (id: string): void => {
@@ -522,6 +720,8 @@ export default function App() {
         const res = json === null ? null : deserializeDoc(json)
         if (res?.meta && res.board) {
           applyHydrated(res.meta, res.board)
+          docStoredRef.current = true
+          setConflict(null)
           setLoadNotice(res.problems.length > 0 ? { problems: res.problems, fatal: false } : null)
           setCurrentDoc(res.meta.id)
           return
@@ -566,7 +766,9 @@ export default function App() {
             })
             return
           }
-          saveNow()
+          // The import replaces the board, so the board it replaces must be
+          // safely on disk first.
+          if (!saveBeforeSwitch()) return
           // Always mint a new id so an import can never overwrite a document
           // that happens to share an id with the file.
           const fallback = file.name.replace(/\.(grapher\.)?json$/i, '')
@@ -578,17 +780,27 @@ export default function App() {
             modifiedAt: Date.now(),
           }
           applyHydrated(meta, res.board)
+          setConflict(null)
           setLoadNotice(res.problems.length > 0 ? { problems: res.problems, fatal: false } : null)
-          writeDoc(docFromBoard(meta, currentBoardInput()))
+          const doc = docFromBoard(meta, currentBoardInput())
+          const written = writeDoc(doc)
+          if (written.ok) {
+            docMetaRef.current = { ...meta, modifiedAt: doc.modifiedAt }
+            docStoredRef.current = true
+            setSaveState('saved')
+          } else {
+            docStoredRef.current = false
+            setSaveState('error')
+            if (!('conflict' in written)) setSaveError(written.message)
+          }
           setCurrentDoc(meta.id)
           setDocs(listDocs())
-          setSaveState('saved')
         })
         .catch(() => {
           setLoadNotice({ problems: ['That file could not be read.'], fatal: true })
         })
     },
-    [applyHydrated, currentBoardInput, saveNow],
+    [applyHydrated, currentBoardInput, saveBeforeSwitch],
   )
 
   // -------------------------------------------------------------- curve CRUD
@@ -616,8 +828,10 @@ export default function App() {
         sourceStroke: processed.points,
         error: best.error,
       }
-      candidatesRef.current.set(curve.id, results)
-      commitState({ curves: [...curvesRef.current, curve] })
+      commitState({
+        curves: [...curvesRef.current, curve],
+        candidates: new Map(candidatesRef.current).set(curve.id, results),
+      })
       setSelectedId(curve.id)
       return curve
     },
@@ -628,14 +842,15 @@ export default function App() {
     (id: string): void => {
       const { [id]: _gone, ...restStyles } = stylesRef.current
       const { [id]: _src, ...restSources } = exprSourcesRef.current
-      exprSourcesRef.current = restSources
-      setExprSources(restSources)
-      setBrokenExpr((prev) => {
-        if (!(id in prev)) return prev
-        const { [id]: _b, ...rest } = prev
-        return rest
+      const { [id]: _broken, ...restBroken } = brokenExprRef.current
+      // Everything the curve owns goes through commitState in one call, so the
+      // snapshot it pushes still holds the equation text that rebuilds it.
+      commitState({
+        curves: curvesRef.current.filter((c) => c.id !== id),
+        styles: restStyles,
+        exprSources: restSources,
+        brokenExpr: restBroken,
       })
-      commitState({ curves: curvesRef.current.filter((c) => c.id !== id), styles: restStyles })
       setSelectedId((sel) => (sel === id ? null : sel))
     },
     [commitState],
@@ -643,25 +858,22 @@ export default function App() {
 
   const clearAll = useCallback((): void => {
     if (curvesRef.current.length === 0) return
-    exprSourcesRef.current = {}
-    setExprSources({})
-    setBrokenExpr({})
-    commitState({ curves: [], styles: {} })
+    commitState({ curves: [], styles: {}, exprSources: {}, brokenExpr: {} })
     setSelectedId(null)
   }, [commitState])
 
   const toggleVisible = useCallback(
     (id: string): void => {
-      applyState({
+      commitState({
         curves: curvesRef.current.map((c) => (c.id === id ? { ...c, visible: !c.visible } : c)),
       })
     },
-    [applyState],
+    [commitState],
   )
 
   const cycleColor = useCallback(
     (id: string): void => {
-      applyState({
+      commitState({
         curves: curvesRef.current.map((c) => {
           if (c.id !== id) return c
           const idx = CURVE_COLORS.indexOf(c.color)
@@ -670,7 +882,7 @@ export default function App() {
         }),
       })
     },
-    [applyState],
+    [commitState],
   )
 
   const setParam = useCallback(
@@ -817,16 +1029,19 @@ export default function App() {
         ...(stroke ? { sourceStroke: stroke } : {}),
       }
       const cands = candidatesRef.current.get(id)
-      if (cands) candidatesRef.current.set(copy.id, cands)
       const srcExpr = exprSourcesRef.current[id]
-      if (srcExpr !== undefined) {
-        exprSourcesRef.current = { ...exprSourcesRef.current, [copy.id]: srcExpr }
-        setExprSources(exprSourcesRef.current)
-      }
+      const brokenWhy = brokenExprRef.current[id]
       const st = stylesRef.current[id]
       commitState({
         curves: [...curvesRef.current, copy],
         ...(st ? { styles: { ...stylesRef.current, [copy.id]: st } } : {}),
+        ...(cands ? { candidates: new Map(candidatesRef.current).set(copy.id, cands) } : {}),
+        ...(srcExpr !== undefined
+          ? { exprSources: { ...exprSourcesRef.current, [copy.id]: srcExpr } }
+          : {}),
+        ...(brokenWhy !== undefined
+          ? { brokenExpr: { ...brokenExprRef.current, [copy.id]: brokenWhy } }
+          : {}),
       })
       setSelectedId(copy.id)
     },
@@ -896,10 +1111,12 @@ export default function App() {
         error: 0,
       }
       // Keep the source text: it is the only thing that can rebuild this
-      // curve's model closure after a reload.
-      exprSourcesRef.current = { ...exprSourcesRef.current, [curve.id]: src }
-      setExprSources(exprSourcesRef.current)
-      commitState({ curves: [...curvesRef.current, curve] })
+      // curve's model closure after a reload. It rides in the same commit as
+      // the curve so undo/redo can never separate the two.
+      commitState({
+        curves: [...curvesRef.current, curve],
+        exprSources: { ...exprSourcesRef.current, [curve.id]: src },
+      })
       setSelectedId(curve.id)
       return null
     },
@@ -965,6 +1182,44 @@ export default function App() {
       setTimeout(() => URL.revokeObjectURL(url), 1000)
     }, 'image/png')
   }, [])
+
+  // ------------------------------------------------------------ file dropping
+  //
+  // dragleave alone can never be trusted to take the overlay down: it fires
+  // when the pointer crosses onto a CHILD element, and it doesn't fire at all
+  // if the drag ends outside the window or is cancelled with Escape. So the
+  // overlay is driven by a watchdog — dragover repeats while a drag is live, so
+  // a gap in those events means the drag is over — with the explicit end events
+  // as the fast path.
+  const dropTimerRef = useRef(0)
+  const endDrop = useCallback((): void => {
+    window.clearTimeout(dropTimerRef.current)
+    dropTimerRef.current = 0
+    setDropActive(false)
+  }, [])
+
+  const keepDropAlive = useCallback((): void => {
+    setDropActive(true)
+    window.clearTimeout(dropTimerRef.current)
+    dropTimerRef.current = window.setTimeout(() => setDropActive(false), 900)
+  }, [])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') endDrop()
+    }
+    window.addEventListener('dragend', endDrop)
+    window.addEventListener('drop', endDrop)
+    window.addEventListener('blur', endDrop)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('dragend', endDrop)
+      window.removeEventListener('drop', endDrop)
+      window.removeEventListener('blur', endDrop)
+      window.removeEventListener('keydown', onKey)
+      window.clearTimeout(dropTimerRef.current)
+    }
+  }, [endDrop])
 
   // ---------------------------------------------------------------- keyboard
   useEffect(() => {
@@ -1064,18 +1319,17 @@ export default function App() {
           if (e.dataTransfer.types.includes('Files')) {
             e.preventDefault()
             e.dataTransfer.dropEffect = 'copy'
-            if (!dropActive) setDropActive(true)
+            keepDropAlive()
           }
         }}
         onDragLeave={(e) => {
-          if (e.currentTarget === e.target) setDropActive(false)
+          if (e.currentTarget === e.target) endDrop()
         }}
         onDrop={(e) => {
-          const file = e.dataTransfer.files?.[0]
-          if (!file) return
           e.preventDefault()
-          setDropActive(false)
-          importDocument(file)
+          endDrop()
+          const file = e.dataTransfer.files?.[0]
+          if (file) importDocument(file)
         }}
       >
         <CanvasStage
@@ -1150,6 +1404,52 @@ export default function App() {
             </button>
             <button className="banner-action" onClick={saveNow}>
               Retry
+            </button>
+          </div>
+        )}
+
+        {conflict && (
+          <div className="banner banner-error" role="alert">
+            <div className="banner-body">
+              <strong className="banner-title">
+                {conflict === 'deleted'
+                  ? 'This document was deleted in another tab'
+                  : 'This document was changed in another tab'}
+              </strong>
+              <span className="banner-text">
+                {conflict === 'deleted'
+                  ? 'Nothing here has been thrown away — but this board is no longer being saved. Save it as a new document to keep it.'
+                  : 'To protect the other tab’s work, this board is not being saved. Reload to take that version, or save this one as a copy.'}
+              </span>
+            </div>
+            {conflict === 'stale' && (
+              <button className="banner-action" onClick={reloadCurrentDoc}>
+                Reload
+              </button>
+            )}
+            <button
+              className="banner-action"
+              onClick={() => saveBoardAsNewDoc(`${docMetaRef.current.name} copy`)}
+            >
+              Save as a copy
+            </button>
+            <button className="banner-action" onClick={exportDocument}>
+              Export to file
+            </button>
+          </div>
+        )}
+
+        {switchBlocked && (
+          <div className="banner banner-error" role="alert">
+            <div className="banner-body">
+              <strong className="banner-title">Stayed on this document</strong>
+              <span className="banner-text">{switchBlocked}</span>
+            </div>
+            <button className="banner-action" onClick={exportDocument}>
+              Export to file
+            </button>
+            <button className="banner-action" onClick={() => setSwitchBlocked(null)}>
+              Dismiss
             </button>
           </div>
         )}

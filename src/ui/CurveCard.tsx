@@ -88,6 +88,73 @@ function fillStyle(value: number, min: number, max: number): CSSProperties {
   return { '--fill': `${pct}%` } as CSSProperties
 }
 
+const sameMeta = (a: ParamMeta, b: ParamMeta): boolean =>
+  a.name === b.name && a.min === b.min && a.max === b.max && a.step === b.step
+
+/**
+ * Map each slider ROW to the parameter index it actually edits.
+ *
+ * WHY THIS EXISTS: ModelSpec.paramMeta may present rows in any order it likes,
+ * and the polynomial families deliberately do NOT use param order. `line`
+ * stores params ascending — [b, m] for y = m·x + b — but lists the rows m, b so
+ * they read like the printed equation; `poly2..poly4` list the highest-degree
+ * coefficient first over ascending storage. Assuming "row i edits params[i]"
+ * therefore labelled the slope "b" and the intercept "m", built every slider's
+ * range around a different coefficient (pegging the thumb at an end), and wrote
+ * typed exact values into the wrong coefficient. Nothing in the ParamMeta
+ * contract records the link, so we recover it here instead of trusting order.
+ *
+ * HOW: probe. Each range is centred on the value of the parameter it belongs to,
+ * so perturbing one parameter moves exactly that parameter's row. One extra
+ * paramMeta call per parameter (n ≤ ~10, memoised with the rows themselves).
+ * Rows that no parameter moves are ranges the model fixed on purpose (the rose's
+ * integer k, the power family's exponent p); those — and any ambiguous row — get
+ * the leftover indices in positional order, which is the identity mapping the
+ * models that need it already assume.
+ */
+function deriveParamIndices(
+  spec: ModelSpec,
+  params: number[],
+  rows: ParamMeta[],
+): number[] {
+  const movedBy: number[][] = rows.map(() => [])
+  for (let j = 0; j < params.length; j++) {
+    const probe = params.slice()
+    // An offset no fitted coefficient is likely to already differ by, so a
+    // coincidentally identical range is not a practical concern.
+    probe[j] = (Number.isFinite(params[j]) ? params[j] : 0) + 7.3125
+    let probed: ParamMeta[]
+    try {
+      probed = spec.paramMeta(probe)
+    } catch {
+      continue
+    }
+    if (!Array.isArray(probed) || probed.length !== rows.length) continue
+    for (let i = 0; i < rows.length; i++) {
+      if (!sameMeta(rows[i], probed[i])) movedBy[i].push(j)
+    }
+  }
+
+  const out = rows.map(() => -1)
+  const claimed = new Set<number>()
+  for (let i = 0; i < rows.length; i++) {
+    const only = movedBy[i].length === 1 ? movedBy[i][0] : -1
+    if (only >= 0 && !claimed.has(only)) {
+      out[i] = only
+      claimed.add(only)
+    }
+  }
+  let next = 0
+  for (let i = 0; i < rows.length; i++) {
+    if (out[i] !== -1) continue
+    while (claimed.has(next)) next++
+    out[i] = next
+    claimed.add(next)
+    next++
+  }
+  return out
+}
+
 export function CurveCard({
   curve,
   style,
@@ -144,16 +211,43 @@ export function CurveCard({
   }, [spec, curve.params, curve.modelId])
 
   // Freeze slider ranges while this card is expanded so paramMeta (which
-  // centers ranges on current values) doesn't re-center under a drag.
-  const meta: ParamMeta[] = useMemo(() => {
-    if (!selected || !spec) return []
+  // centers ranges on current values) doesn't re-center under a drag. Bumped
+  // when a value lands outside its own frozen range (a typed exact value), so
+  // the slider can still reach it instead of yanking it back to the old span.
+  const [rangeEpoch, setRangeEpoch] = useState(0)
+
+  const { rows: meta, index: paramIndex } = useMemo<{
+    rows: ParamMeta[]
+    index: number[]
+  }>(() => {
+    if (!selected || !spec) return { rows: [], index: [] }
+    let rows: ParamMeta[]
     try {
-      return spec.paramMeta(curve.params)
+      rows = spec.paramMeta(curve.params)
     } catch {
-      return []
+      return { rows: [], index: [] }
     }
+    if (!Array.isArray(rows) || rows.length === 0) return { rows: [], index: [] }
+    return { rows, index: deriveParamIndices(spec, curve.params, rows) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, spec, curve.id, curve.modelId])
+  }, [selected, spec, curve.id, curve.modelId, rangeEpoch])
+
+  // Re-derive the frozen ranges once per value set when a coefficient has moved
+  // outside its slider's span. Keyed on the values so a row whose range is fixed
+  // on purpose (rose's k) can never loop.
+  const rangeFixRef = useRef('')
+  useEffect(() => {
+    if (!selected || meta.length === 0) return
+    const sig = `${curve.id}|${curve.params.join(',')}`
+    if (rangeFixRef.current === sig) return
+    const outside = meta.some((m, row) => {
+      const v = curve.params[paramIndex[row] ?? row]
+      return Number.isFinite(v) && (v < m.min || v > m.max)
+    })
+    if (!outside) return
+    rangeFixRef.current = sig
+    setRangeEpoch((e) => e + 1)
+  }, [selected, meta, paramIndex, curve.id, curve.params])
 
   const modelName = (() => {
     try {
@@ -303,12 +397,14 @@ export function CurveCard({
         <div className="card-body" onClick={(e) => e.stopPropagation()}>
           {meta.length > 0 && (
             <div className="param-list">
-              {meta.map((m, i) => {
+              {meta.map((m, row) => {
+                // The parameter this row edits — NOT the row's own position.
+                const i = paramIndex[row] ?? row
                 const value = curve.params[i] ?? 0
                 const isEditing = editing?.index === i
                 const snapped = snapMask?.[i] === true
                 return (
-                  <div className="param-row" key={`${curve.modelId}-${m.name}-${i}`}>
+                  <div className="param-row" key={`${curve.modelId}-${m.name}-${row}`}>
                     <span className="param-name">
                       <Latex tex={m.name} />
                     </span>

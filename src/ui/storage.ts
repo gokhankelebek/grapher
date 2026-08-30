@@ -27,6 +27,39 @@ export interface DocIndex {
 export type SaveOutcome =
   | { ok: true }
   | { ok: false; quota: boolean; message: string }
+  /**
+   * Another tab got there first. 'stale' = the stored record is newer than the
+   * one this tab loaded; 'deleted' = the record this tab is editing is gone.
+   * Either way NOTHING was written: overwriting would destroy the other tab's
+   * work, and re-writing a deleted document would resurrect it.
+   */
+  | { ok: false; quota: false; conflict: 'stale' | 'deleted'; message: string }
+
+/** Keys this app owns — used to filter cross-tab `storage` events. */
+export const STORAGE_PREFIX = PREFIX
+
+export const isGrapherKey = (key: string | null): boolean =>
+  key === null || key.startsWith(PREFIX)
+
+export interface DocStamp {
+  exists: boolean
+  modifiedAt: number
+}
+
+/** What storage currently holds for one document, without hydrating it. */
+export function readDocStamp(id: string): DocStamp {
+  const raw = readDocJSON(id)
+  if (raw === null) return { exists: false, modifiedAt: 0 }
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    const at = isObj(parsed) ? parsed.modifiedAt : undefined
+    return { exists: true, modifiedAt: typeof at === 'number' && Number.isFinite(at) ? at : 0 }
+  } catch {
+    // Unreadable but present: treat it as existing and infinitely old, so a
+    // corrupted record is never mistaken for "someone deleted my document".
+    return { exists: true, modifiedAt: 0 }
+  }
+}
 
 /** Storage can be entirely absent (SSR) or throw on write (Safari private). */
 function storage(): Storage | null {
@@ -145,8 +178,40 @@ export function readDocJSON(id: string): string | null {
   }
 }
 
+export interface WriteOptions {
+  /**
+   * The `modifiedAt` this tab last saw for this document. When given, the
+   * stored record is re-read first and the write is REFUSED if storage has
+   * moved on (another tab saved, or deleted the document). Omit only for a
+   * document this tab is creating, which nothing else can have touched yet.
+   */
+  expectModifiedAt?: number
+}
+
 /** Persist one document and refresh its entry in the index. */
-export function writeDoc(doc: StoredDoc): SaveOutcome {
+export function writeDoc(doc: StoredDoc, opts: WriteOptions = {}): SaveOutcome {
+  // Last-writer-wins across tabs silently destroyed whole boards, so a write
+  // that would clobber a newer record is refused and reported instead.
+  if (opts.expectModifiedAt !== undefined) {
+    const stamp = readDocStamp(doc.id)
+    if (!stamp.exists) {
+      return {
+        ok: false,
+        quota: false,
+        conflict: 'deleted',
+        message: 'This document was deleted in another tab.',
+      }
+    }
+    if (stamp.modifiedAt > opts.expectModifiedAt) {
+      return {
+        ok: false,
+        quota: false,
+        conflict: 'stale',
+        message: 'This document was changed in another tab.',
+      }
+    }
+  }
+
   const outcome = write(docKey(doc.id), serializeDoc(doc))
   if (!outcome.ok) return outcome
 
@@ -160,7 +225,10 @@ export function writeDoc(doc: StoredDoc): SaveOutcome {
   const docs = index.docs.filter((d) => d.id !== doc.id)
   docs.push(meta)
   // Index write failing is not fatal: the document itself is already committed.
-  writeIndex({ currentId: doc.id, docs })
+  // currentId is deliberately NOT claimed here: a background autosave in one
+  // tab must not decide which document every other tab opens next. Callers that
+  // genuinely switch documents call setCurrentDoc themselves.
+  writeIndex({ currentId: index.currentId ?? doc.id, docs })
   return { ok: true }
 }
 

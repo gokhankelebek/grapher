@@ -612,10 +612,44 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
 
   // ------------------------------------------------------------ space-to-pan
   useEffect(() => {
+    /**
+     * Space is the activation key for every focused control, so hold-to-pan
+     * must yield whenever focus is on something that consumes it. Swallowing it
+     * unconditionally meant a keyboard user could Tab to Undo or Export and
+     * press Space to no effect at all.
+     */
+    const consumesSpace = (t: HTMLElement | null): boolean => {
+      if (!t) return false
+      if (t.isContentEditable) return true
+      const role = t.getAttribute('role')
+      if (role === 'button' || role === 'menuitem' || role === 'checkbox' || role === 'switch') {
+        return true
+      }
+      return (
+        t.tagName === 'INPUT' ||
+        t.tagName === 'TEXTAREA' ||
+        t.tagName === 'BUTTON' ||
+        t.tagName === 'SELECT' ||
+        t.tagName === 'A' ||
+        t.tagName === 'SUMMARY'
+      )
+    }
+
+    /**
+     * Release the pan grab. A keyup can be lost for good — Cmd-Tab away while
+     * Space is down and it is delivered to the other application — which left
+     * Draw mode looking active while every stroke panned instead, recoverable
+     * only by pressing and releasing Space again. Mirrors the Alt reset in App.
+     */
+    const release = (): void => {
+      if (!spaceRef.current) return
+      spaceRef.current = false
+      setSpaceHeld(false)
+    }
+
     const down = (e: KeyboardEvent): void => {
       if (e.code !== 'Space') return
-      const t = e.target as HTMLElement | null
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+      if (consumesSpace(e.target as HTMLElement | null)) return
       e.preventDefault()
       if (!spaceRef.current) {
         spaceRef.current = true
@@ -624,14 +658,20 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     }
     const up = (e: KeyboardEvent): void => {
       if (e.code !== 'Space') return
-      spaceRef.current = false
-      setSpaceHeld(false)
+      release()
+    }
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'hidden') release()
     }
     window.addEventListener('keydown', down)
     window.addEventListener('keyup', up)
+    window.addEventListener('blur', release)
+    document.addEventListener('visibilitychange', onVisibility)
     return () => {
       window.removeEventListener('keydown', down)
       window.removeEventListener('keyup', up)
+      window.removeEventListener('blur', release)
+      document.removeEventListener('visibilitychange', onVisibility)
     }
   }, [])
 
