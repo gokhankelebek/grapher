@@ -12,7 +12,7 @@ import {
   applyFeatureEdit,
 } from '../src/core/fit/edit'
 import { analyzeCurve } from '../src/core/analyze'
-import type { SpecialPoint, SpecialPointKind } from '../src/core/types'
+import type { ModelSpec, SpecialPoint, SpecialPointKind } from '../src/core/types'
 import { makeRng, makeGauss } from './helpers'
 
 const SQRT_LN2 = Math.sqrt(Math.LN2)
@@ -1412,6 +1412,102 @@ describe('applyFeatureEdit — refusals a teacher can read', () => {
     expect(res.ok).toBe(false)
     if (res.ok) return
     expect(res.reason.length).toBeGreaterThan(0)
+  })
+})
+
+describe('applyFeatureEdit — families with no closed form', () => {
+  // What a typed expression looks like: an explicit model whose free constants
+  // have no known meaning, so nothing about it can be solved algebraically.
+  const TYPED: ModelSpec = {
+    id: 'typed',
+    kind: 'explicit',
+    name: 'Expression',
+    evalExplicit: (p, x) => p[0] * Math.sin(x) + p[1] * x + p[2],
+    latex: () => 'y = a\\sin x + bx + c',
+    paramMeta: p => p.map((v, i) => ({ name: 'abc'[i], min: v - 2, max: v + 2, step: 0.01 })),
+  }
+  const M = { ...MODELS, typed: TYPED }
+  const typedCurve = (params: number[]): FittedCurve => ({
+    id: 'typed-curve', modelId: 'typed', params, kind: 'explicit',
+    domain: [-6, 6], color: '#4f9cf9', strokeWidth: 2.5, visible: true, error: 0.02,
+  })
+  const f = (p: number[], x: number) => TYPED.evalExplicit!(p, x)
+  const fpp = (p: number[], x: number) => {
+    const h = 1e-4
+    return (f(p, x + h) - 2 * f(p, x) + f(p, x - h)) / (h * h)
+  }
+  const rangeOver = (p: number[], lo: number, hi: number) => {
+    let mn = Infinity
+    let mx = -Infinity
+    for (let i = 0; i <= 60; i++) {
+      const y = f(p, lo + ((hi - lo) * i) / 60)
+      mn = Math.min(mn, y)
+      mx = Math.max(mx, y)
+    }
+    return mx - mn
+  }
+
+  it('a zero is put exactly where it is asked, not merely nearby', () => {
+    const c = typedCurve([2, 0.3, -0.5])
+    const z = analyzeCurve(c, M).filter(p => p.kind === 'zero')[0]
+    const target = z.pos.x + 0.5
+    const res = applyFeatureEdit(c, M, { point: z, to: { x: target } })
+    expect(res.ok, res.ok ? '' : res.reason).toBe(true)
+    if (!res.ok) return
+    expect(res.exact, 'a numeric solve must not claim to be exact').toBe(false)
+    // the soft anchor weighting alone leaves the zero visibly short of target;
+    // the projection step is what makes this hold
+    expect(Math.abs(f(res.params, target))).toBeLessThan(1e-9)
+  })
+
+  it('a maximum stays a maximum, and the curve is not flattened to reach it', () => {
+    const params = [2, 0.3, -0.5]
+    const c = typedCurve(params)
+    const mx = analyzeCurve(c, M).filter(p => p.kind === 'maximum')[0]
+    const tx = mx.pos.x + 0.4
+    const ty = mx.pos.y + 1
+    const res = applyFeatureEdit(c, M, { point: mx, to: { x: tx, y: ty } })
+    expect(res.ok, res.ok ? '' : res.reason).toBe(true)
+    if (!res.ok) return
+    expect(f(res.params, tx)).toBeCloseTo(ty, 6)
+    const h = 1e-5
+    expect(Math.abs((f(res.params, tx + h) - f(res.params, tx - h)) / (2 * h))).toBeLessThan(1e-5)
+    expect(fpp(res.params, tx), 'still turning downwards').toBeLessThan(0)
+    // the least-squares optimum here is a horizontal line through the target;
+    // the curve has to survive the edit
+    expect(rangeOver(res.params, -6, 6)).toBeGreaterThan(0.5 * rangeOver(params, -6, 6))
+  })
+
+  it('honours a pin the family has the freedom for', () => {
+    const c = curve('sine', [1.5, 1.2, 0.3, 0.4], [-7, 7])
+    const infl = analyzeCurve(c, MODELS)
+      .filter(p => p.kind === 'inflection')
+      .reduce((a, b) => (Math.abs(a.pos.x) < Math.abs(b.pos.x) ? a : b))
+    const res = applyFeatureEdit(c, MODELS, {
+      point: feat(c, 'maximum'),
+      to: { x: 1, y: 3 },
+      pinned: [infl],
+    })
+    expect(res.ok, res.ok ? '' : res.reason).toBe(true)
+    if (!res.ok) return
+    expect(evAt('sine', res.params, 1)).toBeCloseTo(3, 6)
+    expect(evAt('sine', res.params, infl.pos.x), 'the pinned inflection held')
+      .toBeCloseTo(infl.pos.y, 6)
+  })
+})
+
+describe('applyFeatureEdit — the curve keeps its orientation', () => {
+  it('a zero dragged far away does not turn the cubic upside down', () => {
+    const c = curve('poly3', fromRoots(0.5, [-2, 1, 3]), [-6, 6])
+    const res = applyFeatureEdit(c, MODELS, { point: feat(c, 'zero', 1), to: { x: 14 } })
+    expect(res.ok, res.ok ? '' : res.reason).toBe(true)
+    if (!res.ok) return
+    expect(res.params[3], 'still opens upwards').toBeGreaterThan(0)
+    // the requested zeros are all there, exactly
+    const truth = fromRoots(res.params[3], [-2, 3, 14])
+    for (let k = 0; k < 4; k++) expect(res.params[k]).toBeCloseTo(truth[k], 8)
+    expect(res.domain, 'the domain grew to reach the new zero').not.toBeNull()
+    expect(res.domain![1]).toBeGreaterThan(14)
   })
 })
 

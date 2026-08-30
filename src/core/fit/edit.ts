@@ -1856,9 +1856,62 @@ function numericFeatureEdit(
     return out
   }
 
+  /**
+   * Which way a turning point turns. f'(a) = 0 says a curve is level at a, not
+   * that it has a maximum there — and a family whose every parameter moves the
+   * whole curve will happily walk from one to the other on the way to a level
+   * point (a·sin x + b·x + c reaches a level point at the right height with a
+   * of either sign; only a > 0 makes it the maximum that was asked for). The
+   * equality solve cannot see the difference, so the second derivative is
+   * pushed to the correct sign by a one-sided residual: zero once the curve is
+   * turning the right way, and a growing pull while it is not.
+   */
+  const character = (p: number[]): number => {
+    let worst = 0
+    for (const r of reqs) {
+      if (r.kind !== 'maximum' && r.kind !== 'minimum') continue
+      const s = r.kind === 'maximum' ? 1 : -1
+      const v = s * bound(d2f(p, r.x) / sc2) + 0.05
+      if (v > worst) worst = v
+    }
+    return worst
+  }
+
+  /**
+   * How far the curve reaches vertically — its own scale, sampled.
+   *
+   * The polynomial solve keeps the leading coefficient when a turning point
+   * moves, so the curve slides rather than reshapes. The general families need
+   * the same protection and have no leading coefficient to hold, so hold the
+   * observable instead. Without it, "raise this local maximum by 1" is answered
+   * by the least-squares optimum of FLATTENING the whole curve to a horizontal
+   * line through the requested height — every condition satisfied, less total
+   * displacement than any honest answer, and nothing left of the graph that was
+   * drawn. Holding the range costs a fraction of a unit and rules that out.
+   */
+  const rangeOf = (p: number[]): number => {
+    let mn = Infinity
+    let mx = -Infinity
+    for (const x of xs) {
+      const y = F(p, x)
+      if (!Number.isFinite(y)) continue
+      if (y < mn) mn = y
+      if (y > mx) mx = y
+    }
+    return mx > mn ? mx - mn : 0
+  }
+  const holdScale = reqs.some(
+    r => r.kind === 'maximum' || r.kind === 'minimum' || r.kind === 'inflection',
+  )
+  const range0 = Math.max(rangeOf(p0), 1e-9)
+  const scaleCost = (p: number[]): number =>
+    holdScale ? (FEATURE_WEIGHT / 2) * ((rangeOf(p) - range0) / range0) : 0
+
   const residuals = (p: number[]): number[] => {
     const out: number[] = []
     for (const v of cons(p)) out.push(FEATURE_WEIGHT * v)
+    out.push(FEATURE_WEIGHT * character(p))
+    out.push(scaleCost(p))
     for (let i = 0; i < xs.length; i++) {
       const y = F(p, xs[i])
       out.push(Number.isFinite(y) ? (ws[i] * (y - y0s[i])) / yScale : 0)
@@ -1869,16 +1922,62 @@ function numericFeatureEdit(
     return out
   }
 
-  const res = levenbergMarquardt(residuals, p0.slice(), FEATURE_ITERS)
-  if (!res || !res.params.every(Number.isFinite)) return null
   // The anchors decide WHERE among the curves that satisfy the request to land;
   // they must not decide WHETHER it is satisfied. A soft weight always trades a
   // little of the constraint away for a little anchor — a sinusoid's zero came
   // to rest 5e-4 from where it was asked, which is visible on a graph and is
-  // not what "put the zero at x = 2" means. So finish by projecting onto the
-  // constraint manifold with minimum-norm steps: the conditions become exact
-  // and the parameters move as little as the geometry allows on the way.
-  return projectOntoConstraints(cons, res.params, pScale)
+  // not what "put the zero at x = 2" means. So every candidate is finished by
+  // projecting onto the constraint manifold with minimum-norm steps: the
+  // conditions become exact, and the parameters move as little as the geometry
+  // allows on the way.
+  //
+  // Two starts, because these families have no local degrees of freedom: every
+  // parameter of a·sin(x) + b·x + c moves the whole curve, so the damped solve
+  // can slide into a basin where a has changed sign and the "maximum" it lands
+  // on is really a minimum. Projecting straight from the current parameters
+  // stays in the basin the curve is already in; the anchor cost then says which
+  // of the two answers actually kept the curve.
+  const starts: number[][] = []
+  const res = levenbergMarquardt(residuals, p0.slice(), FEATURE_ITERS)
+  if (res && res.params.every(Number.isFinite)) starts.push(res.params)
+  starts.push(p0.slice())
+
+  const anchorCost = (p: number[]): number => {
+    let s = 0
+    for (let i = 0; i < xs.length; i++) {
+      const y = F(p, xs[i])
+      if (!Number.isFinite(y)) return Infinity
+      const d = (ws[i] * (y - y0s[i])) / yScale
+      s += d * d
+    }
+    const sc = scaleCost(p)
+    return s + sc * sc
+  }
+  const worstCon = (p: number[]): number => {
+    let m = 0
+    for (const v of cons(p)) m = Math.max(m, Math.abs(v))
+    return m
+  }
+
+  let best: number[] | null = null
+  let bestFeasible = false
+  let bestScore = Infinity
+  for (const s of starts) {
+    const p = projectOntoConstraints(cons, s, pScale)
+    if (!p.every(Number.isFinite)) continue
+    const con = worstCon(p)
+    // a level point of the wrong character is not the feature that was asked
+    // for, however exactly it meets f'(a) = 0
+    const feasible = con <= 1e-8 && character(p) <= 0.05
+    const score = feasible ? anchorCost(p) : con
+    if (best === null || (feasible && !bestFeasible) ||
+        (feasible === bestFeasible && score < bestScore)) {
+      best = p
+      bestFeasible = feasible
+      bestScore = score
+    }
+  }
+  return best
 }
 
 /**
@@ -2055,7 +2154,15 @@ function featureEdit(
   const spec = models[curve.modelId]
   if (!spec) return fail('This curve has no model behind it, so its features cannot be moved.')
   const p0 = curve.params.slice()
-  if (p0.length === 0 || !p0.every(Number.isFinite)) {
+  if (p0.length === 0) {
+    // A typed equation with every number written out has nothing to solve for.
+    // Telling the user to "refit" it would be nonsense — there is no fit.
+    return fail(
+      'This equation has no adjustable constants, so there is nothing to move. ' +
+        'Write one in — y = a x^2 gives you a to set — and its features become editable.',
+    )
+  }
+  if (!p0.every(Number.isFinite)) {
     return fail('This curve’s numbers are not usable yet — refit it before moving a feature.')
   }
   const point = edit?.point
@@ -2071,6 +2178,8 @@ function featureEdit(
   const kind = point.kind
   const name = spec.name.toLowerCase()
   const An = article(name)
+  /** "A parabola", "An expression" — the subject of most of the refusals. */
+  const Fam = `${An[0].toUpperCase()}${An.slice(1)} ${name}`
   const label = kindLabel(kind)
 
   // ---- the target -------------------------------------------------------
@@ -2122,12 +2231,12 @@ function featureEdit(
     }
     if (kind === 'maximum' || kind === 'minimum') {
       if (caps && caps.extrema === 0) {
-        return fail(`${An[0].toUpperCase()}${An.slice(1)} ${name} never turns around, so it has no maximum or minimum to move.`)
+        return fail(`${Fam} never turns around, so it has no maximum or minimum to move.`)
       }
       return fail(`This curve has no ${label} to move.`)
     }
     if (kind === 'inflection' && caps && caps.inflections === 0) {
-      return fail(`${An[0].toUpperCase()}${An.slice(1)} ${name} never changes concavity, so it has no inflection point.`)
+      return fail(`${Fam} never changes concavity, so it has no inflection point.`)
     }
     return fail(`This curve has no ${label} to move.`)
   }
@@ -2144,7 +2253,7 @@ function featureEdit(
     if ((kind === 'maximum' || kind === 'minimum') && caps && same.length >= caps.extrema) {
       return fail(
         ONE_TURN[curve.modelId] ??
-        `${An[0].toUpperCase()}${An.slice(1)} ${name} has at most ${times(caps.extrema)} turning point, and it already has ${word(same.length)} — there is no second one to move.`,
+        `${Fam} has at most ${times(caps.extrema)} turning point, and it already has ${word(same.length)} — there is no second one to move.`,
       )
     }
     return fail(`This curve has no ${label} near x = ${num(point.pos.x)}, so there is nothing there to move.`)
@@ -2189,7 +2298,7 @@ function featureEdit(
     const zs = distinctXs('zero').length
     if (zs > caps.zeros) {
       return fail(
-        `${An[0].toUpperCase()}${An.slice(1)} ${name} crosses the x-axis at most ${times(caps.zeros)}, so it cannot have ${word(zs)} zeros.`,
+        `${Fam} crosses the x-axis at most ${times(caps.zeros)}, so it cannot have ${word(zs)} zeros.`,
       )
     }
     const es = distinctXs('extremum').length
@@ -2197,16 +2306,16 @@ function featureEdit(
       return fail(
         caps.extrema === 1
           ? (ONE_TURN[curve.modelId] ??
-             `${An[0].toUpperCase()}${An.slice(1)} ${name} has exactly one turning point, so it cannot have ${word(es)}.`)
-          : `${An[0].toUpperCase()}${An.slice(1)} ${name} turns around at most ${times(caps.extrema)}, so it cannot have ${word(es)} maxima and minima.`,
+             `${Fam} has exactly one turning point, so it cannot have ${word(es)}.`)
+          : `${Fam} turns around at most ${times(caps.extrema)}, so it cannot have ${word(es)} maxima and minima.`,
       )
     }
     const is = distinctXs('inflection').length
     if (is > caps.inflections) {
       return fail(
         caps.inflections === 0
-          ? `${An[0].toUpperCase()}${An.slice(1)} ${name} never changes concavity, so it has no inflection point to place.`
-          : `${An[0].toUpperCase()}${An.slice(1)} ${name} changes concavity at most ${times(caps.inflections)}, so it cannot have ${word(is)} inflection points.`,
+          ? `${Fam} never changes concavity, so it has no inflection point to place.`
+          : `${Fam} changes concavity at most ${times(caps.inflections)}, so it cannot have ${word(is)} inflection points.`,
       )
     }
   }
@@ -2221,7 +2330,9 @@ function featureEdit(
   const needed = all.reduce((s, r) => s + reqCost(r), 0)
   if (needed > p0.length) {
     return fail(
-      `That asks for ${word(needed)} conditions at once, and ${An} ${name} only has ${word(p0.length)} numbers to set. Unpin a feature and try again.`,
+      `That asks for ${word(needed)} conditions at once, and ${An} ${name} only has ` +
+        `${word(p0.length)} ${p0.length === 1 ? 'number' : 'numbers'} to set. ` +
+        'Unpin a feature and try again.',
     )
   }
 
