@@ -414,6 +414,74 @@ function collectVars(n: Node, out: Set<VarName>): void {
 
 const isVar = (n: Node, name: VarName): boolean => n.t === 'var' && n.name === name
 
+function countParam(n: Node, name: string): number {
+  switch (n.t) {
+    case 'param': return n.name === name ? 1 : 0
+    case 'neg': return countParam(n.a, name)
+    case 'bin': return countParam(n.a, name) + countParam(n.b, name)
+    case 'call': {
+      let c = 0
+      for (const a of n.args) c += countParam(a, name)
+      return c
+    }
+    default: return 0
+  }
+}
+
+/**
+ * Renumber `param` slots by first textual appearance within `n` (pre-order walk
+ * matches source order), returning the new name list. Used after a free
+ * constant is removed from the parse, so the remaining indices stay dense and
+ * aligned with the reported paramNames.
+ */
+function reindexParams(n: Node, names: string[] = [], index = new Map<string, number>()): string[] {
+  switch (n.t) {
+    case 'param': {
+      let i = index.get(n.name)
+      if (i === undefined) { i = names.length; index.set(n.name, i); names.push(n.name) }
+      n.i = i
+      break
+    }
+    case 'neg': reindexParams(n.a, names, index); break
+    case 'bin': reindexParams(n.a, names, index); reindexParams(n.b, names, index); break
+    case 'call': for (const a of n.args) reindexParams(a, names, index); break
+    default: break
+  }
+  return names
+}
+
+/**
+ * Recognize function-definition notation: `<single letter>(<variable>) = <expr>`,
+ * e.g. "f(x) = x^2", "g(t) = 2t+1". The tokenizer sees the head as an implicit
+ * product (param `f` times variable `x`), so without this the equation would be
+ * plotted as the implicit relation f·x = x², with `f` as a slider — a
+ * confidently wrong graph. We instead drop the head and plot the body, which is
+ * what the notation means.
+ *
+ * Deliberately narrow, to avoid stealing legitimate slider expressions:
+ *  - only the LHS head position (so `y = f(x)` still means y = f·x),
+ *  - the LHS must be exactly `param * var` (so `a(x+1) = 3` and `2f(x) = x` are
+ *    untouched),
+ *  - the letter must not occur anywhere else (so `a(x) = a + x`, genuinely
+ *    ambiguous, keeps its slider reading).
+ */
+function matchFuncDef(
+  lhs: Node,
+  rhs: Node | null,
+): { head: string; boundVar: VarName; body: Node } | null {
+  if (rhs === null) return null
+  if (lhs.t !== 'bin' || lhs.op !== '*') return null
+  const head = lhs.a
+  const arg = lhs.b
+  if (head.t !== 'param' || arg.t !== 'var') return null
+  if (countParam(rhs, head.name) > 0) return null
+  return {
+    head: `${head.name}${wrap(VAR_LATEX[arg.name])}`,
+    boundVar: arg.name,
+    body: rhs,
+  }
+}
+
 // ----------------------------------------------------------------------------
 // Closure compiler: AST -> (params, a, b) => number
 //   slot `a` carries the independent variable (x, theta, or t); slot `b` = y.
@@ -471,7 +539,7 @@ function compile(n: Node): Evaluator {
 // precedence classes for rendering: 1 add/sub/neg, 2 mul (& slash-div), 3 pow, 4 atom
 function precOf(n: Node): number {
   switch (n.t) {
-    case 'num': return /[eE]/.test(n.raw) ? 2 : 4
+    case 'num': return numIsCompound(n.raw) ? 2 : 4
     case 'const':
     case 'var':
     case 'param':
@@ -488,16 +556,24 @@ function precOf(n: Node): number {
 }
 
 function isAtomic(n: Node): boolean {
-  return (n.t === 'num' && !/[eE]/.test(n.raw)) || n.t === 'const' || n.t === 'var' || n.t === 'param'
+  return (n.t === 'num' && !numIsCompound(n.raw)) || n.t === 'const' || n.t === 'var' || n.t === 'param'
 }
 
 function numLatex(raw: string): string {
-  const m = /^(.*?)[eE]([+-]?\d+)$/.exec(raw)
-  if (m) {
-    const exp = String(parseInt(m[2], 10))
-    return `${m[1]}\\cdot 10^{${exp}}`
-  }
-  return raw
+  if (!/[eE]/.test(raw)) return raw
+  const plain = String(Number(raw))
+  // Prefer the plain decimal ("5e2" -> 500, "1.5e-2" -> 0.015): it reads better
+  // and, unlike `5\cdot 10^{2}`, it stays a single atom rather than a product
+  // that could re-associate. JS switches its own toString to exponential
+  // exactly when the decimal form gets unwieldy, which is the threshold we want.
+  if (!/[eE]/.test(plain)) return plain
+  const [mantissa, exp] = plain.split(/[eE]/)
+  return `${mantissa}\\cdot 10^{${String(parseInt(exp, 10))}}`
+}
+
+/** True when numLatex renders `raw` as a product rather than a single atom. */
+function numIsCompound(raw: string): boolean {
+  return numLatex(raw).includes('\\cdot')
 }
 
 function child(n: Node, minPrec: number): string {
@@ -509,6 +585,11 @@ const GREEK_STARTS = ['\\pi', '\\theta', '\\tau']
 
 function mulSep(ls: string, rs: string): string {
   if (/^[0-9.]/.test(rs)) return ' \\cdot '
+  // A digit run followed by Euler's e must not be glued: "2e+1" would re-read
+  // (by our own tokenizer, and by a human) as scientific notation 2e+1 = 20.
+  // `e` is the only right operand that can start a numeric exponent, since
+  // params are single letters and `e` is always the constant.
+  if (/[0-9]$/.test(ls) && /^e/.test(rs)) return ' \\cdot '
   const leftEndsLetter = /[A-Za-z]$/.test(ls)
   if (leftEndsLetter && (/^[A-Za-z]/.test(rs) || GREEK_STARTS.some((g) => rs.startsWith(g)))) {
     return '\\,' // thin space keeps "a x" as a\,x and never glues letters into "\pix"
@@ -652,8 +733,21 @@ export function parseExpression(src: string): ParseOutcome {
     }
     const parser = new Parser(src)
     const { lhs, rhs } = parser.parseInput()
-    const cls = classify(lhs, rhs)
-    const paramNames = [...parser.paramNames] // order of first appearance, deduped
+
+    // "f(x) = x^2" — plot the body, not the implicit relation f·x = x².
+    const fdef = matchFuncDef(lhs, rhs)
+    let cls: Classified
+    let paramNames: string[]
+    if (fdef) {
+      // The function letter is not a plottable free constant; drop it and
+      // renumber the survivors so param indices stay dense.
+      paramNames = reindexParams(fdef.body)
+      cls = classify(fdef.body, null)
+      cls.latex = `${fdef.head} = ${toLatex(fdef.body)}`
+    } else {
+      cls = classify(lhs, rhs)
+      paramNames = [...parser.paramNames] // order of first appearance, deduped
+    }
     const defaultParams = paramNames.map(() => 1)
     const { kind, domain, latex, ev } = cls
 

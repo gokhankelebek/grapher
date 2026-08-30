@@ -404,7 +404,7 @@ describe('parse — LaTeX generation', () => {
     ['2pi', 'y = 2\\pi'],
     ['x^2 + y^2 = 4', 'x^{2}+y^{2} = 4'],
     ['r = 1 + cos(theta)', 'r = 1+\\cos\\left(\\theta\\right)'],
-    ['1e3', 'y = 1\\cdot 10^{3}'],
+    ['1e3', 'y = 1000'],
     ['min(x, 2)', 'y = \\min\\left(x,\\,2\\right)'],
   ]
   for (const [src, tex] of cases) {
@@ -442,5 +442,282 @@ describe('parse — LaTeX generation', () => {
     expect(spec.latex([7, -3])).toBe(p.latex)
     expect(spec.id).toBe('m')
     expect(spec.kind).toBe('explicit')
+  })
+})
+
+// ===========================================================================
+// Regressions for the two P0 correctness bugs found in the parser audit.
+// ===========================================================================
+
+describe('function-definition notation (P0: f(x) = ... was plotted as f*x = ...)', () => {
+  it('plots f(x) = x^2 as the explicit curve y = x^2', () => {
+    const p = plot('f(x)=x^2')
+    expect(p.kind).toBe('explicit')
+    expect(p.paramNames).toEqual([]) // 'f' must NOT become a slider
+    const m = p.makeModel('m')
+    for (const x of [-3, -0.5, 0, 1.5, 4]) {
+      expect(m.evalExplicit!([], x)).toBe(x * x)
+    }
+  })
+
+  it('is identical to the equivalent y = form', () => {
+    for (const [fn, y] of [['f(x) = x^2', 'y = x^2'], ['g(x) = 2x+1', 'y = 2x+1'],
+                           ['h(x) = sin(x)/x', 'y = sin(x)/x']]) {
+      const a = plot(fn), b = plot(y)
+      expect(a.kind).toBe(b.kind)
+      expect(a.paramNames).toEqual(b.paramNames)
+      const ma = a.makeModel('a'), mb = b.makeModel('b')
+      for (const x of [-2.5, -1, 0.5, 2, 3.5]) {
+        expect(ma.evalExplicit!([], x)).toBe(mb.evalExplicit!([], x))
+      }
+    }
+  })
+
+  it('respects the bound variable', () => {
+    const t = plot('f(t) = t^2')
+    expect(t.kind).toBe('explicit')
+    expect(t.makeModel('m').evalExplicit!([], 3)).toBe(9)
+    // a theta body is still recognised as polar
+    const th = plot('f(theta) = 1 + cos(theta)')
+    expect(th.kind).toBe('polar')
+    expect(th.makeModel('m').evalPolar!([], Math.PI / 3)).toBeCloseTo(1.5, 12)
+  })
+
+  it('keeps other free constants, densely indexed after dropping the head', () => {
+    const p = plot('f(x) = a x^2 + b')
+    expect(p.paramNames).toEqual(['a', 'b'])
+    expect(p.defaultParams).toEqual([1, 1])
+    expect(p.makeModel('m').evalExplicit!([2, 1], 3)).toBe(19) // 2*9 + 1
+  })
+
+  it('shows the definition back in the latex', () => {
+    expect(plot('f(x)=x^2').latex).toBe('f\\left(x\\right) = x^{2}')
+    expect(plot('g(t) = 2t').latex).toBe('g\\left(t\\right) = 2t')
+  })
+
+  it('does not steal legitimate slider expressions', () => {
+    // y = f(x) means y = f*x with f a slider: the head rule is LHS-only.
+    const a = plot('y = f(x)')
+    expect(a.paramNames).toEqual(['f'])
+    expect(a.makeModel('m').evalExplicit!([3], 4)).toBe(12)
+    // the letter recurring on the right keeps the ambiguous case as a product
+    const b = plot('a(x) = a + x')
+    expect(b.kind).toBe('implicit')
+    expect(b.paramNames).toEqual(['a'])
+    // a non-variable argument is not a function definition
+    expect(plot('a(x+1) = 3').paramNames).toEqual(['a'])
+    // and neither is a head that is itself a product
+    expect(plot('2f(x) = x').paramNames).toEqual(['f'])
+  })
+})
+
+describe('latex round-trip (P0: "2e + 1" rendered as "2e+1", re-reading as 20)', () => {
+  const cases: Array<[string, number, number]> = [
+    // [source, x, expected f(x)]
+    ['2e + 1', 0, 2 * Math.E + 1],
+    ['3.5e + 12', 0, 3.5 * Math.E + 12],
+    ['2e - 3.572', 0, 2 * Math.E - 3.572],
+    ['1e - 7 + 2', 0, Math.E - 5],
+    ['atan(7e - 7x)', 2, Math.atan(7 * Math.E - 14)],
+  ]
+  for (const [src, x, want] of cases) {
+    it(`${src} keeps a separator before e`, () => {
+      const p = plot(src)
+      expect(p.makeModel('m').evalExplicit!([], x)).toBeCloseTo(want, 12)
+      // the rendered form must not contain a digit immediately followed by 'e',
+      // which our own tokenizer (and a reader) would take as an exponent
+      expect(p.latex).not.toMatch(/[0-9]e/)
+    })
+  }
+
+  it('renders scientific literals as plain decimals when readable', () => {
+    expect(plot('1e3').latex).toBe('y = 1000')
+    expect(plot('1.5e-2 x').latex).toBe('y = 0.015x')
+    expect(plot('1e21').latex).toBe('y = 1\\cdot 10^{21}') // unwieldy: keep the power
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Seeded source -> parse -> latex -> de-latex -> re-parse fuzz.
+// Guards the whole LaTeX emitter against rendering a curve that reads back as
+// a different one (the class "2e+1" belonged to).
+// ---------------------------------------------------------------------------
+
+describe('latex round-trip fuzz', () => {
+  /** Render our KaTeX output back into Grapher input syntax. */
+  function readGroup(s: string, i: number): [string, number] {
+    let depth = 0
+    for (let j = i; j < s.length; j++) {
+      if (s[j] === '{') depth++
+      else if (s[j] === '}' && --depth === 0) return [s.slice(i + 1, j), j + 1]
+    }
+    throw new Error(`unbalanced braces in ${s}`)
+  }
+
+  const NAME_MAP: Record<string, string> = { arcsin: 'asin', arccos: 'acos', arctan: 'atan' }
+
+  function delatex(s: string): string {
+    let out = ''
+    let i = 0
+    while (i < s.length) {
+      if (s.startsWith('\\frac{', i)) {
+        const [a, j] = readGroup(s, i + 5)
+        const [b, k] = readGroup(s, j)
+        out += `((${delatex(a)})/(${delatex(b)}))`; i = k; continue
+      }
+      if (s.startsWith('\\sqrt[3]{', i)) {
+        const [a, j] = readGroup(s, i + 8); out += ` cbrt(${delatex(a)})`; i = j; continue
+      }
+      if (s.startsWith('\\sqrt{', i)) {
+        const [a, j] = readGroup(s, i + 5); out += ` sqrt(${delatex(a)})`; i = j; continue
+      }
+      if (s.startsWith('\\operatorname{', i)) {
+        const [a, j] = readGroup(s, i + 13); out += ` ${a}`; i = j; continue
+      }
+      if (s.startsWith('\\log_{2}', i)) { out += ' log2'; i += 8; continue }
+      if (s.startsWith('\\left\\lfloor', i)) { out += ' floor('; i += 12; continue }
+      if (s.startsWith('\\right\\rfloor', i)) { out += ')'; i += 13; continue }
+      if (s.startsWith('\\left\\lceil', i)) { out += ' ceil('; i += 11; continue }
+      if (s.startsWith('\\right\\rceil', i)) { out += ')'; i += 12; continue }
+      // \left| .. \right| is a matched pair, so the nesting is recoverable
+      if (s.startsWith('\\left|', i)) { out += ' abs('; i += 6; continue }
+      if (s.startsWith('\\right|', i)) { out += ')'; i += 7; continue }
+      if (s.startsWith('\\left(', i)) { out += '('; i += 6; continue }
+      if (s.startsWith('\\right)', i)) { out += ')'; i += 7; continue }
+      if (s.startsWith('\\cdot', i)) { out += ' * '; i += 5; continue }
+      if (s.startsWith('\\,', i)) { out += ' '; i += 2; continue }
+      if (s[i] === '^' && s[i + 1] === '{') {
+        const [a, j] = readGroup(s, i + 1); out += `^(${delatex(a)})`; i = j; continue
+      }
+      if (s[i] === '\\') {
+        const m = /^\\([a-zA-Z]+)/.exec(s.slice(i))
+        if (!m) throw new Error(`stray backslash in ${s}`)
+        out += ` ${NAME_MAP[m[1]] ?? m[1]} `; i += m[0].length; continue
+      }
+      out += s[i]; i++
+    }
+    return out
+  }
+
+  type Rng = () => number
+  const pick = <T,>(r: Rng, xs: T[]): T => xs[Math.floor(r() * xs.length)]
+
+  // floor/ceil/sign are excluded on purpose: they turn a sub-ulp difference
+  // into a jump of 1, which makes the round-trip sensitive to floating-point
+  // RE-ASSOCIATION (500*(4.76x) vs (500*4.76)x) rather than to the LaTeX. Their
+  // rendering is covered by the explicit cases below.
+  const UNARY = ['sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh',
+    'sqrt', 'cbrt', 'abs', 'ln', 'log', 'log2', 'exp']
+  const PARAMS = ['a', 'b', 'c', 'k', 'w']
+
+  function num(r: Rng): string {
+    const roll = r()
+    if (roll < 0.25) return String(Math.floor(r() * 10))
+    if (roll < 0.5) return (r() * 10).toFixed(2)
+    if (roll < 0.65) return `${Math.floor(r() * 9) + 1}e${r() < 0.5 ? '' : '-'}${Math.floor(r() * 3) + 1}`
+    if (roll < 0.8) return pick(r, ['pi', 'e', 'tau'])
+    return String(Math.floor(r() * 5) + 1)
+  }
+
+  function genExpr(r: Rng, vars: string[], depth: number): string {
+    if (depth <= 0) return r() < 0.45 ? pick(r, vars) : (r() < 0.75 ? num(r) : pick(r, PARAMS))
+    const roll = r()
+    const sub = (d = depth - 1) => genExpr(r, vars, d)
+    if (roll < 0.18) return `${sub()} ${pick(r, ['+', '-'])} ${sub()}`
+    if (roll < 0.3) return `${sub()} ${pick(r, ['*', '/'])} ${sub()}`
+    if (roll < 0.38) return `(${sub()})^${r() < 0.5 ? String(Math.floor(r() * 4)) : `(${sub(0)})`}`
+    if (roll < 0.46) return `${pick(r, UNARY)}(${sub()})`
+    if (roll < 0.52) return `${pick(r, UNARY)} ${sub(0)}`      // paren-less application
+    if (roll < 0.58) return `${pick(r, ['min', 'max'])}(${sub()}, ${sub()})`
+    if (roll < 0.64) return `|${sub()}|`
+    if (roll < 0.7) return `-${sub()}`
+    if (roll < 0.78) return `(${sub()})(${sub()})`             // juxtaposition
+    if (roll < 0.86) return `${num(r)}${pick(r, vars)}`        // implicit multiplication
+    if (roll < 0.92) return `(${sub()})`
+    return `${sub()} ${pick(r, ['+', '-', '*'])} ${sub()}`
+  }
+
+  function genInput(r: Rng): string {
+    const roll = r()
+    if (roll < 0.2) {
+      const e = genExpr(r, ['theta'], 3)
+      return r() < 0.5 ? `r = ${e}` : e
+    }
+    if (roll < 0.35) return `${genExpr(r, ['x', 'y'], 3)} = ${genExpr(r, ['x', 'y'], 2)}`
+    if (roll < 0.45) return `${pick(r, ['f', 'g', 'h'])}(x) = ${genExpr(r, ['x'], 3)}`
+    if (roll < 0.5) return `${pick(r, ['f', 'g'])}(t) = ${genExpr(r, ['t'], 3)}`
+    if (roll < 0.7) return `y = ${genExpr(r, ['x'], 3)}`
+    return genExpr(r, ['x'], 3)
+  }
+
+  // Tolerance is deliberately loose. The bug class this guards against (a curve
+  // rendering as a DIFFERENT curve, e.g. "2e+1" re-reading as 20) is wrong by
+  // orders of magnitude, while an exact comparison would trip on floating-point
+  // re-association: latex drops the mathematically redundant parens in
+  // `500*(4.76x)`, so the re-parse computes `(500*4.76)*x` and lands one ulp
+  // away. That is invisible in the app (nothing re-parses latex) but a step
+  // function, or a periodic function of a huge argument, can amplify it into a
+  // visible jump — which is why floor/ceil/sign are left out of the generator.
+  const sameNum = (a: number, b: number): boolean =>
+    (Number.isNaN(a) && Number.isNaN(b)) || a === b ||
+    Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(a), Math.abs(b))
+
+  /** Returns a description of the first discrepancy, or null when it round-trips. */
+  function roundTrip(src: string): string | null {
+    const first = parseExpression(src)
+    if (!first.ok) return null // only valid inputs are round-trip candidates
+    const latex = first.plot.latex
+    const round = delatex(latex)
+    const second = parseExpression(round)
+    const bad = (why: string) => `${src}\n  latex: ${latex}\n  round: ${round}\n  ${why}`
+    if (!second.ok) return bad(`re-parse failed: ${second.error}`)
+    const A = first.plot, B = second.plot
+    if (A.kind !== B.kind) return bad(`kind ${A.kind} -> ${B.kind}`)
+    if (A.paramNames.join(',') !== B.paramNames.join(',')) {
+      return bad(`params [${A.paramNames}] -> [${B.paramNames}]`)
+    }
+    const ma = A.makeModel('a'), mb = B.makeModel('b')
+    const params = A.paramNames.map((_, i) => 0.7 + i * 0.4)
+    const probes = [-3.25, -1.5, -0.5, 0.25, 0.75, 1.5, 2.75, 4.5]
+    for (const u of probes) {
+      if (A.kind === 'explicit' || A.kind === 'polar') {
+        const ea = A.kind === 'explicit' ? ma.evalExplicit! : ma.evalPolar!
+        const eb = A.kind === 'explicit' ? mb.evalExplicit! : mb.evalPolar!
+        if (!sameNum(ea(params, u), eb(params, u))) {
+          return bad(`at ${u}: ${ea(params, u)} vs ${eb(params, u)}`)
+        }
+      } else {
+        for (const v of probes) {
+          if (!sameNum(ma.evalImplicit!(params, u, v), mb.evalImplicit!(params, u, v))) {
+            return bad(`at (${u},${v}): ${ma.evalImplicit!(params, u, v)} vs ${mb.evalImplicit!(params, u, v)}`)
+          }
+        }
+      }
+    }
+    return null
+  }
+
+  for (const seed of [1, 2, 3, 12345]) {
+    it(`4000 generated inputs round-trip through latex (seed ${seed})`, () => {
+      const rng = makeRng(seed)
+      const bad: string[] = []
+      for (let i = 0; i < 4000; i++) {
+        const found = roundTrip(genInput(rng))
+        if (found) bad.push(found)
+      }
+      expect(bad.slice(0, 5).join('\n---\n')).toBe('')
+    })
+  }
+
+  it('round-trips the step functions and other fixed shapes', () => {
+    const fixed = [
+      'floor(x)', 'ceil(2x)', 'sign(x-1)', 'floor(x)+ceil(x)', 'sign(x) * floor(|x|)',
+      '2e + 1', '3.5e + 12', 'atan(7e - 7x)', '1e3 x', '1.5e-2 x',
+      'x^2 + y^2 = 4', 'r = 1 + cos(theta)', 'f(x) = a x^2 + b', 'y = f(x)',
+      'min(x, 2)', 'max(sin x, 0)', '|x - 2| + 1', '|(-x)(abs 6)|', 'sqrt(x)/(x+1)',
+      'a sin(b x + c) + d', 'log2(x+1)', 'cbrt(x)', 'x*y = 1', 'exp(-x^2)', '2^3^2',
+    ]
+    const bad = fixed.map(roundTrip).filter(Boolean)
+    expect(bad.join('\n---\n')).toBe('')
   })
 })
