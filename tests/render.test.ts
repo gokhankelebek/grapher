@@ -324,6 +324,114 @@ describe('drawCurve — explicit curves with asymptotes break into subpaths', ()
 })
 
 // ---------------------------------------------------------------------------
+// drawCurve — steep-but-finite curves must still be drawn
+//
+// Regression: the pen-lift test used to fire on any gap wider than a fixed
+// fraction of the canvas (2*H). A straight line has zero chord deviation, so
+// adaptive refinement never subdivides it — every base step of a steep line
+// tripped that test, the path stayed empty and drawCurve returned before
+// stroking. y = 300x rendered as NOTHING (and on a 1600x400 window, so did
+// y = 100x) while y = 300x^2 was fine, because a parabola does get subdivided.
+// ---------------------------------------------------------------------------
+
+describe('drawCurve — steep lines are drawn, not deleted', () => {
+  function vpSized(W: number, H: number, pxPerUnit = 60): Viewport {
+    return { center: { x: 0, y: 0 }, pxPerUnit, widthPx: W, heightPx: H }
+  }
+  /** MODELS.line takes [b, m] ascending -> y = m x + b. */
+  function slopePath(m: number, vp: Viewport): MockPath2D | null {
+    return pathFor(curveOf('line', [0, m], 'explicit', null), MODELS, vp)
+  }
+
+  it('y = 300x is stroked and has points', () => {
+    const path = slopePath(300, vpSized(1200, 800))
+    expect(path, 'y = 300x drew nothing at all').not.toBeNull()
+    expect(path!.points().length).toBeGreaterThan(1)
+    expect(path!.moveToCount(), 'a straight line must not be broken up').toBe(1)
+  })
+
+  it('y = 100x is stroked on a wide 1600x400 viewport', () => {
+    // the old threshold was ~2*H*160/W, i.e. slope 79 on this viewport
+    const path = slopePath(100, vpSized(1600, 400))
+    expect(path, 'y = 100x drew nothing on a wide viewport').not.toBeNull()
+    expect(path!.points().length).toBeGreaterThan(1)
+  })
+
+  it('no slope vanishes, at any viewport aspect ratio', () => {
+    const sizes: Array<[number, number]> = [
+      [953, 849], [900, 800], [1600, 400], [400, 1200], [1600, 1000],
+    ]
+    for (const [W, H] of sizes) {
+      for (const m of [1, 79, 100, 199, 280, 300, 1000, -5000, 1e5, 1e8]) {
+        const path = slopePath(m, vpSized(W, H))
+        expect(path, `y = ${m}x vanished on a ${W}x${H} viewport`).not.toBeNull()
+        expect(path!.points().length, `y = ${m}x drew an empty path`)
+          .toBeGreaterThan(1)
+      }
+    }
+  })
+
+  it('the ink of a steep line actually lies on that line', () => {
+    const vp = vpSized(1200, 800)
+    for (const m of [300, 1000, -5000]) {
+      const path = slopePath(m, vp)!
+      for (const p of path.points()) {
+        // only judge ink that lands on the canvas
+        if (p.x < 0 || p.x > vp.widthPx || p.y < 0 || p.y > vp.heightPx) continue
+        const q = toMath(p, vp)
+        // perpendicular distance from the point to y = m x, in pixels
+        const dist = (Math.abs(m * q.x - q.y) / Math.hypot(m, 1)) * vp.pxPerUnit
+        expect(dist, `ink at (${p.x}, ${p.y}) is off y = ${m}x`).toBeLessThan(1)
+      }
+    }
+  })
+
+  it('|x| with a huge slope keeps its corner and stays one stroke', () => {
+    const r = parseExpression('1000*abs(x)')
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const path = pathFor(
+      curveOf('v', [], 'explicit', null), { v: r.plot.makeModel('v') },
+      vpSized(1200, 800),
+    )
+    expect(path, '1000*abs(x) drew nothing').not.toBeNull()
+    expect(path!.moveToCount(), 'a corner is not a discontinuity').toBe(1)
+  })
+
+  it('a steep logistic stays continuous', () => {
+    const r = parseExpression('1/(1+exp(-1000*x))')
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const path = pathFor(
+      curveOf('s', [], 'explicit', null), { s: r.plot.makeModel('s') },
+      vpSized(1200, 800),
+    )
+    expect(path).not.toBeNull()
+    expect(path!.moveToCount(), 'a steep-but-finite ramp must not be broken').toBe(1)
+  })
+
+  it('poles still break while steep lines do not — the two stay distinguishable', () => {
+    const vp = vpSized(1200, 800)
+    // genuinely discontinuous: must break
+    for (const expr of ['tan(x)', '1/x', '1/(x^2-1)', 'x/(x^2-4)', '1/(x-0.5)']) {
+      const r = parseExpression(expr)
+      expect(r.ok, expr).toBe(true)
+      if (!r.ok) continue
+      const path = pathFor(
+        curveOf('p', [], 'explicit', null), { p: r.plot.makeModel('p') }, vp,
+      )
+      expect(path, `${expr} drew nothing`).not.toBeNull()
+      expect(path!.moveToCount(), `${expr} was joined across its pole`)
+        .toBeGreaterThan(1)
+    }
+    // continuous: must not break, however steep
+    for (const m of [300, 1000, -5000, 1e6]) {
+      expect(slopePath(m, vp)!.moveToCount(), `y = ${m}x was broken up`).toBe(1)
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
 // drawCurve — implicit marching squares
 // ---------------------------------------------------------------------------
 

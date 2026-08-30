@@ -31,67 +31,171 @@ type EvalToScreen = (t: number, out: Sample) => void
 /** Polyline emitter writing into a Path2D with pen-up/pen-down state. */
 interface Emitter {
   path: Path2D
-  down: boolean
-  drawn: boolean   // at least one visible segment was emitted
+  f: EvalToScreen  // the curve being sampled — the break probe re-evaluates it
+  has: boolean     // a previous finite sample exists
+  penDown: boolean // the path's current point IS that sample (it was in-box)
+  drawn: boolean   // at least one segment was emitted
+  lastT: number
   lastX: number
   lastY: number
-  maxJump: number  // screen-px jump between adjacent samples → break
-  cx0: number      // clamp box (generous ±1 viewport overdraw)
+  suspectPx: number // gap this large is ambiguous → probe before joining
+  cx0: number       // clip box (generous ±1 viewport of overdraw)
   cx1: number
   cy0: number
   cy1: number
 }
 
-// path is assigned by resetEmitter before any use; kept unset here so merely
+// path/f are assigned by resetEmitter before any use; kept unset here so merely
 // importing this module never touches DOM globals (tests, SSR).
 const EM: Emitter = {
   path: undefined as unknown as Path2D,
-  down: false,
+  f: undefined as unknown as EvalToScreen,
+  has: false,
+  penDown: false,
   drawn: false,
+  lastT: 0,
   lastX: 0,
   lastY: 0,
-  maxJump: 0,
+  suspectPx: 0,
   cx0: 0, cx1: 0, cy0: 0, cy1: 0,
 }
 
-function resetEmitter(em: Emitter, path: Path2D, vp: Viewport): void {
+function resetEmitter(
+  em: Emitter, path: Path2D, f: EvalToScreen, vp: Viewport,
+): void {
   em.path = path
-  em.down = false
+  em.f = f
+  em.has = false
+  em.penDown = false
   em.drawn = false
+  em.lastT = 0
   em.lastX = 0
   em.lastY = 0
-  em.maxJump = 2 * vp.heightPx
+  em.suspectPx = 2 * vp.heightPx
   em.cx0 = -vp.widthPx
   em.cx1 = 2 * vp.widthPx
   em.cy0 = -vp.heightPx
   em.cy1 = 2 * vp.heightPx
 }
 
-function clampNum(v: number, lo: number, hi: number): number {
-  return v < lo ? lo : v > hi ? hi : v
+// ---------------------------------------------------------------------------
+// Discontinuity test.
+//
+// A large screen-space gap between adjacent samples is ambiguous: either a
+// pole/jump (lift the pen) or a perfectly finite curve that is merely very
+// steep (keep the pen down). Canvas height cannot tell those apart — judging by
+// a fixed fraction of it silently deleted every line whose on-screen slope
+// exceeded ~2*H*BASE_SAMPLES/W, so y = 300x rendered as nothing at all.
+//
+// Ask the function instead. Bisect the parameter interval, always descending
+// into the half that still carries the larger screen-space span. Under
+// refinement a continuous piece collapses geometrically — its span halves at
+// every step — while a pole holds or grows its span (values blow up faster than
+// the interval shrinks) and a jump discontinuity holds its span forever. A gap
+// that has not collapsed to a drawable step within PROBE_STEPS halvings is a
+// discontinuity. Cost is O(PROBE_STEPS) evals, paid only by suspicious gaps.
+// ---------------------------------------------------------------------------
+
+const PROBE_STEPS = 40 // resolves slopes past 1e9 px/px before giving up
+const JOIN_PX = 8      // span at which the remaining gap is a drawable step
+const PROBE: Sample = { x: 0, y: 0, ok: false }
+
+function isDiscontinuity(
+  f: EvalToScreen,
+  ta: number, xa: number, ya: number,
+  tb: number, xb: number, yb: number,
+): boolean {
+  let aT = ta, aX = xa, aY = ya
+  let bT = tb, bX = xb, bY = yb
+  for (let i = 0; i < PROBE_STEPS; i++) {
+    const mT = (aT + bT) / 2
+    // interval collapsed to floating-point resolution with the gap still open
+    if (mT === aT || mT === bT) return true
+    f(mT, PROBE)
+    const mX = PROBE.x
+    const mY = PROBE.y
+    if (!PROBE.ok || !Number.isFinite(mX) || !Number.isFinite(mY)) return true
+    const lo = Math.hypot(mX - aX, mY - aY)
+    const hi = Math.hypot(bX - mX, bY - mY)
+    let span: number
+    if (lo >= hi) { bT = mT; bX = mX; bY = mY; span = lo }
+    else { aT = mT; aX = mX; aY = mY; span = hi }
+    if (span <= JOIN_PX) return false // collapsed: continuous, just steep
+  }
+  return true
 }
 
-function emitPoint(em: Emitter, x: number, y: number, ok: boolean): void {
-  if (!ok || !Number.isFinite(x) || !Number.isFinite(y)) {
-    em.down = false
-    return
-  }
-  if (em.down) {
-    const dx = x - em.lastX
-    const dy = y - em.lastY
-    if (Math.abs(dy) > em.maxJump || Math.abs(dx) > em.maxJump) {
-      em.down = false // discontinuity / asymptote: lift the pen
+// ---------------------------------------------------------------------------
+// Segment emission, clipped to the overdraw box.
+//
+// Clipping the SEGMENT (Liang–Barsky) rather than clamping each coordinate on
+// its own matters now that near-vertical lines actually draw: independent
+// clamping bends a steep chord toward the box corner and shifts where it
+// crosses the canvas, while clipping keeps the drawn geometry exactly on the
+// true chord and merely trims its ends.
+// ---------------------------------------------------------------------------
+
+function drawSeg(
+  em: Emitter, x0: number, y0: number, x1: number, y1: number,
+): void {
+  const dx = x1 - x0
+  const dy = y1 - y0
+  let t0 = 0
+  let t1 = 1
+  for (let e = 0; e < 4; e++) {
+    const p = e === 0 ? -dx : e === 1 ? dx : e === 2 ? -dy : dy
+    const q = e === 0 ? x0 - em.cx0 : e === 1 ? em.cx1 - x0
+      : e === 2 ? y0 - em.cy0 : em.cy1 - y0
+    if (p === 0) {
+      if (q < 0) { em.penDown = false; return } // parallel to and outside it
+      continue
+    }
+    const r = q / p
+    if (p < 0) {
+      if (r > t1) { em.penDown = false; return }
+      if (r > t0) t0 = r
+    } else {
+      if (r < t0) { em.penDown = false; return }
+      if (r < t1) t1 = r
     }
   }
-  const px = clampNum(x, em.cx0, em.cx1)
-  const py = clampNum(y, em.cy0, em.cy1)
-  if (!em.down) {
-    em.path.moveTo(px, py)
-    em.down = true
-  } else {
-    em.path.lineTo(px, py)
-    em.drawn = true
+  if (t0 > 0 || !em.penDown) {
+    // use the exact endpoint when nothing was trimmed, so consecutive
+    // segments share bit-identical join coordinates
+    em.path.moveTo(t0 > 0 ? x0 + dx * t0 : x0, t0 > 0 ? y0 + dy * t0 : y0)
   }
+  em.path.lineTo(t1 < 1 ? x0 + dx * t1 : x1, t1 < 1 ? y0 + dy * t1 : y1)
+  em.drawn = true
+  em.penDown = t1 >= 1
+}
+
+function emitPoint(em: Emitter, t: number, x: number, y: number, ok: boolean): void {
+  if (!ok || !Number.isFinite(x) || !Number.isFinite(y)) {
+    em.has = false
+    em.penDown = false
+    return
+  }
+  if (em.has) {
+    const px = em.lastX
+    const py = em.lastY
+    const dx = x - px
+    const dy = y - py
+    let broken = false
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
+      broken = true // a gap too wide to even subtract is a pole by construction
+    } else if (Math.abs(dy) > em.suspectPx || Math.abs(dx) > em.suspectPx) {
+      // Only pay for the probe when the gap could put ink on the canvas: a gap
+      // that stays off one side of the box is invisible whichever way it goes.
+      const offSameSide =
+        (py < em.cy0 && y < em.cy0) || (py > em.cy1 && y > em.cy1) ||
+        (px < em.cx0 && x < em.cx0) || (px > em.cx1 && x > em.cx1)
+      if (!offSameSide) broken = isDiscontinuity(em.f, em.lastT, px, py, t, x, y)
+    }
+    if (broken) em.penDown = false
+    else drawSeg(em, px, py, x, y)
+  }
+  em.has = true
+  em.lastT = t
   em.lastX = x
   em.lastY = y
 }
@@ -107,7 +211,7 @@ function refine(
   depth: number,
 ): void {
   if (depth <= 0) {
-    emitPoint(em, xb, yb, okb)
+    emitPoint(em, tb, xb, yb, okb)
     return
   }
   const tm = (ta + tb) / 2
@@ -133,7 +237,7 @@ function refine(
   }
 
   if (!split) {
-    emitPoint(em, xb, yb, okb)
+    emitPoint(em, tb, xb, yb, okb)
     return
   }
   refine(em, f, ta, xa, ya, oka, tm, xm, ym, okm, depth - 1)
@@ -158,7 +262,7 @@ function sampleAdaptive(
   let px = SCR.x
   let py = SCR.y
   let pok = SCR.ok
-  emitPoint(em, px, py, pok)
+  emitPoint(em, pt, px, py, pok)
 
   const inv = (t1 - t0) / BASE_SAMPLES
   for (let i = 1; i <= BASE_SAMPLES; i++) {
@@ -175,7 +279,7 @@ function sampleAdaptive(
       ((py < offY0 && y < offY0) || (py > offY1 && y > offY1) ||
        (px < offX0 && x < offX0) || (px > offX1 && x > offX1))
     if (bothOff) {
-      emitPoint(em, x, y, ok)
+      emitPoint(em, t, x, y, ok)
     } else {
       refine(em, f, pt, px, py, pok, t, x, y, ok, MAX_DEPTH)
     }
@@ -219,7 +323,7 @@ function buildExplicit(
     out.y = hh - (y - cy) * ppu
     out.ok = Number.isFinite(y)
   }
-  resetEmitter(EM, path, vp)
+  resetEmitter(EM, path, f, vp)
   sampleAdaptive(EM, f, x0, x1, vp)
   return EM.drawn
 }
@@ -277,7 +381,7 @@ function buildParametric(
     out.y = hh - (p.y - cy) * ppu
     out.ok = Number.isFinite(p.x) && Number.isFinite(p.y)
   }
-  resetEmitter(EM, path, vp)
+  resetEmitter(EM, path, f, vp)
   sampleAdaptive(EM, f, dom[0], dom[1], vp)
   return EM.drawn
 }
@@ -307,7 +411,7 @@ function buildPolar(
     out.y = hh - (y - cy) * ppu
     out.ok = Number.isFinite(r)
   }
-  resetEmitter(EM, path, vp)
+  resetEmitter(EM, path, f, vp)
   sampleAdaptive(EM, f, dom[0], dom[1], vp)
   return EM.drawn
 }
