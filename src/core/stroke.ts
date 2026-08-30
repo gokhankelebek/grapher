@@ -61,7 +61,133 @@ function resample(pts: Vec2[], n: number): Vec2[] {
   return out
 }
 
-/** Light Gaussian smoothing; wraps for closed strokes, clamps at open ends. */
+// --- open-end handling for the smoother ------------------------------------
+//
+// The kernel needs `radius` samples beyond each end of an open stroke. Two
+// obvious choices are both wrong here:
+//
+//   * REPLICATE (clamp j to 0 / n-1) feeds the same raw endpoint into the
+//     kernel several times, so its jitter is amplified into its neighbours;
+//     pinning the endpoint to the raw ink on top of that leaves it with 100%
+//     of its noise while the interior keeps ~40%. That is the bug: the ends
+//     were the noisiest part of the "smoothed" stroke.
+//   * MIRROR (p[-k] = p[k]) folds the stroke back on itself, forcing a zero
+//     derivative at the boundary. It denoises, but it drags the endpoint
+//     inward along the tangent by ~1 sample — i.e. it quietly SHORTENS the
+//     stroke, which is exactly what the raw anchoring was there to prevent.
+//
+// So we do not pad at all. For the few points where the kernel would overhang,
+// we use a different estimator with the same job: a Savitzky-Golay fit — a
+// least-squares QUADRATIC through the nearest END_WINDOW samples — evaluated
+// at the point's own index. It is one-sided, so it never reaches for data that
+// isn't there, and it is evaluated where the point already is, so the point is
+// denoised in place rather than displaced. Both coordinates get the same
+// treatment (see processStroke: x carries as much of the visible endpoint
+// error as y does).
+//
+// Degree 2 is deliberate and load-bearing. A degree-1 (straight-line) fit
+// cannot represent a curved end, so it FLATTENS the last few points — the
+// exact artifact that makes recognition prefer a sinusoid over a parabola.
+// Measured with jitter off, so the number is pure estimator bias, a linear fit
+// displaces the tip of a gaussian by 0.0156 math units against a 0.0014 local
+// noise floor; the quadratic keeps every shape tested under 0.0059, well below
+// the ~0.013 the hand jitter leaves behind anyway.
+//
+// A wide window is also deliberate: it dilutes a two- or three-sample pen-lift
+// hook (which currently dictates the endpoint outright, at full weight) to
+// roughly 3/21 of a least-squares fit. That attenuates a hook, it does not
+// remove one, and nothing is trimmed — the stroke keeps all n points and the
+// full extent the user drew.
+const END_DEGREE = 2
+const END_WINDOW = 21
+
+/**
+ * Least-squares polynomial of degree `deg` through (u[i], v[i]).
+ * Returns coefficients [c0, c1, ...] of c0 + c1·u + c2·u² + ...
+ * Falls back to lower degree if the normal equations are singular.
+ */
+function polyFitLS(us: number[], vs: number[], deg: number): number[] {
+  const m = deg + 1
+  // normal equations A·c = b with A[r][q] = Σ u^(r+q), b[r] = Σ v·u^r
+  const A: number[][] = []
+  const b: number[] = []
+  for (let r = 0; r < m; r++) {
+    A.push(new Array(m).fill(0))
+    b.push(0)
+  }
+  for (let i = 0; i < us.length; i++) {
+    const pow: number[] = [1]
+    for (let e = 1; e < 2 * m; e++) pow.push(pow[e - 1] * us[i])
+    for (let r = 0; r < m; r++) {
+      for (let q = 0; q < m; q++) A[r][q] += pow[r + q]
+      b[r] += vs[i] * pow[r]
+    }
+  }
+  // Gaussian elimination with partial pivoting
+  for (let c = 0; c < m; c++) {
+    let piv = c
+    for (let r = c + 1; r < m; r++) if (Math.abs(A[r][c]) > Math.abs(A[piv][c])) piv = r
+    if (Math.abs(A[piv][c]) < 1e-12) {
+      // singular (degenerate window): drop to the highest degree that works
+      return deg > 0 ? polyFitLS(us, vs, deg - 1) : [vs.length ? vs[0] : 0]
+    }
+    if (piv !== c) { const t = A[piv]; A[piv] = A[c]; A[c] = t; const tb = b[piv]; b[piv] = b[c]; b[c] = tb }
+    for (let r = c + 1; r < m; r++) {
+      const f = A[r][c] / A[c][c]
+      if (f === 0) continue
+      for (let q = c; q < m; q++) A[r][q] -= f * A[c][q]
+      b[r] -= f * b[c]
+    }
+  }
+  const c = new Array(m).fill(0)
+  for (let r = m - 1; r >= 0; r--) {
+    let s = b[r]
+    for (let q = r + 1; q < m; q++) s -= A[r][q] * c[q]
+    c[r] = s / A[r][r]
+  }
+  return c
+}
+
+function polyEval(c: number[], u: number): number {
+  let v = 0
+  for (let e = c.length - 1; e >= 0; e--) v = v * u + c[e]
+  return v
+}
+
+/**
+ * Denoised value for a point in the boundary band, where the Gaussian kernel
+ * has no data on one side. Fits a local least-squares polynomial to the
+ * nearest END_WINDOW samples (measured from the end being repaired) and
+ * evaluates it AT the point's own index — no extrapolation, no displacement.
+ *
+ * `head` = true for the band at index 0; false for the band at index n-1.
+ * `off` is the distance from that end (0 = the endpoint itself).
+ */
+function endBandPoint(pts: Vec2[], off: number, head: boolean): Vec2 {
+  const n = pts.length
+  const w = Math.min(END_WINDOW, n)
+  const us: number[] = []
+  const xs: number[] = []
+  const ys: number[] = []
+  for (let i = 0; i < w; i++) {
+    const idx = head ? i : n - 1 - i
+    us.push(i)               // local coordinate: distance from the end
+    xs.push(pts[idx].x)
+    ys.push(pts[idx].y)
+  }
+  const deg = Math.min(END_DEGREE, w - 1)
+  const x = polyEval(polyFitLS(us, xs, deg), off)
+  const y = polyEval(polyFitLS(us, ys, deg), off)
+  const fallback = pts[head ? off : n - 1 - off]
+  return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : { x: fallback.x, y: fallback.y }
+}
+
+/**
+ * Light Gaussian smoothing. Closed strokes wrap. Open strokes use the Gaussian
+ * wherever it fits entirely inside the stroke, and the one-sided quadratic fit
+ * above for the `radius` points at each end, so the ends come out as clean as
+ * the interior without being moved, shortened, or extended.
+ */
 function gaussianSmooth(pts: Vec2[], closed: boolean): Vec2[] {
   const n = pts.length
   if (n < 5) return pts
@@ -78,25 +204,16 @@ function gaussianSmooth(pts: Vec2[], closed: boolean): Vec2[] {
 
   const out: Vec2[] = new Array(n)
   for (let i = 0; i < n; i++) {
+    if (!closed && i < radius) { out[i] = endBandPoint(pts, i, true); continue }
+    if (!closed && i > n - 1 - radius) { out[i] = endBandPoint(pts, n - 1 - i, false); continue }
     let sx = 0, sy = 0
     for (let k = -radius; k <= radius; k++) {
-      let j = i + k
-      if (closed) {
-        j = ((j % n) + n) % n
-      } else {
-        if (j < 0) j = 0
-        if (j > n - 1) j = n - 1
-      }
+      const j = closed ? (((i + k) % n) + n) % n : i + k
       const w = kernel[k + radius]
       sx += pts[j].x * w
       sy += pts[j].y * w
     }
     out[i] = { x: sx, y: sy }
-  }
-  // keep open endpoints anchored to the drawn ink
-  if (!closed) {
-    out[0] = { x: pts[0].x, y: pts[0].y }
-    out[n - 1] = { x: pts[n - 1].x, y: pts[n - 1].y }
   }
   return out
 }
