@@ -46,12 +46,43 @@ export function parseNumeric(src: string): number | null {
  * so a column of values lines up (1.009, 3.002, −1.990), and uses a real minus
  * sign rather than a hyphen.
  */
-export function formatCoord(v: number): string {
+/** Pure floating-point residue: arithmetic that should have cancelled to zero. */
+const HARD_ZERO = 1e-12
+/**
+ * Resolution of a numerically located feature. Bisection and golden-section
+ * bottom out near sqrt(eps) relative to the search interval, so a maximum
+ * "at 1.05e-8" is at zero and the digits past that are noise, not precision.
+ */
+const SOLVER_SLOP = 1e-7
+
+/**
+ * Format an analysis coordinate.
+ *
+ * A cubic's inflection at the origin arrives as 1.662e-14 and a cosine's peak
+ * as 1.05e-8. Printing those instead of 0 makes the tool look like it cannot do
+ * arithmetic, and it is the kind of thing that costs a teacher's trust in front
+ * of a class. Anything below the floor is reported as the zero it is.
+ *
+ * @param opts.scale  magnitude the value lives at (a curve's extent), so the
+ *                    floor tracks the graph rather than assuming order 1.
+ * @param opts.exact  false when the value came from a numeric solve rather than
+ *                    closed form — SpecialPoint.exact carries exactly this.
+ */
+export function formatCoord(
+  v: number,
+  opts?: { scale?: number; exact?: boolean },
+): string {
   if (!Number.isFinite(v)) return '—'
-  if (v === 0) return '0'
+  const scale =
+    opts?.scale !== undefined && Number.isFinite(opts.scale) && opts.scale > 0 ? opts.scale : 1
+  const floor =
+    opts?.exact === false ? Math.max(HARD_ZERO, SOLVER_SLOP * scale) : HARD_ZERO * scale
+  if (Math.abs(v) <= floor) return '0'
   const abs = Math.abs(v)
   const s = abs >= 1e5 || abs < 1e-3 ? v.toExponential(2) : v.toPrecision(4)
-  return s.replace('-', '−')
+  // NB: replace only the LEADING sign — a replace('-','−') on "1e-14" would
+  // convert the exponent's hyphen instead and leave the sign ASCII.
+  return s.startsWith('-') ? '−' + s.slice(1) : s
 }
 
 /** Compact 4-significant-digit rendering for pre-filled input values. */

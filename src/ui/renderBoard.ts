@@ -143,10 +143,14 @@ function textColor(theme: Theme): string {
 // ---------------------------------------------------------------------------
 
 function labelFor(p: SpecialPoint): string {
+  // p.exact says whether this location was solved in closed form or located
+  // numerically; the formatter uses it so a numeric result is not printed to
+  // more digits than the method can actually support.
+  const o = { exact: p.exact }
   if (p.kind === 'zero') {
-    return `${formatCoord(p.pos.x)}${p.tangent ? ' (touches)' : ''}`
+    return `${formatCoord(p.pos.x, o)}${p.tangent ? ' (touches)' : ''}`
   }
-  return `(${formatCoord(p.pos.x)}, ${formatCoord(p.pos.y)})`
+  return `(${formatCoord(p.pos.x, o)}, ${formatCoord(p.pos.y, o)})`
 }
 
 function roundRect(

@@ -49,9 +49,10 @@ export function axesPhrase(axes: FeatureAxes): string {
 /** How a point reads in a sentence: a zero is a single number, others a pair. */
 export function featureText(p: SpecialPoint): string {
   const axes = featureAxes(p.kind)
-  if (axes.x && !axes.y) return formatCoord(p.pos.x)
-  if (axes.y && !axes.x) return formatCoord(p.pos.y)
-  return `(${formatCoord(p.pos.x)}, ${formatCoord(p.pos.y)})`
+  const o = { exact: p.exact }
+  if (axes.x && !axes.y) return formatCoord(p.pos.x, o)
+  if (axes.y && !axes.x) return formatCoord(p.pos.y, o)
+  return `(${formatCoord(p.pos.x, o)}, ${formatCoord(p.pos.y, o)})`
 }
 
 /** Beyond this the report stops being glanceable and becomes a paragraph. */
