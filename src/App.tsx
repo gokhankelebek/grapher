@@ -1,14 +1,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { FitResult, FittedCurve, ModelSpec, ProcessedStroke, Viewport } from './core/types'
+import type {
+  BoardKind,
+  FitResult,
+  FittedCurve,
+  ModelSpec,
+  NLItem,
+  NLItemDraft,
+  ProcessedStroke,
+  Viewport,
+} from './core/types'
 import { CURVE_COLORS, DARK_THEME, LIGHT_THEME, nextId } from './core/types'
 import { MODELS } from './core/fit/models'
 import { parseExpression } from './core/parse'
+import { parseInequality } from './core/parse/inequality'
 import { applyFeatureEdit, snapParams } from './core/fit/edit'
 import { analyzeCurve } from './core/analyze'
 import type { FeatureEditResult, SpecialPoint } from './core/types'
 import { describePoints } from './ui/featureEdit'
 import { CanvasStage } from './ui/CanvasStage'
 import type { CanvasStageHandle } from './ui/CanvasStage'
+import { NumberLineStage } from './ui/NumberLineStage'
+import type { NumberLineStageHandle } from './ui/NumberLineStage'
+import type { NLPart } from './render/numberline'
 import { Toolbar } from './ui/Toolbar'
 import { Sidebar } from './ui/Sidebar'
 import { DocMenu } from './ui/DocMenu'
@@ -73,6 +86,10 @@ const EMPTY_ANALYSIS: SpecialPoint[] = []
  */
 interface Snapshot {
   curves: FittedCurve[]
+  /** Number-line items. They live in the same history as the curves so a board
+   *  whose kind was switched still undoes in the order things happened. */
+  items: NLItem[]
+  kind: BoardKind
   styles: StyleMap
   exprSources: Record<string, string>
   brokenExpr: Record<string, string>
@@ -82,6 +99,8 @@ interface Snapshot {
 /** The board-state slice any mutation may change; omitted keys are untouched. */
 interface StatePatch {
   curves?: FittedCurve[]
+  items?: NLItem[]
+  kind?: BoardKind
   styles?: StyleMap
   exprSources?: Record<string, string>
   brokenExpr?: Record<string, string>
@@ -96,6 +115,14 @@ const clampPpu = (v: number): number => Math.min(MAX_PPU, Math.max(MIN_PPU, v))
 
 export default function App() {
   const [curves, setCurves] = useState<FittedCurve[]>([])
+  /**
+   * What KIND of board this document is. A number line is not a curve family:
+   * it has its own contents (`items`), its own stage and its own half of the
+   * renderer. Everything else — documents, autosave, undo, pan/zoom, export —
+   * is deliberately shared, so there is one of each rather than two.
+   */
+  const [kind, setKind] = useState<BoardKind>('cartesian')
+  const [items, setItems] = useState<NLItem[]>([])
   const [styles, setStyles] = useState<StyleMap>({})
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [mode, setMode] = useState<Mode>('draw')
@@ -166,6 +193,8 @@ export default function App() {
   const featureNoteTimerRef = useRef(0)
 
   const curvesRef = useRef<FittedCurve[]>([])
+  const itemsRef = useRef<NLItem[]>([])
+  const kindRef = useRef<BoardKind>('cartesian')
   const stylesRef = useRef<StyleMap>({})
   const selectedRef = useRef<string | null>(null)
   const undoRef = useRef<Snapshot[]>([])
@@ -200,6 +229,8 @@ export default function App() {
    */
   const loadedStateRef = useRef<{
     curves: FittedCurve[]
+    items: NLItem[]
+    kind: BoardKind
     styles: StyleMap
     exprSources: Record<string, string>
     selectedId: string | null
@@ -253,11 +284,14 @@ export default function App() {
     heightPx: 600,
   })
   const stageRef = useRef<CanvasStageHandle>(null)
+  const nlStageRef = useRef<NumberLineStageHandle>(null)
 
   // ------------------------------------------------------------ state/history
   const takeSnapshot = useCallback(
     (): Snapshot => ({
       curves: curvesRef.current,
+      items: itemsRef.current,
+      kind: kindRef.current,
       styles: stylesRef.current,
       exprSources: exprSourcesRef.current,
       brokenExpr: brokenExprRef.current,
@@ -270,6 +304,14 @@ export default function App() {
     if (s.curves) {
       curvesRef.current = s.curves
       setCurves(s.curves)
+    }
+    if (s.items) {
+      itemsRef.current = s.items
+      setItems(s.items)
+    }
+    if (s.kind) {
+      kindRef.current = s.kind
+      setKind(s.kind)
     }
     if (s.styles) {
       stylesRef.current = s.styles
@@ -309,7 +351,11 @@ export default function App() {
     redoRef.current = [...redoRef.current, takeSnapshot()]
     applyState(prev)
     bumpHistory((v) => v + 1)
-    setSelectedId((sel) => (sel && prev.curves.some((c) => c.id === sel) ? sel : null))
+    setSelectedId((sel) =>
+      sel && (prev.curves.some((c) => c.id === sel) || prev.items.some((i) => i.id === sel))
+        ? sel
+        : null,
+    )
   }, [applyState, takeSnapshot])
 
   const redo = useCallback((): void => {
@@ -322,7 +368,11 @@ export default function App() {
     undoRef.current = [...undoRef.current, takeSnapshot()]
     applyState(next)
     bumpHistory((v) => v + 1)
-    setSelectedId((sel) => (sel && next.curves.some((c) => c.id === sel) ? sel : null))
+    setSelectedId((sel) =>
+      sel && (next.curves.some((c) => c.id === sel) || next.items.some((i) => i.id === sel))
+        ? sel
+        : null,
+    )
   }, [applyState, takeSnapshot])
 
   // Live-edit bracket: capture once at edit start, commit once at edit end.
@@ -333,7 +383,12 @@ export default function App() {
   const editEnd = useCallback((): void => {
     const pre = preEditRef.current
     preEditRef.current = null
-    if (pre && (pre.curves !== curvesRef.current || pre.styles !== stylesRef.current)) {
+    if (
+      pre &&
+      (pre.curves !== curvesRef.current ||
+        pre.items !== itemsRef.current ||
+        pre.styles !== stylesRef.current)
+    ) {
       undoRef.current = [...undoRef.current.slice(-(HISTORY_LIMIT - 1)), pre]
       redoRef.current = []
       bumpHistory((v) => v + 1)
@@ -406,8 +461,10 @@ export default function App() {
 
   // ======================================================= documents / saving
   const blankBoard = useCallback(
-    (): HydratedBoard => ({
+    (nextKind: BoardKind = 'cartesian'): HydratedBoard => ({
       curves: [],
+      kind: nextKind,
+      items: [],
       styles: {},
       candidates: new Map(),
       extraModels: {},
@@ -425,6 +482,8 @@ export default function App() {
   const currentBoardInput = useCallback(
     (): BoardInput => ({
       curves: curvesRef.current,
+      kind: kindRef.current,
+      items: itemsRef.current,
       styles: stylesRef.current,
       candidates: candidatesRef.current,
       exprSources: exprSourcesRef.current,
@@ -505,6 +564,8 @@ export default function App() {
   const applyHydrated = useCallback((meta: DocMeta, board: HydratedBoard): void => {
     loadedStateRef.current = {
       curves: board.curves,
+      items: board.items,
+      kind: board.kind,
       styles: board.styles,
       exprSources: board.exprSources,
       selectedId: board.selectedId,
@@ -512,6 +573,8 @@ export default function App() {
       name: meta.name,
     }
     curvesRef.current = board.curves
+    itemsRef.current = board.items
+    kindRef.current = board.kind
     stylesRef.current = board.styles
     candidatesRef.current = board.candidates
     exprSourcesRef.current = board.exprSources
@@ -527,6 +590,8 @@ export default function App() {
     skipAutosaveRef.current = true
 
     setCurves(board.curves)
+    setItems(board.items)
+    setKind(board.kind)
     setStyles(board.styles)
     setExprSources(board.exprSources)
     setBrokenExpr(board.brokenExpr)
@@ -536,9 +601,16 @@ export default function App() {
     setDocMeta(meta)
     bumpHistory((v) => v + 1)
 
-    vpRef.current.center = { x: board.viewport.center.x, y: board.viewport.center.y }
+    // A number line pans in x only, so its saved y is always 0 — force it, or
+    // a document switched from a cartesian board would open with its line off
+    // the top of the canvas.
+    vpRef.current.center = {
+      x: board.viewport.center.x,
+      y: board.kind === 'number-line' ? 0 : board.viewport.center.y,
+    }
     vpRef.current.pxPerUnit = board.viewport.pxPerUnit
     stageRef.current?.redraw()
+    nlStageRef.current?.redraw()
   }, [])
 
   // Restore the last document on startup. Runs before any save is allowed.
@@ -596,6 +668,8 @@ export default function App() {
     if (
       loaded &&
       loaded.curves === curves &&
+      loaded.items === items &&
+      loaded.kind === kind &&
       loaded.styles === styles &&
       loaded.exprSources === exprSources &&
       loaded.selectedId === selectedId &&
@@ -607,7 +681,7 @@ export default function App() {
     }
     loadedStateRef.current = null
     scheduleSave()
-  }, [curves, styles, exprSources, selectedId, mode, docMeta.name, scheduleSave])
+  }, [curves, items, kind, styles, exprSources, selectedId, mode, docMeta.name, scheduleSave])
 
   // Don't lose the debounce window to a closing tab or a backgrounded phone.
   useEffect(() => {
@@ -672,23 +746,49 @@ export default function App() {
     setDocMeta(next)
   }, [])
 
-  const newDocument = useCallback((): void => {
-    // Refuse to replace the board when the work on it isn't on disk.
-    if (!saveBeforeSwitch()) return
-    const doc = createDoc('Untitled', emptyBoard())
-    const meta: DocMeta = {
-      id: doc.id,
-      name: doc.name,
-      createdAt: doc.createdAt,
-      modifiedAt: doc.modifiedAt,
-    }
-    applyHydrated(meta, blankBoard())
-    setLoadNotice(null)
-    setConflict(null)
-    docStoredRef.current = writeDoc(doc).ok
-    setCurrentDoc(meta.id)
-    setDocs(listDocs())
-  }, [applyHydrated, blankBoard, saveBeforeSwitch])
+  const newDocument = useCallback(
+    (nextKind: BoardKind = 'cartesian'): void => {
+      // Refuse to replace the board when the work on it isn't on disk.
+      if (!saveBeforeSwitch()) return
+      const doc = createDoc(
+        nextKind === 'number-line' ? 'Number line' : 'Untitled',
+        emptyBoard(nextKind),
+      )
+      const meta: DocMeta = {
+        id: doc.id,
+        name: doc.name,
+        createdAt: doc.createdAt,
+        modifiedAt: doc.modifiedAt,
+      }
+      applyHydrated(meta, blankBoard(nextKind))
+      setLoadNotice(null)
+      setConflict(null)
+      docStoredRef.current = writeDoc(doc).ok
+      setCurrentDoc(meta.id)
+      setDocs(listDocs())
+    },
+    [applyHydrated, blankBoard, saveBeforeSwitch],
+  )
+
+  /**
+   * Turn this document into the other kind of board.
+   *
+   * Nothing is thrown away: a board keeps both its curves and its items, and
+   * the kind only decides which of the two it is showing and editing. Switching
+   * back brings the other set straight back, which is the only behaviour that
+   * makes the switch safe to try — and it is one undo step either way.
+   */
+  const setBoardKind = useCallback(
+    (nextKind: BoardKind): void => {
+      if (nextKind === kindRef.current) return
+      commitState({ kind: nextKind })
+      setSelectedId(null)
+      if (nextKind === 'number-line') vpRef.current.center = { x: vpRef.current.center.x, y: 0 }
+      stageRef.current?.redraw()
+      nlStageRef.current?.redraw()
+    },
+    [commitState],
+  )
 
   const openDocument = useCallback(
     (id: string): void => {
@@ -852,11 +952,15 @@ export default function App() {
 
   // -------------------------------------------------------------- curve CRUD
   const pickColor = useCallback((): string => {
-    const used = new Set(curvesRef.current.map((c) => c.color))
+    const onBoard =
+      kindRef.current === 'number-line'
+        ? itemsRef.current.map((i) => i.color)
+        : curvesRef.current.map((c) => c.color)
+    const used = new Set(onBoard)
     for (const color of CURVE_COLORS) {
       if (!used.has(color)) return color
     }
-    return CURVE_COLORS[curvesRef.current.length % CURVE_COLORS.length]
+    return CURVE_COLORS[onBoard.length % CURVE_COLORS.length]
   }, [])
 
   const handleStrokeRecognized = useCallback(
@@ -904,8 +1008,26 @@ export default function App() {
   )
 
   const clearAll = useCallback((): void => {
+    // Clears what this board is actually showing; the other kind's contents are
+    // not on screen, so wiping them would be a deletion the user can't see.
+    if (kindRef.current === 'number-line') {
+      if (itemsRef.current.length === 0) return
+      const styles: StyleMap = {}
+      for (const c of curvesRef.current) {
+        const st = stylesRef.current[c.id]
+        if (st) styles[c.id] = st
+      }
+      commitState({ items: [], styles })
+      setSelectedId(null)
+      return
+    }
     if (curvesRef.current.length === 0) return
-    commitState({ curves: [], styles: {}, exprSources: {}, brokenExpr: {} })
+    const styles: StyleMap = {}
+    for (const it of itemsRef.current) {
+      const st = stylesRef.current[it.id]
+      if (st) styles[it.id] = st
+    }
+    commitState({ curves: [], styles, exprSources: {}, brokenExpr: {} })
     setSelectedId(null)
   }, [commitState])
 
@@ -1324,6 +1446,173 @@ export default function App() {
     [commitState, pickColor],
   )
 
+  // ======================================================= number-line items
+  //
+  // The whole content of this figure is where each endpoint sits and whether it
+  // is IN or OUT, so every one of these operations is one of those two facts —
+  // and each is a single undoable commit, because each is a single statement a
+  // teacher made.
+
+  /** Replace one item, keeping order. */
+  const mapItems = useCallback(
+    (id: string, fn: (it: NLItem) => NLItem): NLItem[] =>
+      itemsRef.current.map((it) => (it.id === id ? fn(it) : it)),
+    [],
+  )
+
+  /** Add parsed items — one colour for the whole answer, however many parts. */
+  const addItems = useCallback(
+    (drafts: NLItemDraft[], label?: string): NLItem[] => {
+      if (drafts.length === 0) return []
+      const color = pickColor()
+      const made: NLItem[] = drafts.map((d, i) => ({
+        ...d,
+        id: nextId(),
+        color,
+        // The label belongs to the answer, so only its first part carries it —
+        // repeating it over every piece of a union would print it three times.
+        ...(label && i === 0 ? { label } : {}),
+      })) as NLItem[]
+      commitState({ items: [...itemsRef.current, ...made] })
+      setSelectedId(made[0].id)
+      return made
+    },
+    [commitState, pickColor],
+  )
+
+  /** Click on the line. A placed point is closed: the value IS in the set. */
+  const placePoint = useCallback(
+    (x: number): void => {
+      addItems([{ kind: 'point', x, closed: true }])
+    },
+    [addItems],
+  )
+
+  const createInterval = useCallback(
+    (lo: number, hi: number): void => {
+      addItems([{ kind: 'interval', lo, hi, loClosed: true, hiClosed: true }])
+    },
+    [addItems],
+  )
+
+  /** Live endpoint drag. Ends may not cross — they swap roles instead. */
+  const moveEndpoint = useCallback(
+    (id: string, part: NLPart, x: number): void => {
+      applyState({
+        items: mapItems(id, (it) => {
+          if (it.kind === 'point') return { ...it, x }
+          if (part === 'lo') return { ...it, lo: it.hi !== null ? Math.min(x, it.hi) : x }
+          if (part === 'hi') return { ...it, hi: it.lo !== null ? Math.max(x, it.lo) : x }
+          return it
+        }),
+      })
+    },
+    [applyState, mapItems],
+  )
+
+  /** The one edit this figure exists for: included <-> excluded. */
+  const toggleEnd = useCallback(
+    (id: string, part: NLPart): void => {
+      commitState({
+        items: mapItems(id, (it) => {
+          if (it.kind === 'point') return { ...it, closed: !it.closed }
+          if (part === 'lo') return { ...it, loClosed: !it.loClosed }
+          if (part === 'hi') return { ...it, hiClosed: !it.hiClosed }
+          return it
+        }),
+      })
+      setSelectedId(id)
+    },
+    [commitState, mapItems],
+  )
+
+  /** Type an exact endpoint; null means unbounded (drawn as an arrow). */
+  const setBound = useCallback(
+    (id: string, part: NLPart, value: number | null): void => {
+      commitState({
+        items: mapItems(id, (it) => {
+          if (it.kind === 'point') return value === null ? it : { ...it, x: value }
+          if (part === 'lo') {
+            // Refusing (-inf, inf) here rather than repairing it later: a set
+            // with no ends at all is not something this figure can say.
+            if (value === null && it.hi === null) return it
+            return { ...it, lo: value === null || it.hi === null ? value : Math.min(value, it.hi) }
+          }
+          if (part === 'hi') {
+            if (value === null && it.lo === null) return it
+            return { ...it, hi: value === null || it.lo === null ? value : Math.max(value, it.lo) }
+          }
+          return it
+        }),
+      })
+    },
+    [commitState, mapItems],
+  )
+
+  const setItemLabel = useCallback(
+    (id: string, label: string): void => {
+      const text = label.trim().slice(0, 60)
+      commitState({
+        items: mapItems(id, (it) => {
+          const { label: _old, ...rest } = it
+          return (text ? { ...rest, label: text } : rest) as NLItem
+        }),
+      })
+    },
+    [commitState, mapItems],
+  )
+
+  const cycleItemColor = useCallback(
+    (id: string): void => {
+      commitState({
+        items: mapItems(id, (it) => {
+          const idx = CURVE_COLORS.indexOf(it.color)
+          return { ...it, color: CURVE_COLORS[(idx + 1 + CURVE_COLORS.length) % CURVE_COLORS.length] }
+        }),
+      })
+    },
+    [commitState, mapItems],
+  )
+
+  const deleteItem = useCallback(
+    (id: string): void => {
+      const { [id]: _gone, ...restStyles } = stylesRef.current
+      commitState({ items: itemsRef.current.filter((it) => it.id !== id), styles: restStyles })
+      setSelectedId((sel) => (sel === id ? null : sel))
+    },
+    [commitState],
+  )
+
+  const setItemWidth = useCallback(
+    (id: string, width: number): void => {
+      applyState({ styles: { ...stylesRef.current, [id]: { ...stylesRef.current[id], width } } })
+    },
+    [applyState],
+  )
+
+  /**
+   * Type an inequality. The parser owns what the language accepts and hands
+   * back items already sorted and merged, so "x < 1 or x < 3" arrives as one
+   * ray rather than two stacked on top of each other.
+   */
+  const addInequality = useCallback(
+    (src: string): string | null => {
+      let outcome: ReturnType<typeof parseInequality>
+      try {
+        outcome = parseInequality(src)
+      } catch {
+        return 'That couldn’t be read as an inequality'
+      }
+      if (!outcome.ok) return outcome.error
+      if (!Array.isArray(outcome.items) || outcome.items.length === 0) {
+        return 'That describes no numbers at all'
+      }
+      addItems(outcome.items)
+      return null
+    },
+    [addItems],
+  )
+
   // ---------------------------------------------------------------- viewport
   const zoomBy = useCallback(
     (factor: number): void => {
@@ -1373,11 +1662,17 @@ export default function App() {
         heightPx: vp.heightPx,
       },
       theme: exportTheme(settings, DARK_THEME),
+      kind: kindRef.current,
+      items: itemsRef.current,
       curves: curvesRef.current,
       styles: stylesRef.current,
       models: modelsRef.current,
       analysis:
-        showAnalysisRef.current && sel && sel.visible && analysisRef.current.length > 0
+        kindRef.current === 'cartesian' &&
+        showAnalysisRef.current &&
+        sel &&
+        sel.visible &&
+        analysisRef.current.length > 0
           ? { curve: sel, points: analysisRef.current }
           : null,
       // The screen palette is tuned against near-black and washes out on white
@@ -1631,7 +1926,8 @@ export default function App() {
         redo()
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedRef.current) {
         e.preventDefault()
-        deleteCurve(selectedRef.current)
+        if (kindRef.current === 'number-line') deleteItem(selectedRef.current)
+        else deleteCurve(selectedRef.current)
       } else if (NUDGE[e.key]) {
         const [ux, uy] = NUDGE[e.key]
         const step = e.shiftKey ? 1 : 0.1
@@ -1657,7 +1953,7 @@ export default function App() {
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
     }
-  }, [undo, redo, deleteCurve, nudgeSelected, commitWithSnap])
+  }, [undo, redo, deleteCurve, deleteItem, nudgeSelected, commitWithSnap])
 
   // ------------------------------------------------------------------ render
   const canUndo = undoRef.current.length > 0
@@ -1667,6 +1963,14 @@ export default function App() {
     <div className="app">
       <Sidebar
         open={sidebarOpen}
+        kind={kind}
+        items={items}
+        onItemDelete={deleteItem}
+        onItemCycleColor={cycleItemColor}
+        onItemToggleEnd={toggleEnd}
+        onItemSetBound={setBound}
+        onItemLabel={setItemLabel}
+        onItemWidth={setItemWidth}
         curves={curves}
         styles={styles}
         models={models}
@@ -1695,7 +1999,7 @@ export default function App() {
         onDash={setDash}
         onOpacity={setOpacity}
         onExprToggle={() => setExprOpen((o) => !o)}
-        onExprSubmit={addExpression}
+        onExprSubmit={kind === 'number-line' ? addInequality : addExpression}
       />
 
       {sidebarOpen && (
@@ -1721,6 +2025,27 @@ export default function App() {
           if (file) importDocument(file)
         }}
       >
+        {kind === 'number-line' ? (
+          <NumberLineStage
+            ref={nlStageRef}
+            items={items}
+            styles={styles}
+            theme={boardTheme}
+            selectedId={selectedId}
+            mode={mode}
+            inkColor={pickColor()}
+            vpRef={vpRef}
+            onSelect={setSelectedId}
+            onPlacePoint={placePoint}
+            onCreateInterval={createInterval}
+            onMoveEndpoint={moveEndpoint}
+            onToggleEnd={toggleEnd}
+            onEditStart={editStart}
+            onEditEnd={editEnd}
+            onEditCancel={editCancel}
+            onViewportChange={scheduleSave}
+          />
+        ) : (
         <CanvasStage
           ref={stageRef}
           curves={curves}
@@ -1746,13 +2071,14 @@ export default function App() {
           onFeatureEdit={applyFeature}
           theme={boardTheme}
         />
+        )}
 
         <Toolbar
           mode={mode}
           sidebarOpen={sidebarOpen}
           canUndo={canUndo}
           canRedo={canRedo}
-          hasCurves={curves.length > 0}
+          hasCurves={kind === 'number-line' ? items.length > 0 : curves.length > 0}
           showAnalysis={showAnalysis}
           onToggleAnalysis={toggleAnalysis}
           canvasTheme={canvasTheme}
@@ -1763,8 +2089,10 @@ export default function App() {
               currentId={docMeta.id}
               docs={docs}
               saveState={saveState}
+              kind={kind}
               onRename={renameDoc}
               onNew={newDocument}
+              onSetKind={setBoardKind}
               onOpen={openDocument}
               onDuplicate={duplicateDocument}
               onDelete={deleteDocument}
@@ -1906,7 +2234,18 @@ export default function App() {
           </div>
         )}
 
-        {curves.length === 0 && !drawingActive && !loadNotice?.fatal && (
+        {kind === 'number-line' && items.length === 0 && !loadNotice?.fatal && (
+          <div className="empty-hint" aria-hidden="true">
+            <div className="empty-glyph">⟵•⟶</div>
+            <div className="empty-title">Click the line for a point, drag along it for an interval</div>
+            <div className="empty-sub">
+              Or press + and type “-2 ≤ x &lt; 5” · click an endpoint to switch it between included
+              and excluded
+            </div>
+          </div>
+        )}
+
+        {kind === 'cartesian' && curves.length === 0 && !drawingActive && !loadNotice?.fatal && (
           <div className="empty-hint" aria-hidden="true">
             <div className="empty-glyph">∿</div>
             <div className="empty-title">Draw anything — a wave, a circle, a heart…</div>
@@ -1914,7 +2253,7 @@ export default function App() {
           </div>
         )}
 
-        {curves.length === 0 && !drawingActive && loadNotice?.fatal && (
+        {curves.length === 0 && items.length === 0 && !drawingActive && loadNotice?.fatal && (
           <div className="empty-hint empty-hint-error">
             <div className="empty-glyph empty-glyph-error">⚠</div>
             <div className="empty-title">This board is empty because a document couldn’t be opened</div>

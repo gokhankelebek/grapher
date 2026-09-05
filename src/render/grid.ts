@@ -10,7 +10,7 @@ import type { Viewport, Theme } from '../core/types'
 // Minor subdivision: mantissa 2 → 4 minors (0.5 steps), otherwise 5.
 // ---------------------------------------------------------------------------
 
-interface GridStep {
+export interface GridStep {
   major: number     // math units between major lines
   minorDiv: number  // minors per major (4 or 5)
 }
@@ -22,9 +22,18 @@ const LADDER: ReadonlyArray<readonly [number, number]> = [
   [10, 5],
 ]
 
-function pickStep(pxPerUnit: number): GridStep {
-  const minPx = 70
-  const raw = 90 / pxPerUnit // math units that span ~90 px
+/**
+ * The 1–2–5 ladder, shared by every board kind.
+ *
+ * Exported because a number line needs exactly this decision and must not make
+ * a second one: two ladders would drift, and a figure whose ticks disagree with
+ * the grid it was copied from is worse than no ticks at all. `minPx` is the
+ * only thing that differs — a number line has no vertical labels competing for
+ * room, so it can afford a denser ladder (labelling every unit where the
+ * cartesian grid would label every second one).
+ */
+export function pickTickStep(pxPerUnit: number, minPx = 70): GridStep {
+  const raw = (minPx / 70) * 90 / pxPerUnit // math units that span the target gap
   const exp = Math.floor(Math.log10(raw))
   const base = Math.pow(10, exp)
   let major = 10 * base
@@ -91,7 +100,7 @@ export function drawGrid(
   ctx.fillStyle = theme.bg
   ctx.fillRect(0, 0, W, H)
 
-  const { major, minorDiv } = pickStep(ppu)
+  const { major, minorDiv } = pickTickStep(ppu)
   const minor = major / minorDiv
 
   // visible math range

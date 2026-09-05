@@ -1,10 +1,29 @@
-import type { FitResult, FittedCurve, ModelSpec, SpecialPoint } from '../core/types'
+import type {
+  BoardKind,
+  FitResult,
+  FittedCurve,
+  ModelSpec,
+  NLItem,
+  SpecialPoint,
+} from '../core/types'
 import type { StyleMap } from '../App'
+import type { NLPart } from '../render/numberline'
 import { CurveCard } from './CurveCard'
+import { NLCard } from './NLCard'
 import { ExprInput } from './ExprInput'
 
 interface Props {
   open: boolean
+  /** Which board this is. A number line lists items, not curves. */
+  kind: BoardKind
+  items: NLItem[]
+  /** Number-line item edits (ignored on a cartesian board). */
+  onItemDelete(id: string): void
+  onItemCycleColor(id: string): void
+  onItemToggleEnd(id: string, part: NLPart): void
+  onItemSetBound(id: string, part: NLPart, value: number | null): void
+  onItemLabel(id: string, label: string): void
+  onItemWidth(id: string, width: number): void
   curves: FittedCurve[]
   styles: StyleMap
   models: Record<string, ModelSpec>
@@ -48,6 +67,14 @@ const EMPTY_ANALYSIS: SpecialPoint[] = []
 
 export function Sidebar({
   open,
+  kind,
+  items,
+  onItemDelete,
+  onItemCycleColor,
+  onItemToggleEnd,
+  onItemSetBound,
+  onItemLabel,
+  onItemWidth,
   curves,
   styles,
   models,
@@ -78,31 +105,79 @@ export function Sidebar({
   onExprToggle,
   onExprSubmit,
 }: Props) {
+  const numberLine = kind === 'number-line'
+
   return (
     <aside className={`sidebar${open ? '' : ' sidebar-closed'}`}>
       <div className="sidebar-inner">
         <div className="sidebar-head">
-          <span className="sidebar-title">Curves</span>
-          <span className="sidebar-count">{curves.length}</span>
+          <span className="sidebar-title">{numberLine ? 'Solution set' : 'Curves'}</span>
+          <span className="sidebar-count">{numberLine ? items.length : curves.length}</span>
           <button
             className={`add-btn${exprOpen ? ' add-open' : ''}`}
-            title={exprOpen ? 'Close equation input (Esc)' : 'Type an equation'}
-            aria-label="Type an equation"
+            title={
+              exprOpen
+                ? 'Close input (Esc)'
+                : numberLine
+                  ? 'Type an inequality'
+                  : 'Type an equation'
+            }
+            aria-label={numberLine ? 'Type an inequality' : 'Type an equation'}
             onClick={onExprToggle}
           >
             +
           </button>
         </div>
         <div className="sidebar-list">
-          {exprOpen && <ExprInput onSubmit={onExprSubmit} onClose={onExprToggle} />}
-          {curves.length === 0 && !exprOpen && (
+          {exprOpen && (
+            <ExprInput
+              onSubmit={onExprSubmit}
+              onClose={onExprToggle}
+              placeholder={numberLine ? '-2 <= x < 5' : undefined}
+              hint={
+                numberLine
+                  ? 'Enter draws it · Esc closes · try “x < 3”, “x ≤ -2 or x > 4”, “[-2, 5)”, “{-1, 2, 5}”'
+                  : undefined
+              }
+            />
+          )}
+          {numberLine && items.length === 0 && !exprOpen && (
+            <div className="sidebar-empty">
+              Nothing on the line yet.
+              <br />
+              Click the line for a point, drag along it for an interval — or press + and type an
+              inequality.
+            </div>
+          )}
+          {numberLine &&
+            items.map((item) => (
+              <NLCard
+                key={item.id}
+                item={item}
+                style={styles[item.id]}
+                selected={item.id === selectedId}
+                onSelect={() => onSelect(item.id)}
+                onDelete={() => onItemDelete(item.id)}
+                onCycleColor={() => onItemCycleColor(item.id)}
+                onToggleEnd={(part) => onItemToggleEnd(item.id, part)}
+                onSetBound={(part, value) => onItemSetBound(item.id, part, value)}
+                onLabel={(label) => onItemLabel(item.id, label)}
+                onDash={(d) => onDash(item.id, d)}
+                onOpacity={(o) => onOpacity(item.id, o)}
+                onWidth={(w) => onItemWidth(item.id, w)}
+                onStyleEditStart={onParamEditStart}
+                onStyleEditEnd={onParamEditEnd}
+              />
+            ))}
+          {!numberLine && curves.length === 0 && !exprOpen && (
             <div className="sidebar-empty">
               Nothing here yet.
               <br />
               Sketch on the canvas — or press + and type an equation.
             </div>
           )}
-          {curves.map((curve) => (
+          {!numberLine &&
+            curves.map((curve) => (
             <CurveCard
               key={curve.id}
               curve={curve}

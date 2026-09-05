@@ -11,16 +11,43 @@
 // visibly broken card rather than a vanished curve or a dead board.
 // ============================================================================
 
-import type { CurveKind, FitResult, FittedCurve, ModelSpec, Vec2 } from './types'
+import type {
+  BoardKind,
+  CurveKind,
+  FitResult,
+  FittedCurve,
+  ModelSpec,
+  NLItem,
+  Vec2,
+} from './types'
 import { parseExpression } from './parse'
 
-/** Bump when the on-disk shape changes in a way older readers can't handle. */
-export const SCHEMA_VERSION = 1
+/**
+ * Bump when the on-disk shape changes in a way older readers can't handle.
+ *
+ * 1 -> 2 added the board KIND and its number-line items. The change is purely
+ * additive: a version-1 document has no `kind` and no `items`, which is exactly
+ * what a cartesian board serialises to today, so reading one is not a repair
+ * and must not be reported as one (see SILENT_UPGRADE_FROM). In the other
+ * direction a cartesian board still writes neither field, so a document this
+ * reader saves stays readable by a version-1 reader unless it is actually a
+ * number line — the only case where the older reader would genuinely be lost.
+ */
+export const SCHEMA_VERSION = 2
+
+/**
+ * The oldest format this reader upgrades with nothing lost or repaired. Below
+ * it, a load says so; at or above it, the upgrade is invisible because there is
+ * nothing to tell the user about.
+ */
+const SILENT_UPGRADE_FROM = 1
 
 /** Per-curve style extras that FittedCurve itself doesn't carry. */
 export interface CurveStyle {
   dash?: number[]
   opacity?: number
+  /** Number-line items only: bar thickness in px (curves use strokeWidth). */
+  width?: number
 }
 export type StyleMap = Record<string, CurveStyle>
 
@@ -28,6 +55,8 @@ export type BoardMode = 'draw' | 'pan'
 
 // --- defensive limits: a stored blob is untrusted input ----------------------
 const MAX_CURVES = 2000
+const MAX_ITEMS = 500
+const MAX_LABEL_CHARS = 120
 const MAX_PARAMS = 64
 const MAX_CANDIDATES = 24
 /** Stored stroke resolution. Keeps boards small; plenty for refit and hit tests. */
@@ -66,11 +95,26 @@ export interface StoredCurve {
   candidates?: StoredCandidate[]
 }
 
+/**
+ * An NLItem is already plain JSON, so it is stored as it lives — plus the same
+ * per-id style record a curve carries, which lives beside the item rather than
+ * in a second map so an item and its styling can never be separated.
+ */
+export type StoredNLItem = NLItem & { style?: CurveStyle }
+
 export interface StoredBoard {
   curves: StoredCurve[]
   viewport: { cx: number; cy: number; ppu: number }
   selectedId: string | null
   mode: BoardMode
+  /**
+   * Omitted entirely for a cartesian board, which is what every version-1
+   * document is: a board that has never been a number line therefore
+   * serialises byte-for-byte as it did before this field existed.
+   */
+  kind?: BoardKind
+  /** Omitted when empty, for the same reason. */
+  items?: StoredNLItem[]
 }
 
 export interface StoredDoc {
@@ -93,6 +137,9 @@ export interface DocMeta {
 
 export interface BoardInput {
   curves: FittedCurve[]
+  /** Absent means 'cartesian' — every pre-number-line caller keeps working. */
+  kind?: BoardKind
+  items?: NLItem[]
   styles: StyleMap
   candidates: Map<string, FitResult[]>
   /** curveId -> the equation the user typed. */
@@ -104,6 +151,8 @@ export interface BoardInput {
 
 export interface HydratedBoard {
   curves: FittedCurve[]
+  kind: BoardKind
+  items: NLItem[]
   styles: StyleMap
   candidates: Map<string, FitResult[]>
   /** Rebuilt from source text — the closures the board needs to render. */
@@ -221,7 +270,7 @@ export function boardToStored(input: BoardInput): StoredBoard {
     return stored
   })
 
-  return {
+  const board: StoredBoard = {
     curves,
     viewport: {
       cx: round(input.viewport.center.x, 6),
@@ -230,6 +279,46 @@ export function boardToStored(input: BoardInput): StoredBoard {
     },
     selectedId: input.selectedId,
     mode: input.mode,
+  }
+
+  // Written only when they carry information. A cartesian board with no items
+  // produces the same JSON it produced before either field existed.
+  if (input.kind === 'number-line') board.kind = 'number-line'
+  const items = input.items ?? []
+  if (items.length > 0) {
+    board.items = items.slice(0, MAX_ITEMS).map((it) => itemToStored(it, input.styles[it.id]))
+  }
+
+  return board
+}
+
+/** Copy an item into a fresh, own-property-only record (no aliasing, no extras). */
+function itemToStored(it: NLItem, style: CurveStyle | undefined): StoredNLItem {
+  const styled =
+    style && (style.dash !== undefined || style.opacity !== undefined || style.width !== undefined)
+      ? { style: { ...style } }
+      : {}
+  if (it.kind === 'point') {
+    return {
+      ...styled,
+      kind: 'point',
+      id: it.id,
+      x: round(it.x, 6),
+      closed: it.closed === true,
+      color: it.color,
+      ...(it.label !== undefined ? { label: it.label } : {}),
+    }
+  }
+  return {
+    ...styled,
+    kind: 'interval',
+    id: it.id,
+    lo: it.lo === null ? null : round(it.lo, 6),
+    hi: it.hi === null ? null : round(it.hi, 6),
+    loClosed: it.loClosed === true,
+    hiClosed: it.hiClosed === true,
+    color: it.color,
+    ...(it.label !== undefined ? { label: it.label } : {}),
   }
 }
 
@@ -244,13 +333,15 @@ export function createDoc(name: string, board: StoredBoard, now = Date.now()): S
   }
 }
 
-export function emptyBoard(): StoredBoard {
-  return {
+export function emptyBoard(kind: BoardKind = 'cartesian'): StoredBoard {
+  const board: StoredBoard = {
     curves: [],
     viewport: { cx: 0, cy: 0, ppu: 60 },
     selectedId: null,
     mode: 'draw',
   }
+  if (kind === 'number-line') board.kind = 'number-line'
+  return board
 }
 
 export function serializeDoc(doc: StoredDoc): string {
@@ -352,13 +443,57 @@ function storedToCandidates(raw: unknown): FitResult[] {
   return out
 }
 
+/**
+ * One stored item, validated. Returns null when it is not salvageable — an
+ * interval with no finite ends at all, say, which would draw as the whole line
+ * and silently claim every number.
+ */
+function storedToItem(raw: unknown): NLItem | null {
+  if (!isObj(raw)) return null
+  const id = raw.id
+  if (!isStr(id) || !id) return null
+  const color = isStr(raw.color) && raw.color ? raw.color : '#4f9cf9'
+  const label =
+    isStr(raw.label) && raw.label.trim() ? raw.label.slice(0, MAX_LABEL_CHARS) : undefined
+
+  if (raw.kind === 'point') {
+    if (!isNum(raw.x)) return null
+    return {
+      kind: 'point',
+      id,
+      x: raw.x,
+      closed: raw.closed !== false,
+      color,
+      ...(label !== undefined ? { label } : {}),
+    }
+  }
+  if (raw.kind !== 'interval') return null
+  const lo = raw.lo === null ? null : isNum(raw.lo) ? raw.lo : undefined
+  const hi = raw.hi === null ? null : isNum(raw.hi) ? raw.hi : undefined
+  if (lo === undefined || hi === undefined) return null
+  // (-inf, inf) is not an interval a teacher draws; it is a damaged record.
+  if (lo === null && hi === null) return null
+  if (lo !== null && hi !== null && hi < lo) return null
+  return {
+    kind: 'interval',
+    id,
+    lo,
+    hi,
+    loClosed: raw.loClosed === true,
+    hiClosed: raw.hiClosed === true,
+    color,
+    ...(label !== undefined ? { label } : {}),
+  }
+}
+
 function styleOf(raw: unknown): CurveStyle | null {
   if (!isObj(raw)) return null
   const style: CurveStyle = {}
   const dash = numArray(raw.dash, 8)
   if (dash && dash.length > 0) style.dash = dash
   if (isNum(raw.opacity)) style.opacity = Math.min(1, Math.max(0, raw.opacity))
-  return style.dash || style.opacity !== undefined ? style : null
+  if (isNum(raw.width)) style.width = Math.min(64, Math.max(0.5, raw.width))
+  return style.dash || style.opacity !== undefined || style.width !== undefined ? style : null
 }
 
 /**
@@ -379,9 +514,13 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
       `This document was saved by a newer version of Grapher (format ${version}; this app reads ${SCHEMA_VERSION}). Anything it doesn't recognise was skipped.`,
     )
     degraded = true
-  } else if (version < SCHEMA_VERSION) {
+  } else if (version < SILENT_UPGRADE_FROM) {
     problems.push(`Upgraded this document from format ${version} to ${SCHEMA_VERSION}.`)
   }
+  // Between SILENT_UPGRADE_FROM and current the formats differ only by fields
+  // that were added, never moved or reinterpreted, so there is nothing to say:
+  // announcing an upgrade that changed nothing would put a "restored with
+  // changes" banner over every document a teacher already had.
 
   const meta: DocMeta = {
     id: isStr(rawDoc.id) && rawDoc.id ? rawDoc.id : newId(),
@@ -473,8 +612,42 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
     degraded = true
   }
 
+  // ---- board kind + number-line items
+  // An unknown kind is read as cartesian: that is the board every document was
+  // before this field existed, and it never loses anything that is on disk.
+  const kind: BoardKind = rawBoard.kind === 'number-line' ? 'number-line' : 'cartesian'
+  const items: NLItem[] = []
+  const rawItems = Array.isArray(rawBoard.items) ? rawBoard.items : []
+  if (rawBoard.items !== undefined && !Array.isArray(rawBoard.items)) {
+    problems.push('The number-line item list was unreadable.')
+    degraded = true
+  }
+  if (rawItems.length > MAX_ITEMS) {
+    problems.push(`Only the first ${MAX_ITEMS} number-line items were loaded.`)
+    degraded = true
+  }
+  let droppedItems = 0
+  for (const raw of rawItems.slice(0, MAX_ITEMS)) {
+    const item = storedToItem(raw)
+    if (!item || seen.has(item.id)) {
+      droppedItems++
+      continue
+    }
+    seen.add(item.id)
+    const st = isObj(raw) ? styleOf(raw.style) : null
+    if (st) styles[item.id] = st
+    items.push(item)
+  }
+  if (droppedItems > 0) {
+    problems.push(
+      `${droppedItems} damaged number-line item${droppedItems === 1 ? '' : 's'} could not be read.`,
+    )
+    degraded = true
+  }
+
+  const selectable = new Set<string>([...curves.map((c) => c.id), ...items.map((i) => i.id)])
   const selectedId =
-    isStr(rawBoard.selectedId) && curves.some((c) => c.id === rawBoard.selectedId)
+    isStr(rawBoard.selectedId) && selectable.has(rawBoard.selectedId)
       ? rawBoard.selectedId
       : null
   const mode: BoardMode = rawBoard.mode === 'pan' ? 'pan' : 'draw'
@@ -483,6 +656,8 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
     meta,
     board: {
       curves,
+      kind,
+      items,
       styles,
       candidates,
       extraModels,
@@ -501,6 +676,8 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
 function blankHydrated(): HydratedBoard {
   return {
     curves: [],
+    kind: 'cartesian',
+    items: [],
     styles: {},
     candidates: new Map(),
     extraModels: {},

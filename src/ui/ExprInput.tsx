@@ -1,14 +1,22 @@
 import { useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 
 interface Props {
   /** Returns an error message to display, or null on success. */
   onSubmit(src: string): string | null
   onClose(): void
+  /**
+   * What this board actually accepts. A number line takes inequalities, not
+   * equations, so the same card has to be able to say so — an example a
+   * teacher can copy is the whole documentation most people will read.
+   */
+  placeholder?: string
+  hint?: ReactNode
 }
 
 /** Inline equation-entry card ("+" in the sidebar). Enter submits, Esc closes;
  *  stays open after a successful submit for rapid multi-entry. */
-export function ExprInput({ onSubmit, onClose }: Props) {
+export function ExprInput({ onSubmit, onClose, placeholder, hint }: Props) {
   const [text, setText] = useState('')
   const [error, setError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -38,7 +46,7 @@ export function ExprInput({ onSubmit, onClose }: Props) {
         type="text"
         spellCheck={false}
         autoComplete="off"
-        placeholder="y = 2sin(3x) + 1"
+        placeholder={placeholder ?? 'y = 2sin(3x) + 1'}
         value={text}
         onChange={(e) => {
           setText(e.target.value)
@@ -56,7 +64,7 @@ export function ExprInput({ onSubmit, onClose }: Props) {
       />
       {error && <div className="expr-error">{error}</div>}
       <div className="expr-hint">
-        Enter plots · Esc closes · try “x^2 + y^2 = 4”, “r = 1 + cos(theta)”, “a*x^2 + b”
+        {hint ?? 'Enter plots · Esc closes · try “x^2 + y^2 = 4”, “r = 1 + cos(theta)”, “a*x^2 + b”'}
       </div>
     </div>
   )

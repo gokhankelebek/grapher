@@ -2065,3 +2065,203 @@ button.an-value {
   line-height: 1.35;
   color: var(--muted);
 }
+
+/* ------------------------------------------------------------ number lines */
+
+/* The card for one point or interval. Its job is to make the ONE thing the
+   figure is about — included vs excluded — statable in words as well as by
+   clicking the dot on the board. */
+
+.nl-ineq {
+  font-family: var(--font);
+}
+
+.nl-ends {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.nl-end-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nl-end-label {
+  flex: 0 0 34px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.nl-end-value {
+  flex: 0 0 60px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  cursor: text;
+  transition: background 0.15s var(--ease);
+}
+
+.nl-end-value:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.nl-end-input {
+  flex: 0 0 60px;
+  width: 60px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  text-align: right;
+  outline: none;
+}
+
+.nl-end-input:focus {
+  border-color: var(--accent);
+}
+
+.nl-end-input-bad {
+  border-color: var(--danger);
+}
+
+/* The dot toggle is a miniature of what is drawn on the board: filled means
+   included, hollow means excluded, and the word says the same thing again so
+   the two readings can never come apart. */
+.nl-dot-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 2px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 10.5px;
+  cursor: pointer;
+  transition:
+    color 0.15s var(--ease),
+    border-color 0.15s var(--ease);
+}
+
+.nl-dot-toggle:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.nl-dot-toggle:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.nl-dot-glyph {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2px solid var(--dot, var(--accent));
+  background: var(--bg);
+}
+
+.nl-dot-closed .nl-dot-glyph {
+  background: var(--dot, var(--accent));
+}
+
+.nl-dot-closed {
+  color: var(--text);
+}
+
+.nl-label-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.nl-label-tag {
+  flex: 0 0 34px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.nl-label-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 3px 7px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 11.5px;
+  font-family: var(--font);
+  outline: none;
+}
+
+.nl-label-input:focus {
+  border-color: var(--accent);
+}
+
+.nl-card .style-row {
+  margin-top: 10px;
+}
+
+/* board kind, in the document menu */
+
+.doc-kind {
+  padding: 10px 12px 12px;
+}
+
+.doc-kind-title {
+  display: block;
+  color: var(--faint);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+}
+
+.doc-kind-seg {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 7px;
+  background: var(--panel-3);
+}
+
+.doc-kind-btn {
+  flex: 1 1 0;
+  padding: 4px 8px;
+  border-radius: 5px;
+  color: var(--muted);
+  font-size: 11.5px;
+  cursor: pointer;
+  transition:
+    background 0.15s var(--ease),
+    color 0.15s var(--ease);
+}
+
+.doc-kind-btn:hover {
+  color: var(--text);
+}
+
+.doc-kind-on,
+.doc-kind-on:hover {
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
+.doc-kind-note {
+  display: block;
+  margin-top: 6px;
+  color: var(--faint);
+  font-size: 10.5px;
+  line-height: 1.4;
+}

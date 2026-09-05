@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import type { BoardKind } from '../core/types'
 import type { DocMeta } from '../core/persist'
 
 export type SaveState = 'saved' | 'saving' | 'error'
@@ -8,8 +9,12 @@ interface Props {
   currentId: string | null
   docs: DocMeta[]
   saveState: SaveState
+  /** What kind of board the open document is. */
+  kind: BoardKind
   onRename(name: string): void
-  onNew(): void
+  onNew(kind: BoardKind): void
+  /** Turn the OPEN document into the other kind of board (undoable). */
+  onSetKind(kind: BoardKind): void
   onOpen(id: string): void
   onDuplicate(): void
   onDelete(id: string): void
@@ -35,8 +40,10 @@ export function DocMenu({
   currentId,
   docs,
   saveState,
+  kind,
   onRename,
   onNew,
+  onSetKind,
   onOpen,
   onDuplicate,
   onDelete,
@@ -160,9 +167,43 @@ export function DocMenu({
 
       {open && (
         <div className="doc-menu" role="menu">
+          <div className="doc-kind" role="group" aria-label="Board kind">
+            <span className="doc-kind-title">This document is a</span>
+            <div className="doc-kind-seg">
+              <button
+                className={`doc-kind-btn${kind === 'cartesian' ? ' doc-kind-on' : ''}`}
+                aria-pressed={kind === 'cartesian'}
+                title="Draw and fit curves on an x–y grid"
+                onClick={pick(() => onSetKind('cartesian'))}
+              >
+                Graph
+              </button>
+              <button
+                className={`doc-kind-btn${kind === 'number-line' ? ' doc-kind-on' : ''}`}
+                aria-pressed={kind === 'number-line'}
+                title="Solution sets, domains and interval notation on one line"
+                onClick={pick(() => onSetKind('number-line'))}
+              >
+                Number line
+              </button>
+            </div>
+            <span className="doc-kind-note">
+              Switching keeps both — nothing on the other board is thrown away.
+            </span>
+          </div>
+
+          <div className="doc-menu-sep" />
+
           <div className="doc-menu-actions">
-            <button className="doc-item" role="menuitem" onClick={pick(onNew)}>
-              New document
+            <button className="doc-item" role="menuitem" onClick={pick(() => onNew('cartesian'))}>
+              New graph
+            </button>
+            <button
+              className="doc-item"
+              role="menuitem"
+              onClick={pick(() => onNew('number-line'))}
+            >
+              New number line
             </button>
             <button className="doc-item" role="menuitem" onClick={pick(onDuplicate)}>
               Duplicate

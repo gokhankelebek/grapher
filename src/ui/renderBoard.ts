@@ -23,9 +23,11 @@
 // ============================================================================
 
 import type {
+  BoardKind,
   CurveHandle,
   FittedCurve,
   ModelSpec,
+  NLItem,
   SpecialPoint,
   Theme,
   Vec2,
@@ -35,6 +37,8 @@ import { LIGHT_THEME, toPrintColor, toScreen } from '../core/types'
 import type { StyleMap } from '../core/persist'
 import { drawGrid } from '../render/grid'
 import { drawCurve, drawInk } from '../render/curves'
+import { drawNLItem, drawNumberLineAxis, nlLanes } from '../render/numberline'
+import type { NLPart } from '../render/numberline'
 import { formatCoord } from './numeric'
 
 const TWO_PI = Math.PI * 2
@@ -79,6 +83,16 @@ export interface BoardChrome {
   ink?: { pts: readonly Vec2[]; color: string } | null
   /** Per-curve fade-in alpha (a curve that has just appeared). */
   curveAlpha?: { id: string; alpha: number } | null
+  /**
+   * Number line: the endpoint under the pointer or being dragged. Emphasis
+   * only — the dot is already drawn, this makes it a little bigger.
+   */
+  activePart?: { itemId: string; part: NLPart } | null
+  /**
+   * Number line: the item being dragged into existence right now. It is not in
+   * `items` yet, so it exists only as chrome until the pointer comes up.
+   */
+  pending?: NLItem | null
 }
 
 export interface BoardScene {
@@ -87,6 +101,13 @@ export interface BoardScene {
   curves: readonly FittedCurve[]
   styles: StyleMap
   models: Record<string, ModelSpec>
+  /**
+   * Which kind of board this scene is. Absent means 'cartesian', so every
+   * existing caller keeps drawing exactly what it drew before.
+   */
+  kind?: BoardKind
+  /** Number-line boards draw these instead of curves. */
+  items?: readonly NLItem[]
   /** Markers + labels for one curve. Null/absent when the toggle is off. */
   analysis?: { curve: FittedCurve; points: readonly SpecialPoint[] } | null
   /** Map curve colours to their print counterparts (export on white). */
@@ -423,6 +444,14 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
   ctx.fillStyle = theme.bg
   ctx.fillRect(0, 0, Math.max(0, vp.widthPx), Math.max(0, vp.heightPx))
 
+  // A number line is a different KIND of board, not a curve drawn differently:
+  // no grid, no y axis, no models. It goes through this same routine — and so
+  // through the same export — precisely so it can never grow a second path.
+  if (scene.kind === 'number-line') {
+    renderNumberLine(ctx, scene, chrome, paint)
+    return
+  }
+
   try {
     drawGrid(ctx, vp, theme)
   } catch {
@@ -490,6 +519,79 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
       }
     }
   }
+}
+
+/**
+ * The number-line half of the one render routine.
+ *
+ * Same contract as the cartesian half: everything in `items` is the figure and
+ * reaches the export; everything in `chrome` (selection wash, endpoint
+ * emphasis, the interval currently being dragged out) is scaffolding and stops
+ * at the screen.
+ */
+function renderNumberLine(
+  ctx: CanvasRenderingContext2D,
+  scene: BoardScene,
+  chrome: BoardChrome | null,
+  paint: (c: string) => string,
+): void {
+  const { vp, theme } = scene
+  const items = scene.items ?? []
+
+  try {
+    drawNumberLineAxis(ctx, vp, theme)
+  } catch {
+    /* axis render failed — items still stand */
+  }
+
+  const lanes = nlLanes(items, vp)
+  for (const { item, y } of lanes) {
+    const style = scene.styles[item.id]
+    try {
+      drawNLItem(ctx, item, vp, {
+        color: paint(item.color),
+        theme,
+        y,
+        barWidth: style?.width,
+        ...(style?.dash ? { dash: style.dash } : {}),
+        ...(style?.opacity !== undefined ? { opacity: style.opacity } : {}),
+        selected: chrome !== null && item.id === chrome.selectedId,
+        activePart:
+          chrome && chrome.activePart && chrome.activePart.itemId === item.id
+            ? chrome.activePart.part
+            : null,
+      })
+    } catch {
+      /* one bad item must not take the board down */
+    }
+  }
+
+  // Chrome: the interval being dragged out right now, drawn on the top lane so
+  // it never hides behind what is already there.
+  if (chrome?.pending) {
+    // Laid out WITH the existing items, so it lands in the lane it will keep
+    // when the pointer comes up — the preview doesn't jump on release.
+    const withPending = nlLanes([...items, chrome.pending], vp)
+    const spot = withPending[withPending.length - 1]
+    try {
+      drawNLItem(ctx, chrome.pending, vp, {
+        color: paint(chrome.pending.color),
+        theme,
+        y: spot ? spot.y : numberLineTopY(vp),
+        // Slightly ghosted: it is a promise, not yet a fact.
+        opacity: 0.85,
+        selected: false,
+        activePart: null,
+      })
+    } catch {
+      /* preview only — never worth a broken frame */
+    }
+  }
+}
+
+/** Where the pending item sits when nothing else is on the board. */
+function numberLineTopY(vp: Viewport): number {
+  return Math.round(vp.heightPx / 2)
 }
 
 // ---------------------------------------------------------------------------

@@ -317,3 +317,83 @@ export type FeatureEditResult =
       /** nearest achievable result, when one exists and is worth offering */
       nearest?: { params: number[]; domain: [number, number] | null }
     }
+
+// ============================================================================
+// Number lines — solution sets, domains, interval notation.
+//
+// A number line is not a curve family: it is a different KIND of board, the
+// way GraphFree separates Cartesian / Polar / Number Line grids. A document
+// carries one kind, and a number-line board holds NLItems instead of curves.
+// Everything else -- pan/zoom, undo, documents, autosave, export -- is shared.
+// ============================================================================
+
+export type BoardKind = 'cartesian' | 'number-line'
+
+/**
+ * A point or an interval on the line. `null` on an interval bound means
+ * unbounded in that direction and renders as an arrow.
+ *
+ * Closed/open is the whole pedagogical point: a filled dot includes the
+ * endpoint, a hollow one excludes it, and getting that wrong is the single
+ * most common mistake a student makes reading a solution set.
+ */
+export type NLItem =
+  | {
+      kind: 'point'
+      id: string
+      x: number
+      closed: boolean
+      color: string
+      label?: string
+    }
+  | {
+      kind: 'interval'
+      id: string
+      lo: number | null
+      hi: number | null
+      loClosed: boolean
+      hiClosed: boolean
+      color: string
+      label?: string
+    }
+
+/** Human-readable interval notation, e.g. "[-2, 5)" or "(-inf, 3]". */
+export function intervalNotation(it: Extract<NLItem, { kind: 'interval' }>): string {
+  const lo = it.lo === null ? '-\\infty' : trimNum(it.lo)
+  const hi = it.hi === null ? '\\infty' : trimNum(it.hi)
+  const l = it.lo === null ? '(' : it.loClosed ? '[' : '('
+  const r = it.hi === null ? ')' : it.hiClosed ? ']' : ')'
+  return `${l}${lo}, ${hi}${r}`
+}
+
+function trimNum(v: number): string {
+  const s = v.toPrecision(6)
+  return s.includes('.') ? s.replace(/\.?0+$/, '') : s
+}
+
+// ============================================================================
+// Inequality parsing (src/core/parse/inequality.ts):
+//
+//   export function parseInequality(src: string): InequalityOutcome
+//
+// Accepts what a teacher actually writes for a solution set:
+//   x < 3          x >= -2          -2 <= x < 5        2 < x <= 7
+//   x < -2 or x >= 3               x <= 1 and x > -4
+//   [-2, 5)        (-inf, 3]        {-1, 2, 5}         x = 4
+// Returns the items to draw, already normalised (sorted, merged where they
+// overlap) so "x < 1 or x < 3" is one ray rather than two stacked ones.
+// ============================================================================
+
+/**
+ * Omit that distributes over a union. Plain `Omit<NLItem, ...>` collapses to the
+ * members' COMMON keys, so `item.lo` would not typecheck at the call site even
+ * though it is there at runtime.
+ */
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
+
+/** An NLItem before the board assigns it an id and a colour. */
+export type NLItemDraft = DistributiveOmit<NLItem, 'id' | 'color'>
+
+export type InequalityOutcome =
+  | { ok: true; items: NLItemDraft[]; latex: string }
+  | { ok: false; error: string; pos?: number }

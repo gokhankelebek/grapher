@@ -786,3 +786,50 @@ export function parseExpression(src: string): ParseOutcome {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }
 }
+
+// ----------------------------------------------------------------------------
+// Sub-expression analysis — used by the inequality parser (./inequality.ts) so
+// that interval bounds can be arbitrary constant expressions (2*pi, sqrt(2),
+// -3/4) without anyone having to write a second tokenizer.
+// ----------------------------------------------------------------------------
+
+export type ExprAnalysis =
+  | {
+      ok: true
+      /** value of the expression; only meaningful when `free` is empty */
+      value: number
+      latex: string
+      /**
+       * Names that stop the expression from being a constant: the reserved
+       * variables (x, y, r, θ, t) and any single-letter free constants.
+       */
+      free: string[]
+    }
+  | { ok: false; error: string; pos?: number }
+
+const NO_PARAMS: readonly number[] = []
+
+/**
+ * Parse one self-contained expression and report whether it is constant.
+ * Positions in errors are relative to `src`.
+ */
+export function analyzeExpr(src: string): ExprAnalysis {
+  try {
+    if (!src || src.trim() === '') return { ok: false, error: 'Empty expression' }
+    const parser = new Parser(src)
+    const { lhs, rhs } = parser.parseInput()
+    if (rhs !== null) return { ok: false, error: "Unexpected '='" }
+    const vars = new Set<VarName>()
+    collectVars(lhs, vars)
+    const free = [...vars, ...parser.paramNames]
+    const value = free.length === 0 ? compile(lhs)(NO_PARAMS, NaN, NaN) : NaN
+    return { ok: true, value, latex: toLatex(lhs), free }
+  } catch (err) {
+    if (err instanceof ParseError) {
+      return err.pos !== undefined
+        ? { ok: false, error: err.message, pos: err.pos }
+        : { ok: false, error: err.message }
+    }
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
