@@ -13,6 +13,8 @@
 
 import type { DocMeta, StoredDoc } from '../core/persist'
 import { serializeDoc } from '../core/persist'
+import type { ExportSettings } from './renderBoard'
+import { DEFAULT_EXPORT, clampExportSettings } from './renderBoard'
 
 const PREFIX = 'grapher.v1'
 const INDEX_KEY = `${PREFIX}.index`
@@ -233,6 +235,7 @@ export function writeDoc(doc: StoredDoc, opts: WriteOptions = {}): SaveOutcome {
 }
 
 export function removeDoc(id: string): void {
+  forgetExportSettings(id)
   const s = storage()
   if (s) {
     try {
@@ -261,26 +264,68 @@ export function setCurrentDoc(id: string | null): void {
 
 export interface Prefs {
   showAnalysis: boolean
+  /** Ground the ON-SCREEN canvas is drawn on. Export has its own setting. */
+  canvasTheme: 'dark' | 'light'
+  /**
+   * Export size/margin/theme, per document id. Worksheet figures have to be
+   * consistent across a document, so the choice is remembered with the
+   * document rather than globally.
+   *
+   * It lives here, beside the other preferences, and NOT inside StoredDoc:
+   * core/persist.ts owns the document schema, its hydrator validates a closed
+   * shape, and an unknown field would be dropped on the next save. Keeping it
+   * out also means an exported .grapher.json file stays byte-compatible with
+   * every document already on disk — no schema bump, nothing to migrate.
+   */
+  exportByDoc: Record<string, ExportSettings>
+  /** The last settings used, inherited by a document that has none yet. */
+  exportDefaults: ExportSettings
 }
 
-export const DEFAULT_PREFS: Prefs = { showAnalysis: true }
+export const DEFAULT_PREFS: Prefs = {
+  showAnalysis: true,
+  canvasTheme: 'dark',
+  exportByDoc: {},
+  exportDefaults: { ...DEFAULT_EXPORT },
+}
+
+/** Never trust what came back from storage: a bad value falls back silently. */
+function exportOf(v: unknown, fallback: ExportSettings): ExportSettings {
+  if (!isObj(v)) return { ...fallback }
+  const scale = typeof v.scale === 'number' ? v.scale : fallback.scale
+  const width =
+    v.width === null ? null : typeof v.width === 'number' ? v.width : fallback.width
+  const margin = typeof v.margin === 'number' ? v.margin : fallback.margin
+  const theme = v.theme === 'dark' || v.theme === 'light' ? v.theme : fallback.theme
+  return clampExportSettings({ scale, width, margin, theme })
+}
 
 export function readPrefs(): Prefs {
   const s = storage()
-  if (!s) return { ...DEFAULT_PREFS }
+  if (!s) return { ...DEFAULT_PREFS, exportByDoc: {} }
   try {
     const raw = s.getItem(PREFS_KEY)
-    if (!raw) return { ...DEFAULT_PREFS }
+    if (!raw) return { ...DEFAULT_PREFS, exportByDoc: {} }
     const parsed: unknown = JSON.parse(raw)
-    if (!isObj(parsed)) return { ...DEFAULT_PREFS }
+    if (!isObj(parsed)) return { ...DEFAULT_PREFS, exportByDoc: {} }
+    const exportDefaults = exportOf(parsed.exportDefaults, DEFAULT_PREFS.exportDefaults)
+    const exportByDoc: Record<string, ExportSettings> = {}
+    if (isObj(parsed.exportByDoc)) {
+      for (const [id, v] of Object.entries(parsed.exportByDoc)) {
+        if (typeof id === 'string' && id) exportByDoc[id] = exportOf(v, exportDefaults)
+      }
+    }
     return {
       showAnalysis:
         typeof parsed.showAnalysis === 'boolean'
           ? parsed.showAnalysis
           : DEFAULT_PREFS.showAnalysis,
+      canvasTheme: parsed.canvasTheme === 'light' ? 'light' : 'dark',
+      exportByDoc,
+      exportDefaults,
     }
   } catch {
-    return { ...DEFAULT_PREFS }
+    return { ...DEFAULT_PREFS, exportByDoc: {} }
   }
 }
 
@@ -288,6 +333,40 @@ export function writePrefs(prefs: Prefs): void {
   // A preference failing to save must never surface as a "work not saved"
   // alarm — it is not the user's work.
   write(PREFS_KEY, JSON.stringify(prefs))
+}
+
+/** Change some preferences without having to restate the rest. */
+export function updatePrefs(patch: Partial<Prefs>): Prefs {
+  const next: Prefs = { ...readPrefs(), ...patch }
+  writePrefs(next)
+  return next
+}
+
+/** The export settings for one document, falling back to the last used. */
+export function readExportSettings(docId: string): ExportSettings {
+  const prefs = readPrefs()
+  const own = docId ? prefs.exportByDoc[docId] : undefined
+  return own ? { ...own } : { ...prefs.exportDefaults }
+}
+
+/**
+ * Remember a document's export settings, and make them the default the next
+ * new document starts from.
+ */
+export function writeExportSettings(docId: string, settings: ExportSettings): void {
+  const prefs = readPrefs()
+  const clean = clampExportSettings(settings)
+  const byDoc = { ...prefs.exportByDoc }
+  if (docId) byDoc[docId] = clean
+  writePrefs({ ...prefs, exportByDoc: byDoc, exportDefaults: clean })
+}
+
+/** Drop a deleted document's export settings so the map can't grow forever. */
+export function forgetExportSettings(docId: string): void {
+  const prefs = readPrefs()
+  if (!docId || !(docId in prefs.exportByDoc)) return
+  const { [docId]: _gone, ...rest } = prefs.exportByDoc
+  writePrefs({ ...prefs, exportByDoc: rest })
 }
 
 /** Rough bytes used by this app's keys — shown when storage runs out. */

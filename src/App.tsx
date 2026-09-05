@@ -1,20 +1,29 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FitResult, FittedCurve, ModelSpec, ProcessedStroke, Viewport } from './core/types'
-import { CURVE_COLORS, DARK_THEME, nextId } from './core/types'
+import { CURVE_COLORS, DARK_THEME, LIGHT_THEME, nextId } from './core/types'
 import { MODELS } from './core/fit/models'
 import { parseExpression } from './core/parse'
 import { applyFeatureEdit, snapParams } from './core/fit/edit'
 import { analyzeCurve } from './core/analyze'
 import type { FeatureEditResult, SpecialPoint } from './core/types'
 import { describePoints } from './ui/featureEdit'
-import { drawGrid } from './render/grid'
-import { drawCurve } from './render/curves'
 import { CanvasStage } from './ui/CanvasStage'
 import type { CanvasStageHandle } from './ui/CanvasStage'
 import { Toolbar } from './ui/Toolbar'
 import { Sidebar } from './ui/Sidebar'
 import { DocMenu } from './ui/DocMenu'
 import type { SaveState } from './ui/DocMenu'
+import { ExportMenu } from './ui/ExportMenu'
+import type { CopyState } from './ui/ExportMenu'
+import {
+  DEFAULT_EXPORT,
+  canvasToPngBlob,
+  clampExportSettings,
+  exportGeometry,
+  exportTheme,
+  renderBoardToCanvas,
+} from './ui/renderBoard'
+import type { BoardScene, ExportSettings } from './ui/renderBoard'
 import {
   createDoc,
   deserializeDoc,
@@ -29,12 +38,14 @@ import {
   readDocJSON,
   readDocStamp,
   readIndex,
+  readExportSettings,
   readPrefs,
   removeDoc,
   setCurrentDoc,
+  updatePrefs,
   usedBytes,
   writeDoc,
-  writePrefs,
+  writeExportSettings,
 } from './ui/storage'
 import type { SaveOutcome } from './ui/storage'
 
@@ -124,6 +135,16 @@ export default function App() {
 
   // ---- curve analysis (zeros, extrema, inflections)
   const [showAnalysis, setShowAnalysis] = useState<boolean>(() => readPrefs().showAnalysis)
+  /**
+   * Ground the ON-SCREEN canvas is drawn on. Dark by default — the export has
+   * its own, independent setting, because the two are answering different
+   * questions ("what do I want to look at" vs "what goes on the paper").
+   */
+  const [canvasTheme, setCanvasTheme] = useState<'dark' | 'light'>(() => readPrefs().canvasTheme)
+  const [exportSettings, setExportSettings] = useState<ExportSettings>(() => ({
+    ...readPrefs().exportDefaults,
+  }))
+  const [copyState, setCopyState] = useState<CopyState>({ kind: 'idle' })
   /** Index into the analysis array whose marker should be emphasised. */
   const [highlight, setHighlight] = useState<number | null>(null)
   /**
@@ -761,7 +782,7 @@ export default function App() {
   const toggleAnalysis = useCallback((): void => {
     setShowAnalysis((v) => {
       const next = !v
-      writePrefs({ showAnalysis: next })
+      updatePrefs({ showAnalysis: next })
       return next
     })
   }, [])
@@ -981,6 +1002,13 @@ export default function App() {
     },
     [commitState],
   )
+
+  /** A brief, non-modal message at the foot of the board. */
+  const showToast = useCallback((msg: string, ms = 3600): void => {
+    window.clearTimeout(toastTimerRef.current)
+    setToast({ msg, key: Date.now() })
+    toastTimerRef.current = window.setTimeout(() => setToast(null), ms)
+  }, [])
 
   /** Oversketch couldn't blend the stroke: shake the card, brief toast. */
   const oversketchFail = useCallback((id: string): void => {
@@ -1316,44 +1344,231 @@ export default function App() {
   }, [scheduleSave])
 
   // ------------------------------------------------------------------ export
-  const exportPNG = useCallback((): void => {
+  //
+  // The exported PNG is not a second rendering of the board — it is the SAME
+  // scene handed to the same renderBoard() the canvas uses, with two things
+  // swapped: the theme (light, print-safe colours) and `chrome: null`, which
+  // drops handles, hover/selection halos and live ink. Anything the teacher can
+  // see that is part of the figure — grid, curves with their dash/opacity/width,
+  // analysis markers and labels — is therefore in the file by construction, and
+  // cannot silently go missing the way it did when export had its own code.
+  const exportSettingsRef = useRef<ExportSettings>(exportSettings)
+  exportSettingsRef.current = exportSettings
+  const showAnalysisRef = useRef(showAnalysis)
+  showAnalysisRef.current = showAnalysis
+  const canvasThemeRef = useRef(canvasTheme)
+  canvasThemeRef.current = canvasTheme
+  const copyTimerRef = useRef(0)
+
+  const boardTheme = canvasTheme === 'light' ? LIGHT_THEME : DARK_THEME
+
+  const buildExportScene = useCallback((settings: ExportSettings): BoardScene => {
     const vp = vpRef.current
-    const scale = 2
-    const off = document.createElement('canvas')
-    off.width = Math.max(1, Math.round(vp.widthPx * scale))
-    off.height = Math.max(1, Math.round(vp.heightPx * scale))
-    const ctx = off.getContext('2d')
-    if (!ctx) return
-    ctx.setTransform(scale, 0, 0, scale, 0, 0)
-    ctx.fillStyle = DARK_THEME.bg
-    ctx.fillRect(0, 0, vp.widthPx, vp.heightPx)
-    try {
-      drawGrid(ctx, vp, DARK_THEME)
-    } catch {
-      /* ignore */
+    const sel = curvesRef.current.find((c) => c.id === selectedRef.current) ?? null
+    return {
+      vp: {
+        center: { x: vp.center.x, y: vp.center.y },
+        pxPerUnit: vp.pxPerUnit,
+        widthPx: vp.widthPx,
+        heightPx: vp.heightPx,
+      },
+      theme: exportTheme(settings, DARK_THEME),
+      curves: curvesRef.current,
+      styles: stylesRef.current,
+      models: modelsRef.current,
+      analysis:
+        showAnalysisRef.current && sel && sel.visible && analysisRef.current.length > 0
+          ? { curve: sel, points: analysisRef.current }
+          : null,
+      // The screen palette is tuned against near-black and washes out on white
+      // (amber lands near 1.7:1 — a copier renders it as nothing), so a light
+      // export swaps every curve for its print counterpart.
+      printColors: settings.theme === 'light',
+      chrome: null,
     }
-    for (const curve of curvesRef.current) {
-      if (!curve.visible) continue
-      const st = stylesRef.current[curve.id]
-      if (st?.opacity !== undefined) ctx.globalAlpha = st.opacity
-      if (st?.dash) ctx.setLineDash(st.dash)
-      try {
-        drawCurve(ctx, curve, modelsRef.current, vp)
-      } catch {
-        /* ignore */
-      }
-      ctx.setLineDash([])
-      ctx.globalAlpha = 1
-    }
-    off.toBlob((blob) => {
-      if (!blob) return
+  }, [])
+
+  const renderExportCanvas = useCallback((): HTMLCanvasElement | null => {
+    const settings = clampExportSettings(exportSettingsRef.current)
+    const out = renderBoardToCanvas(buildExportScene(settings), settings)
+    return out ? out.canvas : null
+  }, [buildExportScene])
+
+  const pngFileName = useCallback((): string => {
+    const safe = docMetaRef.current.name.replace(/[^\w\d\-. ]+/g, '_').trim()
+    return `${safe || 'grapher'}.png`
+  }, [])
+
+  const downloadBlob = useCallback(
+    (blob: Blob): void => {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = 'grapher.png'
+      a.download = pngFileName()
       a.click()
       setTimeout(() => URL.revokeObjectURL(url), 1000)
-    }, 'image/png')
+    },
+    [pngFileName],
+  )
+
+  const exportPNG = useCallback((): void => {
+    const canvas = renderExportCanvas()
+    if (!canvas) {
+      showToast('Couldn’t render the figure for export.')
+      return
+    }
+    void canvasToPngBlob(canvas).then((blob) => {
+      if (!blob) {
+        showToast('Couldn’t render the figure for export.')
+        return
+      }
+      downloadBlob(blob)
+    })
+  }, [renderExportCanvas, downloadBlob, showToast])
+
+  const flashCopy = useCallback((next: CopyState): void => {
+    setCopyState(next)
+    window.clearTimeout(copyTimerRef.current)
+    copyTimerRef.current = window.setTimeout(() => setCopyState({ kind: 'idle' }), 2200)
+  }, [])
+
+  useEffect(() => () => window.clearTimeout(copyTimerRef.current), [])
+
+  /**
+   * Why the clipboard can refuse, in the browser's own terms. Checked BEFORE
+   * trying, so the honest message is available even where the attempt would
+   * throw synchronously.
+   */
+  const clipboardBlockedBecause = (): string | null => {
+    if (typeof window === 'undefined') return 'there is no browser here'
+    if (!window.isSecureContext) {
+      return 'this page isn’t on a secure (https) connection'
+    }
+    if (typeof window.ClipboardItem !== 'function') {
+      return 'this browser can’t put images on the clipboard'
+    }
+    if (!navigator.clipboard || typeof navigator.clipboard.write !== 'function') {
+      return 'this browser has no clipboard write access'
+    }
+    return null
+  }
+
+  const describeClipboardError = (err: unknown): string => {
+    const name = err instanceof Error ? err.name : ''
+    if (name === 'NotAllowedError') {
+      return 'the browser blocked it (the page has to be focused, and copying has to come from a click)'
+    }
+    if (name === 'SecurityError') return 'the browser blocked it for security reasons'
+    if (name === 'DataError' || name === 'NotSupportedError') {
+      return 'this browser won’t accept a PNG on the clipboard'
+    }
+    return 'the browser refused'
+  }
+
+  /**
+   * Copy the figure to the clipboard, ready to paste into Word or Docs.
+   *
+   * Everything up to `clipboard.write` runs SYNCHRONOUSLY inside the click:
+   * Safari treats an `await` as the end of the user gesture and rejects the
+   * write, so the ClipboardItem is built around a PROMISE of the blob rather
+   * than the blob itself. Every failure path ends in a download plus a message
+   * saying what happened — a Copy button that quietly does nothing is worse
+   * than no Copy button.
+   */
+  const copyPNG = useCallback((): void => {
+    const canvas = renderExportCanvas()
+    if (!canvas) {
+      showToast('Couldn’t render the figure to copy.')
+      return
+    }
+    const blobPromise = canvasToPngBlob(canvas).then((b) => {
+      if (!b) throw new Error('png encode failed')
+      return b
+    })
+
+    const fallBack = (reason: string): void => {
+      blobPromise.then(
+        (blob) => {
+          downloadBlob(blob)
+          flashCopy({ kind: 'fell-back', reason })
+          showToast(`Couldn’t copy — ${reason}. Downloaded the PNG instead.`)
+        },
+        () => {
+          flashCopy({ kind: 'idle' })
+          showToast('Couldn’t produce a PNG to copy or download.')
+        },
+      )
+    }
+
+    const blocked = clipboardBlockedBecause()
+    if (blocked !== null) {
+      fallBack(blocked)
+      return
+    }
+
+    setCopyState({ kind: 'working' })
+    const done = (): void => flashCopy({ kind: 'copied' })
+
+    try {
+      const item = new ClipboardItem({ 'image/png': blobPromise })
+      navigator.clipboard.write([item]).then(done, (err: unknown) => {
+        // Some browsers accept a resolved Blob but not a promise of one; that
+        // second attempt is outside the gesture, so it may itself be refused.
+        blobPromise.then(
+          (blob) => {
+            try {
+              navigator.clipboard
+                .write([new ClipboardItem({ 'image/png': blob })])
+                .then(done, () => fallBack(describeClipboardError(err)))
+            } catch {
+              fallBack(describeClipboardError(err))
+            }
+          },
+          () => fallBack('the PNG could not be encoded'),
+        )
+      })
+    } catch (err) {
+      fallBack(describeClipboardError(err))
+    }
+  }, [renderExportCanvas, downloadBlob, flashCopy, showToast])
+
+  /**
+   * Output pixel size for a candidate setting. A function, not a memo: the
+   * viewport is a mutable ref that pan/zoom/resize change without re-rendering
+   * App, so the readout has to be computed when it is about to be shown.
+   */
+  const exportSizeOf = useCallback(
+    (s: ExportSettings): { w: number; h: number } => {
+      const geo = exportGeometry(vpRef.current, s)
+      return { w: geo.w, h: geo.h }
+    },
+    [],
+  )
+
+  const changeExportSettings = useCallback((next: ExportSettings): void => {
+    const clean = clampExportSettings(next)
+    setExportSettings(clean)
+    writeExportSettings(docMetaRef.current.id, clean)
+  }, [])
+
+  /**
+   * Export settings follow the DOCUMENT: a worksheet's figures have to come out
+   * the same size as each other. A document that has none yet inherits the last
+   * settings used, so the choice is made once and then stops being a decision.
+   */
+  const exportDocRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (exportDocRef.current === docMeta.id) return
+    exportDocRef.current = docMeta.id
+    setExportSettings(readExportSettings(docMeta.id))
+  }, [docMeta.id])
+
+  const toggleCanvasTheme = useCallback((): void => {
+    setCanvasTheme((t) => {
+      const next = t === 'dark' ? 'light' : 'dark'
+      updatePrefs({ canvasTheme: next })
+      return next
+    })
   }, [])
 
   // ------------------------------------------------------------ file dropping
@@ -1428,7 +1643,7 @@ export default function App() {
       } else if (key === 'a' && !meta) {
         setShowAnalysis((v) => {
           const next = !v
-          writePrefs({ showAnalysis: next })
+          updatePrefs({ showAnalysis: next })
           return next
         })
       }
@@ -1529,6 +1744,7 @@ export default function App() {
           analysis={showAnalysis ? analysis : EMPTY_ANALYSIS}
           analysisHighlight={highlight}
           onFeatureEdit={applyFeature}
+          theme={boardTheme}
         />
 
         <Toolbar
@@ -1539,6 +1755,8 @@ export default function App() {
           hasCurves={curves.length > 0}
           showAnalysis={showAnalysis}
           onToggleAnalysis={toggleAnalysis}
+          canvasTheme={canvasTheme}
+          onToggleCanvasTheme={toggleCanvasTheme}
           docMenu={
             <DocMenu
               name={docMeta.name}
@@ -1554,12 +1772,21 @@ export default function App() {
               onImport={importDocument}
             />
           }
+          exportMenu={
+            <ExportMenu
+              settings={exportSettings}
+              sizeOf={exportSizeOf}
+              copyState={copyState}
+              onChange={changeExportSettings}
+              onExport={exportPNG}
+              onCopy={copyPNG}
+            />
+          }
           onMode={setMode}
           onToggleSidebar={() => setSidebarOpen((o) => !o)}
           onUndo={undo}
           onRedo={redo}
           onClear={clearAll}
-          onExport={exportPNG}
         />
 
         {toast && (

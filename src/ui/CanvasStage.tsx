@@ -17,7 +17,8 @@ import type {
   Vec2,
   Viewport,
 } from '../core/types'
-import { DARK_THEME, toMath, toScreen } from '../core/types'
+import { toMath, toScreen } from '../core/types'
+import type { Theme } from '../core/types'
 import { processStroke } from '../core/stroke'
 import { recognize } from '../core/fit/recognize'
 import {
@@ -27,8 +28,7 @@ import {
   oversketch,
   nearestOnCurve,
 } from '../core/fit/edit'
-import { drawGrid } from '../render/grid'
-import { drawCurve, drawInk } from '../render/curves'
+import { HANDLE_HIT_RADIUS, renderBoard } from './renderBoard'
 import { sampleCurveScreen, distToPolyline } from './sample'
 import { formatCoord } from './numeric'
 import { axesPhrase, axisKeys, featureAxes } from './featureEdit'
@@ -46,6 +46,8 @@ interface Props {
   curves: FittedCurve[]
   styles: StyleMap
   models: Record<string, ModelSpec>
+  /** Ground the on-screen board is drawn on. Dark by default; light projects. */
+  theme: Theme
   selectedId: string | null
   mode: Mode
   inkColor: string
@@ -84,7 +86,6 @@ const MIN_PPU = 0.001
 const MAX_PPU = 100000
 const FADE_MS = 250
 const HIT_RADIUS = 8
-const HANDLE_HIT_RADIUS = 10
 /**
  * Strictly smaller than HANDLE_HIT_RADIUS, and only ever consulted after
  * handleAt() has already missed: an edit handle keeps first refusal on the
@@ -96,7 +97,6 @@ const OVERSKETCH_RADIUS = 12
 const ESCAPE_PX = 28
 /** Pointer entries older than this are considered stale/phantom. */
 const POINTER_STALE_MS = 3000
-const TWO_PI = Math.PI * 2
 
 type Gesture =
   | { type: 'draw'; pointerId: number }
@@ -203,217 +203,6 @@ const clampPpu = (v: number): number => Math.min(MAX_PPU, Math.max(MIN_PPU, v))
 // the pointer. Handles are hit-tested first regardless.
 // ---------------------------------------------------------------------------
 
-const TEXT_COLOR = '#e6eaf5'
-const LABEL_FONT = '11px "SF Mono", Menlo, Consolas, monospace'
-/** Above this many on-screen points, labels would be an unreadable pile. */
-const MAX_LABELS = 8
-/** Two labels closer than this along the curve collapse to markers only. */
-const MIN_LABEL_GAP = 28
-
-function labelFor(p: SpecialPoint): string {
-  if (p.kind === 'zero') {
-    return `${formatCoord(p.pos.x)}${p.tangent ? ' (touches)' : ''}`
-  }
-  return `(${formatCoord(p.pos.x)}, ${formatCoord(p.pos.y)})`
-}
-
-function roundRect(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  r: number,
-): void {
-  ctx.beginPath()
-  ctx.moveTo(x + r, y)
-  ctx.arcTo(x + w, y, x + w, y + h, r)
-  ctx.arcTo(x + w, y + h, x, y + h, r)
-  ctx.arcTo(x, y + h, x, y, r)
-  ctx.arcTo(x, y, x + w, y, r)
-  ctx.closePath()
-}
-
-function drawMarker(
-  ctx: CanvasRenderingContext2D,
-  p: SpecialPoint,
-  sx: number,
-  sy: number,
-  color: string,
-  grow: number,
-): void {
-  const ring = (r: number, lw: number): void => {
-    ctx.beginPath()
-    ctx.arc(sx, sy, r, 0, TWO_PI)
-    ctx.fillStyle = DARK_THEME.bg
-    ctx.fill()
-    ctx.lineWidth = lw
-    ctx.strokeStyle = color
-    ctx.stroke()
-  }
-  const dot = (r: number, alpha: number): void => {
-    ctx.globalAlpha = alpha
-    ctx.beginPath()
-    ctx.arc(sx, sy, r, 0, TWO_PI)
-    ctx.fillStyle = color
-    ctx.fill()
-    ctx.lineWidth = 1.5
-    ctx.strokeStyle = DARK_THEME.bg
-    ctx.stroke()
-    ctx.globalAlpha = 1
-  }
-
-  switch (p.kind) {
-    case 'zero':
-      // hollow ring, sitting on the axis
-      ring(4 + grow, 1.8)
-      break
-    case 'maximum':
-    case 'minimum':
-      dot(3.5 + grow, 1)
-      break
-    case 'inflection': {
-      // diamond — deliberately not a circle, so concavity reads at a glance
-      const d = 4.6 + grow
-      ctx.beginPath()
-      ctx.moveTo(sx, sy - d)
-      ctx.lineTo(sx + d, sy)
-      ctx.lineTo(sx, sy + d)
-      ctx.lineTo(sx - d, sy)
-      ctx.closePath()
-      ctx.fillStyle = DARK_THEME.bg
-      ctx.fill()
-      ctx.lineWidth = 1.7
-      ctx.strokeStyle = color
-      ctx.stroke()
-      break
-    }
-    case 'y-intercept':
-      dot(2.6 + grow, 0.62)
-      break
-    default:
-      dot(3 + grow, 0.74)
-      break
-  }
-}
-
-/**
- * The affordance a marker only shows on approach: dashed while hovered, solid
- * while its editor is open. Deliberately a ring AROUND the glyph rather than a
- * change to the glyph, so the marker's own shape — which encodes what kind of
- * feature it is — stays exactly as it reads at rest.
- */
-function drawMarkerHalo(
-  ctx: CanvasRenderingContext2D,
-  sx: number,
-  sy: number,
-  color: string,
-  open: boolean,
-): void {
-  ctx.save()
-  ctx.beginPath()
-  ctx.arc(sx, sy, 10, 0, TWO_PI)
-  ctx.strokeStyle = color
-  ctx.globalAlpha = open ? 0.92 : 0.5
-  ctx.lineWidth = open ? 1.6 : 1.2
-  if (!open) ctx.setLineDash([2.5, 3])
-  ctx.stroke()
-  ctx.restore()
-}
-
-function drawAnalysis(
-  ctx: CanvasRenderingContext2D,
-  vp: Viewport,
-  curve: FittedCurve,
-  points: SpecialPoint[],
-  handles: CurveHandle[],
-  highlight: number | null,
-  openIdx: number | null,
-  hoverIdx: number | null,
-): void {
-  if (points.length === 0) return
-
-  const handlePts = handles.map((h) => toScreen(h.pos, vp))
-  const shown: { p: SpecialPoint; sx: number; sy: number; i: number }[] = []
-
-  for (let i = 0; i < points.length; i++) {
-    const p = points[i]
-    if (!p || !p.pos || !Number.isFinite(p.pos.x) || !Number.isFinite(p.pos.y)) continue
-    const s = toScreen(p.pos, vp)
-    if (s.x < -30 || s.y < -30 || s.x > vp.widthPx + 30 || s.y > vp.heightPx + 30) continue
-    // Yield the spot to an interactive handle, unless this is the one the user
-    // is pointing at in the readout.
-    if (i !== highlight && i !== openIdx) {
-      let masked = false
-      for (const hp of handlePts) {
-        if (Math.hypot(hp.x - s.x, hp.y - s.y) <= HANDLE_HIT_RADIUS) {
-          masked = true
-          break
-        }
-      }
-      if (masked) continue
-    }
-    shown.push({ p, sx: s.x, sy: s.y, i })
-  }
-  if (shown.length === 0) return
-
-  for (const m of shown) {
-    const emphasised = m.i === highlight || m.i === openIdx
-    if (m.i === openIdx || m.i === hoverIdx) {
-      drawMarkerHalo(ctx, m.sx, m.sy, curve.color, m.i === openIdx)
-    }
-    drawMarker(ctx, m.p, m.sx, m.sy, curve.color, emphasised ? 2.5 : m.i === hoverIdx ? 1.2 : 0)
-  }
-
-  // --- labels, only while they can still be read
-  if (shown.length > MAX_LABELS) return
-  const ordered = shown.slice().sort((a, b) => a.sx - b.sx)
-  ctx.font = LABEL_FONT
-  ctx.textBaseline = 'middle'
-  const placed: { x: number; y: number; w: number; h: number }[] = []
-  let lastX = -Infinity
-
-  const emph = (i: number): boolean => i === highlight || i === openIdx
-
-  for (const m of ordered) {
-    // crowded neighbours: keep the markers, drop the text
-    if (!emph(m.i) && m.sx - lastX < MIN_LABEL_GAP) continue
-    const text = labelFor(m.p)
-    const w = ctx.measureText(text).width + 10
-    const h = 16
-    // try above-right first, then a few vertical nudges
-    const candidates = [m.sy - 14, m.sy - 30, m.sy + 16, m.sy + 32, m.sy - 46]
-    let box: { x: number; y: number; w: number; h: number } | null = null
-    for (const cy of candidates) {
-      const x = Math.min(Math.max(m.sx + 8, 2), vp.widthPx - w - 2)
-      const y = cy - h / 2
-      if (y < 2 || y + h > vp.heightPx - 2) continue
-      const clash = placed.some(
-        (r) => x < r.x + r.w && x + w > r.x && y < r.y + r.h && y + h > r.y,
-      )
-      if (!clash) {
-        box = { x, y, w, h }
-        break
-      }
-    }
-    if (!box) continue
-
-    ctx.globalAlpha = 0.86
-    roundRect(ctx, box.x, box.y, box.w, box.h, 4)
-    ctx.fillStyle = DARK_THEME.bg
-    ctx.fill()
-    ctx.globalAlpha = 1
-    ctx.lineWidth = 1
-    ctx.strokeStyle = emph(m.i) ? curve.color : DARK_THEME.gridMajor
-    ctx.stroke()
-    ctx.fillStyle = emph(m.i) ? curve.color : TEXT_COLOR
-    ctx.fillText(text, box.x + 5, box.y + h / 2)
-
-    placed.push(box)
-    lastX = m.sx
-  }
-  ctx.textBaseline = 'alphabetic'
-}
 
 
 
@@ -422,6 +211,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     curves,
     styles,
     models,
+    theme,
     selectedId,
     mode,
     inkColor,
@@ -454,6 +244,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   const selectedRef = useRef<string | null>(selectedId)
   const modeRef = useRef<Mode>(mode)
   const inkColorRef = useRef(inkColor)
+  const themeRef = useRef<Theme>(theme)
 
   const pointersRef = useRef<Map<number, PointerEntry>>(new Map())
   const gestureRef = useRef<Gesture | null>(null)
@@ -485,6 +276,13 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   }, [])
 
   // ---------------------------------------------------------------- rendering
+  //
+  // The stage does not draw the board itself: it BUILDS A SCENE and hands it to
+  // renderBoard() — the same routine the PNG export calls. Everything the stage
+  // adds on top of the figure (handles, hover/selection halos, live ink) rides
+  // in `chrome`, which the export path leaves null. That is the whole reason
+  // markers and labels can no longer be present on screen and missing in the
+  // file: there is only one place either of them is drawn.
   const draw = useCallback((): void => {
     const canvas = canvasRef.current
     const ctx = ctxRef.current
@@ -492,14 +290,6 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     const vp = vpRef.current
     const dpr = window.devicePixelRatio || 1
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    ctx.fillStyle = DARK_THEME.bg
-    ctx.fillRect(0, 0, vp.widthPx, vp.heightPx)
-
-    try {
-      drawGrid(ctx, vp, DARK_THEME)
-    } catch {
-      /* grid module absent or failed — keep going */
-    }
 
     const now = performance.now()
     let fade = fadeRef.current
@@ -513,123 +303,60 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       }
     }
 
-    for (const curve of curvesRef.current) {
-      if (!curve.visible) continue
-      const isNew = fade !== null && fade.curveId === curve.id
-      const style = stylesRef.current[curve.id]
-      let alpha = isNew ? Math.max(0, Math.min(1, fadeT)) : 1
-      if (style?.opacity !== undefined) alpha *= style.opacity
-      ctx.globalAlpha = alpha
-      if (style?.dash) ctx.setLineDash(style.dash)
-      try {
-        drawCurve(ctx, curve, modelsRef.current, vp, curve.id === selectedRef.current)
-      } catch {
-        /* curve render failed — skip */
-      }
-      ctx.setLineDash([])
-      ctx.globalAlpha = 1
-    }
-
-    // Control handles for the selected curve (hidden while inking/pinching).
+    // Handles and markers are hidden for the selected curve while inking or
+    // pinching — the pen owns the board then.
     const g = gestureRef.current
+    const busy = g?.type === 'draw' || g?.type === 'pinch'
     const sel = curvesRef.current.find((c) => c.id === selectedRef.current && c.visible)
-    if (sel && g?.type !== 'draw' && g?.type !== 'pinch') {
-      let hs: CurveHandle[] = []
+    let handles: CurveHandle[] = []
+    if (sel && !busy) {
       try {
-        hs = getHandles(sel, modelsRef.current)
+        handles = getHandles(sel, modelsRef.current)
       } catch {
         /* no handles */
       }
-
-      // Analysis markers go UNDER the handles: handles are interactive and must
-      // stay visually dominant (and unobstructed) wherever the two coincide.
-      const openFeature = handleEditRef.current?.feature
-      drawAnalysis(
-        ctx,
-        vp,
-        sel,
-        analysisRef.current,
-        hs,
-        highlightRef.current,
-        openFeature && handleEditRef.current?.curveId === sel.id ? openFeature.index : null,
-        hoverRef.current?.markerIndex ?? null,
-      )
-
-      const activeId =
-        g?.type === 'dragHandle'
-          ? g.handleId
-          : (handleEditRef.current?.handleId ?? hoverRef.current?.handleId ?? null)
-      for (const h of hs) {
-        const sp = toScreen(h.pos, vp)
-        if (
-          !Number.isFinite(sp.x) ||
-          !Number.isFinite(sp.y) ||
-          sp.x < -24 ||
-          sp.y < -24 ||
-          sp.x > vp.widthPx + 24 ||
-          sp.y > vp.heightPx + 24
-        ) {
-          continue
-        }
-        const grow = h.id === activeId ? 1.5 : 0
-        if (h.kind === 'domain-start' || h.kind === 'domain-end') {
-          // slightly larger, ring only
-          ctx.beginPath()
-          ctx.arc(sp.x, sp.y, 6 + grow, 0, TWO_PI)
-          ctx.fillStyle = DARK_THEME.bg
-          ctx.fill()
-          ctx.lineWidth = 2
-          ctx.strokeStyle = sel.color
-          ctx.stroke()
-        } else if (h.kind === 'center') {
-          // crosshair dot
-          const arm = 7 + grow
-          ctx.strokeStyle = sel.color
-          ctx.lineWidth = 1.5
-          ctx.beginPath()
-          ctx.moveTo(sp.x - arm, sp.y)
-          ctx.lineTo(sp.x + arm, sp.y)
-          ctx.moveTo(sp.x, sp.y - arm)
-          ctx.lineTo(sp.x, sp.y + arm)
-          ctx.stroke()
-          ctx.beginPath()
-          ctx.arc(sp.x, sp.y, 2.5 + grow * 0.5, 0, TWO_PI)
-          ctx.fillStyle = sel.color
-          ctx.fill()
-        } else {
-          // feature point: filled dot with bg ring
-          ctx.beginPath()
-          ctx.arc(sp.x, sp.y, 5 + grow, 0, TWO_PI)
-          ctx.fillStyle = sel.color
-          ctx.fill()
-          ctx.lineWidth = 2
-          ctx.strokeStyle = DARK_THEME.bg
-          ctx.stroke()
-        }
-      }
     }
 
-    if (fade) {
-      ctx.globalAlpha = Math.max(0, 1 - fadeT)
-      try {
-        drawInk(ctx, fade.pts, vp, fade.color)
-      } catch {
-        /* ignore */
-      }
-      ctx.globalAlpha = 1
-    }
+    const openFeature = handleEditRef.current?.feature
+    const openIdx =
+      sel && openFeature && handleEditRef.current?.curveId === sel.id ? openFeature.index : null
 
-    if (inkRef.current.length > 1) {
-      // Oversketch ink borrows the target curve's color.
-      const overTarget = oversketchForRef.current
-        ? curvesRef.current.find((c) => c.id === oversketchForRef.current)
-        : undefined
-      try {
-        drawInk(ctx, inkRef.current, vp, overTarget ? overTarget.color : inkColorRef.current)
-      } catch {
-        /* ignore */
-      }
-    }
+    const overTarget = oversketchForRef.current
+      ? curvesRef.current.find((c) => c.id === oversketchForRef.current)
+      : undefined
+
+    renderBoard(ctx, {
+      vp,
+      theme: themeRef.current,
+      curves: curvesRef.current,
+      styles: stylesRef.current,
+      models: modelsRef.current,
+      analysis:
+        sel && !busy && analysisRef.current.length > 0
+          ? { curve: sel, points: analysisRef.current }
+          : null,
+      chrome: {
+        selectedId: selectedRef.current,
+        handles,
+        activeHandleId:
+          g?.type === 'dragHandle'
+            ? g.handleId
+            : (handleEditRef.current?.handleId ?? hoverRef.current?.handleId ?? null),
+        highlight: highlightRef.current,
+        openIdx,
+        hoverIdx: hoverRef.current?.markerIndex ?? null,
+        fade: fade ? { pts: fade.pts, color: fade.color, alpha: Math.max(0, 1 - fadeT) } : null,
+        ink:
+          inkRef.current.length > 1
+            ? {
+                pts: inkRef.current,
+                // Oversketch ink borrows the target curve's color.
+                color: overTarget ? overTarget.color : inkColorRef.current,
+              }
+            : null,
+        curveAlpha: fade ? { id: fade.curveId, alpha: fadeT } : null,
+      },
+    })
   }, [vpRef])
 
   const frame = useCallback((): void => {
@@ -654,10 +381,22 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     selectedRef.current = selectedId
     modeRef.current = mode
     inkColorRef.current = inkColor
+    themeRef.current = theme
     analysisRef.current = analysis
     highlightRef.current = analysisHighlight
     scheduleRender()
-  }, [curves, styles, models, selectedId, mode, inkColor, analysis, analysisHighlight, scheduleRender])
+  }, [
+    curves,
+    styles,
+    models,
+    theme,
+    selectedId,
+    mode,
+    inkColor,
+    analysis,
+    analysisHighlight,
+    scheduleRender,
+  ])
 
   // A feature popover is bound to one special point. The moment the point list
   // is rebuilt — the curve reshaped, or markers switched off — that binding is

@@ -9,14 +9,18 @@ interface Props {
   hasCurves: boolean
   showAnalysis: boolean
   onToggleAnalysis(): void
+  /** Ground the on-screen canvas is drawn on. */
+  canvasTheme: 'dark' | 'light'
+  onToggleCanvasTheme(): void
   /** Document name + save state + documents menu. */
   docMenu?: ReactNode
+  /** Download / Copy / export settings — the way out of the app. */
+  exportMenu?: ReactNode
   onMode(mode: Mode): void
   onToggleSidebar(): void
   onUndo(): void
   onRedo(): void
   onClear(): void
-  onExport(): void
 }
 
 export function Toolbar({
@@ -27,13 +31,15 @@ export function Toolbar({
   hasCurves,
   showAnalysis,
   onToggleAnalysis,
+  canvasTheme,
+  onToggleCanvasTheme,
   docMenu,
+  exportMenu,
   onMode,
   onToggleSidebar,
   onUndo,
   onRedo,
   onClear,
-  onExport,
 }: Props) {
   return (
     <div className="toolbar">
@@ -121,6 +127,41 @@ export function Toolbar({
         Analysis
       </button>
 
+      <button
+        className="tb-btn tb-icon"
+        onClick={onToggleCanvasTheme}
+        aria-pressed={canvasTheme === 'light'}
+        data-testid="canvas-theme"
+        data-canvas-theme={canvasTheme}
+        title={
+          canvasTheme === 'light'
+            ? 'Canvas is light — switch back to dark'
+            : 'Canvas is dark — switch to light (for projecting on white)'
+        }
+        aria-label="Toggle canvas background"
+      >
+        {canvasTheme === 'light' ? (
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="4.2" stroke="currentColor" strokeWidth="1.7" />
+            <path
+              d="M12 2.5v2.4M12 19.1v2.4M2.5 12h2.4M19.1 12h2.4M5.2 5.2l1.7 1.7M17.1 17.1l1.7 1.7M18.8 5.2l-1.7 1.7M6.9 17.1l-1.7 1.7"
+              stroke="currentColor"
+              strokeWidth="1.7"
+              strokeLinecap="round"
+            />
+          </svg>
+        ) : (
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path
+              d="M20.5 14.6A8.8 8.8 0 0 1 9.4 3.5a8.8 8.8 0 1 0 11.1 11.1Z"
+              stroke="currentColor"
+              strokeWidth="1.7"
+              strokeLinejoin="round"
+            />
+          </svg>
+        )}
+      </button>
+
       <div className="tb-sep" />
 
       <button className="tb-btn" onClick={onUndo} disabled={!canUndo} title="Undo (⌘Z)">
@@ -135,9 +176,7 @@ export function Toolbar({
 
       <div className="tb-sep" />
 
-      <button className="tb-btn tb-primary" onClick={onExport} title="Export current view as PNG (2×)">
-        Export PNG
-      </button>
+      {exportMenu}
     </div>
   )
 }

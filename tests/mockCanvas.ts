@@ -85,6 +85,28 @@ export class MockCtx {
   textAlign = 'start'
   textBaseline = 'alphabetic'
 
+  /** Every style assigned to strokeStyle across the render, in order. */
+  strokeStyles: string[] = []
+  /** Every style assigned to fillStyle across the render, in order. */
+  fillStyles: string[] = []
+  /** fillText calls. */
+  textCount = 0
+  /** arc calls (markers, handles, dots). */
+  get arcCount(): number {
+    return this.own.cmds.filter(c => c.op === 'arc').length + this._pathArcs
+  }
+  _pathArcs = 0
+  lineDash: number[] = []
+  setLineDash(d: number[]): void { this.lineDash = d.slice() }
+  getLineDash(): number[] { return this.lineDash.slice() }
+  clip(): void { /* export clips to the plot rect; geometry is asserted elsewhere */ }
+  translate(): void { /* export offsets by the margin */ }
+  scale(): void { /* DPR / export scale */ }
+  setTransform(): void { /* DPR reset */ }
+  rect(): void { /* clip rects */ }
+  strokeRect(): void { /* not used by the figure itself */ }
+  createLinearGradient(): { addColorStop(): void } { return { addColorStop() {} } }
+
   save(): void { this.saveCount++ }
   restore(): void { this.restoreCount++ }
   beginPath(): void { /* subpath boundaries are tracked via moveTo */ }
@@ -94,16 +116,33 @@ export class MockCtx {
     this.own.quadraticCurveTo(cx, cy, x, y)
   }
   arc(x: number, y: number, r: number): void { this.own.arc(x, y, r) }
+  /** Label chips are rounded rects; without this they throw and are silently skipped. */
+  arcTo(x1: number, y1: number, x2: number, y2: number, r: number): void {
+    this.own.lineTo(x1, y1)
+    void x2; void y2; void r
+  }
+  bezierCurveTo(_a: number, _b: number, _c: number, _d: number, x: number, y: number): void {
+    this.own.lineTo(x, y)
+  }
   closePath(): void { this.own.closePath() }
   fillRect(x: number, y: number, w: number, h: number): void {
     this.fills.push({ x, y, w, h, style: this.fillStyle })
   }
+  /** Record a style the moment it is used, which is what assertions care about. */
+  private _note(): void {
+    if (this.strokeStyle) this.strokeStyles.push(this.strokeStyle)
+    if (this.fillStyle) this.fillStyles.push(this.fillStyle)
+  }
+
   stroke(path?: MockPath2D): void {
+    this._note()
     this.strokeCount++
     if (path) this.strokedPaths.push(path)
   }
   fill(): void { this.fillCount++ }
   fillText(text: string, x: number, y: number): void {
+    this.textCount++
+    this._note()
     this.texts.push({ text, x, y, align: this.textAlign, baseline: this.textBaseline })
   }
   measureText(text: string): { width: number } {

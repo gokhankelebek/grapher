@@ -133,10 +133,39 @@ export const DARK_THEME: Theme = {
   label: '#8b93b0',
 }
 
+/**
+ * Light/print theme. Exports on a dark ground cannot go in a worksheet or
+ * through a copier, so every figure needs a version meant for white paper.
+ */
+export const LIGHT_THEME: Theme = {
+  bg: '#ffffff',
+  gridMinor: '#e6e8ef',
+  gridMajor: '#c9ced9',
+  axis: '#4a5163',
+  label: '#3a4050',
+}
+
 export const CURVE_COLORS = [
   '#4f9cf9', '#f95f62', '#38c976', '#f9a825',
   '#c678dd', '#2dd4bf', '#fb7185', '#a3e635',
 ]
+
+/**
+ * Print counterparts, index-for-index with CURVE_COLORS, so a curve keeps its
+ * identity between screen and paper. The screen palette is tuned for contrast
+ * against a near-black ground and washes out on white -- amber in particular
+ * drops to about 1.7:1, which a copier renders as nothing.
+ */
+export const PRINT_CURVE_COLORS = [
+  '#1a5fb4', '#c01c28', '#1a7f37', '#9a6700',
+  '#7038b0', '#0f766e', '#bf3989', '#4d7c0f',
+]
+
+/** Map a screen curve colour to its print counterpart; unknown colours pass through. */
+export function toPrintColor(color: string): string {
+  const i = CURVE_COLORS.indexOf(color)
+  return i >= 0 ? PRINT_CURVE_COLORS[i] : color
+}
 
 let idCounter = 0
 export function nextId(): string {
