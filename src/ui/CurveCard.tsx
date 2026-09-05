@@ -12,6 +12,7 @@ import type { CurveStyle } from '../App'
 import { Latex } from './Latex'
 import { formatCoord, formatSig, parseNumeric } from './numeric'
 import { axisKeys, featureAxes } from './featureEdit'
+import { curveEquationText } from './equationText'
 
 interface Props {
   curve: FittedCurve
@@ -51,6 +52,11 @@ interface Props {
   /** Exact typed value (inline edit), undoable. */
   onParamSetExact(index: number, value: number): void
   onApplyCandidate(candidate: FitResult): void
+  /**
+   * Retype the equation itself. Returns an error message to show (the parser's
+   * own words), or null when it was accepted and the editor should close.
+   */
+  onEquationCommit(src: string): string | null
   onStrokeWidth(width: number): void
   onDash(dash: number[] | undefined): void
   onOpacity(opacity: number): void
@@ -187,6 +193,7 @@ export function CurveCard({
   onParamCommit,
   onParamSetExact,
   onApplyCandidate,
+  onEquationCommit,
   onStrokeWidth,
   onDash,
   onOpacity,
@@ -238,6 +245,42 @@ export function CurveCard({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected])
+
+  // Inline editing of the equation ITSELF (click the formula).
+  //
+  // The seed is the line the user would TYPE, not the LaTeX above it: a typed
+  // curve seeds with its own source, a fitted one with its params written out
+  // (see equationText.ts). A family with no text form seeds with null, and its
+  // formula stays print-only rather than offering an editor that could only
+  // throw the curve away.
+  const [eqEdit, setEqEdit] = useState<{ text: string; error: string | null } | null>(null)
+  const eqInputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (eqEdit) {
+      eqInputRef.current?.focus()
+      eqInputRef.current?.select()
+    }
+    // Only when it opens — re-running per keystroke would fight the caret.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eqEdit !== null])
+
+  const equationSeed = useMemo<string | null>(() => {
+    if (isExpression || broken) return exprSource ?? null
+    return curveEquationText(curve, spec)
+  }, [isExpression, broken, exprSource, curve, spec])
+
+  const openEqEdit = (): void => {
+    if (equationSeed === null) return
+    setEqEdit({ text: equationSeed, error: null })
+  }
+
+  /** Enter. The parser's refusal is shown verbatim and the text is kept. */
+  const commitEqEdit = (): void => {
+    if (!eqEdit) return
+    const err = onEquationCommit(eqEdit.text)
+    if (err) setEqEdit({ ...eqEdit, error: err })
+    else setEqEdit(null)
+  }
 
   const latexStr = useMemo(() => {
     try {
@@ -416,9 +459,56 @@ export function CurveCard({
             onCycleColor()
           }}
         />
-        <div className="card-formula">
-          <Latex tex={latexStr} className="card-latex" />
-        </div>
+        {eqEdit ? (
+          <input
+            ref={eqInputRef}
+            className={`expr-input card-formula-input${
+              eqEdit.error ? ' expr-input-bad' : ''
+            }`}
+            type="text"
+            spellCheck={false}
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            aria-label="Equation"
+            aria-invalid={eqEdit.error ? true : undefined}
+            value={eqEdit.text}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) => setEqEdit({ text: e.target.value, error: null })}
+            onKeyDown={(e) => {
+              e.stopPropagation()
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                commitEqEdit()
+              } else if (e.key === 'Escape') {
+                e.preventDefault()
+                setEqEdit(null)
+              }
+            }}
+            onBlur={() => setEqEdit(null)}
+          />
+        ) : equationSeed === null ? (
+          <div className="card-formula" title={`A ${modelName.toLowerCase()} has no equation form to type — drag its handles or pick another interpretation`}>
+            <Latex tex={latexStr} className="card-latex" />
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="card-formula card-formula-btn"
+            title="Click to edit this equation"
+            onClick={(e) => {
+              e.stopPropagation()
+              onSelect()
+              openEqEdit()
+            }}
+          >
+            <Latex tex={latexStr} className="card-latex" />
+          </button>
+        )}
+        {/* While the equation is being typed the row belongs to the input:
+            an equation needs the width more than three icons do. */}
+        {!eqEdit && (
+          <>
         <button
           className="icon-btn dup"
           title="Duplicate curve"
@@ -467,7 +557,16 @@ export function CurveCard({
             <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
           </svg>
         </button>
+          </>
+        )}
       </div>
+
+      {eqEdit && (
+        <div className="card-eq-foot" onClick={(e) => e.stopPropagation()}>
+          {eqEdit.error && <div className="expr-error">{eqEdit.error}</div>}
+          <div className="expr-hint">Enter saves · Esc cancels</div>
+        </div>
+      )}
 
       <div className="card-sub">
         <span className="model-name">{broken ? 'Equation' : modelName}</span>

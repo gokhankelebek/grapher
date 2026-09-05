@@ -11,11 +11,14 @@ import type { NLPart } from '../render/numberline'
 import { CurveCard } from './CurveCard'
 import { NLCard } from './NLCard'
 import { ExprInput } from './ExprInput'
+import { BoardKindSwitch } from './BoardKindSwitch'
 
 interface Props {
   open: boolean
   /** Which board this is. A number line lists items, not curves. */
   kind: BoardKind
+  /** Switch the whole board over. Lossless, and one undo step. */
+  onSetKind(kind: BoardKind): void
   items: NLItem[]
   /** Number-line item edits (ignored on a cartesian board). */
   onItemDelete(id: string): void
@@ -24,6 +27,8 @@ interface Props {
   onItemSetBound(id: string, part: NLPart, value: number | null): void
   onItemLabel(id: string, label: string): void
   onItemWidth(id: string, width: number): void
+  /** Restate a number-line item from its notation. Error message, or null. */
+  onItemEquation(id: string, src: string): string | null
   curves: FittedCurve[]
   styles: StyleMap
   models: Record<string, ModelSpec>
@@ -55,6 +60,8 @@ interface Props {
   /** Exact typed value commit (inline edit). */
   onParamSetExact(id: string, index: number, value: number): void
   onApplyCandidate(id: string, candidate: FitResult): void
+  /** Retype a curve's equation. Error message to show, or null on success. */
+  onCurveEquation(id: string, src: string): string | null
   onStrokeWidth(id: string, width: number): void
   onDash(id: string, dash: number[] | undefined): void
   onOpacity(id: string, opacity: number): void
@@ -68,6 +75,7 @@ const EMPTY_ANALYSIS: SpecialPoint[] = []
 export function Sidebar({
   open,
   kind,
+  onSetKind,
   items,
   onItemDelete,
   onItemCycleColor,
@@ -75,6 +83,7 @@ export function Sidebar({
   onItemSetBound,
   onItemLabel,
   onItemWidth,
+  onItemEquation,
   curves,
   styles,
   models,
@@ -99,6 +108,7 @@ export function Sidebar({
   onParamCommit,
   onParamSetExact,
   onApplyCandidate,
+  onCurveEquation,
   onStrokeWidth,
   onDash,
   onOpacity,
@@ -111,22 +121,25 @@ export function Sidebar({
     <aside className={`sidebar${open ? '' : ' sidebar-closed'}`}>
       <div className="sidebar-inner">
         <div className="sidebar-head">
-          <span className="sidebar-title">{numberLine ? 'Solution set' : 'Curves'}</span>
-          <span className="sidebar-count">{numberLine ? items.length : curves.length}</span>
-          <button
-            className={`add-btn${exprOpen ? ' add-open' : ''}`}
-            title={
-              exprOpen
-                ? 'Close input (Esc)'
-                : numberLine
-                  ? 'Type an inequality'
-                  : 'Type an equation'
-            }
-            aria-label={numberLine ? 'Type an inequality' : 'Type an equation'}
-            onClick={onExprToggle}
-          >
-            +
-          </button>
+          <BoardKindSwitch kind={kind} onSetKind={onSetKind} />
+          <div className="sidebar-head-row">
+            <span className="sidebar-title">{numberLine ? 'Solution set' : 'Curves'}</span>
+            <span className="sidebar-count">{numberLine ? items.length : curves.length}</span>
+            <button
+              className={`add-btn${exprOpen ? ' add-open' : ''}`}
+              title={
+                exprOpen
+                  ? 'Close input (Esc)'
+                  : numberLine
+                    ? 'Type an inequality'
+                    : 'Type an equation'
+              }
+              aria-label={numberLine ? 'Type an inequality' : 'Type an equation'}
+              onClick={onExprToggle}
+            >
+              +
+            </button>
+          </div>
         </div>
         <div className="sidebar-list">
           {exprOpen && (
@@ -162,6 +175,7 @@ export function Sidebar({
                 onToggleEnd={(part) => onItemToggleEnd(item.id, part)}
                 onSetBound={(part, value) => onItemSetBound(item.id, part, value)}
                 onLabel={(label) => onItemLabel(item.id, label)}
+                onEquationCommit={(src) => onItemEquation(item.id, src)}
                 onDash={(d) => onDash(item.id, d)}
                 onOpacity={(o) => onOpacity(item.id, o)}
                 onWidth={(w) => onItemWidth(item.id, w)}
@@ -204,6 +218,7 @@ export function Sidebar({
               onParamCommit={() => onParamCommit(curve.id)}
               onParamSetExact={(i, v) => onParamSetExact(curve.id, i, v)}
               onApplyCandidate={(c) => onApplyCandidate(curve.id, c)}
+              onEquationCommit={(src) => onCurveEquation(curve.id, src)}
               onStrokeWidth={(w) => onStrokeWidth(curve.id, w)}
               onDash={(d) => onDash(curve.id, d)}
               onOpacity={(o) => onOpacity(curve.id, o)}

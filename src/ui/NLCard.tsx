@@ -6,6 +6,7 @@ import type { CurveStyle } from '../core/persist'
 import { NL_BAR_WIDTH, NL_MAX_BAR_WIDTH, NL_MIN_BAR_WIDTH } from '../render/numberline'
 import { Latex } from './Latex'
 import { parseNumeric } from './numeric'
+import { itemEquationText } from './equationText'
 
 interface Props {
   item: NLItem
@@ -18,6 +19,11 @@ interface Props {
   /** Type an exact endpoint. `null` sets that end unbounded (an arrow). */
   onSetBound(end: 'lo' | 'hi' | 'point', value: number | null): void
   onLabel(label: string): void
+  /**
+   * Restate this item as an inequality or an interval. Returns the parser's
+   * error message to show, or null when it was accepted.
+   */
+  onEquationCommit(src: string): string | null
   onDash(dash: number[] | undefined): void
   onOpacity(opacity: number): void
   onWidth(width: number): void
@@ -182,6 +188,7 @@ export function NLCard({
   onToggleEnd,
   onSetBound,
   onLabel,
+  onEquationCommit,
   onDash,
   onOpacity,
   onWidth,
@@ -189,6 +196,26 @@ export function NLCard({
   onStyleEditEnd,
 }: Props) {
   const [labelDraft, setLabelDraft] = useState<string | null>(null)
+
+  // Click the notation to restate the whole set — the same gesture as a curve
+  // card's equation, reading the same language the "+" box takes.
+  const [eqEdit, setEqEdit] = useState<{ text: string; error: string | null } | null>(null)
+  const eqInputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (eqEdit) {
+      eqInputRef.current?.focus()
+      eqInputRef.current?.select()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eqEdit !== null])
+
+  const commitEqEdit = (): void => {
+    if (!eqEdit) return
+    const err = onEquationCommit(eqEdit.text)
+    if (err) setEqEdit({ ...eqEdit, error: err })
+    else setEqEdit(null)
+  }
+
   const activeDashKey =
     style?.dash && style.dash.length > 0
       ? style.dash[0] > 4
@@ -224,9 +251,47 @@ export function NLCard({
             onCycleColor()
           }}
         />
-        <div className="card-formula">
-          <Latex tex={nlNotation(item)} className="card-latex" />
-        </div>
+        {eqEdit ? (
+          <input
+            ref={eqInputRef}
+            className={`expr-input card-formula-input${eqEdit.error ? ' expr-input-bad' : ''}`}
+            type="text"
+            spellCheck={false}
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            aria-label="Solution set"
+            aria-invalid={eqEdit.error ? true : undefined}
+            value={eqEdit.text}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) => setEqEdit({ text: e.target.value, error: null })}
+            onKeyDown={(e) => {
+              e.stopPropagation()
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                commitEqEdit()
+              } else if (e.key === 'Escape') {
+                e.preventDefault()
+                setEqEdit(null)
+              }
+            }}
+            onBlur={() => setEqEdit(null)}
+          />
+        ) : (
+          <button
+            type="button"
+            className="card-formula card-formula-btn"
+            title="Click to restate this set — an inequality, an interval or a set of points"
+            onClick={(e) => {
+              e.stopPropagation()
+              onSelect()
+              setEqEdit({ text: itemEquationText(item), error: null })
+            }}
+          >
+            <Latex tex={nlNotation(item)} className="card-latex" />
+          </button>
+        )}
+        {!eqEdit && (
         <button
           className="icon-btn del"
           title="Delete this item (Del)"
@@ -240,7 +305,17 @@ export function NLCard({
             <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
           </svg>
         </button>
+        )}
       </div>
+
+      {eqEdit && (
+        <div className="card-eq-foot" onClick={(e) => e.stopPropagation()}>
+          {eqEdit.error && <div className="expr-error">{eqEdit.error}</div>}
+          <div className="expr-hint">
+            Enter saves · Esc cancels · try “x &lt; 3”, “[-2, 5)”, “x ≤ -2 or x &gt; 4”
+          </div>
+        </div>
+      )}
 
       <div className="card-sub">
         <span className="model-name">{item.kind === 'point' ? 'Point' : 'Interval'}</span>

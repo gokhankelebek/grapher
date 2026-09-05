@@ -17,6 +17,7 @@ import { applyFeatureEdit, snapParams } from './core/fit/edit'
 import { analyzeCurve } from './core/analyze'
 import type { FeatureEditResult, SpecialPoint } from './core/types'
 import { describePoints } from './ui/featureEdit'
+import { readCurveEquation } from './ui/equationText'
 import { CanvasStage } from './ui/CanvasStage'
 import type { CanvasStageHandle } from './ui/CanvasStage'
 import { NumberLineStage } from './ui/NumberLineStage'
@@ -1446,6 +1447,98 @@ export default function App() {
     [commitState, pickColor],
   )
 
+  /**
+   * Retype the equation ON a card.
+   *
+   * THE TRADE THIS MAKES. A sketched curve is a member of a family — poly3,
+   * sine, circle — and that membership is what gives it drag handles, an
+   * arrow-nudge, an Interpretations list and "put this zero at x = 2". A typed
+   * expression has none of those. So the edited text is first offered back to
+   * the curve's OWN family: when it still is one (new coefficients on the same
+   * cubic, however it is written), only the params change and every handle
+   * survives. Only when the text is genuinely something else does the curve
+   * become a typed expression — and then the board says what was traded, in
+   * the same non-modal line that reports a feature edit's side effects, so it
+   * is never a silent downgrade. Either way it is one undo entry.
+   */
+  const setCurveEquation = useCallback(
+    (id: string, src: string): string | null => {
+      const curve = curvesRef.current.find((c) => c.id === id)
+      if (!curve) return null
+      const isExpr = curve.modelId.startsWith('expr_')
+      // A curve that is already an expression stays one: it has no handles to
+      // protect, and its free constants are sliders the user asked for by name.
+      const familySpec = isExpr ? undefined : modelsRef.current[curve.modelId]
+
+      let res: ReturnType<typeof readCurveEquation>
+      try {
+        res = readCurveEquation(src, curve, familySpec)
+      } catch {
+        return 'The parser crashed on this input'
+      }
+      if (!res.ok) return res.error
+
+      if (res.mode === 'family') {
+        const unchanged =
+          res.params.length === curve.params.length &&
+          res.params.every((v, i) => Object.is(v, curve.params[i]))
+        // Pressing Enter on a line nobody edited is not an edit.
+        if (unchanged) return null
+        commitState({
+          curves: curvesRef.current.map((c) =>
+            c.id === id ? { ...c, params: res.params.slice() } : c,
+          ),
+        })
+        setSelectedId(id)
+        return null
+      }
+
+      if (isExpr && exprSourcesRef.current[id] === src && brokenExprRef.current[id] === undefined) {
+        return null
+      }
+      const modelId = `expr_${++exprCounterRef.current}`
+      let spec: ModelSpec
+      try {
+        spec = res.plot.makeModel(modelId)
+      } catch {
+        return 'Could not build a plot from this expression'
+      }
+      setExtraModels((prev) => ({ ...prev, [modelId]: spec }))
+      const lost = isExpr ? null : (familySpec?.name ?? null)
+      // The ink belonged to the family that just went away; keeping it would
+      // let an oversketch try to refit a model that no longer exists. Undo
+      // restores the whole curve, ink included.
+      const { sourceStroke: _ink, ...bare } = curve
+      const { [id]: _wasBroken, ...restBroken } = brokenExprRef.current
+      commitState({
+        curves: curvesRef.current.map((c) =>
+          c.id === id
+            ? {
+                ...bare,
+                modelId,
+                kind: res.plot.kind,
+                params: res.plot.defaultParams.slice(),
+                domain: res.plot.domain,
+                error: 0,
+              }
+            : c,
+        ),
+        exprSources: { ...exprSourcesRef.current, [id]: src },
+        brokenExpr: restBroken,
+      })
+      setSelectedId(id)
+      if (lost) {
+        showFeatureNote({
+          kind: 'moved',
+          key: Date.now(),
+          text: `That is no longer a ${lost.toLowerCase()}, so it is a typed equation now — it has no drag handles or fit error. Undo brings the ${lost.toLowerCase()} back.`,
+        })
+      }
+      return null
+    },
+    [commitState, showFeatureNote],
+  )
+
   // ======================================================= number-line items
   //
   // The whole content of this figure is where each endpoint sits and whether it
@@ -1611,6 +1704,44 @@ export default function App() {
       return null
     },
     [addItems],
+  )
+
+  /**
+   * Restate ONE item from its own card. The parser owns what the language
+   * accepts, so this is the same language the "+" box takes — and an answer
+   * that is a union ("x < -2 or x >= 3") replaces the item with its parts,
+   * in place, keeping the colour and the label the teacher gave it.
+   */
+  const setItemEquation = useCallback(
+    (id: string, src: string): string | null => {
+      const at = itemsRef.current.findIndex((it) => it.id === id)
+      if (at < 0) return null
+      const old = itemsRef.current[at]
+      let outcome: ReturnType<typeof parseInequality>
+      try {
+        outcome = parseInequality(src)
+      } catch {
+        return 'That couldn’t be read as an inequality'
+      }
+      if (!outcome.ok) return outcome.error
+      if (!Array.isArray(outcome.items) || outcome.items.length === 0) {
+        return 'That describes no numbers at all'
+      }
+      // The first part keeps this item's id, so the selection, the style and
+      // the label all stay attached to the thing that was being edited.
+      const made: NLItem[] = outcome.items.map((d, i) => ({
+        ...d,
+        id: i === 0 ? old.id : nextId(),
+        color: old.color,
+        ...(old.label && i === 0 ? { label: old.label } : {}),
+      })) as NLItem[]
+      commitState({
+        items: [...itemsRef.current.slice(0, at), ...made, ...itemsRef.current.slice(at + 1)],
+      })
+      setSelectedId(made[0].id)
+      return null
+    },
+    [commitState],
   )
 
   // ---------------------------------------------------------------- viewport
@@ -1964,6 +2095,7 @@ export default function App() {
       <Sidebar
         open={sidebarOpen}
         kind={kind}
+        onSetKind={setBoardKind}
         items={items}
         onItemDelete={deleteItem}
         onItemCycleColor={cycleItemColor}
@@ -1971,6 +2103,7 @@ export default function App() {
         onItemSetBound={setBound}
         onItemLabel={setItemLabel}
         onItemWidth={setItemWidth}
+        onItemEquation={setItemEquation}
         curves={curves}
         styles={styles}
         models={models}
@@ -1995,6 +2128,7 @@ export default function App() {
         onParamCommit={(id) => commitWithSnap(id, false)}
         onParamSetExact={setParamExact}
         onApplyCandidate={applyCandidate}
+        onCurveEquation={setCurveEquation}
         onStrokeWidth={setStrokeWidth}
         onDash={setDash}
         onOpacity={setOpacity}
