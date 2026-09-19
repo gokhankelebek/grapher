@@ -14,6 +14,7 @@ import {
   type BoardChrome,
   type BoardScene,
   type Polyline,
+  type Shape,
   type SlopeField,
 } from '../src/ui/renderBoard'
 import { MockCtx, MockPath2D, withMockPath2D } from './mockCanvas'
@@ -628,5 +629,78 @@ describe('renderBoard — slope fields absent change nothing', () => {
     expect(ctx.strokeStyles).toContain(PRINT_CURVE_COLORS[1])
     expect(ctx.strokeStyles).toContain(PRINT_CURVE_COLORS[2])
     expect(ctx.strokeStyles).not.toContain(CURVE_COLORS[1])
+  })
+})
+
+// ===========================================================================
+// Shapes — points, segments, vectors and polygons.
+//
+// Same claim once more, one layer up: a board that never mentions `shapes`
+// must emit the byte-identical command stream it emitted before the layer
+// existed, and a shape that IS present must reach the export — ON TOP of the
+// curves it is measured against. The layer's own geometry is pinned in
+// tests/shapes.render.test.ts.
+// ===========================================================================
+
+describe('renderBoard — shapes absent change nothing', () => {
+  const stream = (ctx: MockCtx): string =>
+    JSON.stringify({
+      cmds: ctx.own.cmds,
+      texts: ctx.texts,
+      fills: ctx.fills,
+      strokeStyles: ctx.strokeStyles,
+      fillStyles: ctx.fillStyles,
+      counts: [ctx.strokeCount, ctx.fillCount, ctx.textCount,
+               ctx.saveCount, ctx.restoreCount, ctx.arcCount],
+      paths: ctx.strokedPaths.map((p) => p.cmds),
+    })
+
+  const FIGURE: Shape[] = [
+    {
+      kind: 'polygon', id: 'tri',
+      pts: [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 4, y: 3 }],
+      color: CURVE_COLORS[3], visible: true, fill: true, labels: ['A', 'B', 'C'],
+    },
+    {
+      kind: 'vector', id: 'v', tail: { x: 0, y: 0 }, v: { x: 4, y: 3 },
+      color: CURVE_COLORS[4], visible: true, label: 'v',
+    },
+  ]
+
+  it('`shapes: []` is byte-identical to the field being absent', () => {
+    for (const chrome of [null, chromeOn()]) {
+      const before = render(scene({ chrome }))
+      const after = render(scene({ chrome, shapes: [] }))
+      expect(stream(after)).toBe(stream(before))
+    }
+  })
+
+  it('a triangle and a vector reach the figure (chrome:null)', () => {
+    const plain = render(scene({ chrome: null }))
+    const withShapes = render(scene({ chrome: null, shapes: FIGURE }))
+    expect(withShapes.strokeCount, 'the figure never reached the export')
+      .toBeGreaterThan(plain.strokeCount)
+    expect(withShapes.strokeStyles).toContain(CURVE_COLORS[3])
+    expect(withShapes.strokeStyles).toContain(CURVE_COLORS[4])
+    expect(withShapes.texts.map((t) => t.text)).toEqual(
+      expect.arrayContaining(['A', 'B', 'C', 'v']),
+    )
+  })
+
+  it('they map to the print palette on a light ground, like every stroke', () => {
+    const ctx = render(scene({ theme: LIGHT_THEME, chrome: null, shapes: FIGURE }))
+    expect(ctx.strokeStyles).toContain(PRINT_CURVE_COLORS[3])
+    expect(ctx.strokeStyles).not.toContain(CURVE_COLORS[3])
+  })
+
+  it('are drawn ON TOP of the curve they are measured against', () => {
+    const ctx = render(scene({ chrome: null, shapes: FIGURE }))
+    // strokeStyles records a style at the moment it is used, in order: the
+    // curve's own colour must appear before the figure's.
+    const curve = ctx.strokeStyles.indexOf(CURVE_COLORS[0])
+    const shape = ctx.strokeStyles.indexOf(CURVE_COLORS[3])
+    expect(curve, 'the curve was never stroked').toBeGreaterThanOrEqual(0)
+    expect(shape, 'the figure was never stroked').toBeGreaterThanOrEqual(0)
+    expect(curve, 'the figure went under the curve').toBeLessThan(shape)
   })
 })

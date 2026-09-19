@@ -43,6 +43,8 @@ import type { Overlay } from '../render/overlays'
 import { drawOverlays } from '../render/overlays'
 import type { Polyline, SlopeField } from '../render/fields'
 import { drawPolylines, drawSlopeFields } from '../render/fields'
+import type { Shape } from '../render/shapes'
+import { drawShapes } from '../render/shapes'
 import { drawNLItem, drawNumberLineAxis, nlLanes } from '../render/numberline'
 import type { NLPart } from '../render/numberline'
 import { formatCoord } from './numeric'
@@ -224,6 +226,19 @@ export interface BoardScene {
    * Cartesian only; a number-line board ignores it.
    */
   polylines?: readonly Polyline[]
+  /**
+   * Points, segments, vectors and polygons — the figure a class MEASURES.
+   *
+   * Painted after every curve and before the analysis layer: a triangle, a
+   * chord or a vector is drawn AGAINST the curves it is measured against, so
+   * it sits on top of them. A vertex buried under a 2.5px stroke is a vertex
+   * no one can read a coordinate off.
+   *
+   * FIGURE, not chrome: it exports.
+   *
+   * Cartesian only; a number-line board ignores it.
+   */
+  shapes?: readonly Shape[]
   /** Editing chrome. Null = the figure alone. */
   chrome?: BoardChrome | null
 }
@@ -232,6 +247,7 @@ export interface BoardScene {
 export type { AxisUnit, AxisUnits }
 export type { Overlay, OverlayRect } from '../render/overlays'
 export type { Polyline, SlopeField } from '../render/fields'
+export type { Shape } from '../render/shapes'
 
 /**
  * Trig by name, at a word boundary, so `sinh`/`cosh`/`tanh` (not periodic) and
@@ -971,6 +987,18 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
     }
     ctx.setLineDash([])
     ctx.globalAlpha = 1
+  }
+
+  // Shapes: on top of every curve, under the analysis layer. The figure is
+  // measured AGAINST the curves, so it cannot be painted beneath them; the
+  // markers and labels that state the numbers still go on top of it.
+  const shapes = scene.shapes
+  if (shapes && shapes.length > 0) {
+    try {
+      drawShapes(ctx, shapes, { vp, theme, paint, scale })
+    } catch {
+      /* shape render failed — the figure still stands */
+    }
   }
 
   const an = scene.analysis ?? null
