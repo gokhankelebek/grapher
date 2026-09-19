@@ -408,6 +408,26 @@ describe('latex', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Variables spelled out — a polar domain is typed "theta", not "θ"
+// ---------------------------------------------------------------------------
+
+describe('the variable may be a reserved name spelled out', () => {
+  it('reads theta as the variable, and prints it as one', () => {
+    expect(items('0 <= theta < pi')).toEqual([iv(0, Math.PI, true, false)])
+    expect(latex('0 <= theta < pi')).toBe('\\theta \\in [0, \\pi)')
+    expect(latex('theta > 0')).toBe('\\theta \\in (0, \\infty)')
+  })
+
+  it('θ is the same variable', () => {
+    expect(latex('θ > 0')).toBe('\\theta \\in (0, \\infty)')
+  })
+
+  it('still refuses an unsolved expression in that variable', () => {
+    expect(err('2 theta < 3').error).toMatch(/solve for theta first/)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
 

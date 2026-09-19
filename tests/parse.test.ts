@@ -720,4 +720,160 @@ describe('latex round-trip fuzz', () => {
     const bad = fixed.map(roundTrip).filter(Boolean)
     expect(bad.join('\n---\n')).toBe('')
   })
+
+  // -------------------------------------------------------------------------
+  // Restricted domains and piecewise definitions go through the same wringer:
+  // the equation card is the curve, and that claim is only worth anything if
+  // the CONDITIONS survive the trip too.
+  // -------------------------------------------------------------------------
+
+  /** Our printed condition, read back into input syntax. */
+  function deCondition(tex: string): string {
+    let s = tex
+      .split('\\text{otherwise}').join('otherwise')
+      .split('\\leq').join('<=')
+      .split('\\geq').join('>=')
+      .split('\\neq').join('!=')
+      .split('\\cup').join(' or ')
+      .split('\\infty').join('inf')
+      .split('\\theta').join('theta')
+      .split('\\pi').join('pi')
+      .split('\\tau').join('tau')
+      .split('\\,').join(' ')
+      .split('\\;').join(' ')
+    // "x \in A" -> A on its own: interval notation is accepted as a condition.
+    s = s.replace(/^[A-Za-z]+\s*\\in\s*/, '')
+    s = s.split('\\{').join('{').split('\\}').join('}')
+    if (/\\[a-zA-Z]/.test(s)) throw new Error(`unhandled latex in condition "${tex}"`)
+    return s
+  }
+
+  /** A whole restricted / piecewise card, read back into input syntax. */
+  function dePieced(latex: string): string {
+    const cases = /^([\s\S]*?) = \\begin\{cases\} ([\s\S]*) \\end\{cases\}$/.exec(latex)
+    if (cases) {
+      const rows = cases[2].split(' \\\\ ').map((row) => {
+        const k = row.indexOf('&')
+        if (k < 0) throw new Error(`cases row without a condition: ${row}`)
+        return `${delatex(row.slice(0, k))} if ${deCondition(row.slice(k + 1))}`
+      })
+      return `${delatex(cases[1])} = { ${rows.join(' ; ')} }`
+    }
+    const i = latex.indexOf(',\\ ') // the suffix separator, and only ours
+    if (i < 0) return delatex(latex)
+    return `${delatex(latex.slice(0, i))} {${deCondition(latex.slice(i + 3))}}`
+  }
+
+  const rel = (r: Rng): string => (r() < 0.5 ? '<=' : '<')
+
+  function genRestricted(r: Rng): string {
+    const e = genExpr(r, ['x'], 3)
+    const lo = Math.floor(r() * 7) - 3
+    const hi = lo + 1 + Math.floor(r() * 5)
+    return pick(r, [
+      `y = ${e} {${lo} ${rel(r)} x ${rel(r)} ${hi}}`,
+      `y = ${e}, x >${r() < 0.5 ? '=' : ''} ${lo}`,
+      `y = ${e} for x ${rel(r)} ${hi}`,
+      `y = ${e} where x != ${lo}`,
+      `y = ${e} {x < ${lo} or x > ${hi}}`,
+      `y = ${e} {[${lo}, ${hi})}`,
+      `f(x) = ${e} {${lo} ${rel(r)} x ${rel(r)} ${hi}}`,
+    ])
+  }
+
+  function genPiecewise(r: Rng): string {
+    const n = 2 + Math.floor(r() * 2)
+    const cuts: number[] = []
+    let c = Math.floor(r() * 5) - 4
+    for (let i = 0; i < n - 1; i++) { cuts.push(c); c += 1 + Math.floor(r() * 3) }
+    const rows: string[] = []
+    for (let i = 0; i < n; i++) {
+      const body = genExpr(r, ['x'], 2)
+      if (i === 0) rows.push(`${body} if x ${rel(r)} ${cuts[0]}`)
+      else if (i === n - 1) {
+        rows.push(r() < 0.4 ? `${body} otherwise` : `${body} if x >${r() < 0.5 ? '=' : ''} ${cuts[i - 1]}`)
+      } else rows.push(`${body} if ${cuts[i - 1]} <= x < ${cuts[i]}`)
+    }
+    const head = r() < 0.2 ? 'f(x)' : 'y'
+    if (r() < 0.25) {
+      // the piecewise(...) spelling, which prints the same table
+      const args = rows.map((row) => {
+        const k = row.lastIndexOf(' if ')
+        return k < 0 ? row.replace(/ otherwise$/, '') : `${row.slice(0, k)}, ${row.slice(k + 4)}`
+      })
+      return `${head} = piecewise(${args.join(', ')})`
+    }
+    return `${head} = { ${rows.join(' ; ')} }`
+  }
+
+  const PROBES = [-4.25, -3, -2.5, -1, -0.5, 0, 0.5, 1, 1.5, 2, 3, 4.75]
+
+  function roundTripPieced(src: string): string | null {
+    const first = parseExpression(src)
+    if (!first.ok) return null // only valid inputs are round-trip candidates
+    const latex = first.plot.latex
+    let round: string
+    try {
+      round = dePieced(latex)
+    } catch (e) {
+      return `${src}\n  latex: ${latex}\n  ${(e as Error).message}`
+    }
+    const second = parseExpression(round)
+    const bad = (why: string) => `${src}\n  latex: ${latex}\n  round: ${round}\n  ${why}`
+    if (!second.ok) return bad(`re-parse failed: ${second.error}`)
+    const A = first.plot, B = second.plot
+    if (A.kind !== B.kind) return bad(`kind ${A.kind} -> ${B.kind}`)
+    if (A.paramNames.join(',') !== B.paramNames.join(',')) {
+      return bad(`params [${A.paramNames}] -> [${B.paramNames}]`)
+    }
+    if (JSON.stringify(A.domain) !== JSON.stringify(B.domain)) {
+      return bad(`domain ${JSON.stringify(A.domain)} -> ${JSON.stringify(B.domain)}`)
+    }
+    const ea = A.makeModel('a').evalExplicit!
+    const eb = B.makeModel('b').evalExplicit!
+    const params = A.paramNames.map((_, i) => 0.7 + i * 0.4)
+    for (const u of PROBES) {
+      // NaN counts as a value here: a gap has to come back as the same gap.
+      if (!sameNum(ea(params, u), eb(params, u))) {
+        return bad(`at ${u}: ${ea(params, u)} vs ${eb(params, u)}`)
+      }
+    }
+    return null
+  }
+
+  for (const seed of [5, 99]) {
+    it(`2000 restricted and piecewise inputs round-trip (seed ${seed})`, () => {
+      const rng = makeRng(seed)
+      const bad: string[] = []
+      for (let i = 0; i < 2000; i++) {
+        const src = rng() < 0.5 ? genRestricted(rng) : genPiecewise(rng)
+        const found = roundTripPieced(src)
+        if (found) bad.push(found)
+      }
+      expect(bad.slice(0, 5).join('\n---\n')).toBe('')
+    })
+  }
+
+  it('round-trips the fixed restricted and piecewise shapes', () => {
+    const fixed = [
+      'y = x^2 {0 <= x < 3}',
+      'y = x^2, 0 <= x < 3',
+      'y = x^2 for x > 0',
+      'y = sqrt(x) {x >= 0}',
+      'y = 1/x {x != 0}',
+      'y = 1/x {x < -1 or x > 2}',
+      'y = { x^2 if x < 0 ; 2x if x >= 0 }',
+      'y = { x^2, x < 0 ; 2x, x >= 0 }',
+      'y = piecewise(x^2, x < 0, 2x, x >= 0)',
+      'f(x) = { -x if x < 0 ; x if x >= 0 }',
+      'y = { a x if x < 0 ; b x if x >= 0 }',
+      'y = { -1 if x < 0 ; 1 if x >= 0 }',
+      'y = { 1 if x < 5 ; 2 if x < 10 ; 3 otherwise }',
+      'y = { sqrt(x) if 0 <= x <= 4 ; 2 otherwise }',
+      'y = min(x, 2) {0 < x <= 5}',
+      'y = |x - 2| {x != 2}',
+    ]
+    const bad = fixed.map(roundTripPieced).filter(Boolean)
+    expect(bad.join('\n---\n')).toBe('')
+  })
 })

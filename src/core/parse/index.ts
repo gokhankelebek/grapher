@@ -25,6 +25,20 @@
 // ============================================================================
 
 import type { CurveKind, ModelSpec, ParamMeta, ParseOutcome, ParsedPlot } from '../types'
+import {
+  CondError,
+  compactLatex,
+  exclusionLatex,
+  excludedPoints,
+  extentOf,
+  inPieces,
+  newCtx,
+  parseCondition,
+  setLatex,
+  WHOLE_LINE,
+  type CondCtx,
+  type Piece,
+} from './condition'
 
 // ----------------------------------------------------------------------------
 // Function / constant / variable tables
@@ -723,6 +737,676 @@ function classify(lhs: Node, rhs: Node | null): Classified {
 }
 
 // ----------------------------------------------------------------------------
+// Plot assembly — shared by the plain, restricted and piecewise paths.
+// ----------------------------------------------------------------------------
+
+/** Parse one whole equation into its classified, compiled form. */
+function compileEquation(src: string): {
+  cls: Classified
+  paramNames: string[]
+  vars: Set<VarName>
+} {
+  const parser = new Parser(src)
+  const { lhs, rhs } = parser.parseInput()
+
+  // "f(x) = x^2" — plot the body, not the implicit relation f·x = x².
+  const fdef = matchFuncDef(lhs, rhs)
+  const vars = new Set<VarName>()
+  let cls: Classified
+  let paramNames: string[]
+  if (fdef) {
+    // The function letter is not a plottable free constant; drop it and
+    // renumber the survivors so param indices stay dense.
+    paramNames = reindexParams(fdef.body)
+    cls = classify(fdef.body, null)
+    cls.latex = `${fdef.head} = ${toLatex(fdef.body)}`
+    collectVars(fdef.body, vars)
+    vars.add(fdef.boundVar)
+  } else {
+    cls = classify(lhs, rhs)
+    paramNames = [...parser.paramNames] // order of first appearance, deduped
+    collectVars(lhs, vars)
+    if (rhs) collectVars(rhs, vars)
+  }
+  return { cls, paramNames, vars }
+}
+
+function makePlot(
+  kind: CurveKind,
+  latex: string,
+  paramNames: string[],
+  domain: [number, number] | null,
+  ev: Evaluator,
+): ParsedPlot {
+  const defaultParams = paramNames.map(() => 1)
+  return {
+    kind,
+    latex,
+    paramNames,
+    defaultParams,
+    domain,
+    makeModel(modelId: string): ModelSpec {
+      const spec: ModelSpec = {
+        id: modelId,
+        kind,
+        name: 'Expression',
+        latex: () => latex,
+        paramMeta: (params: number[]) =>
+          paramNames.map((nm, i) => metaFor(nm, params[i] ?? 1)),
+      }
+      if (kind === 'explicit') {
+        spec.evalExplicit = (params, x) => ev(params, x, 0)
+      } else if (kind === 'polar') {
+        spec.evalPolar = (params, theta) => ev(params, theta, 0)
+      } else {
+        spec.evalImplicit = (params, x, y) => ev(params, x, y)
+      }
+      return spec
+    },
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Restricted domains and piecewise definitions
+//
+//   y = x^2 {0 <= x < 3}      y = x^2, 0 <= x < 3      y = x^2 for x > 0
+//   y = { x^2 if x < 0 ; 2x if x >= 0 }
+//   y = { x^2, x < 0 ; 2x, x >= 0 }
+//   y = piecewise(x^2, x < 0, 2x, x >= 0)
+//   f(x) = { -x if x < 0 ; x if x >= 0 }
+//
+// Both shapes compile to the SAME thing: a list of branches, each a compiled
+// expression plus the set of x it owns. A restriction is the one-branch case,
+// which is why `y = { x^2 if 0 < x < 3 }` and `y = x^2 {0 < x < 3}` come out
+// identical — same domain, same evaluator, same latex.
+//
+// The first branch whose condition holds wins; where none holds the function
+// is undefined and evaluates to NaN, which the renderer already draws as a
+// pen-lift. That is the honest picture: a gap is a gap, not a vertical jump.
+//
+// Conditions are parsed by ./condition.ts — the same engine the number-line
+// board uses — so `0 <= x < 3`, `x != 0`, `[0, 3)` and `x < -1 or x > 2` all
+// mean here exactly what they mean there.
+// ----------------------------------------------------------------------------
+
+const TWO_PI = 2 * Math.PI
+
+/** Words that introduce a condition: "x^2 for x > 0", "x^2 if x > 0". */
+const COND_WORDS: ReadonlySet<string> = new Set(['for', 'if', 'where', 'when'])
+/** Words for "everything no earlier branch claimed". */
+const ELSE_WORDS: ReadonlySet<string> = new Set(['otherwise', 'else'])
+
+const OPENERS = '([{'
+const CLOSERS = ')]}'
+
+/** Re-point the "at position N" inside a message parsed from a substring. */
+function shiftPositions(msg: string, by: number): string {
+  if (by === 0) return msg
+  return msg.replace(/position (\d+)/g, (_m, d: string) => `position ${Number(d) + by}`)
+}
+
+/** Run a sub-parse whose source starts at offset `at` in the real input. */
+function atOffset<T>(at: number, f: () => T): T {
+  try {
+    return f()
+  } catch (err) {
+    if (err instanceof ParseError) {
+      throw new ParseError(shiftPositions(err.message, at), err.pos === undefined ? undefined : err.pos + at)
+    }
+    if (err instanceof CondError) {
+      throw new ParseError(err.message, err.pos)
+    }
+    throw err
+  }
+}
+
+/** Index of the '}' closing the '{' at `i`; -1 when it never closes. */
+function matchBrace(src: string, i: number): number {
+  let depth = 0
+  for (let k = i; k < src.length; k++) {
+    const c = src[k]
+    if (OPENERS.includes(c)) depth++
+    else if (CLOSERS.includes(c)) {
+      depth--
+      if (depth === 0) return src[k] === '}' ? k : -1
+    }
+  }
+  return -1
+}
+
+interface Cut {
+  kind: 'brace' | 'comma' | 'word'
+  /** offset of the marker itself */
+  at: number
+  /** offset just past the marker (for a brace: past the '}') */
+  end: number
+  /** the condition text and where it starts */
+  cond: string
+  condAt: number
+  /** the matched word, lower-cased ('' for brace/comma) */
+  word: string
+}
+
+/**
+ * The first top-level condition marker in `src`: a `{...}` group, a comma, or
+ * one of the joining words. Brackets are honoured so that `min(x, 2)` and
+ * `[0, 3]` keep their own commas.
+ *
+ * Only an unclosed `{` is reported here; every other bracket slip is left to
+ * the expression parser, whose message for it is already the better one.
+ */
+function findCut(src: string, words: ReadonlySet<string>, at = 0): Cut | null {
+  let depth = 0
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i]
+    if (c === '{' && depth === 0) {
+      // "x^{2}" is pasted LaTeX, not a condition. Leave it to the tokenizer,
+      // whose "Unexpected character '{'" is the message that fits.
+      if (/[\^_]\s*$/.test(src.slice(0, i))) continue
+      const close = matchBrace(src, i)
+      if (close < 0) {
+        throw new ParseError(`Missing closing '}' for the '{' at position ${i + at}`, i + at)
+      }
+      return {
+        kind: 'brace',
+        at: i,
+        end: close + 1,
+        cond: src.slice(i + 1, close),
+        condAt: i + 1,
+        word: '',
+      }
+    }
+    if (OPENERS.includes(c)) { depth++; continue }
+    if (CLOSERS.includes(c)) { if (depth > 0) depth--; continue }
+    if (depth !== 0) continue
+    if (c === ',') {
+      return { kind: 'comma', at: i, end: i + 1, cond: src.slice(i + 1), condAt: i + 1, word: '' }
+    }
+    if (/[A-Za-z]/.test(c) && (i === 0 || !/[A-Za-z0-9]/.test(src[i - 1]))) {
+      let j = i
+      while (j < src.length && /[A-Za-z0-9]/.test(src[j])) j++
+      const w = src.slice(i, j).toLowerCase()
+      if (words.has(w)) {
+        const isElse = ELSE_WORDS.has(w)
+        return {
+          kind: 'word',
+          at: i,
+          end: j,
+          cond: isElse ? w : src.slice(j),
+          condAt: isElse ? i : j,
+          word: w,
+        }
+      }
+      i = j - 1 // skip the whole word: 'floor' hides no 'for'
+    }
+  }
+  return null
+}
+
+/** Split `text` on a depth-0 separator, keeping source offsets. */
+function splitTop(text: string, at: number, sep: string): { text: string; at: number }[] {
+  const out: { text: string; at: number }[] = []
+  let depth = 0
+  let from = 0
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]
+    if (OPENERS.includes(c)) depth++
+    else if (CLOSERS.includes(c)) { if (depth > 0) depth-- }
+    else if (c === sep && depth === 0) {
+      out.push({ text: text.slice(from, i), at: at + from })
+      from = i + 1
+    }
+  }
+  out.push({ text: text.slice(from), at: at + from })
+  return out
+}
+
+/** Offset of the first top-level '=', skipping <=, >=, !=, ==. -1 when none. */
+function topLevelEq(src: string): number {
+  let depth = 0
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i]
+    if (OPENERS.includes(c)) depth++
+    else if (CLOSERS.includes(c)) { if (depth > 0) depth-- }
+    else if (c === '=' && depth === 0) {
+      if ('<>=!'.includes(src[i - 1] ?? '') || src[i + 1] === '=') continue
+      return i
+    }
+  }
+  return -1
+}
+
+/** One piece of a piecewise definition (a restriction is the one-branch case). */
+interface Branch {
+  ev: Evaluator
+  pieces: Piece[]
+  /** the branch expression, as KaTeX */
+  bodyTex: string
+  /** the branch condition, as KaTeX */
+  condTex: string
+}
+
+const isWholeLine = (ps: readonly Piece[]): boolean =>
+  ps.length === 1 && ps[0].lo === -Infinity && ps[0].hi === Infinity
+
+/**
+ * Turn branches into the (domain, evaluator) pair the contract carries.
+ *
+ * `ParsedPlot.domain` is one interval, so it holds the overall extent and the
+ * evaluator holds the detail. When the branches ARE one plain interval the
+ * evaluator is left alone: the domain already says everything, and an
+ * ungated closure keeps the domain handles draggable.
+ */
+function planBranches(
+  kind: CurveKind,
+  branches: Branch[],
+): { domain: [number, number] | null; ev: Evaluator } {
+  const single = branches.length === 1
+  if (single && isWholeLine(branches[0].pieces)) {
+    return { domain: kind === 'polar' ? [0, TWO_PI] : null, ev: branches[0].ev }
+  }
+
+  const all = branches.flatMap((b) => b.pieces)
+  const ext = extentOf(all)!
+  const finite = Number.isFinite(ext[0]) && Number.isFinite(ext[1])
+
+  const sets = branches.map((b) => b.pieces)
+  const evs = branches.map((b) => b.ev)
+  const gated: Evaluator = (p, a, b) => {
+    for (let i = 0; i < sets.length; i++) {
+      if (inPieces(sets[i], a)) return evs[i](p, a, b)
+    }
+    return Number.NaN // undefined here — the renderer lifts the pen
+  }
+
+  if (kind === 'polar') {
+    // θ has a natural default turn; an unbounded end means "as far as usual".
+    const domain: [number, number] = [
+      Number.isFinite(ext[0]) ? ext[0] : 0,
+      Number.isFinite(ext[1]) ? ext[1] : TWO_PI,
+    ]
+    const plain = single && branches[0].pieces.length === 1
+    return { domain, ev: plain ? branches[0].ev : gated }
+  }
+
+  const plain = single && branches[0].pieces.length === 1 && finite
+  return {
+    domain: finite ? [ext[0], ext[1]] : null,
+    ev: plain ? branches[0].ev : gated,
+  }
+}
+
+/** Which variable a curve is a function of, for checking against a condition. */
+function independentVar(vars: ReadonlySet<VarName>): VarName {
+  if (vars.has('theta') || vars.has('r')) return 'theta'
+  if (vars.has('t')) return 't'
+  return 'x'
+}
+
+/** Parse a condition, and insist it is about `want`. */
+function branchPieces(
+  cond: string,
+  at: number,
+  want: VarName,
+  ctx: CondCtx,
+): Piece[] {
+  if (cond.trim() === '') {
+    throw new ParseError('Empty condition — write something like {0 < x < 3}', at)
+  }
+  let pieces: Piece[]
+  try {
+    pieces = parseCondition(cond, ctx, at)
+  } catch (err) {
+    if (err instanceof CondError) throw new ParseError(err.message, err.pos)
+    throw err
+  }
+  if (ctx.name !== null && ctx.name !== want) {
+    throw new ParseError(
+      `The condition is about '${ctx.name}' but the equation is in '${want}' — ` +
+        `write the condition in ${want} (like ${want} > 0)`,
+      ctx.pos,
+    )
+  }
+  if (pieces.length === 0) {
+    throw new ParseError(
+      `That condition is never true, so there would be nothing to draw`,
+      at,
+    )
+  }
+  return pieces
+}
+
+const varTexOf = (ctx: CondCtx, want: VarName): string => ctx.tex ?? VAR_LATEX[want]
+
+/**
+ * `y = f(x) <condition>` — one expression, restricted.
+ * `cut` has already located the condition.
+ */
+function parseRestricted(src: string, cut: Cut): ParsedPlot {
+  const base = src.slice(0, cut.at)
+  if (cut.kind === 'brace' && src.slice(cut.end).trim() !== '') {
+    throw new ParseError(
+      `Unexpected '${src.slice(cut.end).trim()[0]}' after the condition at position ${cut.end}`,
+      cut.end,
+    )
+  }
+  if (base.trim() === '') {
+    throw new ParseError('Write the formula before the condition, e.g. y = x^2 {0 < x < 3}', 0)
+  }
+  if (cut.cond.trim() === '') {
+    // Reported at the marker, not inside it: that is where the eye goes.
+    throw new ParseError('Empty condition — write something like {0 < x < 3}', cut.at)
+  }
+
+  const { cls, paramNames, vars } = compileEquation(base)
+  if (cls.kind !== 'explicit' && cls.kind !== 'polar') {
+    throw new ParseError(
+      'A domain restriction needs an explicit curve — write it as y = f(x) or r = f(θ)',
+      cut.at,
+    )
+  }
+  const want = cls.kind === 'polar' ? 'theta' : independentVar(vars)
+  const ctx = newCtx(analyzeExpr)
+  const pieces = branchPieces(cut.cond, cut.condAt, want, ctx)
+  const vTex = varTexOf(ctx, want)
+
+  // "1/x {x != 0}" removes a single point from an otherwise whole line. The
+  // curve is not a piecewise and there is no gap to draw at sampling width —
+  // so the restriction becomes a note on the equation, not a fake hole.
+  const holes = excludedPoints(pieces)
+  const branch: Branch = {
+    ev: cls.ev,
+    pieces: holes && holes.length > 0 ? WHOLE_LINE() : pieces,
+    bodyTex: cls.latex,
+    condTex: '',
+  }
+  const plan = planBranches(cls.kind, [branch])
+
+  let latex = cls.latex
+  if (holes && holes.length > 0) latex += `,\\ ${exclusionLatex(holes, vTex)}`
+  else if (!isWholeLine(pieces)) latex += `,\\ ${setLatex(pieces, vTex)}`
+
+  return makePlot(cls.kind, latex, paramNames, plan.domain, plan.ev)
+}
+
+/** The `y =` / `f(x) =` / `r =` head of a piecewise definition. */
+interface PieceHead {
+  tex: string
+  /** true when there was no head at all, so a polar body may rename it 'r' */
+  implied: boolean
+  /** the letter to drop, when the head is a function definition */
+  fnName: string | null
+  /** the variable the head names, when it names one */
+  boundVar: VarName | null
+  polar: boolean
+}
+
+const HEAD_FN_RE = /^([A-Za-z])\s*\(\s*([A-Za-z]+|θ)\s*\)$/
+const HEAD_ARGS: ReadonlySet<string> = new Set(['x', 't', 'theta'])
+
+function parseHead(raw: string, at: number): PieceHead {
+  const head = raw.trim()
+  if (head === '' || head === 'y') {
+    return { tex: 'y', implied: head === '', fnName: null, boundVar: null, polar: false }
+  }
+  if (head === 'r') return { tex: 'r', implied: false, fnName: null, boundVar: null, polar: true }
+
+  const m = HEAD_FN_RE.exec(head)
+  if (m) {
+    const name = m[1]
+    const argRaw = m[2] === 'θ' ? 'theta' : m[2]
+    if (!(name in FUNCS) && !(name in CONSTS) && !VAR_NAMES.has(name) && HEAD_ARGS.has(argRaw)) {
+      const arg = argRaw as VarName
+      return {
+        tex: `${name}${wrap(VAR_LATEX[arg])}`,
+        implied: false,
+        fnName: name,
+        boundVar: arg,
+        polar: arg === 'theta',
+      }
+    }
+  }
+  throw new ParseError(
+    `'${head}' cannot be defined piecewise — write 'y = { ... }' or 'f(x) = { ... }'`,
+    at,
+  )
+}
+
+/** One branch of a piecewise body: an expression and the condition it owns. */
+interface RawBranch {
+  expr: string
+  exprAt: number
+  cond: string
+  condAt: number
+  otherwise: boolean
+}
+
+const BRANCH_WORDS: ReadonlySet<string> = new Set([...COND_WORDS, ...ELSE_WORDS])
+
+/**
+ * Split "x^2 if x < 0" / "x^2, x < 0" / "2x otherwise" into its two halves.
+ *
+ * A piece with no condition at all is refused rather than guessed at: a
+ * trailing default is spelled `otherwise`, which is unambiguous, and
+ * `{ x^2 ; 2x }` is far more likely to be a forgotten condition than a
+ * deliberate one.
+ */
+function splitBranch(seg: { text: string; at: number }): RawBranch {
+  const cut = findCut(seg.text, BRANCH_WORDS, seg.at)
+  if (cut === null || cut.kind === 'brace') {
+    throw new ParseError(
+      `Each piece needs a condition — 'x^2 if x < 0'`,
+      seg.at + (seg.text.length - seg.text.trimStart().length),
+    )
+  }
+  const cond = cut.cond.trim()
+  return {
+    expr: seg.text.slice(0, cut.at),
+    exprAt: seg.at,
+    cond: cut.cond,
+    condAt: seg.at + cut.condAt,
+    otherwise: ELSE_WORDS.has(cond.toLowerCase()),
+  }
+}
+
+/** Compile the branch bodies, sharing one deduplicated parameter list. */
+function compileBranchBodies(raws: RawBranch[]): { bodies: Node[]; paramNames: string[] } {
+  const bodies = raws.map((b) => {
+    if (b.expr.trim() === '') {
+      throw new ParseError(`Each piece needs a formula, e.g. 'x^2 if x < 0'`, b.exprAt)
+    }
+    return atOffset(b.exprAt, () => {
+      const parser = new Parser(b.expr)
+      const { lhs, rhs } = parser.parseInput()
+      if (rhs !== null) {
+        throw new ParseError(`A piece is a formula, not an equation — drop the '='`)
+      }
+      return lhs
+    })
+  })
+  // One shared, deduplicated list: `{ a x if x<0 ; b x if x>=0 }` has two
+  // sliders, and a repeated letter is the SAME slider in every branch.
+  const paramNames: string[] = []
+  const index = new Map<string, number>()
+  for (const body of bodies) reindexParams(body, paramNames, index)
+  return { bodies, paramNames }
+}
+
+function buildPiecewise(headRaw: string, headAt: number, raws: RawBranch[]): ParsedPlot {
+  const head = parseHead(headRaw, headAt)
+  const { bodies, paramNames } = compileBranchBodies(raws)
+
+  const vars = new Set<VarName>()
+  for (const b of bodies) collectVars(b, vars)
+  if (vars.has('y')) {
+    throw new ParseError("A piece cannot contain 'y' — each piece is a formula in x")
+  }
+  if (vars.has('r')) {
+    throw new ParseError("A piece cannot contain 'r' — each piece is a formula in θ")
+  }
+  const polar = head.polar || vars.has('theta')
+  if (polar && (vars.has('x') || vars.has('t'))) {
+    throw new ParseError(
+      "Cannot mix polar variables (r, θ) with x, y, or t — use either 'r = f(θ)' or a cartesian equation",
+    )
+  }
+  if (polar && head.tex === 'y') {
+    if (!head.implied) {
+      throw new ParseError(
+        "Cannot mix polar variables (r, θ) with x, y, or t — use either 'r = f(θ)' or a cartesian equation",
+      )
+    }
+    head.tex = 'r' // a bare "{ 1 + cos(theta) if ... }" is polar, and says so
+  }
+  if (vars.has('x') && vars.has('t')) {
+    throw new ParseError("Cannot mix 'x' and 't' in one expression — use one independent variable")
+  }
+  if (head.fnName !== null) {
+    for (const b of bodies) {
+      if (countParam(b, head.fnName) > 0) {
+        throw new ParseError(
+          `'${head.fnName}' is the function's own name, so it cannot also be a constant inside it`,
+          headAt,
+        )
+      }
+    }
+  }
+
+  const kind: CurveKind = polar ? 'polar' : 'explicit'
+  const want: VarName = polar ? 'theta' : head.boundVar ?? independentVar(vars)
+
+  // Every branch is checked against the same variable, so each gets its own
+  // context and the mismatch is reported branch by branch.
+  const ctxs: CondCtx[] = []
+  const branches: Branch[] = raws.map((raw, i) => {
+    const ctx = newCtx(analyzeExpr)
+    ctxs.push(ctx)
+    const pieces = raw.otherwise
+      ? WHOLE_LINE()
+      : branchPieces(raw.cond, raw.condAt, want, ctx)
+    return {
+      ev: compile(bodies[i]),
+      pieces,
+      bodyTex: toLatex(bodies[i]),
+      condTex: '',
+    }
+  })
+  const vTex = ctxs.find((c) => c.tex !== null)?.tex ?? VAR_LATEX[want]
+  for (const b of branches) b.condTex = compactLatex(b.pieces, vTex)
+
+  const plan = planBranches(kind, branches)
+
+  // One branch IS a restriction — print it as one, so the two spellings of the
+  // same curve produce the same card.
+  let latex: string
+  if (branches.length === 1) {
+    latex = `${head.tex} = ${branches[0].bodyTex}`
+    if (!isWholeLine(branches[0].pieces)) {
+      latex += `,\\ ${setLatex(branches[0].pieces, vTex)}`
+    }
+  } else {
+    // Overlaps are legal and the top row wins, which is exactly how a reader
+    // scans \begin{cases} — so the printed order is the evaluated order.
+    const rows = branches.map((b) => `${b.bodyTex} & ${b.condTex}`)
+    latex = `${head.tex} = \\begin{cases} ${rows.join(' \\\\ ')} \\end{cases}`
+  }
+  return makePlot(kind, latex, paramNames, plan.domain, plan.ev)
+}
+
+/** `piecewise(e1, c1, e2, c2, ...)` with an optional final default value. */
+function piecewiseCall(inner: string, at: number): RawBranch[] {
+  const args = splitTop(inner, at, ',')
+  if (args.length < 2) {
+    throw new ParseError(
+      `piecewise() needs a formula and a condition, e.g. piecewise(x^2, x < 0, 2x, x >= 0)`,
+      at,
+    )
+  }
+  const raws: RawBranch[] = []
+  for (let i = 0; i + 1 < args.length; i += 2) {
+    raws.push({
+      expr: args[i].text,
+      exprAt: args[i].at,
+      cond: args[i + 1].text,
+      condAt: args[i + 1].at,
+      otherwise: ELSE_WORDS.has(args[i + 1].text.trim().toLowerCase()),
+    })
+  }
+  if (args.length % 2 === 1) {
+    const last = args[args.length - 1]
+    raws.push({ expr: last.text, exprAt: last.at, cond: '', condAt: last.at, otherwise: true })
+  }
+  return raws
+}
+
+const PIECEWISE_RE = /^(\s*)piecewise\s*\(/i
+
+/**
+ * The front door for both new shapes. Returns null when `src` is an ordinary
+ * equation, so the plain path stays byte-for-byte what it was.
+ */
+function parsePieced(src: string): ParsedPlot | null {
+  const cut = findCut(src, COND_WORDS)
+
+  if (cut === null) {
+    // y = piecewise(x^2, x < 0, 2x, x >= 0)
+    const eqAt = topLevelEq(src)
+    const rhs = src.slice(eqAt + 1)
+    const m = PIECEWISE_RE.exec(rhs)
+    if (!m) return null
+    const open = eqAt + 1 + m[0].length - 1
+    const close = matchParen(src, open)
+    if (close < 0) {
+      throw new ParseError(`Missing closing ')' for the '(' at position ${open}`, open)
+    }
+    if (src.slice(close + 1).trim() !== '') {
+      throw new ParseError(`Unexpected text after piecewise(...) at position ${close + 1}`, close + 1)
+    }
+    const raws = piecewiseCall(src.slice(open + 1, close), open + 1)
+    return buildPiecewise(eqAt < 0 ? '' : src.slice(0, eqAt), 0, raws)
+  }
+
+  // A brace that IS the whole right-hand side is a piecewise body; a brace
+  // AFTER an expression is that expression's domain.
+  if (cut.kind === 'brace') {
+    const head = src.slice(0, cut.at).trim()
+    const isBody =
+      head === '' ||
+      (head.endsWith('=') && (head.length === 1 || !'<>=!'.includes(head.slice(-2, -1))))
+    if (isBody) {
+      if (src.slice(cut.end).trim() !== '') {
+        throw new ParseError(
+          `Unexpected text after the piecewise body at position ${cut.end}`,
+          cut.end,
+        )
+      }
+      if (cut.cond.trim() === '') {
+        throw new ParseError('Empty condition — write something like {0 < x < 3}', cut.at)
+      }
+      const segs = splitTop(cut.cond, cut.condAt, ';')
+      const raws = segs.map(splitBranch)
+      return buildPiecewise(head.slice(0, -1), 0, raws)
+    }
+  }
+
+  return parseRestricted(src, cut)
+}
+
+/** Index of the ')' closing the '(' at `i`; -1 when it never closes. */
+function matchParen(src: string, i: number): number {
+  let depth = 0
+  for (let k = i; k < src.length; k++) {
+    const c = src[k]
+    if (OPENERS.includes(c)) depth++
+    else if (CLOSERS.includes(c)) {
+      depth--
+      if (depth === 0) return src[k] === ')' ? k : -1
+    }
+  }
+  return -1
+}
+
+// ----------------------------------------------------------------------------
 // Public API
 // ----------------------------------------------------------------------------
 
@@ -731,52 +1415,12 @@ export function parseExpression(src: string): ParseOutcome {
     if (!src || src.trim() === '') {
       return { ok: false, error: 'Empty expression' }
     }
-    const parser = new Parser(src)
-    const { lhs, rhs } = parser.parseInput()
+    // "y = x^2 {0 <= x < 3}", "y = { x^2 if x < 0 ; 2x if x >= 0 }", ...
+    const restricted = parsePieced(src)
+    if (restricted) return { ok: true, plot: restricted }
 
-    // "f(x) = x^2" — plot the body, not the implicit relation f·x = x².
-    const fdef = matchFuncDef(lhs, rhs)
-    let cls: Classified
-    let paramNames: string[]
-    if (fdef) {
-      // The function letter is not a plottable free constant; drop it and
-      // renumber the survivors so param indices stay dense.
-      paramNames = reindexParams(fdef.body)
-      cls = classify(fdef.body, null)
-      cls.latex = `${fdef.head} = ${toLatex(fdef.body)}`
-    } else {
-      cls = classify(lhs, rhs)
-      paramNames = [...parser.paramNames] // order of first appearance, deduped
-    }
-    const defaultParams = paramNames.map(() => 1)
-    const { kind, domain, latex, ev } = cls
-
-    const plot: ParsedPlot = {
-      kind,
-      latex,
-      paramNames,
-      defaultParams,
-      domain,
-      makeModel(modelId: string): ModelSpec {
-        const spec: ModelSpec = {
-          id: modelId,
-          kind,
-          name: 'Expression',
-          latex: () => latex,
-          paramMeta: (params: number[]) =>
-            paramNames.map((nm, i) => metaFor(nm, params[i] ?? 1)),
-        }
-        if (kind === 'explicit') {
-          spec.evalExplicit = (params, x) => ev(params, x, 0)
-        } else if (kind === 'polar') {
-          spec.evalPolar = (params, theta) => ev(params, theta, 0)
-        } else {
-          spec.evalImplicit = (params, x, y) => ev(params, x, y)
-        }
-        return spec
-      },
-    }
-    return { ok: true, plot }
+    const { cls, paramNames } = compileEquation(src)
+    return { ok: true, plot: makePlot(cls.kind, cls.latex, paramNames, cls.domain, cls.ev) }
   } catch (err) {
     if (err instanceof ParseError) {
       return err.pos !== undefined
