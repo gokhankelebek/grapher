@@ -28,9 +28,20 @@ const SCR: Sample = { x: 0, y: 0, ok: false }
 
 type EvalToScreen = (t: number, out: Sample) => void
 
-/** Polyline emitter writing into a Path2D with pen-up/pen-down state. */
+/**
+ * Where a sampled polyline goes. `Path2D` satisfies it structurally, and so
+ * does a plain collector that keeps the points — which is how the area overlay
+ * gets the SAME adaptive, pole-broken boundary the stroke is drawn from
+ * instead of a second sampler that would disagree with it.
+ */
+export interface PolylineSink {
+  moveTo(x: number, y: number): void
+  lineTo(x: number, y: number): void
+}
+
+/** Polyline emitter writing into a sink with pen-up/pen-down state. */
 interface Emitter {
-  path: Path2D
+  path: PolylineSink
   f: EvalToScreen  // the curve being sampled — the break probe re-evaluates it
   has: boolean     // a previous finite sample exists
   penDown: boolean // the path's current point IS that sample (it was in-box)
@@ -48,7 +59,7 @@ interface Emitter {
 // path/f are assigned by resetEmitter before any use; kept unset here so merely
 // importing this module never touches DOM globals (tests, SSR).
 const EM: Emitter = {
-  path: undefined as unknown as Path2D,
+  path: undefined as unknown as PolylineSink,
   f: undefined as unknown as EvalToScreen,
   has: false,
   penDown: false,
@@ -61,7 +72,7 @@ const EM: Emitter = {
 }
 
 function resetEmitter(
-  em: Emitter, path: Path2D, f: EvalToScreen, vp: Viewport,
+  em: Emitter, path: PolylineSink, f: EvalToScreen, vp: Viewport,
 ): void {
   em.path = path
   em.f = f
@@ -656,6 +667,70 @@ function buildImplicit(
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
+
+/**
+ * Sample y = evalY(x) over [x0, x1] into SCREEN-space polylines, using exactly
+ * the machinery drawCurve uses: the uniform base pass, the recursive bisection
+ * on chord error, the pole/jump probe that lifts the pen, and the generous
+ * Liang–Barsky clip to ±1 viewport of overdraw.
+ *
+ * The reason this is exported rather than re-implemented next door: the shaded
+ * area under a curve is bounded ABOVE by the very stroke the board already
+ * draws. A second sampler would eventually disagree with the first, and the
+ * disagreement would show up as shading that creeps past a pole — the exact
+ * picture a class must never be shown for 1/x on [-1, 1]. Here the region is
+ * split wherever the stroke is broken, because it is the same break.
+ *
+ * Each returned polyline has at least two points; an empty array means the
+ * function put nothing on (or near) the canvas over that span.
+ */
+export function sampleExplicitPolylines(
+  evalY: (x: number) => number,
+  vp: Viewport,
+  x0: number,
+  x1: number,
+): Vec2[][] {
+  if (!(x1 > x0) || !(vp.pxPerUnit > 0) || vp.widthPx <= 0 || vp.heightPx <= 0) return []
+  const ppu = vp.pxPerUnit
+  const cx = vp.center.x
+  const cy = vp.center.y
+  const hw = vp.widthPx / 2
+  const hh = vp.heightPx / 2
+
+  const f: EvalToScreen = (x, out) => {
+    let y: number
+    try {
+      y = evalY(x)
+    } catch {
+      y = Number.NaN
+    }
+    out.x = hw + (x - cx) * ppu
+    out.y = hh - (y - cy) * ppu
+    out.ok = Number.isFinite(y)
+  }
+
+  const sink = new PolylineCollector()
+  resetEmitter(EM, sink, f, vp)
+  sampleAdaptive(EM, f, x0, x1, vp)
+  return sink.lines.filter((l) => l.length >= 2)
+}
+
+/** A PolylineSink that keeps the points: one array per pen-down run. */
+class PolylineCollector implements PolylineSink {
+  lines: Vec2[][] = []
+  private cur: Vec2[] | null = null
+  moveTo(x: number, y: number): void {
+    this.cur = [{ x, y }]
+    this.lines.push(this.cur)
+  }
+  lineTo(x: number, y: number): void {
+    if (!this.cur) {
+      this.moveTo(x, y)
+      return
+    }
+    this.cur.push({ x, y })
+  }
+}
 
 /** Paint-time options that are about the BOARD, not about the curve itself. */
 export interface CurvePaintOpts {

@@ -523,3 +523,44 @@ describe('BoardScene.present — the board a class can read from the back', () =
     }
   })
 })
+
+// ===========================================================================
+// The overlay layer (shaded area / Riemann rectangles / closed region) paints
+// between the grid and the curves. Every assertion ABOVE this line was written
+// before it existed, and must keep measuring the same board — so the guard is
+// not "the suite still passes" but the stronger claim that a scene with an
+// EMPTY overlay list emits a byte-identical command stream. The overlays'
+// own behaviour is pinned in tests/overlays.test.ts.
+// ===========================================================================
+
+describe('renderBoard — overlays absent change nothing', () => {
+  const stream = (ctx: MockCtx): string =>
+    JSON.stringify({
+      cmds: ctx.own.cmds,
+      texts: ctx.texts,
+      fills: ctx.fills,
+      strokeStyles: ctx.strokeStyles,
+      fillStyles: ctx.fillStyles,
+      counts: [ctx.strokeCount, ctx.fillCount, ctx.textCount,
+               ctx.saveCount, ctx.restoreCount, ctx.arcCount],
+      paths: ctx.strokedPaths.map((p) => p.cmds),
+    })
+
+  it('`overlays: []` is byte-identical to no overlays field, figure and screen', () => {
+    for (const chrome of [null, chromeOn()]) {
+      const before = render(scene({ chrome }))
+      const after = render(scene({ chrome, overlays: [] }))
+      expect(stream(after)).toBe(stream(before))
+    }
+  })
+
+  it('an overlay that IS present reaches the figure (chrome:null)', () => {
+    const shaded = render(scene({
+      chrome: null,
+      overlays: [{ kind: 'area', curveId: CUBIC.id, from: -2, to: 1 }],
+    }))
+    const plain = render(scene({ chrome: null }))
+    expect(shaded.fillCount, 'the shaded area never reached the export')
+      .toBeGreaterThan(plain.fillCount)
+  })
+})

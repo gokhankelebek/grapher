@@ -38,6 +38,8 @@ import type { StyleMap } from '../core/persist'
 import type { AxisUnit, AxisUnits, PaintScale } from '../render/grid'
 import { drawGrid, paintScale } from '../render/grid'
 import { drawCurve, drawInk } from '../render/curves'
+import type { Overlay } from '../render/overlays'
+import { drawOverlays } from '../render/overlays'
 import { drawNLItem, drawNumberLineAxis, nlLanes } from '../render/numberline'
 import type { NLPart } from '../render/numberline'
 import { formatCoord } from './numeric'
@@ -164,12 +166,26 @@ export interface BoardScene {
    * This is a CARTESIAN property; a number-line board ignores it.
    */
   axisUnits?: AxisUnits
+  /**
+   * Filled figure content painted between the grid and the curves: the shaded
+   * area under a curve, Riemann rectangles, and the general closed region.
+   *
+   * These are FIGURE, not chrome. They carry the mathematics the lesson is
+   * about — a shaded ∫ that vanished from the PNG would be the same bug the
+   * analysis layer had — so they go through this one routine and reach the
+   * export identically. Absent or empty means the board draws exactly the
+   * pixels it drew before this field existed.
+   *
+   * Cartesian only; a number-line board ignores it.
+   */
+  overlays?: readonly Overlay[]
   /** Editing chrome. Null = the figure alone. */
   chrome?: BoardChrome | null
 }
 
 /** Re-exported so the App can name the field's type without reaching into render/. */
 export type { AxisUnit, AxisUnits }
+export type { Overlay, OverlayRect } from '../render/overlays'
 
 /**
  * Trig by name, at a word boundary, so `sinh`/`cosh`/`tanh` (not periodic) and
@@ -839,6 +855,24 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
     drawGrid(ctx, vp, theme, scale, scene.axisUnits ?? null)
   } catch {
     /* grid module absent or failed — keep going */
+  }
+
+  // Overlays: after the grid, before every curve — so a curve's own stroke
+  // sits on top of its own shading rather than under it — and before all
+  // chrome, because they are part of the figure.
+  const overlays = scene.overlays
+  if (overlays && overlays.length > 0) {
+    try {
+      drawOverlays(ctx, overlays, {
+        vp,
+        curves: scene.curves,
+        models,
+        paint,
+        scale,
+      })
+    } catch {
+      /* overlay render failed — the figure still stands */
+    }
   }
 
   for (const curve of scene.curves) {
