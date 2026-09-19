@@ -1,10 +1,13 @@
 // ============================================================================
 // src/ui/ExportMenu.tsx — the way out of the app.
 //
-// Download and Copy sit in the toolbar, side by side, not behind a menu: the
-// exit IS the product for a teacher building a worksheet, and burying it costs
-// them a trip every single figure. Only the SETTINGS hide behind the caret,
-// because they are set once per document and then reused.
+// ONE control: Download ▾. The primary click downloads the PNG, which is what
+// a teacher building a worksheet does every single time; the caret holds the
+// two things they do occasionally — copy it to the clipboard instead, and set
+// the size and background, which are chosen once per document and then reused.
+//
+// Two buttons side by side cost 148px of a toolbar that had 680px of controls
+// in a 704px canvas, and the second one was pressed far less than the first.
 // ============================================================================
 
 import { useEffect, useId, useRef, useState } from 'react'
@@ -77,14 +80,17 @@ export function ExportMenu({ settings, sizeOf, copyState, onChange, onExport, on
     })
   }
 
+  // The fall-back case says DOWNLOADED, and the board says why in a toast that
+  // is raised at the same moment: a Copy control that flips to "Downloaded"
+  // with no reason on screen is the thing a reviewer could not explain.
   const copyLabel =
     copyState.kind === 'copied'
-      ? 'Copied'
+      ? 'Copied to clipboard'
       : copyState.kind === 'fell-back'
-        ? 'Downloaded'
+        ? 'Downloaded instead'
         : copyState.kind === 'working'
           ? 'Copying…'
-          : 'Copy'
+          : 'Copy to clipboard'
 
   return (
     <div className="exp" ref={wrapRef}>
@@ -107,43 +113,11 @@ export function ExportMenu({ settings, sizeOf, copyState, onChange, onExport, on
       </button>
 
       <button
-        className={`tb-btn exp-copy${copyState.kind === 'copied' ? ' exp-copy-done' : ''}`}
-        onClick={onCopy}
-        disabled={copyState.kind === 'working'}
-        data-testid="export-copy"
-        data-copy-state={copyState.kind}
-        title="Copy the figure to the clipboard, ready to paste into a document"
-      >
-        {copyState.kind === 'copied' ? (
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path
-              d="M3 8.4l3.2 3.2L13 4.8"
-              stroke="currentColor"
-              strokeWidth="1.7"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        ) : (
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <rect x="5.2" y="5.2" width="8.3" height="8.3" rx="1.6" stroke="currentColor" strokeWidth="1.4" />
-            <path
-              d="M10.8 5.2V4a1.6 1.6 0 0 0-1.6-1.6H4A1.6 1.6 0 0 0 2.4 4v5.2A1.6 1.6 0 0 0 4 10.8h1.2"
-              stroke="currentColor"
-              strokeWidth="1.4"
-              strokeLinecap="round"
-            />
-          </svg>
-        )}
-        {copyLabel}
-      </button>
-
-      <button
         className={`exp-caret${open ? ' exp-caret-open' : ''}`}
-        aria-haspopup="dialog"
+        aria-haspopup="menu"
         aria-expanded={open}
-        aria-label="Export settings"
-        title={`Export settings — ${size.w}×${size.h} px`}
+        aria-label="Export options"
+        title={`Copy to clipboard, export settings — ${size.w}×${size.h} px`}
         data-testid="export-settings"
         onClick={() => setOpen((o) => !o)}
       >
@@ -153,7 +127,28 @@ export function ExportMenu({ settings, sizeOf, copyState, onChange, onExport, on
       </button>
 
       {open && (
-        <div className="exp-menu" role="dialog" aria-label="Export settings">
+        <div className="exp-menu" role="dialog" aria-label="Export options">
+          <button
+            className="exp-item"
+            onClick={onCopy}
+            disabled={copyState.kind === 'working'}
+            data-testid="export-copy"
+            data-copy-state={copyState.kind}
+            title="Copy the figure to the clipboard, ready to paste into a document"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <rect x="5.2" y="5.2" width="8.3" height="8.3" rx="1.6" stroke="currentColor" strokeWidth="1.4" />
+              <path
+                d="M10.8 5.2V4a1.6 1.6 0 0 0-1.6-1.6H4A1.6 1.6 0 0 0 2.4 4v5.2A1.6 1.6 0 0 0 4 10.8h1.2"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                strokeLinecap="round"
+              />
+            </svg>
+            {copyLabel}
+          </button>
+
+          <div className="exp-menu-sep" />
           <div className="exp-title">Output size</div>
           <div className="seg exp-seg" role="group" aria-label="Export scale">
             {EXPORT_SCALES.map((sc) => (
@@ -243,9 +238,6 @@ export function ExportMenu({ settings, sizeOf, copyState, onChange, onExport, on
           <div className="exp-readout" data-testid="export-readout">
             {size.w} × {size.h} px
             {settings.width === null ? '' : ' (exact)'}
-          </div>
-          <div className="exp-note">
-            Remembered with this document, so every figure in a worksheet comes out the same size.
           </div>
         </div>
       )}

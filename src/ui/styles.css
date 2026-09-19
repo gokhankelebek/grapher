@@ -3013,3 +3013,369 @@ button.an-value {
 .canvas-light .tb-btn[title^='Remove all curves'] {
   color: #626a86;
 }
+
+/* ============================================================
+   WAVE 2a — the card, the toolbar and the notices.
+   Appended, never edited in place: every rule above still says
+   what it said, and these are the overrides the new markup asks
+   for. Spacing 4/8/12/16/24, type 11/12/13/15/17, as before.
+   ============================================================ */
+
+/* ---- the card's first line: who this is, and one menu ---- */
+
+/* The head no longer holds the equation, so the menu takes the far end and
+   the family name gets the room the three hover-only icons used to reserve. */
+.card-head {
+  flex-wrap: nowrap;
+}
+
+.card-menu-wrap {
+  position: relative;
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.card-menu-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: var(--fs-lg);
+  line-height: 1;
+  transition:
+    background 0.15s var(--ease),
+    color 0.15s var(--ease);
+}
+
+.card-menu-btn:hover,
+.card-menu-btn-open {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+.card-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  width: 196px;
+  padding: var(--sp-2);
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow);
+  cursor: default;
+}
+
+.card-menu-item {
+  display: block;
+  width: 100%;
+  padding: 6px var(--sp-2);
+  border-radius: 6px;
+  text-align: left;
+  color: var(--text);
+  font-size: var(--fs-md);
+  transition: background 0.15s var(--ease);
+}
+
+.card-menu-item:hover {
+  background: var(--panel-3);
+}
+
+.card-menu-danger {
+  color: var(--danger);
+}
+
+.card-menu-danger:hover {
+  background: rgba(249, 95, 98, 0.14);
+}
+
+.card-menu-sep {
+  height: 1px;
+  margin: var(--sp-2) 0;
+  background: var(--border-soft);
+}
+
+.card-menu-title {
+  padding: 0 var(--sp-2);
+  margin-bottom: var(--sp-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* The style controls, inside the menu: same row, narrower home. */
+.card-menu-style {
+  margin-top: 0;
+  padding: 0 var(--sp-2) var(--sp-1);
+}
+
+/* "hidden" states a fact about the curve; it is not a control. */
+.card-flag {
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: rgba(154, 161, 189, 0.12);
+  color: #c3c9dc;
+  font-size: var(--fs-xs);
+  letter-spacing: 0.02em;
+}
+
+/* σ is a READOUT. It sat under the card's own `cursor: pointer` and looked
+   like a button that did nothing when pressed. */
+.err-badge {
+  cursor: default;
+}
+
+/* ---- the equation, on a line of its own ---- */
+
+.card-eq-line {
+  display: flex;
+  margin-top: var(--sp-2);
+}
+
+/* Measured before: a 149px box holding 257-302px of content, 43-52% of it
+   hidden behind a gradient mask so that three icons could keep 96px of the
+   same line. The equation is the product's own output — it gets the width,
+   and it wraps rather than clipping. */
+.card-eq {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+.card-eq .card-latex {
+  font-size: var(--fs-lg);
+  line-height: 1.5;
+}
+
+/* KaTeX lays a formula out as one unbreakable line by default. */
+.card-eq .katex,
+.card-eq .katex-html {
+  white-space: normal;
+}
+
+button.card-eq {
+  display: block;
+  width: 100%;
+}
+
+/* ---- Read as: one row, not a 352px list ---- */
+
+.readas-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.readas-label {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* The options carry a fit QUALITY, not σ: the list is ranked by a score σ is
+   not monotone in, and a σ column that rose and fell down a ranked list read
+   as a broken table. */
+.readas-select {
+  flex: 0 1 auto;
+  max-width: 180px;
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: var(--fs-sm);
+}
+
+.readas-select:hover {
+  border-color: var(--accent);
+}
+
+.readas-also {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.readas-also-label {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.readas-chip-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.readas-dot {
+  color: var(--faint);
+  font-size: var(--fs-xs);
+}
+
+.readas-chip {
+  padding: 2px var(--sp-2);
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  transition:
+    background 0.15s var(--ease),
+    border-color 0.15s var(--ease);
+}
+
+.readas-chip:hover {
+  background: var(--panel-3);
+  border-color: var(--border-strong);
+}
+
+/* ---- readouts that line up ---- */
+
+/* One precision per group, right-aligned on a tabular figure: a column of
+   coefficients now shares a decimal point. */
+.param-value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A value and its comma are one thing. A separator that can wrap on its own
+   ends a line with a dangling punctuation mark. */
+.an-value {
+  white-space: nowrap;
+}
+
+/* ---- the markers that belong to the other curves ---- */
+
+.analysis-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+/* ---- a toast that can carry one action ---- */
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.toast-text {
+  min-width: 0;
+}
+
+/* The toast itself stays click-through; only its button takes the pointer. */
+.toast-action {
+  pointer-events: auto;
+  padding: 2px var(--sp-2);
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background 0.15s var(--ease);
+}
+
+.toast-action:hover {
+  background: var(--panel-3);
+}
+
+/* ---- Download ▾ ---- */
+
+.exp-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: 6px var(--sp-2);
+  margin-bottom: var(--sp-2);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: var(--fs-md);
+  text-align: left;
+  transition: background 0.15s var(--ease);
+}
+
+.exp-item:hover:not(:disabled) {
+  background: var(--panel-3);
+}
+
+.exp-item:disabled {
+  color: var(--muted);
+}
+
+/* ---- the destructive item in the document menu ---- */
+
+.doc-confirm-clear {
+  margin-top: var(--sp-1);
+}
+
+.doc-item:disabled {
+  color: var(--faint);
+  opacity: 0.6;
+}
+
+/* ---- the endpoint tip, where the endpoint is ---- */
+
+.nl-coach {
+  grid-column: 1 / -1;
+  margin-top: var(--sp-1);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+/* ---- vertical budget: four curves in an 812px window ----
+   Measured before: a selected card was 795px tall in an 812px window and the
+   fourth curve was off-screen entirely. The equation now wraps instead of
+   clipping, which costs lines, so the space it needs is taken back from the
+   places that were only ever air: the leading of a wrapped formula, the gap
+   above it, and the separators inside the body. */
+
+.card-eq-line {
+  margin-top: var(--sp-1);
+}
+
+.card-eq .card-latex {
+  line-height: 1.35;
+}
+
+.card-body {
+  margin-top: var(--sp-2);
+  padding-top: var(--sp-2);
+}
+
+.an-section,
+.cand-section {
+  margin-top: var(--sp-2);
+  padding-top: var(--sp-2);
+}
+
+.readas-row {
+  gap: var(--sp-1) var(--sp-2);
+}
+
+.readas-select {
+  padding: 2px var(--sp-1);
+}

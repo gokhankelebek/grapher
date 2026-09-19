@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
 
 interface Props {
   /** Returns an error message to display, or null on success. */
@@ -8,15 +7,15 @@ interface Props {
   /**
    * What this board actually accepts. A number line takes inequalities, not
    * equations, so the same card has to be able to say so — an example a
-   * teacher can copy is the whole documentation most people will read.
+   * teacher can copy is the whole documentation most people will read, and it
+   * belongs IN the field rather than in a line of prose underneath it.
    */
   placeholder?: string
-  hint?: ReactNode
 }
 
 /** Inline equation-entry card ("+" in the sidebar). Enter submits, Esc closes;
  *  stays open after a successful submit for rapid multi-entry. */
-export function ExprInput({ onSubmit, onClose, placeholder, hint }: Props) {
+export function ExprInput({ onSubmit, onClose, placeholder }: Props) {
   const [text, setText] = useState('')
   const [error, setError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -63,9 +62,6 @@ export function ExprInput({ onSubmit, onClose, placeholder, hint }: Props) {
         }}
       />
       {error && <div className="expr-error">{error}</div>}
-      <div className="expr-hint">
-        {hint ?? 'Enter plots · Esc closes · try “x^2 + y^2 = 4”, “r = 1 + cos(theta)”, “a*x^2 + b”'}
-      </div>
     </div>
   )
 }

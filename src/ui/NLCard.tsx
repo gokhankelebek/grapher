@@ -68,6 +68,16 @@ export function nlInequality(item: NLItem): string {
   return parts[0] ?? 'x \\in \\mathbb{R}'
 }
 
+/**
+ * Shown once per session, the first time a teacher goes near an endpoint.
+ *
+ * It used to live in the canvas's empty state — a line of instructions about
+ * endpoints, printed where there were no endpoints yet, and gone for good the
+ * moment the first interval appeared. It belongs where the thing it describes
+ * is, and only until it has been read.
+ */
+let endpointTipSeen = false
+
 /** One endpoint: its value (typeable) and its closed/open state (clickable). */
 function EndpointRow({
   end,
@@ -89,7 +99,15 @@ function EndpointRow({
   onSet(v: number | null): void
 }) {
   const [editing, setEditing] = useState<{ text: string; bad: boolean } | null>(null)
+  const [tip, setTip] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+
+  const maybeTip = (): void => {
+    if (endpointTipSeen || unbounded) return
+    endpointTipSeen = true
+    setTip(true)
+    window.setTimeout(() => setTip(false), 5000)
+  }
 
   useEffect(() => {
     if (editing) inputRef.current?.select()
@@ -164,11 +182,18 @@ function EndpointRow({
         }
         aria-pressed={closed}
         aria-label={`${label} is ${closed ? 'closed' : 'open'}`}
+        onMouseEnter={maybeTip}
+        onFocus={maybeTip}
         onClick={onToggle}
       >
         <span className="nl-dot-glyph" aria-hidden="true" />
         {closed ? 'included' : 'excluded'}
       </button>
+      {tip && (
+        <span className="nl-coach" role="status">
+          Click an endpoint to switch it between included and excluded.
+        </span>
+      )}
     </div>
   )
 }

@@ -1,12 +1,9 @@
 import type { ReactNode } from 'react'
-import type { Mode } from '../App'
 
 interface Props {
-  mode: Mode
   sidebarOpen: boolean
   canUndo: boolean
   canRedo: boolean
-  hasCurves: boolean
   showAnalysis: boolean
   onToggleAnalysis(): void
   /** Ground the on-screen canvas is drawn on. */
@@ -14,40 +11,47 @@ interface Props {
   onToggleCanvasTheme(): void
   /** Document name + save state + documents menu. */
   docMenu?: ReactNode
-  /** Download / Copy / export settings — the way out of the app. */
+  /** Download ▾ — the way out of the app. */
   exportMenu?: ReactNode
-  onMode(mode: Mode): void
   onToggleSidebar(): void
   onUndo(): void
   onRedo(): void
-  onClear(): void
 }
 
+/**
+ * The toolbar, after two controls left it.
+ *
+ * Draw/Pan is gone because the canvas is modeless: Space or a middle-drag or
+ * two fingers pan, a tap selects, a tap on nothing deselects. A mode that was
+ * needed once in seven flows cost a curve every time it was set wrong.
+ *
+ * Clear is gone because a destructive button beside Undo is a live-demo
+ * landmine — "Remove all curves" now lives in the document menu behind a
+ * confirm, which is one extra click for the once-a-lesson case and no clicks
+ * at all for the accident.
+ */
 export function Toolbar({
-  mode,
   sidebarOpen,
   canUndo,
   canRedo,
-  hasCurves,
   showAnalysis,
   onToggleAnalysis,
   canvasTheme,
   onToggleCanvasTheme,
   docMenu,
   exportMenu,
-  onMode,
   onToggleSidebar,
   onUndo,
   onRedo,
-  onClear,
 }: Props) {
   return (
     <div className="toolbar">
       <button
         className="tb-btn tb-icon"
         onClick={onToggleSidebar}
-        title={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
+        title={sidebarOpen ? 'Hide sidebar (\\)' : 'Show sidebar (\\)'}
         aria-label="Toggle sidebar"
+        aria-pressed={sidebarOpen}
       >
         <svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true">
           <rect x="1" y="2" width="13" height="11" rx="2" stroke="currentColor" strokeWidth="1.3" />
@@ -68,51 +72,11 @@ export function Toolbar({
 
       <div className="tb-sep" />
 
-      <div className="seg" role="group" aria-label="Interaction mode">
-        <button
-          className={`seg-btn${mode === 'draw' ? ' seg-on' : ''}`}
-          onClick={() => onMode('draw')}
-          title="Draw mode (D) — sketch curves, hold Space to pan"
-        >
-          <svg className="seg-glyph" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path
-              d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3Z"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinejoin="round"
-            />
-          </svg>
-          Draw
-        </button>
-        <button
-          className={`seg-btn${mode === 'pan' ? ' seg-on' : ''}`}
-          onClick={() => onMode('pan')}
-          title="Pan mode (P) — drag to move, click a curve to select"
-        >
-          <svg className="seg-glyph" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path
-              d="M18 11V8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15V6.5a1.5 1.5 0 0 1 3 0V11m0 0V4.5a1.5 1.5 0 0 1 3 0V11m0 0V5.5a1.5 1.5 0 0 1 3 0V11"
-              stroke="currentColor"
-              strokeWidth="1.7"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-          Pan
-        </button>
-      </div>
-
-      <div className="tb-sep" />
-
       <button
         className={`tb-btn tb-toggle${showAnalysis ? ' tb-toggle-on' : ''}`}
         onClick={onToggleAnalysis}
         aria-pressed={showAnalysis}
-        title={
-          showAnalysis
-            ? 'Hide zeros, extrema and inflections (A)'
-            : 'Show zeros, extrema and inflections (A)'
-        }
+        title={showAnalysis ? 'Hide analysis markers (A)' : 'Show analysis markers (A)'}
       >
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path
@@ -133,11 +97,7 @@ export function Toolbar({
         aria-pressed={canvasTheme === 'light'}
         data-testid="canvas-theme"
         data-canvas-theme={canvasTheme}
-        title={
-          canvasTheme === 'light'
-            ? 'Canvas is light — switch back to dark'
-            : 'Canvas is dark — switch to light (for projecting on white)'
-        }
+        title={canvasTheme === 'light' ? 'Canvas: light' : 'Canvas: dark'}
         aria-label="Toggle canvas background"
       >
         {canvasTheme === 'light' ? (
@@ -169,9 +129,6 @@ export function Toolbar({
       </button>
       <button className="tb-btn" onClick={onRedo} disabled={!canRedo} title="Redo (⇧⌘Z)">
         Redo
-      </button>
-      <button className="tb-btn" onClick={onClear} disabled={!hasCurves} title="Remove all curves (undoable)">
-        Clear
       </button>
 
       <div className="tb-sep" />

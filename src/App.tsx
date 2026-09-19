@@ -9,12 +9,15 @@ import type {
   ProcessedStroke,
   Viewport,
 } from './core/types'
-import { CURVE_COLORS, DARK_THEME, LIGHT_THEME, nextId } from './core/types'
+import { CURVE_COLORS, DARK_THEME, LIGHT_THEME, nextId, toPrintColor } from './core/types'
 import { MODELS } from './core/fit/models'
 import { parseExpression } from './core/parse'
 import { parseInequality } from './core/parse/inequality'
 import { applyFeatureEdit, snapParams } from './core/fit/edit'
 import { analyzeCurve } from './core/analyze'
+import { curveBounds, splitNotice, unionBoxes } from './ui/curveState'
+import { AnalysisOverlay, drawContextMarkers } from './ui/AnalysisOverlay'
+import type { AnalysisOverlayHandle } from './ui/AnalysisOverlay'
 import type { FeatureEditResult, SpecialPoint } from './core/types'
 import { describePoints } from './ui/featureEdit'
 import { readCurveEquation } from './ui/equationText'
@@ -63,7 +66,15 @@ import {
 } from './ui/storage'
 import type { SaveOutcome } from './ui/storage'
 
+/**
+ * The canvas is MODELESS — Space or a middle-drag or two fingers pan, a tap
+ * selects, a tap on nothing deselects. The type survives because the stages and
+ * the document format still name it; it has exactly one value that is ever used.
+ */
 export type Mode = 'draw' | 'pan'
+
+/** The one value. Nothing sets it any more. */
+const MODE: Mode = 'draw'
 
 /** Per-curve style extras FittedCurve doesn't carry (kept in a parallel map). */
 export type { CurveStyle, StyleMap } from './core/persist'
@@ -94,8 +105,33 @@ interface Snapshot {
   styles: StyleMap
   exprSources: Record<string, string>
   brokenExpr: Record<string, string>
+  /** curveId -> the user's own typed form, while the params still mean it. */
+  displaySources: Record<string, string>
+  /** curveId -> the edits made since recognition, in the order they were made. */
+  edits: Record<string, CurveEdit[]>
   candidates: Map<string, FitResult[]>
+  /**
+   * What the action was, in three or four words: "set zero", "edit equation",
+   * "delete curve". Undo changed 0.6% of the pixels on a measured board and
+   * said nothing; now it says what it took back.
+   */
+  label: string
 }
+
+/**
+ * One thing done to a curve after it was recognised.
+ *
+ * `feature` edits are recorded in full because they can be RE-APPLIED: asking
+ * for another reading of the same sketch then re-states "the zero is at −2"
+ * against the new family, and only falls back to the confirm when the new
+ * family refuses. The others cannot be replayed and are remembered only so the
+ * board knows the curve is no longer a reading of its ink.
+ */
+export type CurveEdit =
+  | { kind: 'feature'; point: SpecialPoint; to: { x?: number; y?: number } }
+  | { kind: 'equation' }
+  | { kind: 'handle' }
+  | { kind: 'param' }
 
 /** The board-state slice any mutation may change; omitted keys are untouched. */
 interface StatePatch {
@@ -105,6 +141,8 @@ interface StatePatch {
   styles?: StyleMap
   exprSources?: Record<string, string>
   brokenExpr?: Record<string, string>
+  displaySources?: Record<string, string>
+  edits?: Record<string, CurveEdit[]>
   candidates?: Map<string, FitResult[]>
 }
 
@@ -126,7 +164,6 @@ export default function App() {
   const [items, setItems] = useState<NLItem[]>([])
   const [styles, setStyles] = useState<StyleMap>({})
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [mode, setMode] = useState<Mode>('draw')
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [drawingActive, setDrawingActive] = useState(false)
   const [exprOpen, setExprOpen] = useState(false)
@@ -135,7 +172,22 @@ export default function App() {
     null,
   )
   const [shake, setShake] = useState<{ id: string; key: number } | null>(null)
-  const [toast, setToast] = useState<{ msg: string; key: number } | null>(null)
+  /** A brief line at the foot of the board, sometimes with one thing to do. */
+  const [toast, setToast] = useState<{
+    msg: string
+    key: number
+    action?: { label: string; run(): void }
+  } | null>(null)
+  /**
+   * A destructive thing asked about before it happens. One line, two buttons,
+   * never modal: the teacher can ignore it and keep working.
+   */
+  const [confirmAsk, setConfirmAsk] = useState<{
+    key: number
+    text: string
+    yes: string
+    run(): void
+  } | null>(null)
   const [, bumpHistory] = useState(0)
 
   // ---- documents / persistence
@@ -159,6 +211,10 @@ export default function App() {
   const [exprSources, setExprSources] = useState<Record<string, string>>({})
   /** curveId -> why its equation could not be restored. */
   const [brokenExpr, setBrokenExpr] = useState<Record<string, string>>({})
+  /** curveId -> the typed form the user wrote for a curve that is still a family. */
+  const [displaySources, setDisplaySources] = useState<Record<string, string>>({})
+  /** curveId -> what has been done to it since it was recognised. */
+  const [edits, setEdits] = useState<Record<string, CurveEdit[]>>({})
   const [dropActive, setDropActive] = useState(false)
 
   // ---- curve analysis (zeros, extrema, inflections)
@@ -209,6 +265,8 @@ export default function App() {
   const toastTimerRef = useRef(0)
   const exprSourcesRef = useRef<Record<string, string>>({})
   const brokenExprRef = useRef<Record<string, string>>({})
+  const displaySourcesRef = useRef<Record<string, string>>({})
+  const editsRef = useRef<Record<string, CurveEdit[]>>({})
   const docMetaRef = useRef<DocMeta>(docMeta)
   const saveTimerRef = useRef(0)
   /** Nothing may be written until the stored document has been read in. */
@@ -235,7 +293,6 @@ export default function App() {
     styles: StyleMap
     exprSources: Record<string, string>
     selectedId: string | null
-    mode: Mode
     name: string
   } | null>(null)
 
@@ -246,8 +303,6 @@ export default function App() {
   const modelsRef = useRef(models)
   modelsRef.current = models
   selectedRef.current = selectedId
-  const modeRef = useRef<Mode>(mode)
-  modeRef.current = mode
 
   const selectedCurve = useMemo(
     () => curves.find((c) => c.id === selectedId) ?? null,
@@ -278,6 +333,62 @@ export default function App() {
   }, [analysisKey, models])
   analysisRef.current = analysis
 
+  // ------------------------------------------- analysis for the OTHER curves
+  //
+  // Markers used to exist only for the selected curve, so switching Analysis on
+  // and then deselecting left a lit button over an empty board. The toggle now
+  // means every visible curve, and the cost is kept off the hot path by a memo
+  // per curve keyed on the only three things that can move a special point.
+  const analysisCacheRef = useRef(new Map<string, SpecialPoint[]>())
+  const analysisModelsRef = useRef(models)
+  if (analysisModelsRef.current !== models) {
+    analysisModelsRef.current = models
+    analysisCacheRef.current = new Map()
+  }
+
+  const analysisFor = useCallback((curve: FittedCurve): SpecialPoint[] => {
+    const key = `${curve.id}|${curve.modelId}|${curve.params.join(',')}|${
+      curve.domain ? curve.domain.join(',') : ''
+    }`
+    const hit = analysisCacheRef.current.get(key)
+    if (hit) return hit
+    let pts: SpecialPoint[] = []
+    try {
+      const got = analyzeCurve(curve, analysisModelsRef.current)
+      pts = Array.isArray(got) ? got : []
+    } catch {
+      pts = []
+    }
+    // One entry per curve: the previous key for this id is dead the moment the
+    // curve moves, so the map cannot grow with the length of a drag.
+    for (const k of analysisCacheRef.current.keys()) {
+      if (k.startsWith(`${curve.id}|`)) analysisCacheRef.current.delete(k)
+    }
+    analysisCacheRef.current.set(key, pts)
+    return pts
+  }, [])
+
+  /**
+   * curveId -> "this curve is no longer a reading of its ink". The card uses it
+   * to decide whether σ still means anything.
+   */
+  const editedIds = useMemo<Record<string, boolean>>(() => {
+    const out: Record<string, boolean> = {}
+    for (const [id, list] of Object.entries(edits)) {
+      if (list.length > 0) out[id] = true
+    }
+    return out
+  }, [edits])
+
+  /** The visible, unselected curves and their markers. Empty when off. */
+  const contextAnalysis = useMemo(() => {
+    if (!showAnalysis || kind !== 'cartesian') return []
+    return curves
+      .filter((c) => c.visible && c.id !== selectedId)
+      .map((curve) => ({ curve, points: analysisFor(curve) }))
+      .filter((m) => m.points.length > 0)
+  }, [showAnalysis, kind, curves, selectedId, analysisFor])
+
   const vpRef = useRef<Viewport>({
     center: { x: 0, y: 0 },
     pxPerUnit: 60,
@@ -286,17 +397,50 @@ export default function App() {
   })
   const stageRef = useRef<CanvasStageHandle>(null)
   const nlStageRef = useRef<NumberLineStageHandle>(null)
+  const overlayRef = useRef<AnalysisOverlayHandle>(null)
+
+  // ------------------------------------------------------------------ toasts
+  /**
+   * A brief, non-modal message at the foot of the board, optionally carrying
+   * the ONE thing to do about it. Defined up here because undo and redo report
+   * themselves through it.
+   */
+  const showToast = useCallback(
+    (msg: string, opts?: { ms?: number; action?: { label: string; run(): void } }): void => {
+      window.clearTimeout(toastTimerRef.current)
+      setToast({ msg, key: Date.now(), ...(opts?.action ? { action: opts.action } : {}) })
+      toastTimerRef.current = window.setTimeout(() => setToast(null), opts?.ms ?? 3600)
+    },
+    [],
+  )
+
+  /** Only one answer is on screen at a time — both reply to the last action. */
+  const showFeatureNote = useCallback(
+    (note: typeof featureNote): void => {
+      window.clearTimeout(featureNoteTimerRef.current)
+      window.clearTimeout(toastTimerRef.current)
+      setToast(null)
+      setFeatureNote(note)
+      if (note && note.kind === 'moved') {
+        featureNoteTimerRef.current = window.setTimeout(() => setFeatureNote(null), 5200)
+      }
+    },
+    [],
+  )
 
   // ------------------------------------------------------------ state/history
   const takeSnapshot = useCallback(
-    (): Snapshot => ({
+    (label: string): Snapshot => ({
       curves: curvesRef.current,
       items: itemsRef.current,
       kind: kindRef.current,
       styles: stylesRef.current,
       exprSources: exprSourcesRef.current,
       brokenExpr: brokenExprRef.current,
+      displaySources: displaySourcesRef.current,
+      edits: editsRef.current,
       candidates: candidatesRef.current,
+      label,
     }),
     [],
   )
@@ -326,14 +470,27 @@ export default function App() {
       brokenExprRef.current = s.brokenExpr
       setBrokenExpr(s.brokenExpr)
     }
+    if (s.displaySources) {
+      displaySourcesRef.current = s.displaySources
+      setDisplaySources(s.displaySources)
+    }
+    if (s.edits) {
+      editsRef.current = s.edits
+      setEdits(s.edits)
+    }
     // Replaced wholesale, never mutated in place, so snapshots stay immutable.
     if (s.candidates) candidatesRef.current = s.candidates
   }, [])
 
-  /** Apply new state and push the previous snapshot onto the undo stack. */
+  /**
+   * Apply new state and push the previous snapshot onto the undo stack.
+   *
+   * `label` names the action in the teacher's words, not the code's, because
+   * it is what the undo toast will say: "Undid: set zero".
+   */
   const commitState = useCallback(
-    (s: StatePatch): void => {
-      undoRef.current = [...undoRef.current.slice(-(HISTORY_LIMIT - 1)), takeSnapshot()]
+    (s: StatePatch, label = 'change'): void => {
+      undoRef.current = [...undoRef.current.slice(-(HISTORY_LIMIT - 1)), takeSnapshot(label)]
       redoRef.current = []
       applyState(s)
       bumpHistory((v) => v + 1)
@@ -349,7 +506,7 @@ export default function App() {
     setFeatureNote(null)
     const prev = stack[stack.length - 1]
     undoRef.current = stack.slice(0, -1)
-    redoRef.current = [...redoRef.current, takeSnapshot()]
+    redoRef.current = [...redoRef.current, takeSnapshot(prev.label)]
     applyState(prev)
     bumpHistory((v) => v + 1)
     setSelectedId((sel) =>
@@ -357,7 +514,10 @@ export default function App() {
         ? sel
         : null,
     )
-  }, [applyState, takeSnapshot])
+    // An undo that moved 0.6% of the pixels on a measured board said nothing at
+    // all. Now it says what it took back.
+    showToast(`Undid: ${prev.label}`, { ms: 2200 })
+  }, [applyState, takeSnapshot, showToast])
 
   const redo = useCallback((): void => {
     const stack = redoRef.current
@@ -366,7 +526,7 @@ export default function App() {
     setFeatureNote(null)
     const next = stack[stack.length - 1]
     redoRef.current = stack.slice(0, -1)
-    undoRef.current = [...undoRef.current, takeSnapshot()]
+    undoRef.current = [...undoRef.current, takeSnapshot(next.label)]
     applyState(next)
     bumpHistory((v) => v + 1)
     setSelectedId((sel) =>
@@ -374,12 +534,23 @@ export default function App() {
         ? sel
         : null,
     )
-  }, [applyState, takeSnapshot])
+    showToast(`Redid: ${next.label}`, { ms: 2200 })
+  }, [applyState, takeSnapshot, showToast])
 
-  // Live-edit bracket: capture once at edit start, commit once at edit end.
-  const editStart = useCallback((): void => {
-    if (!preEditRef.current) preEditRef.current = takeSnapshot()
-  }, [takeSnapshot])
+  /**
+   * Live-edit bracket: capture once at edit start, commit once at edit end.
+   *
+   * The label is optional AND defensive: this is handed straight to React
+   * event props in places (a slider's onPointerDown), so the first argument
+   * can arrive as an event rather than a name.
+   */
+  const editStart = useCallback(
+    (label?: unknown): void => {
+      const name = typeof label === 'string' && label.trim() !== '' ? label : 'edit curve'
+      if (!preEditRef.current) preEditRef.current = takeSnapshot(name)
+    },
+    [takeSnapshot],
+  )
 
   const editEnd = useCallback((): void => {
     const pre = preEditRef.current
@@ -439,6 +610,41 @@ export default function App() {
     [applyState, editEnd],
   )
 
+  // ------------------------------------------------------- curve provenance
+  //
+  // A sketched curve starts as a READING OF ITS INK, and σ on its card is the
+  // distance between the two. Every edit after that — a typed equation, a
+  // stated feature, a dragged handle, a typed coefficient — makes the ink a
+  // description of something the curve no longer is. Two things depend on
+  // knowing which: the card stops showing σ, and asking for another reading
+  // stops being free (it refits the ORIGINAL sketch, which would throw the
+  // edits away without saying so).
+
+  /** The edit map with one more entry for `id`. Goes INTO the commit's patch. */
+  const withEdit = useCallback((id: string, edit: CurveEdit): Record<string, CurveEdit[]> => {
+    const list = editsRef.current[id] ?? []
+    return { ...editsRef.current, [id]: [...list, edit] }
+  }, [])
+
+  /** Record an edit made inside a live bracket (a drag), once per kind. */
+  const noteEdit = useCallback((id: string, edit: CurveEdit): void => {
+    const list = editsRef.current[id] ?? []
+    if (edit.kind !== 'feature' && list.some((e) => e.kind === edit.kind)) return
+    const next = { ...editsRef.current, [id]: [...list, edit] }
+    editsRef.current = next
+    setEdits(next)
+  }, [])
+
+  /** Everything this curve owns, minus the curve. */
+  const forgetCurve = useCallback(
+    (id: string): { displaySources: Record<string, string>; edits: Record<string, CurveEdit[]> } => {
+      const { [id]: _src, ...displaySources } = displaySourcesRef.current
+      const { [id]: _ed, ...edits } = editsRef.current
+      return { displaySources, edits }
+    },
+    [],
+  )
+
   // Track Alt so slider/nudge commits can honor "hold Alt to skip snapping".
   useEffect(() => {
     const onDown = (e: KeyboardEvent): void => {
@@ -490,7 +696,7 @@ export default function App() {
       exprSources: exprSourcesRef.current,
       viewport: { center: vpRef.current.center, pxPerUnit: vpRef.current.pxPerUnit },
       selectedId: selectedRef.current,
-      mode: modeRef.current,
+      mode: MODE,
     }),
     [],
   )
@@ -533,7 +739,7 @@ export default function App() {
     const kb = Math.round(usedBytes() / 1024)
     setSaveError(
       outcome.quota
-        ? `${outcome.message} Grapher is using about ${kb}KB. Export this document to a file, or delete documents you no longer need, then edit again to retry.`
+        ? `${outcome.message} Grapher is using about ${kb}KB. Save a backup of this document, or delete documents you no longer need, then edit again to retry.`
         : outcome.message,
     )
     return outcome
@@ -548,8 +754,8 @@ export default function App() {
     if (res.ok) return true
     setSwitchBlocked(
       'conflict' in res
-        ? `${res.message} Nothing was switched, so this board is still here. Export it to a file, or reload the other tab’s version, before moving on.`
-        : 'This document could not be saved, so switching would have thrown the work away. Export it to a file first.',
+        ? `${res.message} Nothing was switched, so this board is still here. Save a backup, or reload the other tab’s version, before moving on.`
+        : 'This document could not be saved, so switching would have thrown the work away. Save a backup first.',
     )
     return false
   }, [saveNow])
@@ -570,7 +776,6 @@ export default function App() {
       styles: board.styles,
       exprSources: board.exprSources,
       selectedId: board.selectedId,
-      mode: board.mode,
       name: meta.name,
     }
     curvesRef.current = board.curves
@@ -580,8 +785,11 @@ export default function App() {
     candidatesRef.current = board.candidates
     exprSourcesRef.current = board.exprSources
     brokenExprRef.current = board.brokenExpr
+    // A freshly loaded board has no edit history of its own yet: every curve on
+    // it is exactly what the document said it was.
+    displaySourcesRef.current = {}
+    editsRef.current = {}
     selectedRef.current = board.selectedId
-    modeRef.current = board.mode
     docMetaRef.current = meta
     exprCounterRef.current = board.exprCounter
     docStoredRef.current = false
@@ -596,9 +804,10 @@ export default function App() {
     setStyles(board.styles)
     setExprSources(board.exprSources)
     setBrokenExpr(board.brokenExpr)
+    setDisplaySources({})
+    setEdits({})
     setExtraModels(board.extraModels)
     setSelectedId(board.selectedId)
-    setMode(board.mode)
     setDocMeta(meta)
     bumpHistory((v) => v + 1)
 
@@ -674,7 +883,6 @@ export default function App() {
       loaded.styles === styles &&
       loaded.exprSources === exprSources &&
       loaded.selectedId === selectedId &&
-      loaded.mode === mode &&
       loaded.name === docMeta.name
     ) {
       loadedStateRef.current = null
@@ -682,7 +890,7 @@ export default function App() {
     }
     loadedStateRef.current = null
     scheduleSave()
-  }, [curves, items, kind, styles, exprSources, selectedId, mode, docMeta.name, scheduleSave])
+  }, [curves, items, kind, styles, exprSources, selectedId, docMeta.name, scheduleSave])
 
   // Don't lose the debounce window to a closing tab or a backgrounded phone.
   useEffect(() => {
@@ -980,10 +1188,13 @@ export default function App() {
         sourceStroke: processed.points,
         error: best.error,
       }
-      commitState({
-        curves: [...curvesRef.current, curve],
-        candidates: new Map(candidatesRef.current).set(curve.id, results),
-      })
+      commitState(
+        {
+          curves: [...curvesRef.current, curve],
+          candidates: new Map(candidatesRef.current).set(curve.id, results),
+        },
+        'draw curve',
+      )
       setSelectedId(curve.id)
       return curve
     },
@@ -997,15 +1208,20 @@ export default function App() {
       const { [id]: _broken, ...restBroken } = brokenExprRef.current
       // Everything the curve owns goes through commitState in one call, so the
       // snapshot it pushes still holds the equation text that rebuilds it.
-      commitState({
-        curves: curvesRef.current.filter((c) => c.id !== id),
-        styles: restStyles,
-        exprSources: restSources,
-        brokenExpr: restBroken,
-      })
+      const forgotten = forgetCurve(id)
+      commitState(
+        {
+          curves: curvesRef.current.filter((c) => c.id !== id),
+          styles: restStyles,
+          exprSources: restSources,
+          brokenExpr: restBroken,
+          ...forgotten,
+        },
+        'delete curve',
+      )
       setSelectedId((sel) => (sel === id ? null : sel))
     },
-    [commitState],
+    [commitState, forgetCurve],
   )
 
   const clearAll = useCallback((): void => {
@@ -1018,7 +1234,7 @@ export default function App() {
         const st = stylesRef.current[c.id]
         if (st) styles[c.id] = st
       }
-      commitState({ items: [], styles })
+      commitState({ items: [], styles }, 'remove everything on the line')
       setSelectedId(null)
       return
     }
@@ -1028,35 +1244,46 @@ export default function App() {
       const st = stylesRef.current[it.id]
       if (st) styles[it.id] = st
     }
-    commitState({ curves: [], styles, exprSources: {}, brokenExpr: {} })
+    commitState(
+      { curves: [], styles, exprSources: {}, brokenExpr: {}, displaySources: {}, edits: {} },
+      'remove all curves',
+    )
     setSelectedId(null)
   }, [commitState])
 
   const toggleVisible = useCallback(
     (id: string): void => {
-      commitState({
-        curves: curvesRef.current.map((c) => (c.id === id ? { ...c, visible: !c.visible } : c)),
-      })
+      const now = curvesRef.current.find((c) => c.id === id)
+      commitState(
+        {
+          curves: curvesRef.current.map((c) => (c.id === id ? { ...c, visible: !c.visible } : c)),
+        },
+        now && now.visible ? 'hide curve' : 'show curve',
+      )
     },
     [commitState],
   )
 
   const cycleColor = useCallback(
     (id: string): void => {
-      commitState({
-        curves: curvesRef.current.map((c) => {
-          if (c.id !== id) return c
-          const idx = CURVE_COLORS.indexOf(c.color)
-          const next = CURVE_COLORS[(idx + 1 + CURVE_COLORS.length) % CURVE_COLORS.length]
-          return { ...c, color: next }
-        }),
-      })
+      commitState(
+        {
+          curves: curvesRef.current.map((c) => {
+            if (c.id !== id) return c
+            const idx = CURVE_COLORS.indexOf(c.color)
+            const next = CURVE_COLORS[(idx + 1 + CURVE_COLORS.length) % CURVE_COLORS.length]
+            return { ...c, color: next }
+          }),
+        },
+        'change colour',
+      )
     },
     [commitState],
   )
 
   const setParam = useCallback(
     (id: string, index: number, value: number): void => {
+      noteEdit(id, { kind: 'param' })
       applyState({
         curves: curvesRef.current.map((c) =>
           c.id === id
@@ -1065,27 +1292,97 @@ export default function App() {
         ),
       })
     },
-    [applyState],
+    [applyState, noteEdit],
   )
 
+  /**
+   * Read this sketch as something else.
+   *
+   * The candidate was fitted to the ORIGINAL ink, so applying it throws away
+   * everything done to the curve since — and it used to do that silently, with
+   * no way back other than an undo nobody knew they needed (clicking the first
+   * family again does NOT restore the edits; it refits the ink a second time).
+   *
+   * So: a curve that has only ever been READ is switched straight over. A curve
+   * that has been edited gets its feature edits RE-STATED against the new
+   * family first — "the zero is at −2" is a fact about the curve, not about the
+   * cubic — and only when that is impossible is the teacher asked, once, in one
+   * line. Either way it is a single undo step.
+   */
   const applyCandidate = useCallback(
     (id: string, cand: FitResult): void => {
-      commitState({
-        curves: curvesRef.current.map((c) =>
-          c.id === id
-            ? {
-                ...c,
-                modelId: cand.modelId,
-                params: cand.params.slice(),
-                kind: cand.kind,
-                domain: cand.domain,
-                error: cand.error,
-              }
-            : c,
-        ),
+      const curve = curvesRef.current.find((c) => c.id === id)
+      if (!curve) return
+      const name = modelsRef.current[cand.modelId]?.name ?? cand.modelId
+      const label = `read as ${name.toLowerCase()}`
+      const refit: FittedCurve = {
+        ...curve,
+        modelId: cand.modelId,
+        params: cand.params.slice(),
+        kind: cand.kind,
+        domain: cand.domain,
+        error: cand.error,
+      }
+      const put = (next: FittedCurve, edits: Record<string, CurveEdit[]>): void => {
+        const { [id]: _src, ...displaySources } = displaySourcesRef.current
+        commitState(
+          {
+            curves: curvesRef.current.map((c) => (c.id === id ? next : c)),
+            displaySources,
+            edits,
+          },
+          label,
+        )
+        setSelectedId(id)
+      }
+
+      const history = editsRef.current[id] ?? []
+      if (history.length === 0) {
+        put(refit, editsRef.current)
+        return
+      }
+
+      // Replayable only when every edit was a stated FEATURE: a typed equation
+      // or a dragged handle has no restatement in another family.
+      if (history.every((e) => e.kind === 'feature')) {
+        let work = refit
+        let ok = true
+        for (const e of history) {
+          if (e.kind !== 'feature') continue
+          try {
+            const res = applyFeatureEdit(work, modelsRef.current, { point: e.point, to: e.to })
+            if (!res || !res.ok || !Array.isArray(res.params) || res.params.some((v) => !Number.isFinite(v))) {
+              ok = false
+              break
+            }
+            work = { ...work, params: res.params.slice(), domain: res.domain }
+          } catch {
+            ok = false
+            break
+          }
+        }
+        if (ok) {
+          put(work, editsRef.current)
+          showFeatureNote({
+            kind: 'moved',
+            key: Date.now(),
+            text: `Read as a ${name.toLowerCase()}, with your ${history.length === 1 ? 'edit' : `${history.length} edits`} re-applied.`,
+          })
+          return
+        }
+      }
+
+      setConfirmAsk({
+        key: Date.now(),
+        text: `This refits your original sketch as a ${name.toLowerCase()} and discards the edits you made — continue?`,
+        yes: 'Refit anyway',
+        run: () => {
+          const { [id]: _gone, ...edits } = editsRef.current
+          put(refit, edits)
+        },
       })
     },
-    [commitState],
+    [commitState, showFeatureNote],
   )
 
   const candidatesFor = useCallback(
@@ -1097,41 +1394,53 @@ export default function App() {
   /** Live param+stroke update during a canvas drag (history handled by editStart/End). */
   const dragCurveLive = useCallback(
     (id: string, params: number[], stroke?: { x: number; y: number }[]): void => {
+      noteEdit(id, { kind: 'handle' })
       applyState({
         curves: curvesRef.current.map((c) =>
           c.id === id ? { ...c, params, ...(stroke ? { sourceStroke: stroke } : {}) } : c,
         ),
       })
     },
-    [applyState],
+    [applyState, noteEdit],
   )
 
   /** Live param+domain update during a handle drag. */
   const handleDragLive = useCallback(
     (id: string, params: number[], domain: [number, number] | null): void => {
+      noteEdit(id, { kind: 'handle' })
       applyState({
         curves: curvesRef.current.map((c) => (c.id === id ? { ...c, params, domain } : c)),
       })
     },
-    [applyState],
+    [applyState, noteEdit],
   )
 
   /** Successful oversketch refit: one undoable commit. */
   const oversketchApply = useCallback(
     (id: string, params: number[], error: number): void => {
-      commitState({
-        curves: curvesRef.current.map((c) => (c.id === id ? { ...c, params, error } : c)),
-      })
+      commitState(
+        {
+          curves: curvesRef.current.map((c) => (c.id === id ? { ...c, params, error } : c)),
+        },
+        'blend stroke',
+      )
     },
     [commitState],
   )
 
-  /** A brief, non-modal message at the foot of the board. */
-  const showToast = useCallback((msg: string, ms = 3600): void => {
-    window.clearTimeout(toastTimerRef.current)
-    setToast({ msg, key: Date.now() })
-    toastTimerRef.current = window.setTimeout(() => setToast(null), ms)
-  }, [])
+  /**
+   * A transient notice the STAGE raised, naming something undoable that just
+   * happened ("Blended into this curve · Undo"). It arrives as text with the
+   * word Undo in it; here it becomes a real button, because a sentence that
+   * says Undo and cannot be pressed is worse than no sentence.
+   */
+  const showNotice = useCallback(
+    (text: string): void => {
+      const { msg, undoable } = splitNotice(text)
+      showToast(msg, undoable ? { action: { label: 'Undo', run: undo } } : undefined)
+    },
+    [showToast, undo],
+  )
 
   /** Oversketch couldn't blend the stroke: shake the card, brief toast. */
   const oversketchFail = useCallback((id: string): void => {
@@ -1149,15 +1458,19 @@ export default function App() {
   /** Exact value typed into a card readout: one undoable commit, no snapping. */
   const setParamExact = useCallback(
     (id: string, index: number, value: number): void => {
-      commitState({
-        curves: curvesRef.current.map((c) =>
-          c.id === id
-            ? { ...c, params: c.params.map((p, i) => (i === index ? value : p)) }
-            : c,
-        ),
-      })
+      commitState(
+        {
+          curves: curvesRef.current.map((c) =>
+            c.id === id
+              ? { ...c, params: c.params.map((p, i) => (i === index ? value : p)) }
+              : c,
+          ),
+          edits: withEdit(id, { kind: 'param' }),
+        },
+        'set coefficient',
+      )
     },
-    [commitState],
+    [commitState, withEdit],
   )
 
   // -------------------------------------------------------- feature editing
@@ -1168,20 +1481,6 @@ export default function App() {
   //   ok            — one undoable commit, and NO snapParams (see below).
   //   ok + alsoMoved— the same commit, plus a report of what else shifted.
   //   refused       — nothing changes; the solver's own sentence is shown.
-
-  /** Only one answer is on screen at a time — both reply to the last action. */
-  const showFeatureNote = useCallback(
-    (note: typeof featureNote): void => {
-      window.clearTimeout(featureNoteTimerRef.current)
-      window.clearTimeout(toastTimerRef.current)
-      setToast(null)
-      setFeatureNote(note)
-      if (note && note.kind === 'moved') {
-        featureNoteTimerRef.current = window.setTimeout(() => setFeatureNote(null), 5200)
-      }
-    },
-    [],
-  )
 
   /**
    * Returns true when the curve actually changed (the caller closes its editor)
@@ -1259,11 +1558,16 @@ export default function App() {
       // exact fact, exactly as with a typed coordinate. Magnetizing "x = −2" to
       // something rounder would destroy the very thing that was just asserted —
       // the same inversion HandleInput.tsx documents for typed values.
-      commitState({
-        curves: curvesRef.current.map((c) =>
-          c.id === curveId ? { ...c, params: res.params.slice(), domain: res.domain } : c,
-        ),
-      })
+      commitState(
+        {
+          curves: curvesRef.current.map((c) =>
+            c.id === curveId ? { ...c, params: res.params.slice(), domain: res.domain } : c,
+          ),
+          // Recorded so another reading of the same sketch can re-state it.
+          edits: withEdit(curveId, { kind: 'feature', point, to }),
+        },
+        `set ${point.label}`,
+      )
 
       const moved = Array.isArray(res.alsoMoved) ? res.alsoMoved : []
       const parts: string[] = []
@@ -1277,7 +1581,7 @@ export default function App() {
       )
       return true
     },
-    [commitState, showFeatureNote],
+    [commitState, showFeatureNote, withEdit],
   )
 
   /** Card readout path: the index is into the selected curve's analysis. */
@@ -1356,17 +1660,28 @@ export default function App() {
       const srcExpr = exprSourcesRef.current[id]
       const brokenWhy = brokenExprRef.current[id]
       const st = stylesRef.current[id]
-      commitState({
-        curves: [...curvesRef.current, copy],
-        ...(st ? { styles: { ...stylesRef.current, [copy.id]: st } } : {}),
-        ...(cands ? { candidates: new Map(candidatesRef.current).set(copy.id, cands) } : {}),
-        ...(srcExpr !== undefined
-          ? { exprSources: { ...exprSourcesRef.current, [copy.id]: srcExpr } }
-          : {}),
-        ...(brokenWhy !== undefined
-          ? { brokenExpr: { ...brokenExprRef.current, [copy.id]: brokenWhy } }
-          : {}),
-      })
+      const shownSrc = displaySourcesRef.current[id]
+      const madeEdits = editsRef.current[id]
+      commitState(
+        {
+          curves: [...curvesRef.current, copy],
+          ...(st ? { styles: { ...stylesRef.current, [copy.id]: st } } : {}),
+          ...(cands ? { candidates: new Map(candidatesRef.current).set(copy.id, cands) } : {}),
+          ...(srcExpr !== undefined
+            ? { exprSources: { ...exprSourcesRef.current, [copy.id]: srcExpr } }
+            : {}),
+          ...(brokenWhy !== undefined
+            ? { brokenExpr: { ...brokenExprRef.current, [copy.id]: brokenWhy } }
+            : {}),
+          ...(shownSrc !== undefined
+            ? { displaySources: { ...displaySourcesRef.current, [copy.id]: shownSrc } }
+            : {}),
+          ...(madeEdits !== undefined
+            ? { edits: { ...editsRef.current, [copy.id]: madeEdits.slice() } }
+            : {}),
+        },
+        'duplicate curve',
+      )
       setSelectedId(copy.id)
     },
     [commitState, pickColor],
@@ -1384,9 +1699,10 @@ export default function App() {
 
   const setDash = useCallback(
     (id: string, dash: number[] | undefined): void => {
-      commitState({
-        styles: { ...stylesRef.current, [id]: { ...stylesRef.current[id], dash } },
-      })
+      commitState(
+        { styles: { ...stylesRef.current, [id]: { ...stylesRef.current[id], dash } } },
+        'change line style',
+      )
     },
     [commitState],
   )
@@ -1437,10 +1753,13 @@ export default function App() {
       // Keep the source text: it is the only thing that can rebuild this
       // curve's model closure after a reload. It rides in the same commit as
       // the curve so undo/redo can never separate the two.
-      commitState({
-        curves: [...curvesRef.current, curve],
-        exprSources: { ...exprSourcesRef.current, [curve.id]: src },
-      })
+      commitState(
+        {
+          curves: [...curvesRef.current, curve],
+          exprSources: { ...exprSourcesRef.current, [curve.id]: src },
+        },
+        'add equation',
+      )
       setSelectedId(curve.id)
       return null
     },
@@ -1484,11 +1803,20 @@ export default function App() {
           res.params.every((v, i) => Object.is(v, curve.params[i]))
         // Pressing Enter on a line nobody edited is not an edit.
         if (unchanged) return null
-        commitState({
-          curves: curvesRef.current.map((c) =>
-            c.id === id ? { ...c, params: res.params.slice() } : c,
-          ),
-        })
+        // The curve is still a cubic (or a circle, or a sine) — so every handle
+        // and every interpretation survives, and the card goes on printing the
+        // line the user wrote. A lesson about factored form must not have its
+        // equation expanded the moment it is entered.
+        commitState(
+          {
+            curves: curvesRef.current.map((c) =>
+              c.id === id ? { ...c, params: res.params.slice() } : c,
+            ),
+            displaySources: { ...displaySourcesRef.current, [id]: src },
+            edits: withEdit(id, { kind: 'equation' }),
+          },
+          'edit equation',
+        )
         setSelectedId(id)
         return null
       }
@@ -1510,22 +1838,28 @@ export default function App() {
       // restores the whole curve, ink included.
       const { sourceStroke: _ink, ...bare } = curve
       const { [id]: _wasBroken, ...restBroken } = brokenExprRef.current
-      commitState({
-        curves: curvesRef.current.map((c) =>
-          c.id === id
-            ? {
-                ...bare,
-                modelId,
-                kind: res.plot.kind,
-                params: res.plot.defaultParams.slice(),
-                domain: res.plot.domain,
-                error: 0,
-              }
-            : c,
-        ),
-        exprSources: { ...exprSourcesRef.current, [id]: src },
-        brokenExpr: restBroken,
-      })
+      const { [id]: _shown, ...restShown } = displaySourcesRef.current
+      commitState(
+        {
+          curves: curvesRef.current.map((c) =>
+            c.id === id
+              ? {
+                  ...bare,
+                  modelId,
+                  kind: res.plot.kind,
+                  params: res.plot.defaultParams.slice(),
+                  domain: res.plot.domain,
+                  error: 0,
+                }
+              : c,
+          ),
+          exprSources: { ...exprSourcesRef.current, [id]: src },
+          brokenExpr: restBroken,
+          displaySources: restShown,
+          edits: withEdit(id, { kind: 'equation' }),
+        },
+        'edit equation',
+      )
       setSelectedId(id)
       if (lost) {
         showFeatureNote({
@@ -1536,7 +1870,7 @@ export default function App() {
       }
       return null
     },
-    [commitState, showFeatureNote],
+    [commitState, showFeatureNote, withEdit],
   )
 
   // ======================================================= number-line items
@@ -1750,6 +2084,8 @@ export default function App() {
       const vp = vpRef.current
       vp.pxPerUnit = clampPpu(vp.pxPerUnit * factor)
       stageRef.current?.redraw()
+      nlStageRef.current?.redraw()
+      overlayRef.current?.redraw()
       scheduleSave()
     },
     [scheduleSave],
@@ -1760,6 +2096,70 @@ export default function App() {
     vp.center = { x: 0, y: 0 }
     vp.pxPerUnit = 60
     stageRef.current?.redraw()
+    nlStageRef.current?.redraw()
+    overlayRef.current?.redraw()
+    scheduleSave()
+  }, [scheduleSave])
+
+  /** Fraction of the frame left as breathing room around the figure. */
+  const FIT_MARGIN = 0.12
+
+  /**
+   * Frame everything on the board, in one click.
+   *
+   * Zoom in / zoom out / reset gave a teacher three ways to hunt for a curve
+   * they had panned away from and no way to simply be shown it. Reset only
+   * goes home; home is not where the work is.
+   */
+  const fitToContent = useCallback((): void => {
+    const vp = vpRef.current
+    let box: { min: { x: number; y: number }; max: { x: number; y: number } } | null = null
+    if (kindRef.current === 'number-line') {
+      const xs: number[] = []
+      for (const it of itemsRef.current) {
+        if (it.kind === 'point') xs.push(it.x)
+        else {
+          if (it.lo !== null) xs.push(it.lo)
+          if (it.hi !== null) xs.push(it.hi)
+        }
+      }
+      if (xs.length === 0) return
+      box = {
+        min: { x: Math.min(...xs), y: -0.5 },
+        max: { x: Math.max(...xs), y: 0.5 },
+      }
+    } else {
+      const half = vp.widthPx / 2 / vp.pxPerUnit
+      const window: [number, number] = [vp.center.x - half, vp.center.x + half]
+      box = unionBoxes(
+        curvesRef.current
+          .filter((c) => c.visible)
+          .map((c) => curveBounds(c, modelsRef.current[c.modelId], window)),
+      )
+    }
+    if (!box) {
+      showToast('Nothing visible to frame.', { ms: 2000 })
+      return
+    }
+    const w = Math.max(box.max.x - box.min.x, 1e-6)
+    const h = Math.max(box.max.y - box.min.y, 1e-6)
+    const usableW = vp.widthPx * (1 - 2 * FIT_MARGIN)
+    const usableH = vp.heightPx * (1 - 2 * FIT_MARGIN)
+    const ppu = clampPpu(Math.min(usableW / w, usableH / h))
+    vp.pxPerUnit = ppu
+    vp.center = {
+      x: (box.min.x + box.max.x) / 2,
+      y: kindRef.current === 'number-line' ? 0 : (box.min.y + box.max.y) / 2,
+    }
+    stageRef.current?.redraw()
+    nlStageRef.current?.redraw()
+    overlayRef.current?.redraw()
+    scheduleSave()
+  }, [scheduleSave, showToast])
+
+  /** Pan/zoom happened: the marker layer rides the same viewport. */
+  const viewportChanged = useCallback((): void => {
+    overlayRef.current?.redraw()
     scheduleSave()
   }, [scheduleSave])
 
@@ -1778,6 +2178,8 @@ export default function App() {
   showAnalysisRef.current = showAnalysis
   const canvasThemeRef = useRef(canvasTheme)
   canvasThemeRef.current = canvasTheme
+  const contextAnalysisRef = useRef(contextAnalysis)
+  contextAnalysisRef.current = contextAnalysis
   const copyTimerRef = useRef(0)
 
   const boardTheme = canvasTheme === 'light' ? LIGHT_THEME : DARK_THEME
@@ -1816,8 +2218,30 @@ export default function App() {
 
   const renderExportCanvas = useCallback((): HTMLCanvasElement | null => {
     const settings = clampExportSettings(exportSettingsRef.current)
-    const out = renderBoardToCanvas(buildExportScene(settings), settings)
-    return out ? out.canvas : null
+    const scene = buildExportScene(settings)
+    const out = renderBoardToCanvas(scene, settings)
+    if (!out) return null
+    // The scene's analysis field describes ONE curve, so the other visible
+    // curves' markers are drawn on top of the same picture, in the same
+    // geometry — the export says exactly what the screen says.
+    const extra = contextAnalysisRef.current
+    if (extra.length > 0 && kindRef.current === 'cartesian' && showAnalysisRef.current) {
+      const ctx = out.canvas.getContext('2d')
+      if (ctx) {
+        const geo = out.geometry
+        ctx.save()
+        ctx.setTransform(geo.scale, 0, 0, geo.scale, geo.margin, geo.margin)
+        ctx.beginPath()
+        ctx.rect(0, 0, scene.vp.widthPx, scene.vp.heightPx)
+        ctx.clip()
+        for (const m of extra) {
+          const color = settings.theme === 'light' ? toPrintColor(m.curve.color) : m.curve.color
+          drawContextMarkers(ctx, scene.vp, m.points, color, scene.theme.bg)
+        }
+        ctx.restore()
+      }
+    }
+    return out.canvas
   }, [buildExportScene])
 
   const pngFileName = useCallback((): string => {
@@ -1933,7 +2357,10 @@ export default function App() {
     }
 
     setCopyState({ kind: 'working' })
-    const done = (): void => flashCopy({ kind: 'copied' })
+    const done = (): void => {
+      flashCopy({ kind: 'copied' })
+      showToast('Copied the figure — paste it into a document.', { ms: 2600 })
+    }
 
     try {
       const item = new ClipboardItem({ 'image/png': blobPromise })
@@ -2063,10 +2490,10 @@ export default function App() {
         const [ux, uy] = NUDGE[e.key]
         const step = e.shiftKey ? 1 : 0.1
         if (nudgeSelected(ux * step, uy * step)) e.preventDefault()
-      } else if (key === 'd' && !meta) {
-        setMode('draw')
-      } else if (key === 'p' && !meta) {
-        setMode('pan')
+      } else if (e.key === '\\' && !meta) {
+        // The sidebar is half the app and had no key at all.
+        e.preventDefault()
+        setSidebarOpen((o) => !o)
       } else if (key === 'a' && !meta) {
         setShowAnalysis((v) => {
           const next = !v
@@ -2091,7 +2518,7 @@ export default function App() {
   const canRedo = redoRef.current.length > 0
 
   return (
-    <div className="app">
+    <div className={`app${canvasTheme === 'light' ? ' canvas-light' : ''}`}>
       <Sidebar
         open={sidebarOpen}
         kind={kind}
@@ -2113,6 +2540,8 @@ export default function App() {
         shake={shake}
         exprSources={exprSources}
         brokenExpr={brokenExpr}
+        displaySources={displaySources}
+        editedIds={editedIds}
         analysis={analysis}
         onAnalysisHover={setHighlight}
         onFeatureEdit={applyFeatureByIndex}
@@ -2123,7 +2552,7 @@ export default function App() {
         onToggleVisible={toggleVisible}
         onCycleColor={cycleColor}
         onParamChange={setParam}
-        onParamEditStart={editStart}
+        onParamEditStart={() => editStart('move slider')}
         onParamEditEnd={editEnd}
         onParamCommit={(id) => commitWithSnap(id, false)}
         onParamSetExact={setParamExact}
@@ -2166,7 +2595,7 @@ export default function App() {
             styles={styles}
             theme={boardTheme}
             selectedId={selectedId}
-            mode={mode}
+            mode={MODE}
             inkColor={pickColor()}
             vpRef={vpRef}
             onSelect={setSelectedId}
@@ -2177,7 +2606,7 @@ export default function App() {
             onEditStart={editStart}
             onEditEnd={editEnd}
             onEditCancel={editCancel}
-            onViewportChange={scheduleSave}
+            onViewportChange={viewportChanged}
           />
         ) : (
         <CanvasStage
@@ -2186,7 +2615,7 @@ export default function App() {
           styles={styles}
           models={models}
           selectedId={selectedId}
-          mode={mode}
+          mode={MODE}
           inkColor={pickColor()}
           vpRef={vpRef}
           onStrokeRecognized={handleStrokeRecognized}
@@ -2199,7 +2628,8 @@ export default function App() {
           onCurveEditStart={editStart}
           onCurveEditEnd={commitWithSnap}
           onCurveEditCancel={editCancel}
-          onViewportChange={scheduleSave}
+          onViewportChange={viewportChanged}
+          onNotice={showNotice}
           analysis={showAnalysis ? analysis : EMPTY_ANALYSIS}
           analysisHighlight={highlight}
           onFeatureEdit={applyFeature}
@@ -2207,12 +2637,14 @@ export default function App() {
         />
         )}
 
+        {kind === 'cartesian' && contextAnalysis.length > 0 && (
+          <AnalysisOverlay ref={overlayRef} marked={contextAnalysis} theme={boardTheme} vpRef={vpRef} />
+        )}
+
         <Toolbar
-          mode={mode}
           sidebarOpen={sidebarOpen}
           canUndo={canUndo}
           canRedo={canRedo}
-          hasCurves={kind === 'number-line' ? items.length > 0 : curves.length > 0}
           showAnalysis={showAnalysis}
           onToggleAnalysis={toggleAnalysis}
           canvasTheme={canvasTheme}
@@ -2224,9 +2656,10 @@ export default function App() {
               docs={docs}
               saveState={saveState}
               kind={kind}
+              hasContent={kind === 'number-line' ? items.length > 0 : curves.length > 0}
               onRename={renameDoc}
               onNew={newDocument}
-              onSetKind={setBoardKind}
+              onClearBoard={clearAll}
               onOpen={openDocument}
               onDuplicate={duplicateDocument}
               onDelete={deleteDocument}
@@ -2244,16 +2677,45 @@ export default function App() {
               onCopy={copyPNG}
             />
           }
-          onMode={setMode}
           onToggleSidebar={() => setSidebarOpen((o) => !o)}
           onUndo={undo}
           onRedo={redo}
-          onClear={clearAll}
         />
 
         {toast && (
           <div key={toast.key} className="toast" role="status">
-            {toast.msg}
+            <span className="toast-text">{toast.msg}</span>
+            {toast.action && (
+              <button
+                className="toast-action"
+                onClick={() => {
+                  const run = toast.action?.run
+                  setToast(null)
+                  run?.()
+                }}
+              >
+                {toast.action.label}
+              </button>
+            )}
+          </div>
+        )}
+
+        {confirmAsk && (
+          <div key={confirmAsk.key} className="feature-note feature-note-refused" role="alertdialog">
+            <span className="feature-note-text">{confirmAsk.text}</span>
+            <button
+              className="feature-note-action"
+              onClick={() => {
+                const run = confirmAsk.run
+                setConfirmAsk(null)
+                run()
+              }}
+            >
+              {confirmAsk.yes}
+            </button>
+            <button className="feature-note-action" onClick={() => setConfirmAsk(null)}>
+              Keep my edits
+            </button>
           </div>
         )}
 
@@ -2299,12 +2761,14 @@ export default function App() {
               <strong className="banner-title">Not saved</strong>
               <span className="banner-text">{saveError}</span>
             </div>
-            <button className="banner-action" onClick={exportDocument}>
-              Export to file
-            </button>
-            <button className="banner-action" onClick={saveNow}>
-              Retry
-            </button>
+            <div className="banner-actions">
+              <button className="banner-action" onClick={exportDocument}>
+                Save a backup
+              </button>
+              <button className="banner-action" onClick={saveNow}>
+                Retry
+              </button>
+            </div>
           </div>
         )}
 
@@ -2322,20 +2786,22 @@ export default function App() {
                   : 'To protect the other tab’s work, this board is not being saved. Reload to take that version, or save this one as a copy.'}
               </span>
             </div>
-            {conflict === 'stale' && (
-              <button className="banner-action" onClick={reloadCurrentDoc}>
-                Reload
+            <div className="banner-actions">
+              {conflict === 'stale' && (
+                <button className="banner-action" onClick={reloadCurrentDoc}>
+                  Reload
+                </button>
+              )}
+              <button
+                className="banner-action"
+                onClick={() => saveBoardAsNewDoc(`${docMetaRef.current.name} copy`)}
+              >
+                Save as a copy
               </button>
-            )}
-            <button
-              className="banner-action"
-              onClick={() => saveBoardAsNewDoc(`${docMetaRef.current.name} copy`)}
-            >
-              Save as a copy
-            </button>
-            <button className="banner-action" onClick={exportDocument}>
-              Export to file
-            </button>
+              <button className="banner-action" onClick={exportDocument}>
+                Save a backup
+              </button>
+            </div>
           </div>
         )}
 
@@ -2345,12 +2811,14 @@ export default function App() {
               <strong className="banner-title">Stayed on this document</strong>
               <span className="banner-text">{switchBlocked}</span>
             </div>
-            <button className="banner-action" onClick={exportDocument}>
-              Export to file
-            </button>
-            <button className="banner-action" onClick={() => setSwitchBlocked(null)}>
-              Dismiss
-            </button>
+            <div className="banner-actions">
+              <button className="banner-action" onClick={exportDocument}>
+                Save a backup
+              </button>
+              <button className="banner-action" onClick={() => setSwitchBlocked(null)}>
+                Dismiss
+              </button>
+            </div>
           </div>
         )}
 
@@ -2362,9 +2830,11 @@ export default function App() {
               </strong>
               <span className="banner-text">{loadNotice.problems.slice(0, 3).join(' ')}</span>
             </div>
-            <button className="banner-action" onClick={() => setLoadNotice(null)}>
-              Dismiss
-            </button>
+            <div className="banner-actions">
+              <button className="banner-action" onClick={() => setLoadNotice(null)}>
+                Dismiss
+              </button>
+            </div>
           </div>
         )}
 
@@ -2372,10 +2842,7 @@ export default function App() {
           <div className="empty-hint" aria-hidden="true">
             <div className="empty-glyph">⟵•⟶</div>
             <div className="empty-title">Click the line for a point, drag along it for an interval</div>
-            <div className="empty-sub">
-              Or press + and type “-2 ≤ x &lt; 5” · click an endpoint to switch it between included
-              and excluded
-            </div>
+            <div className="empty-sub">Or press + and type “-2 ≤ x &lt; 5”</div>
           </div>
         )}
 
@@ -2383,7 +2850,10 @@ export default function App() {
           <div className="empty-hint" aria-hidden="true">
             <div className="empty-glyph">∿</div>
             <div className="empty-title">Draw anything — a wave, a circle, a heart…</div>
-            <div className="empty-sub">Every stroke becomes a live equation — or press + to type one</div>
+            <div className="empty-sub">
+              Every stroke becomes a live equation. Select a curve to get handles; drag them, or
+              double-click one to type exact values.
+            </div>
           </div>
         )}
 
@@ -2418,6 +2888,23 @@ export default function App() {
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
               <path d="M3.25 8h9.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+          </button>
+          <button
+            className="zoom-btn"
+            onClick={fitToContent}
+            title="Fit to curves (frame everything visible)"
+            aria-label="Fit to curves"
+            data-testid="fit-to-curves"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path
+                d="M2 5.5v-2a1.5 1.5 0 0 1 1.5-1.5h2M10.5 2h2A1.5 1.5 0 0 1 14 3.5v2M14 10.5v2a1.5 1.5 0 0 1-1.5 1.5h-2M5.5 14h-2A1.5 1.5 0 0 1 2 12.5v-2"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
+              <path d="M4.5 10c1.6 0 2-4 3.5-4s1.9 2 3.5 2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
             </svg>
           </button>
           <button className="zoom-btn" onClick={resetView} title="Reset view" aria-label="Reset view">

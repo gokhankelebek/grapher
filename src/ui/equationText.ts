@@ -113,6 +113,20 @@ const TEMPLATES: Record<string, Template> = {
     toParams: (v) => [v[0], -v[1], v[2], v[3]],
     verify: 'explicit',
   },
+  // y = a·ln(x − b) + c
+  log: {
+    parts: ['y = ', n(0), 'ln(x ', s(1), ') ', s(2)],
+    toSlots: (p) => [p[0], -p[1], p[2]],
+    toParams: (v) => [v[0], -v[1], v[2]],
+    verify: 'explicit',
+  },
+  // y = a/(x − b) + c
+  recip: {
+    parts: ['y = ', n(0), '/(x ', s(1), ') ', s(2)],
+    toSlots: (p) => [p[0], -p[1], p[2]],
+    toParams: (v) => [v[0], -v[1], v[2]],
+    verify: 'explicit',
+  },
   // y = a·exp(bx) + c
   exp: {
     parts: ['y = ', n(0), 'exp(', n(1), 'x) ', s(2)],
@@ -533,6 +547,45 @@ function recoverFamilyParams(
   if (candidate.some((v) => !Number.isFinite(v))) return null
   if (!provesSame(spec, candidate, probe, probeParams, mode, curve.domain)) return null
   return candidate
+}
+
+/**
+ * The KaTeX for a curve whose equation the USER wrote, when what they wrote is
+ * still true of the curve.
+ *
+ * A lesson whose subject is factored form types "y = 0.25(x+2)(x-1)(x-3)" and
+ * gets a cubic — with drag handles, an Interpretations list and feature
+ * editing, because the family survived the round trip. Expanding the line on
+ * the spot is a different lesson, so the card keeps printing what was typed and
+ * only falls back to the family's generated latex when the params have moved
+ * away from it (a slider dragged, a zero stated) or the text no longer parses.
+ *
+ * Returns null whenever the source cannot be trusted; the caller then prints
+ * `spec.latex(params)` exactly as before.
+ */
+export function displayEquationLatex(
+  source: string | undefined,
+  curve: FittedCurve,
+  spec: ModelSpec | undefined,
+): string | null {
+  if (!source || !source.trim() || !spec) return null
+  if (curve.modelId.startsWith('expr_')) return null
+  let outcome: ReturnType<typeof parseExpression>
+  try {
+    outcome = parseExpression(source)
+  } catch {
+    return null
+  }
+  if (!outcome.ok) return null
+  const params = recoverFamilyParams(source.trim(), curve, spec, outcome.plot)
+  if (!params || params.length !== curve.params.length) return null
+  // "Still says the same thing" is measured against the params on the card, to
+  // the same tolerance a redraw could show.
+  for (let i = 0; i < params.length; i++) {
+    if (!near(params[i], curve.params[i])) return null
+  }
+  const latex = outcome.plot.latex
+  return typeof latex === 'string' && latex.trim() !== '' ? latex : null
 }
 
 // ----------------------------------------------------------------------------

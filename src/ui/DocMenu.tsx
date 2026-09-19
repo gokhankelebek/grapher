@@ -9,12 +9,14 @@ interface Props {
   currentId: string | null
   docs: DocMeta[]
   saveState: SaveState
-  /** What kind of board the open document is. */
+  /** What kind of board the open document is — names what "remove all" removes. */
   kind: BoardKind
+  /** True when there is anything on the board to remove. */
+  hasContent: boolean
   onRename(name: string): void
   onNew(kind: BoardKind): void
-  /** Turn the OPEN document into the other kind of board (undoable). */
-  onSetKind(kind: BoardKind): void
+  /** Wipe this board's contents. Destructive, confirmed, and undoable. */
+  onClearBoard(): void
   onOpen(id: string): void
   onDuplicate(): void
   onDelete(id: string): void
@@ -41,9 +43,10 @@ export function DocMenu({
   docs,
   saveState,
   kind,
+  hasContent,
   onRename,
   onNew,
-  onSetKind,
+  onClearBoard,
   onOpen,
   onDuplicate,
   onDelete,
@@ -54,6 +57,7 @@ export function DocMenu({
   const [renaming, setRenaming] = useState(false)
   const [draft, setDraft] = useState(name)
   const [confirmId, setConfirmId] = useState<string | null>(null)
+  const [confirmClear, setConfirmClear] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -72,12 +76,14 @@ export function DocMenu({
       if (!wrapRef.current?.contains(e.target as Node)) {
         setOpen(false)
         setConfirmId(null)
+        setConfirmClear(false)
       }
     }
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
         setOpen(false)
         setConfirmId(null)
+        setConfirmClear(false)
       }
     }
     window.addEventListener('pointerdown', onDown)
@@ -98,8 +104,11 @@ export function DocMenu({
   const pick = (fn: () => void) => () => {
     setOpen(false)
     setConfirmId(null)
+    setConfirmClear(false)
     fn()
   }
+
+  const clearTitle = kind === 'number-line' ? 'Remove everything on the line' : 'Remove all curves'
 
   return (
     <div className="doc" ref={wrapRef}>
@@ -136,18 +145,17 @@ export function DocMenu({
         </button>
       )}
 
-      <span
-        className={`doc-save doc-save-${saveState}`}
-        title={
-          saveState === 'error'
-            ? 'Your latest changes are not saved'
-            : saveState === 'saving'
-              ? 'Saving…'
-              : 'All changes saved to this browser'
-        }
-      >
-        {saveState === 'error' ? 'unsaved' : saveState === 'saving' ? 'saving…' : 'saved'}
-      </span>
+      {/* Only the states worth a teacher's attention. A permanent "saved"
+          badge is a promise nobody asked for taking up room beside the name
+          every second of the lesson; "saving…" and "unsaved" are news. */}
+      {saveState !== 'saved' && (
+        <span
+          className={`doc-save doc-save-${saveState}`}
+          title={saveState === 'error' ? 'Your latest changes are not saved' : 'Saving…'}
+        >
+          {saveState === 'error' ? 'unsaved' : 'saving…'}
+        </span>
+      )}
 
       <button
         className={`doc-caret${open ? ' doc-caret-open' : ''}`}
@@ -158,6 +166,7 @@ export function DocMenu({
         onClick={() => {
           setOpen((o) => !o)
           setConfirmId(null)
+          setConfirmClear(false)
         }}
       >
         <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
@@ -167,33 +176,6 @@ export function DocMenu({
 
       {open && (
         <div className="doc-menu" role="menu">
-          <div className="doc-kind" role="group" aria-label="Board kind">
-            <span className="doc-kind-title">This document is a</span>
-            <div className="doc-kind-seg">
-              <button
-                className={`doc-kind-btn${kind === 'cartesian' ? ' doc-kind-on' : ''}`}
-                aria-pressed={kind === 'cartesian'}
-                title="Draw and fit curves on an x–y grid"
-                onClick={pick(() => onSetKind('cartesian'))}
-              >
-                Graph
-              </button>
-              <button
-                className={`doc-kind-btn${kind === 'number-line' ? ' doc-kind-on' : ''}`}
-                aria-pressed={kind === 'number-line'}
-                title="Solution sets, domains and interval notation on one line"
-                onClick={pick(() => onSetKind('number-line'))}
-              >
-                Number line
-              </button>
-            </div>
-            <span className="doc-kind-note">
-              Switching keeps both — nothing on the other board is thrown away.
-            </span>
-          </div>
-
-          <div className="doc-menu-sep" />
-
           <div className="doc-menu-actions">
             <button className="doc-item" role="menuitem" onClick={pick(() => onNew('cartesian'))}>
               New graph
@@ -208,12 +190,42 @@ export function DocMenu({
             <button className="doc-item" role="menuitem" onClick={pick(onDuplicate)}>
               Duplicate
             </button>
+            {/* "Save a backup…" writes a DOCUMENT; Download writes a PNG. The
+                old wording ("Export to file…") was being read as the picture. */}
             <button className="doc-item" role="menuitem" onClick={pick(onExport)}>
-              Export to file…
+              Save a backup…
             </button>
             <button className="doc-item" role="menuitem" onClick={() => fileRef.current?.click()}>
               Import from file…
             </button>
+            {confirmClear ? (
+              <div className="doc-confirm doc-confirm-clear">
+                <span className="doc-confirm-text">{clearTitle}?</span>
+                <button
+                  className="doc-confirm-yes"
+                  onClick={() => {
+                    setConfirmClear(false)
+                    setOpen(false)
+                    onClearBoard()
+                  }}
+                >
+                  Remove
+                </button>
+                <button className="doc-confirm-no" onClick={() => setConfirmClear(false)}>
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                className="doc-item tb-danger"
+                role="menuitem"
+                disabled={!hasContent}
+                title={`${clearTitle} (undoable)`}
+                onClick={() => setConfirmClear(true)}
+              >
+                {clearTitle}
+              </button>
+            )}
           </div>
 
           <div className="doc-menu-sep" />

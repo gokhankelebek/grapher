@@ -40,6 +40,10 @@ interface Props {
   exprSources: Record<string, string>
   /** curveId -> why its equation could not be restored on load. */
   brokenExpr: Record<string, string>
+  /** curveId -> the user's own typed form of a curve that is still a family. */
+  displaySources: Record<string, string>
+  /** curveId -> true once the curve stopped being a reading of its own ink. */
+  editedIds: Record<string, boolean>
   /** Special points of the selected curve, in analyzeCurve() order. */
   analysis: SpecialPoint[]
   /** Hovering a listed value emphasises its marker on canvas. */
@@ -93,6 +97,8 @@ export function Sidebar({
   shake,
   exprSources,
   brokenExpr,
+  displaySources,
+  editedIds,
   analysis,
   onAnalysisHover,
   onFeatureEdit,
@@ -146,21 +152,8 @@ export function Sidebar({
             <ExprInput
               onSubmit={onExprSubmit}
               onClose={onExprToggle}
-              placeholder={numberLine ? '-2 <= x < 5' : undefined}
-              hint={
-                numberLine
-                  ? 'Enter draws it · Esc closes · try “x < 3”, “x ≤ -2 or x > 4”, “[-2, 5)”, “{-1, 2, 5}”'
-                  : undefined
-              }
+              placeholder={numberLine ? '-2 <= x < 5' : 'y = 2sin(3x) + 1'}
             />
-          )}
-          {numberLine && items.length === 0 && !exprOpen && (
-            <div className="sidebar-empty">
-              Nothing on the line yet.
-              <br />
-              Click the line for a point, drag along it for an interval — or press + and type an
-              inequality.
-            </div>
           )}
           {numberLine &&
             items.map((item) => (
@@ -183,13 +176,6 @@ export function Sidebar({
                 onStyleEditEnd={onParamEditEnd}
               />
             ))}
-          {!numberLine && curves.length === 0 && !exprOpen && (
-            <div className="sidebar-empty">
-              Nothing here yet.
-              <br />
-              Sketch on the canvas — or press + and type an equation.
-            </div>
-          )}
           {!numberLine &&
             curves.map((curve) => (
             <CurveCard
@@ -203,7 +189,9 @@ export function Sidebar({
               snapKey={snapFlash && snapFlash.id === curve.id ? snapFlash.key : 0}
               shaking={shake !== null && shake.id === curve.id}
               exprSource={exprSources[curve.id]}
+              displaySource={displaySources[curve.id]}
               brokenReason={brokenExpr[curve.id]}
+              edited={editedIds[curve.id] === true}
               analysis={curve.id === selectedId ? analysis : EMPTY_ANALYSIS}
               onAnalysisHover={onAnalysisHover}
               onFeatureEdit={(i, to) => onFeatureEdit(curve.id, i, to)}
