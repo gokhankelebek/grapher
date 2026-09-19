@@ -633,7 +633,7 @@ function drawHandles(
     ) {
       continue
     }
-    const grow = h.id === activeId ? 1.5 : 0
+    const grow = h.id === activeId ? 3 : 0   // ~1.6x on r=5: hover must be unmistakable
     if (h.kind === 'domain-start' || h.kind === 'domain-end') {
       // A bracket: vertical stem with two arms turning INTO the domain, so the
       // pair reads as [ ... ] — an interval, which is what a trimmed domain is.
