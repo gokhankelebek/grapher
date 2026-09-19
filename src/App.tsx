@@ -53,6 +53,22 @@ import {
   FIELD_SPACING_DEFAULT,
 } from './ui/fieldLinks'
 import type { BoardField, CompiledField, FieldCardData } from './ui/fieldLinks'
+import {
+  compileShapes,
+  looksLikeShape,
+  moveVertex,
+  readShape,
+  replaceCoord,
+  sceneShapes,
+  scanPairs,
+  shapeCard,
+  shapeLegend,
+  pointLabel,
+  shapeVertices,
+} from './ui/shapeLinks'
+import type { BoardShape, CompiledShape, ShapeCardData } from './ui/shapeLinks'
+import { POLAR_OFFER, suggestPolarRuling } from './ui/boardGrid'
+import { snapPlaced } from './ui/snap'
 import { curveBounds, splitNotice, unionBoxes } from './ui/curveState'
 import { answerPieces } from './ui/nlText'
 import { AnswerContext } from './ui/answerContext'
@@ -79,7 +95,7 @@ import {
   renderBoardToCanvas,
   suggestAxisUnits,
 } from './ui/renderBoard'
-import type { AxisUnits, BoardScene, Overlay, Polyline, SlopeField } from './ui/renderBoard'
+import type { AxisUnits, BoardScene, Overlay, Polyline, Shape, SlopeField } from './ui/renderBoard'
 import { clampFitSettings, contentBounds, exportViewport } from './ui/exportFit'
 import type { FitExportSettings } from './ui/exportFit'
 import { PresentBar } from './ui/PresentBar'
@@ -99,6 +115,7 @@ import {
 import type {
   AxisUnitChoice,
   AxisUnitChoices,
+  BoardGrid,
   BoardInput,
   DocMeta,
   HydratedBoard,
@@ -180,6 +197,11 @@ interface Snapshot {
    * whole picture back rather than half of it.
    */
   fields: BoardField[]
+  /**
+   * The shapes, in the same history again: a triangle deleted beside the
+   * curve it was measured against has to come back with it, in one undo.
+   */
+  shapes: BoardShape[]
   candidates: Map<string, FitResult[]>
   /**
    * What the action was, in three or four words: "set zero", "edit equation",
@@ -216,6 +238,7 @@ interface StatePatch {
   edits?: Record<string, CurveEdit[]>
   calc?: CalcLink[]
   fields?: BoardField[]
+  shapes?: BoardShape[]
   candidates?: Map<string, FitResult[]>
 }
 
@@ -262,6 +285,23 @@ export default function App() {
    * being selected already makes a click on empty board an initial condition.
    */
   const [armedField, setArmedField] = useState<string | null>(null)
+  /**
+   * Points, segments, vectors and polygons. Same declarative rule as the
+   * fields: what is held is the LINE THE TEACHER TYPED plus its constants, and
+   * every vertex is evaluated out of that on every change — which is why a
+   * slider moves a triangle's apex live, and why a dragged vertex rewrites
+   * the line rather than being stored beside it.
+   */
+  const [shapes, setShapes] = useState<BoardShape[]>([])
+  /**
+   * Which RULING this board is drawn on — the square lattice or the polar one.
+   *
+   * A property of the DOCUMENT, exactly like the axis units and for the same
+   * reason: a polar lesson is a polar lesson on any machine. It is NOT in the
+   * undo history, also exactly like the axis units — it is a way of measuring
+   * the board, not a thing on it.
+   */
+  const [boardGrid, setBoardGrid] = useState<BoardGrid>('cartesian')
   const [snapFlash, setSnapFlash] = useState<{ id: string; mask: boolean[]; key: number } | null>(
     null,
   )
@@ -390,6 +430,15 @@ export default function App() {
   const editsRef = useRef<Record<string, CurveEdit[]>>({})
   const calcRef = useRef<CalcLink[]>([])
   const fieldsRef = useRef<BoardField[]>([])
+  const shapesRef = useRef<BoardShape[]>([])
+  const boardGridRef = useRef<BoardGrid>('cartesian')
+  boardGridRef.current = boardGrid
+  /**
+   * True once this document has been offered the polar ruling, so a board with
+   * three roses on it asks once rather than three times. Reset by a load: the
+   * next document has not been asked.
+   */
+  const polarOfferedRef = useRef(false)
   /** Highest dfdx_N registered, so a new derivative cannot collide with one. */
   const derivCounterRef = useRef(0)
   /**
@@ -615,6 +664,7 @@ export default function App() {
       edits: editsRef.current,
       calc: calcRef.current,
       fields: fieldsRef.current,
+      shapes: shapesRef.current,
       candidates: candidatesRef.current,
       label,
     }),
@@ -662,6 +712,10 @@ export default function App() {
       fieldsRef.current = s.fields
       setFields(s.fields)
     }
+    if (s.shapes) {
+      shapesRef.current = s.shapes
+      setShapes(s.shapes)
+    }
     // Replaced wholesale, never mutated in place, so snapshots stay immutable.
     if (s.candidates) candidatesRef.current = s.candidates
   }, [])
@@ -697,7 +751,8 @@ export default function App() {
       sel &&
       (prev.curves.some((c) => c.id === sel) ||
         prev.items.some((i) => i.id === sel) ||
-        prev.fields.some((f) => f.id === sel))
+        prev.fields.some((f) => f.id === sel) ||
+        prev.shapes.some((sh) => sh.id === sel))
         ? sel
         : null,
     )
@@ -720,7 +775,8 @@ export default function App() {
       sel &&
       (next.curves.some((c) => c.id === sel) ||
         next.items.some((i) => i.id === sel) ||
-        next.fields.some((f) => f.id === sel))
+        next.fields.some((f) => f.id === sel) ||
+        next.shapes.some((sh) => sh.id === sel))
         ? sel
         : null,
     )
@@ -756,7 +812,10 @@ export default function App() {
         // take back. A field's slider and a dragged initial condition are the
         // same case: they move no curve at all.
         pre.calc !== calcRef.current ||
-        pre.fields !== fieldsRef.current)
+        pre.fields !== fieldsRef.current ||
+        // And a dragged vertex: it rewrites the shape's own line and touches
+        // no curve at all.
+        pre.shapes !== shapesRef.current)
     ) {
       undoRef.current = [...undoRef.current.slice(-(HISTORY_LIMIT - 1)), pre]
       redoRef.current = []
@@ -868,6 +927,8 @@ export default function App() {
       axisUnits: { ...AUTO_AXIS_UNITS },
       calc: [],
       fields: [],
+      shapes: [],
+      grid: 'cartesian',
       viewport: { center: { x: 0, y: 0 }, pxPerUnit: 60 },
       selectedId: null,
       mode: 'draw',
@@ -890,6 +951,8 @@ export default function App() {
       axisUnits: axisUnitChoiceRef.current,
       calc: calcRef.current,
       fields: fieldsRef.current,
+      shapes: shapesRef.current,
+      grid: boardGridRef.current,
       viewport: { center: vpRef.current.center, pxPerUnit: vpRef.current.pxPerUnit },
       selectedId: selectedRef.current,
       mode: MODE,
@@ -995,6 +1058,10 @@ export default function App() {
     calcRef.current = board.calc
     // Same rule: the equations come back, everything they DRAW is re-derived.
     fieldsRef.current = board.fields
+    // And the shapes: the lines come back, every vertex is evaluated again.
+    shapesRef.current = board.shapes
+    boardGridRef.current = board.grid
+    polarOfferedRef.current = false
     calcSigRef.current = new Map()
     calcAutoHiddenRef.current = new Set()
     derivCounterRef.current = board.derivCounter
@@ -1018,6 +1085,8 @@ export default function App() {
     setAxisUnitChoice(board.axisUnits)
     setCalcLinks(board.calc)
     setFields(board.fields)
+    setShapes(board.shapes)
+    setBoardGrid(board.grid)
     setArmedField(null)
     setEdits({})
     setExtraModels(board.extraModels)
@@ -1122,6 +1191,11 @@ export default function App() {
     // And a slope field. Its equation, its constants, its spacing and its
     // initial conditions are the whole of it, and none of them touch a curve.
     fields,
+    // And a shape, for exactly the same reason — a dragged vertex changes one
+    // line of text and no curve at all.
+    shapes,
+    // And the ruling, which is a property of the document like the units.
+    boardGrid,
     selectedId,
     docMeta.name,
     scheduleSave,
@@ -1420,6 +1494,8 @@ export default function App() {
             // a new field the colour of the curve above it would be the one
             // collision the cycle exists to prevent.
             ...fieldsRef.current.map((f) => f.color),
+            // And a shape, for the same reason again: one list, one palette.
+            ...shapesRef.current.map((sh) => sh.color),
           ]
     const used = new Set(onBoard)
     for (const color of CURVE_COLORS) {
@@ -1532,7 +1608,13 @@ export default function App() {
       setSelectedId(null)
       return
     }
-    if (curvesRef.current.length === 0 && fieldsRef.current.length === 0) return
+    if (
+      curvesRef.current.length === 0 &&
+      fieldsRef.current.length === 0 &&
+      shapesRef.current.length === 0
+    ) {
+      return
+    }
     const styles: StyleMap = {}
     for (const it of itemsRef.current) {
       const st = stylesRef.current[it.id]
@@ -1543,6 +1625,7 @@ export default function App() {
         curves: [],
         calc: [],
         fields: [],
+        shapes: [],
         styles,
         exprSources: {},
         brokenExpr: {},
@@ -2544,7 +2627,12 @@ export default function App() {
       if (!Number.isFinite(at.x) || !Number.isFinite(at.y)) return
       const field = fieldsRef.current.find((f) => f.id === fieldId)
       if (!field) return
-      const sol = { id: nextId(), x: at.x, y: at.y }
+      // A point put down with a finger lands on the grid's own ladder. The tap
+      // that used to place (−0.041667, 1.975) places (0, 2), which is what the
+      // teacher meant and what the class can copy down. A TYPED initial
+      // condition stays exactly as typed — see setSolutionCoord.
+      const on = snapPlaced(at, vpRef.current)
+      const sol = { id: nextId(), x: on.x, y: on.y }
       commitState(
         { fields: mapField(fieldId, (f) => ({ ...f, solutions: [...f.solutions, sol] })) },
         'add solution curve',
@@ -2718,6 +2806,249 @@ export default function App() {
     if (armedField && armedField !== selectedId) setArmedField(null)
   }, [armedField, selectedId])
 
+  // ==================================================================== shapes
+  //
+  // A point, a segment, a vector, a polygon. Not curves: there is no x
+  // sweeping across the board, only a handful of places. What is held is the
+  // LINE THE TEACHER TYPED plus the constants its sliders are at; every vertex
+  // is evaluated out of that (src/ui/shapeLinks.ts), which is what makes a
+  // slider move an apex live and a reopened document a live figure.
+  //
+  // The consequence that makes shapes different from everything else here: a
+  // vertex dragged with a finger REWRITES THE LINE. There is nowhere else for
+  // the number to go — a stored vertex beside a source that disagrees with it
+  // is a contradiction the next load would resolve the wrong way — so a
+  // coordinate written `a` becomes the number, exactly as if it had been
+  // typed. Typing one does the same thing. One rule, two gestures.
+
+  const shapeCompiledRef = useRef<Map<string, CompiledShape>>(new Map())
+
+  /** One shape, replaced in place. The list order is the sidebar's order. */
+  const mapShape = useCallback(
+    (id: string, fn: (s: BoardShape) => BoardShape): BoardShape[] =>
+      shapesRef.current.map((s) => (s.id === id ? fn(s) : s)),
+    [],
+  )
+
+  /**
+   * Add a shape to the board.
+   *
+   * Returns the parser's own message when it refuses, so the equation box
+   * shows a triangle's complaint in exactly the place it shows an equation's.
+   */
+  const addShape = useCallback(
+    (src: string): string | null => {
+      const outcome = readShape(src)
+      if (!outcome.ok) return outcome.error
+      const shape: BoardShape = {
+        id: nextId(),
+        src,
+        params: outcome.defaultParams.slice(),
+        color: pickColor(),
+        fill: false,
+        visible: true,
+      }
+      commitState({ shapes: [...shapesRef.current, shape] }, 'add shape')
+      setSelectedId(shape.id)
+      return null
+    },
+    [commitState, pickColor],
+  )
+
+  /**
+   * Restate a shape from a new line of text — retyped on the card, or
+   * rewritten by a drag or a typed coordinate.
+   *
+   * The constants that survive keep their values BY NAME (carryParams), for
+   * the reason a field's do: turning `(a, 0)` into `(a, b)` mid-lesson must
+   * leave a where the class just put it.
+   */
+  const restateShape = useCallback(
+    (id: string, src: string, label: string, live: boolean): string | null => {
+      const shape = shapesRef.current.find((s) => s.id === id)
+      if (!shape) return null
+      if (shape.src === src) return null
+      const outcome = readShape(src)
+      if (!outcome.ok) return outcome.error
+      const was = readShape(shape.src)
+      const params = carryParams(
+        was.ok ? was.paramNames : [],
+        shape.params,
+        outcome.paramNames,
+        outcome.defaultParams,
+      )
+      const patch = { shapes: mapShape(id, (s) => ({ ...s, src, params })) }
+      if (live) {
+        relabelEdit(label)
+        applyState(patch)
+      } else {
+        commitState(patch, label)
+      }
+      return null
+    },
+    [applyState, commitState, mapShape, relabelEdit],
+  )
+
+  const setShapeEquation = useCallback(
+    (id: string, src: string): string | null => restateShape(id, src, 'edit shape', false),
+    [restateShape],
+  )
+
+  /** A constant in flight. Inside the bracket the slider's press opened. */
+  const setShapeParam = useCallback(
+    (id: string, index: number, value: number): void => {
+      if (!Number.isFinite(value)) return
+      relabelEdit('move slider')
+      applyState({
+        shapes: mapShape(id, (s) => {
+          const params = s.params.slice()
+          params[index] = value
+          return { ...s, params }
+        }),
+      })
+    },
+    [applyState, mapShape, relabelEdit],
+  )
+
+  /** A typed exact constant: one commit, one undo entry, full precision. */
+  const setShapeParamExact = useCallback(
+    (id: string, index: number, value: number): void => {
+      if (!Number.isFinite(value)) return
+      commitState(
+        {
+          shapes: mapShape(id, (s) => {
+            const params = s.params.slice()
+            params[index] = value
+            return { ...s, params }
+          }),
+        },
+        'set value',
+      )
+      setSelectedId(id)
+    },
+    [commitState, mapShape],
+  )
+
+  const toggleShapeVisible = useCallback(
+    (id: string): void => {
+      const now = shapesRef.current.find((s) => s.id === id)
+      commitState(
+        { shapes: mapShape(id, (s) => ({ ...s, visible: !s.visible })) },
+        now && now.visible ? 'hide shape' : 'show shape',
+      )
+    },
+    [commitState, mapShape],
+  )
+
+  const cycleShapeColor = useCallback(
+    (id: string): void => {
+      const now = shapesRef.current.find((s) => s.id === id)
+      if (!now) return
+      const i = CURVE_COLORS.indexOf(now.color)
+      const next = CURVE_COLORS[(i + 1) % CURVE_COLORS.length]
+      commitState({ shapes: mapShape(id, (s) => ({ ...s, color: next })) }, 'change colour')
+    },
+    [commitState, mapShape],
+  )
+
+  const toggleShapeFill = useCallback(
+    (id: string): void => {
+      const now = shapesRef.current.find((s) => s.id === id)
+      if (!now) return
+      commitState(
+        { shapes: mapShape(id, (s) => ({ ...s, fill: !s.fill })) },
+        now.fill ? 'unfill polygon' : 'fill polygon',
+      )
+    },
+    [commitState, mapShape],
+  )
+
+  const deleteShape = useCallback(
+    (id: string): void => {
+      const shape = shapesRef.current.find((s) => s.id === id)
+      if (!shape) return
+      commitState({ shapes: shapesRef.current.filter((s) => s.id !== id) }, 'delete shape')
+      setSelectedId((cur) => (cur === id ? null : cur))
+      showToast('Deleted the shape. Undo brings it back.', {
+        action: { label: 'Undo', run: () => undo() },
+      })
+    },
+    [commitState, showToast, undo],
+  )
+
+  /**
+   * Type one exact coordinate.
+   *
+   * It REPLACES that coordinate's source text, which is the whole point: a
+   * vertex written `a` and then typed as 4 is at 4, not at wherever the slider
+   * happens to be. Exact and unsnapped — a typed number is a statement.
+   */
+  const setShapeCoord = useCallback(
+    (id: string, pair: number, axis: 'x' | 'y', value: number): void => {
+      if (!Number.isFinite(value)) return
+      const shape = shapesRef.current.find((s) => s.id === id)
+      if (!shape) return
+      const next = replaceCoord(shape.src, pair, axis, value)
+      if (!next) return
+      restateShape(id, next, 'set coordinate', false)
+      setSelectedId(id)
+    },
+    [restateShape],
+  )
+
+  /**
+   * Drag one vertex. Inside the bracket the press opened, so a vertex dragged
+   * across the board is ONE undo called "move vertex" rather than one a frame.
+   *
+   * Snapped (src/ui/snap.ts): a corner put down with a finger lands on the
+   * grid's own ladder, because "(3.9583, 2.9917)" is not a vertex anybody
+   * means and not a number a class can copy down.
+   */
+  const dragShapeVertex = useCallback(
+    (id: string, pair: number, to: Vec2): void => {
+      const shape = shapesRef.current.find((s) => s.id === id)
+      if (!shape) return
+      const compiled = shapeCompiledRef.current.get(id)
+      if (!compiled?.shape) return
+      const vertex = shapeVertices(compiled.shape, scanPairs(shape.src)).find(
+        (v) => v.pair === pair,
+      )
+      if (!vertex) return
+      const next = moveVertex(shape.src, vertex, snapPlaced(to, vpRef.current))
+      if (!next) return
+      restateShape(id, next, 'move vertex', true)
+    },
+    [restateShape],
+  )
+
+  // ------------------------------------------------ what the shapes draw
+
+  /** Every shape's vertices, its LaTeX and its slider names, in one pass. */
+  const shapeCompiled = useMemo<Map<string, CompiledShape>>(
+    () => (kind === 'cartesian' ? compileShapes(shapes) : new Map()),
+    [kind, shapes],
+  )
+  shapeCompiledRef.current = shapeCompiled
+
+  const shapeScene = useMemo<Shape[]>(
+    () => sceneShapes(shapes, shapeCompiled),
+    [shapes, shapeCompiled],
+  )
+  const shapeSceneRef = useRef<Shape[]>(shapeScene)
+  shapeSceneRef.current = shapeScene
+
+  /** Everything each shape's card says, computed once for all of them. */
+  const shapeCards = useMemo<Record<string, ShapeCardData>>(() => {
+    const out: Record<string, ShapeCardData> = {}
+    for (const s of shapes) out[s.id] = shapeCard(s, shapeCompiled)
+    return out
+  }, [shapes, shapeCompiled])
+
+  const shapeCardFor = useCallback(
+    (id: string): ShapeCardData | undefined => shapeCards[id],
+    [shapeCards],
+  )
+
   // ------------------------------------------------------- typed expressions
   /** Parse and add a typed expression. Returns an error message, or null on success. */
   const addExpression = useCallback(
@@ -2733,6 +3064,12 @@ export default function App() {
       if (asField.ok) return addField(src)
       if (looksLikeField(src)) return asField.error
 
+      // Then a shape. "(1, 2)" is a point and "ABC = (0,0) (4,0) (4,3)" is a
+      // triangle; both are things the expression parser would either refuse or
+      // — worse — quietly read as something else.
+      const asShape = readShape(src)
+      if (asShape.ok) return addShape(src)
+
       let outcome: ReturnType<typeof parseExpression>
       try {
         outcome = parseExpression(src)
@@ -2740,6 +3077,14 @@ export default function App() {
         return 'The parser crashed on this input'
       }
       if (!outcome.ok) {
+        // BOTH parsers have now refused it. Which complaint is the useful one
+        // depends on what the teacher was evidently writing: the shape parser
+        // refuses "y = x" and "(x+1)(x-2)" as loudly as it refuses a malformed
+        // triangle, and its "that is a curve" is the last thing someone typing
+        // a curve needs to read. So its message surfaces only when the line
+        // clearly IS a shape — a shape word, a name and a bracket, or a line
+        // that opens with one.
+        if (looksLikeShape(src)) return asShape.error
         // The parser's message already embeds the position where relevant.
         return outcome.error
       }
@@ -2776,7 +3121,7 @@ export default function App() {
       setSelectedId(curve.id)
       return null
     },
-    [addField, commitState, pickColor],
+    [addField, addShape, commitState, pickColor],
   )
 
   /**
@@ -3357,12 +3702,47 @@ export default function App() {
           pos: { x: sol.x, y: sol.y },
           label: throughLabel(sol.x, sol.y),
           color: field.color,
-          onDrag: (pos) => moveSolution(field.id, sol.id, { x: pos.x, y: pos.y }, true),
+          onDrag: (pos) => {
+            const on = snapPlaced(pos, vpRef.current)
+            moveSolution(field.id, sol.id, { x: on.x, y: on.y }, true)
+          },
         })
       }
     }
+    // A shape's VERTICES. They are the shape — everything else about a
+    // triangle is derived from its three corners — so they are grabbable the
+    // moment its card is selected, and a drag rewrites the line that put them
+    // there (see dragShapeVertex). A point has one, a segment two, a vector
+    // its tip and, when the line writes one, its tail.
+    const shape = shapes.find((sh) => sh.id === selectedId)
+    if (shape && shape.visible) {
+      const built = shapeCompiled.get(shape.id)
+      if (built?.shape) {
+        for (const v of shapeVertices(built.shape, scanPairs(shape.src))) {
+          out.push({
+            id: `shape:${shape.id}:${v.pair}`,
+            pos: v.pos,
+            label: v.label ? `${v.label} ${pointLabel(v.pos)}` : pointLabel(v.pos),
+            color: shape.color,
+            onDrag: (pos) => dragShapeVertex(shape.id, v.pair, pos),
+          })
+        }
+      }
+    }
     return out
-  }, [kind, selectedId, calcLinks, curves, models, changeCalc, fields, moveSolution])
+  }, [
+    kind,
+    selectedId,
+    calcLinks,
+    curves,
+    models,
+    changeCalc,
+    fields,
+    moveSolution,
+    shapes,
+    shapeCompiled,
+    dragShapeVertex,
+  ])
 
   const copyTimerRef = useRef(0)
 
@@ -3432,6 +3812,14 @@ export default function App() {
       // uses rather than by a second code path that could forget them.
       fields: fieldSceneRef.current,
       polylines: fieldPolylinesRef.current,
+      // A triangle, a vector, a labelled point ARE the figure on a geometry
+      // board — often the only thing on it — so they go into the exported
+      // scene by the same field the screen uses rather than by a second code
+      // path that could forget them.
+      shapes: shapeSceneRef.current,
+      // And on the ruling the screen is on: a polar board exported on squares
+      // would be a different picture of the same curve.
+      grid: boardGridRef.current,
       chrome: null,
     }
     },
@@ -3664,6 +4052,46 @@ export default function App() {
   }, [])
 
   /**
+   * Put the board on a ruling.
+   *
+   * Not in the undo history, exactly as the axis units are not: it is how the
+   * board is MEASURED, not a thing on it. Choosing one also settles the
+   * question for this document — the offer below never comes back.
+   */
+  const setRuling = useCallback((next: BoardGrid): void => {
+    polarOfferedRef.current = true
+    setBoardGrid((prev) => (prev === next ? prev : next))
+  }, [])
+
+  /**
+   * A polar curve has just landed on a square board. OFFER the polar ruling.
+   *
+   * Deliberately not the axis-units mechanism, which re-rules the board by
+   * itself when 'auto' sees a sine. Re-drawing every gridline under a class
+   * mid-lesson is a much larger surprise than re-labelling an axis, and it is
+   * a surprise in both directions — deleting the rose would have to put the
+   * squares back, in the middle of whatever came next. So it is one line at
+   * the foot of the board with one tap to accept, asked once per document,
+   * and ignoring it IS declining it.
+   */
+  const wantsPolar = useMemo(
+    () => (kind === 'cartesian' ? suggestPolarRuling(curves) : false),
+    [kind, curves],
+  )
+  useEffect(() => {
+    if (!wantsPolar || polarOfferedRef.current) return
+    if (boardGridRef.current === 'polar') {
+      polarOfferedRef.current = true
+      return
+    }
+    polarOfferedRef.current = true
+    showToast(POLAR_OFFER, {
+      ms: 9000,
+      action: { label: 'Polar ruling', run: () => setBoardGrid('polar') },
+    })
+  }, [wantsPolar, showToast])
+
+  /**
    * Shift+P: the x-axis, round the three states, with the answer said out loud.
    *
    * A cycle rather than a toggle because 'auto' is a state a teacher has to be
@@ -3757,6 +4185,8 @@ export default function App() {
         if (kindRef.current === 'number-line') deleteItem(selectedRef.current)
         else if (fieldsRef.current.some((f) => f.id === selectedRef.current)) {
           deleteField(selectedRef.current)
+        } else if (shapesRef.current.some((sh) => sh.id === selectedRef.current)) {
+          deleteShape(selectedRef.current)
         } else deleteCurve(selectedRef.current)
       } else if (NUDGE[e.key]) {
         const [ux, uy] = NUDGE[e.key]
@@ -3802,6 +4232,7 @@ export default function App() {
     redo,
     deleteCurve,
     deleteField,
+    deleteShape,
     deleteItem,
     nudgeSelected,
     commitWithSnap,
@@ -3837,8 +4268,23 @@ export default function App() {
               // field has no card on the wall. Two fields projected side by
               // side would otherwise be two grey textures.
               ...fieldLegend(fields, fieldCompiled),
+              // And a shape: △ABC on the wall, so the class knows which
+              // triangle the lesson is about when two are on the board.
+              ...shapeLegend(shapes, shapeCompiled),
             ],
-    [presentMode, kind, items, curves, models, displaySources, calcLinks, fields, fieldCompiled],
+    [
+      presentMode,
+      kind,
+      items,
+      curves,
+      models,
+      displaySources,
+      calcLinks,
+      fields,
+      fieldCompiled,
+      shapes,
+      shapeCompiled,
+    ],
   )
 
   const changePresentType = useCallback((next: number): void => {
@@ -3848,7 +4294,9 @@ export default function App() {
   }, [])
 
   const hasBoardContent =
-    kind === 'number-line' ? items.length > 0 : curves.length > 0 || fields.length > 0
+    kind === 'number-line'
+      ? items.length > 0
+      : curves.length > 0 || fields.length > 0 || shapes.length > 0
 
   /** What every number-line card needs to speak for its whole answer. */
   const answerBoard = useMemo(() => ({ items, styles }), [items, styles])
@@ -3922,6 +4370,16 @@ export default function App() {
         onFieldEquation={setFieldEquation}
         onSolutionSet={setSolutionCoord}
         onSolutionRemove={removeSolution}
+        shapes={shapes}
+        shapeCardFor={shapeCardFor}
+        onShapeDelete={deleteShape}
+        onShapeToggleVisible={toggleShapeVisible}
+        onShapeCycleColor={cycleShapeColor}
+        onShapeToggleFill={toggleShapeFill}
+        onShapeParamChange={setShapeParam}
+        onShapeParamSetExact={setShapeParamExact}
+        onShapeEquation={setShapeEquation}
+        onShapeCoord={setShapeCoord}
       />
       </AnswerContext.Provider>
 
@@ -4000,6 +4458,8 @@ export default function App() {
           overlays={overlays}
           fields={fieldScene}
           polylines={fieldPolylines}
+          shapes={shapeScene}
+          grid={boardGrid}
           extraHandles={extraHandles}
           pointPick={pointPick}
         />
@@ -4088,6 +4548,8 @@ export default function App() {
                 axisUnits={kind === 'cartesian' ? axisUnitChoice : null}
                 resolvedAxisUnits={axisUnits}
                 onAxisUnit={setAxisUnit}
+                grid={kind === 'cartesian' ? boardGrid : null}
+                onGrid={setRuling}
               />
             </>
           }
@@ -4283,6 +4745,7 @@ export default function App() {
         {kind === 'cartesian' &&
           curves.length === 0 &&
           fields.length === 0 &&
+          shapes.length === 0 &&
           !drawingActive &&
           !loadNotice?.fatal && (
           <div className="empty-hint" aria-hidden="true">
@@ -4298,6 +4761,7 @@ export default function App() {
         {curves.length === 0 &&
           items.length === 0 &&
           fields.length === 0 &&
+          shapes.length === 0 &&
           !drawingActive &&
           loadNotice?.fatal && (
           <div className="empty-hint empty-hint-error">

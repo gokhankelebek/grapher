@@ -12,6 +12,8 @@ import { CurveCard } from './CurveCard'
 import type { CalcChange, CalcKind, CardCalc } from './calcLinks'
 import { FieldCard } from './FieldCard'
 import type { BoardField, FieldCardData } from './fieldLinks'
+import { ShapeCard } from './ShapeCard'
+import type { BoardShape, ShapeCardData } from './shapeLinks'
 import { NLCard } from './NLCard'
 import { ExprInput } from './ExprInput'
 import { BoardKindSwitch } from './BoardKindSwitch'
@@ -102,6 +104,25 @@ interface Props {
   onFieldEquation(id: string, src: string): string | null
   onSolutionSet(fieldId: string, solutionId: string, to: { x?: number; y?: number }): void
   onSolutionRemove(fieldId: string, solutionId: string): void
+  /**
+   * The shapes on this board — points, segments, vectors, polygons. In the
+   * SAME list again, for the same reason: one column of objects a teacher
+   * typed. A board with a triangle and a tangent line on it has ONE list of
+   * what is on it.
+   */
+  shapes: BoardShape[]
+  /** Everything one shape's card prints, already computed. */
+  shapeCardFor(id: string): ShapeCardData | undefined
+  onShapeDelete(id: string): void
+  onShapeToggleVisible(id: string): void
+  onShapeCycleColor(id: string): void
+  onShapeToggleFill(id: string): void
+  onShapeParamChange(id: string, index: number, value: number): void
+  onShapeParamSetExact(id: string, index: number, value: number): void
+  /** Retype a shape. Error message to show, or null. */
+  onShapeEquation(id: string, src: string): string | null
+  /** Type one exact coordinate, which rewrites that coordinate's source text. */
+  onShapeCoord(id: string, pair: number, axis: 'x' | 'y', value: number): void
 }
 
 /** Stable empty array for the cards that aren't selected. */
@@ -168,6 +189,16 @@ export function Sidebar({
   onFieldEquation,
   onSolutionSet,
   onSolutionRemove,
+  shapes,
+  shapeCardFor,
+  onShapeDelete,
+  onShapeToggleVisible,
+  onShapeCycleColor,
+  onShapeToggleFill,
+  onShapeParamChange,
+  onShapeParamSetExact,
+  onShapeEquation,
+  onShapeCoord,
 }: Props) {
   const numberLine = kind === 'number-line'
 
@@ -179,7 +210,7 @@ export function Sidebar({
           <div className="sidebar-head-row">
             <span className="sidebar-title">{numberLine ? 'Solution set' : 'Curves'}</span>
             <span className="sidebar-count">
-              {numberLine ? items.length : curves.length + fields.length}
+              {numberLine ? items.length : curves.length + fields.length + shapes.length}
             </span>
             <button
               className={`add-btn${exprOpen ? ' add-open' : ''}`}
@@ -202,7 +233,11 @@ export function Sidebar({
             <ExprInput
               onSubmit={onExprSubmit}
               onClose={onExprToggle}
-              placeholder={numberLine ? '-2 <= x < 5' : 'y = 2sin(3x) + 1   or   dy/dx = x - y'}
+              placeholder={
+                numberLine
+                  ? '-2 <= x < 5'
+                  : 'y = 2sin(3x) + 1   ·   dy/dx = x - y   ·   ABC = (0,0) (4,0) (4,3)'
+              }
             />
           )}
           {numberLine &&
@@ -290,6 +325,30 @@ export function Sidebar({
                   onEquationCommit={(src) => onFieldEquation(field.id, src)}
                   onSolutionSet={(solId, to) => onSolutionSet(field.id, solId, to)}
                   onSolutionRemove={(solId) => onSolutionRemove(field.id, solId)}
+                />
+              )
+            })}
+          {!numberLine &&
+            shapes.map((shape) => {
+              const data = shapeCardFor(shape.id)
+              if (!data) return null
+              return (
+                <ShapeCard
+                  key={shape.id}
+                  shape={shape}
+                  data={data}
+                  selected={shape.id === selectedId}
+                  onSelect={() => onSelect(shape.id)}
+                  onDelete={() => onShapeDelete(shape.id)}
+                  onToggleVisible={() => onShapeToggleVisible(shape.id)}
+                  onCycleColor={() => onShapeCycleColor(shape.id)}
+                  onToggleFill={() => onShapeToggleFill(shape.id)}
+                  onParamChange={(i, v) => onShapeParamChange(shape.id, i, v)}
+                  onParamEditStart={onParamEditStart}
+                  onParamEditEnd={onParamEditEnd}
+                  onParamSetExact={(i, v) => onShapeParamSetExact(shape.id, i, v)}
+                  onEquationCommit={(src) => onShapeEquation(shape.id, src)}
+                  onCoordSet={(pair, axis, v) => onShapeCoord(shape.id, pair, axis, v)}
                 />
               )
             })}

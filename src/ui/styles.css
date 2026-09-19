@@ -4058,3 +4058,32 @@ button.calc-field-btn {
   font-size: var(--fs-xs);
   line-height: 1.45;
 }
+
+/*
+ * A shape's card is a field's card is a curve's card, for the third time and
+ * the same reason: on the board they are the same kind of object. Only the one
+ * thing a shape genuinely has that neither of the others does needs rules — a
+ * list of VERTICES, which are not parameters but the figure itself.
+ */
+
+.shape-vertex-row {
+  align-items: center;
+}
+
+/* "A" / "tip" — the letter the figure was named with, ahead of its pair. */
+.shape-vertex-name {
+  min-width: 1.6em;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/*
+ * A coordinate whose source is a formula rather than a number. Marked, because
+ * typing into it or dragging its vertex REPLACES that formula with a number —
+ * a one-way edit to the teacher's own text, and the only one in the app. The
+ * dotted rule is the same "there is more to this than the value" mark the
+ * analysis readouts use, and the tooltip says the rest.
+ */
+.shape-coord-expr .calc-field-value {
+  border-bottom: 1px dotted var(--faint);
+}

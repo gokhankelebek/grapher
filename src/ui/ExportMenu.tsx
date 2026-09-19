@@ -14,7 +14,13 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { EXPORT_SCALES, MAX_EXPORT_MARGIN, MAX_EXPORT_WIDTH, MIN_EXPORT_WIDTH } from './renderBoard'
 import { ASPECTS, ASPECT_LABELS } from './exportFit'
 import type { AspectKey, FitExportSettings } from './exportFit'
-import type { AxisUnitChoice, AxisUnitChoices, ResolvedAxisUnits } from '../core/persist'
+import type {
+  AxisUnitChoice,
+  AxisUnitChoices,
+  BoardGrid,
+  ResolvedAxisUnits,
+} from '../core/persist'
+import { RULINGS } from './boardGrid'
 
 /** What the Copy button is currently saying. */
 export type CopyState =
@@ -49,6 +55,17 @@ interface Props {
   /** What 'auto' currently comes out as, so the control can say so. */
   resolvedAxisUnits: ResolvedAxisUnits
   onAxisUnit(axis: 'x' | 'y', choice: AxisUnitChoice): void
+  /**
+   * Which RULING the board is drawn on, or null on a board that has no grid
+   * to rule (a number line) — the row is then not drawn at all.
+   *
+   * Beside the axis units because it is the same kind of decision, made in the
+   * same breath and about the same thing: how this board is MEASURED. A polar
+   * lesson sets the ruling and the θ axis together, and they belong in one
+   * panel rather than one here and one three menus away.
+   */
+  grid: BoardGrid | null
+  onGrid(next: BoardGrid): void
   onChange(next: FitExportSettings): void
   onExport(): void
   onCopy(): void
@@ -69,6 +86,8 @@ export function ExportMenu({
   axisUnits,
   resolvedAxisUnits,
   onAxisUnit,
+  grid,
+  onGrid,
   onChange,
   onExport,
   onCopy,
@@ -153,7 +172,7 @@ export function ExportMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label="Board and export settings"
-        title={`Copy to clipboard, axis units, export settings — ${size.w}×${size.h} px`}
+        title={`Copy to clipboard, axis units, ruling, export settings — ${size.w}×${size.h} px`}
         data-testid="export-settings"
         onClick={() => setOpen((o) => !o)}
       >
@@ -226,6 +245,38 @@ export function ExportMenu({
                 Auto follows the board: a sine or a typed sin/cos/tan puts the x-axis in π, and
                 removing it puts it back. Shift+P cycles the x-axis. The PNG is measured the same
                 way the screen is.
+              </div>
+            </>
+          )}
+
+          {grid && (
+            <>
+              <div className="exp-menu-sep" />
+              <div className="exp-title">Ruling</div>
+              <div
+                className="seg exp-seg"
+                role="group"
+                aria-label="Board ruling"
+                data-testid="board-grid"
+                data-grid={grid}
+              >
+                {RULINGS.map((r) => (
+                  <button
+                    key={r.value}
+                    className={`seg-btn${grid === r.value ? ' seg-on' : ''}`}
+                    data-testid={`board-grid-${r.value}`}
+                    aria-pressed={grid === r.value}
+                    onClick={() => onGrid(r.value)}
+                    title={r.title}
+                  >
+                    {r.label}
+                  </button>
+                ))}
+              </div>
+              <div className="exp-note">
+                Polar draws circles of constant r and spokes of constant θ, which is how a rose or
+                a limaçon is actually read. The axis units still apply — π along x puts the spokes
+                at π/6, π/4, π/3. The PNG is ruled the same way the screen is.
               </div>
             </>
           )}

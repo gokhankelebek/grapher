@@ -29,7 +29,8 @@ import {
   nearestOnCurve,
 } from '../core/fit/edit'
 import { handleHitRadius, renderBoard } from './renderBoard'
-import type { AxisUnits, Overlay, Polyline, SlopeField } from './renderBoard'
+import type { AxisUnits, Overlay, Polyline, Shape, SlopeField } from './renderBoard'
+import type { BoardGrid } from '../core/persist'
 import {
   NEIGHBOURHOOD_PX,
   TOUCH_INK_HOLD_MS,
@@ -124,6 +125,19 @@ interface Props {
    */
   fields?: readonly SlopeField[] | null
   polylines?: readonly Polyline[] | null
+  /**
+   * Points, segments, vectors and polygons — the figure a class MEASURES.
+   * Straight into the scene beside the fields, so the screen and the exported
+   * PNG cannot disagree about where a vertex is.
+   */
+  shapes?: readonly Shape[] | null
+  /**
+   * The RULING: the square lattice, or the circles and spokes a polar curve is
+   * read off. Absent means the square one, so a caller that never mentions it
+   * draws exactly what it always drew. Threaded exactly like `axisUnits`,
+   * because the export builds the same scene.
+   */
+  grid?: BoardGrid | null
   /**
    * Extra grabbable points for the selected object, owned by the App. Drawn as
    * handles; their drags go to `onDrag` instead of applyHandleDrag.
@@ -422,6 +436,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     overlays,
     fields,
     polylines,
+    shapes,
+    grid,
     extraHandles,
     pointPick,
   },
@@ -451,6 +467,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   const overlaysRef = useRef<readonly Overlay[] | null | undefined>(overlays)
   const fieldsRef = useRef<readonly SlopeField[] | null | undefined>(fields)
   const polylinesRef = useRef<readonly Polyline[] | null | undefined>(polylines)
+  const shapesRef = useRef<readonly Shape[] | null | undefined>(shapes)
+  const gridRef = useRef<BoardGrid | null | undefined>(grid)
   const extraHandlesRef = useRef<readonly ExtraHandle[]>(extraHandles ?? [])
   const pointPickRef = useRef<Props['pointPick']>(pointPick)
 
@@ -603,6 +621,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       overlays: overlaysRef.current ?? undefined,
       fields: fieldsRef.current ?? undefined,
       polylines: polylinesRef.current ?? undefined,
+      shapes: shapesRef.current ?? undefined,
+      grid: gridRef.current ?? undefined,
       analysis:
         sel && !busy && analysisRef.current.length > 0
           ? { curve: sel, points: analysisRef.current }
@@ -676,6 +696,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     overlaysRef.current = overlays
     fieldsRef.current = fields
     polylinesRef.current = polylines
+    shapesRef.current = shapes
+    gridRef.current = grid
     extraHandlesRef.current = extraHandles ?? []
     pointPickRef.current = pointPick
     hitRef.current = hitRadii(coarseRef.current, present)
@@ -692,6 +714,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     overlays,
     fields,
     polylines,
+    shapes,
+    grid,
     extraHandles,
     pointPick,
     selectedId,

@@ -22,6 +22,7 @@ import type {
 } from './types'
 import { parseExpression } from './parse'
 import { parseSlopeField } from './parse/slopeField'
+import { parseShape } from './parse/shapes'
 import { MODELS } from './fit/models'
 import { derivativeModel } from './calculus'
 import type { RiemannMethod } from './calculus'
@@ -192,6 +193,48 @@ export function clampFieldSpacing(v: unknown): number {
   return best
 }
 
+// --- shapes -----------------------------------------------------------------
+//
+// A point, a segment, a vector, a polygon. Same rule as everything else on
+// this board: what is stored is the LINE THE TEACHER TYPED plus the constants
+// its sliders are at, and every vertex is evaluated out of that on load. So a
+// triangle written `ABC = (0,0) (4,0) (a,3)` comes back with its slider still
+// driving C, rather than as three frozen numbers.
+//
+// That is also why a dragged vertex REWRITES the source text (see the App):
+// the source is the only truth there is, so a vertex whose position no longer
+// follows from it would be a lie the next load would expose.
+
+/** A shape as the board holds it. `src` is the only source of truth. */
+export interface BoardShape {
+  id: string
+  /** The shape exactly as it was typed, e.g. "ABC = (0,0) (4,0) (4,3)". */
+  src: string
+  /** The free constants, in the parser's own order. */
+  params: number[]
+  color: string
+  /** Polygons only: paint the interior. Ignored by the other kinds. */
+  fill: boolean
+  visible: boolean
+}
+
+// --- board ruling -----------------------------------------------------------
+//
+// Which LATTICE a cartesian board is drawn on: the square grid, or the
+// concentric circles and radial spokes a polar curve is actually read off.
+// It is a property of the board, not of any curve — a rose and its r-vs-θ
+// companion can be on screen together and the teacher chooses the frame the
+// class is reading — which is exactly why it lives in the document beside the
+// axis units rather than on a curve.
+
+/** The ruling a cartesian board is drawn on. */
+export type BoardGrid = 'cartesian' | 'polar'
+
+/** Anything but the word 'polar' is the square ruling, which is the default. */
+export function storedGrid(v: unknown): BoardGrid {
+  return v === 'polar' ? 'polar' : 'cartesian'
+}
+
 /** Rectangle counts a board offers. 200 is also where the slider stops. */
 export const RIEMANN_N_MIN = 1
 export const RIEMANN_N_MAX = 200
@@ -291,6 +334,8 @@ const MAX_CALC = 200
 /** Same for slope fields, and for the solution curves through any one of them. */
 const MAX_FIELDS = 100
 const MAX_SOLUTIONS = 100
+/** And for shapes. A figure with more than this in it is a damaged record. */
+const MAX_SHAPES = 200
 /** Stored stroke resolution. Keeps boards small; plenty for refit and hit tests. */
 export const MAX_STORED_STROKE = 120
 const MAX_STROKE_IN = 20000
@@ -393,6 +438,46 @@ export interface StoredBoard {
    * exactly on "this board has no slope fields".
    */
   fields?: StoredField[]
+  /**
+   * The points, segments, vectors and polygons on this board — as the lines
+   * that were typed, never as evaluated vertices, for the same reason a field
+   * stores its sentence.
+   *
+   * Omitted entirely when there are none, which is every document written
+   * before this field existed: such a board serialises byte-for-byte as it did
+   * then, and an older reader drops a key it does not know and lands exactly
+   * on "this board has no shapes".
+   */
+  shapes?: StoredShape[]
+  /**
+   * The ruling: 'polar' when the board is drawn on circles and spokes.
+   *
+   * Written ONLY for a polar board. The square ruling is the default and what
+   * every document ever written meant, so a cartesian board writes no key and
+   * serialises byte-for-byte as it did before this existed — and an older
+   * reader drops a key it does not know and lands exactly on 'cartesian'.
+   */
+  grid?: BoardGrid
+}
+
+/**
+ * One shape as JSON: the line as typed, its constants, and its style.
+ *
+ * Everything that has a default is omitted at that default, by the same rule
+ * the fields follow: a control nobody touched must not change the bytes of a
+ * saved document.
+ */
+export interface StoredShape {
+  id: string
+  /** The shape as typed — the only thing that rebuilds its vertices. */
+  src: string
+  color: string
+  /** Free constants. Omitted when the shape has none. */
+  params?: number[]
+  /** Polygons only, and only when the interior is painted. */
+  fill?: true
+  /** Written only when the shape is hidden. */
+  hidden?: true
 }
 
 /**
@@ -497,6 +582,10 @@ export interface BoardInput {
   calc?: readonly CalcLink[]
   /** Slope fields. Absent or empty writes nothing at all, by the same rule. */
   fields?: readonly BoardField[]
+  /** Shapes. Absent or empty writes nothing at all, by the same rule. */
+  shapes?: readonly BoardShape[]
+  /** The ruling. Absent means 'cartesian', which writes nothing at all. */
+  grid?: BoardGrid
   viewport: { center: Vec2; pxPerUnit: number }
   selectedId: string | null
   mode: BoardMode
@@ -532,6 +621,14 @@ export interface HydratedBoard {
    * what it said.
    */
   fields: BoardField[]
+  /**
+   * The shapes that could be rebuilt, by the same rule and for the same
+   * reason: a triangle is one line of text, and a silent drop would lose the
+   * figure a lesson was built around and leave no trace of what it said.
+   */
+  shapes: BoardShape[]
+  /** The ruling this document states. 'cartesian' when it is silent. */
+  grid: BoardGrid
   viewport: { center: Vec2; pxPerUnit: number }
   selectedId: string | null
   mode: BoardMode
@@ -682,7 +779,72 @@ export function boardToStored(input: BoardInput): StoredBoard {
   const fields = input.fields ?? []
   if (fields.length > 0) board.fields = fields.slice(0, MAX_FIELDS).map(fieldToStored)
 
+  // And for the shapes.
+  const shapes = input.shapes ?? []
+  if (shapes.length > 0) board.shapes = shapes.slice(0, MAX_SHAPES).map(shapeToStored)
+
+  // The ruling, only when it is not the square one every document has always
+  // been drawn on.
+  if (input.grid === 'polar') board.grid = 'polar'
+
   return board
+}
+
+/**
+ * One shape as JSON.
+ *
+ * The params are NOT rounded, for the reason a field's are not: a vertex is
+ * evaluated from them, and a triangle whose apex comes back a millionth off
+ * is a triangle whose area readout changed while the document was closed.
+ */
+export function shapeToStored(s: BoardShape): StoredShape {
+  const out: StoredShape = { id: s.id, src: s.src, color: s.color }
+  if (s.params.length > 0) out.params = s.params.slice()
+  if (s.fill === true) out.fill = true
+  if (s.visible === false) out.hidden = true
+  return out
+}
+
+/**
+ * One shape out of an untrusted blob, re-parsed.
+ *
+ * The typed line is the only thing that can rebuild the vertices, so a source
+ * the parser now refuses is not salvageable: the loader reports it rather than
+ * swallowing it, exactly as it does for a slope field.
+ */
+export function storedToShape(raw: unknown): { shape: BoardShape } | { error: string } {
+  if (!isObj(raw)) return { error: 'it was not readable' }
+  const { id, src, color } = raw
+  if (!isStr(id) || !id) return { error: 'it had no id' }
+  if (!isStr(src) || src.trim() === '') return { error: 'it had nothing typed in it' }
+  let outcome: ReturnType<typeof parseShape>
+  try {
+    outcome = parseShape(src)
+  } catch {
+    return { error: 'the parser could not read it' }
+  }
+  if (!outcome.ok) return { error: outcome.error }
+
+  // Matched to the shape's own list by POSITION — the order the parser reports
+  // them in and the order the sliders are shown in. A shorter list (an older
+  // save, a hand-edited file) falls back to the parser's defaults rather than
+  // leaving a slider at undefined.
+  const stored = Array.isArray(raw.params) ? raw.params : []
+  const params = outcome.defaultParams.map((d, i) => {
+    const v = stored[i]
+    return isNum(v) ? v : d
+  })
+
+  return {
+    shape: {
+      id,
+      src,
+      params,
+      color: isStr(color) && color ? color : '#4f9cf9',
+      fill: raw.fill === true,
+      visible: raw.hidden !== true,
+    },
+  }
 }
 
 /**
@@ -1357,6 +1519,45 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
     fields.push(built.field)
   }
 
+  // ---- shapes
+  //
+  // One typed line each, rebuilt the way a field is: re-parse, and if the
+  // parser refuses it now, say so. There is no half-shape to keep — without
+  // the coordinates there is nothing to draw — so it is dropped, loudly.
+  const shapes: BoardShape[] = []
+  const rawShapes = Array.isArray(rawBoard.shapes) ? rawBoard.shapes : []
+  if (rawBoard.shapes !== undefined && !Array.isArray(rawBoard.shapes)) {
+    problems.push('The list of shapes was unreadable.')
+    degraded = true
+  }
+  if (rawShapes.length > MAX_SHAPES) {
+    problems.push(`Only the first ${MAX_SHAPES} shapes were loaded.`)
+    degraded = true
+  }
+  for (const raw of rawShapes.slice(0, MAX_SHAPES)) {
+    const built = storedToShape(raw)
+    if ('error' in built) {
+      const src = isObj(raw) && isStr(raw.src) ? raw.src : null
+      problems.push(
+        src
+          ? `The shape “${src}” could not be restored: ${built.error}`
+          : `A shape could not be restored: ${built.error}`,
+      )
+      degraded = true
+      continue
+    }
+    if (seen.has(built.shape.id)) {
+      problems.push('A shape was dropped: two of them claimed the same id.')
+      degraded = true
+      continue
+    }
+    seen.add(built.shape.id)
+    shapes.push(built.shape)
+  }
+
+  // ---- the ruling. Unreadable or absent is not a repair: it is the default.
+  const grid = storedGrid(rawBoard.grid)
+
   // ---- axis units. Unreadable or absent is not a repair: it is the default.
   const rawAxis = isObj(rawBoard.axisUnits) ? rawBoard.axisUnits : {}
   const axisUnits: AxisUnitChoices = {
@@ -1368,6 +1569,7 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
     ...curves.map((c) => c.id),
     ...items.map((i) => i.id),
     ...fields.map((f) => f.id),
+    ...shapes.map((s) => s.id),
   ])
   const selectedId =
     isStr(rawBoard.selectedId) && selectable.has(rawBoard.selectedId)
@@ -1390,6 +1592,8 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
       axisUnits,
       calc,
       fields,
+      shapes,
+      grid,
       viewport,
       selectedId,
       mode,
@@ -1415,6 +1619,8 @@ function blankHydrated(): HydratedBoard {
     axisUnits: { ...AUTO_AXIS_UNITS },
     calc: [],
     fields: [],
+    shapes: [],
+    grid: 'cartesian',
     viewport: { center: { x: 0, y: 0 }, pxPerUnit: 60 },
     selectedId: null,
     mode: 'draw',
