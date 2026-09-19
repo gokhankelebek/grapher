@@ -48,6 +48,16 @@ export interface CurveStyle {
   opacity?: number
   /** Number-line items only: bar thickness in px (curves use strokeWidth). */
   width?: number
+  /**
+   * Number-line items only: which ANSWER this piece belongs to.
+   *
+   * "x < −2 or x ≥ 3" is one answer in two pieces, and the things that belong
+   * to the answer rather than to a piece — its label, its interval notation —
+   * need to know which pieces are in it. The stamp lives here because the
+   * style map is already carried through history, export and this file; an
+   * item with no stamp is an answer of one, which is what it is.
+   */
+  group?: string
 }
 export type StyleMap = Record<string, CurveStyle>
 
@@ -91,6 +101,18 @@ export interface StoredCurve {
   stroke?: number[]
   /** Present iff this curve came from a typed equation. */
   exprSource?: string
+  /**
+   * The user's own typed form for a curve that is still a FAMILY — the
+   * factored cubic they wrote, which the card keeps printing while the
+   * family's params drive the curve.
+   *
+   * Deliberately NOT exprSource. That field means "this curve IS a typed
+   * expression", and the loader rebuilds a model closure from it; putting a
+   * family's display text there would overwrite the family with a generic
+   * expr_N model on the next load, losing its handles and its interpretation.
+   * Absent field = no source, so every document already on disk is unchanged.
+   */
+  displaySource?: string
   style?: CurveStyle
   candidates?: StoredCandidate[]
 }
@@ -126,11 +148,42 @@ export interface StoredDoc {
   board: StoredBoard
 }
 
+/** What a board holds, so the documents list can say so without opening it. */
+export interface DocCounts {
+  curves: number
+  points: number
+  intervals: number
+}
+
 export interface DocMeta {
   id: string
   name: string
   createdAt: number
   modifiedAt: number
+  /**
+   * Index-only, both optional: the documents list shows a board's kind and
+   * what is on it, and neither is worth opening a 200KB record to find out.
+   * They live in the index (src/ui/storage.ts), never in the document itself,
+   * so the on-disk document schema is untouched. Absent = not known yet.
+   */
+  kind?: BoardKind
+  counts?: DocCounts
+}
+
+/** Count what a stored board holds. Cheap: it never touches stroke data. */
+export function countBoard(board: StoredBoard): DocCounts {
+  const items = Array.isArray(board.items) ? board.items : []
+  let points = 0
+  let intervals = 0
+  for (const it of items) {
+    if (it && it.kind === 'point') points++
+    else if (it && it.kind === 'interval') intervals++
+  }
+  return {
+    curves: Array.isArray(board.curves) ? board.curves.length : 0,
+    points,
+    intervals,
+  }
 }
 
 // ---------------------------------------------------------------- live shape
@@ -144,6 +197,8 @@ export interface BoardInput {
   candidates: Map<string, FitResult[]>
   /** curveId -> the equation the user typed. */
   exprSources: Record<string, string>
+  /** curveId -> the typed form to PRINT while the family still means it. */
+  displaySources?: Record<string, string>
   viewport: { center: Vec2; pxPerUnit: number }
   selectedId: string | null
   mode: BoardMode
@@ -158,6 +213,8 @@ export interface HydratedBoard {
   /** Rebuilt from source text — the closures the board needs to render. */
   extraModels: Record<string, ModelSpec>
   exprSources: Record<string, string>
+  /** curveId -> the typed form the card prints instead of the generated one. */
+  displaySources: Record<string, string>
   /** curveId -> why its equation could not be rebuilt. */
   brokenExpr: Record<string, string>
   viewport: { center: Vec2; pxPerUnit: number }
@@ -261,6 +318,10 @@ export function boardToStored(input: BoardInput): StoredBoard {
     }
     const src = input.exprSources[c.id]
     if (src !== undefined) stored.exprSource = src
+    // Written only when there is one, so a board without any typed display
+    // forms serialises byte-for-byte as it did before this field existed.
+    const shown = input.displaySources?.[c.id]
+    if (typeof shown === 'string' && shown.trim() !== '') stored.displaySource = shown
     const st = input.styles[c.id]
     if (st && (st.dash !== undefined || st.opacity !== undefined)) stored.style = { ...st }
     const cands = input.candidates.get(c.id)
@@ -295,7 +356,11 @@ export function boardToStored(input: BoardInput): StoredBoard {
 /** Copy an item into a fresh, own-property-only record (no aliasing, no extras). */
 function itemToStored(it: NLItem, style: CurveStyle | undefined): StoredNLItem {
   const styled =
-    style && (style.dash !== undefined || style.opacity !== undefined || style.width !== undefined)
+    style &&
+    (style.dash !== undefined ||
+      style.opacity !== undefined ||
+      style.width !== undefined ||
+      style.group !== undefined)
       ? { style: { ...style } }
       : {}
   if (it.kind === 'point') {
@@ -493,7 +558,13 @@ function styleOf(raw: unknown): CurveStyle | null {
   if (dash && dash.length > 0) style.dash = dash
   if (isNum(raw.opacity)) style.opacity = Math.min(1, Math.max(0, raw.opacity))
   if (isNum(raw.width)) style.width = Math.min(64, Math.max(0.5, raw.width))
-  return style.dash || style.opacity !== undefined || style.width !== undefined ? style : null
+  if (isStr(raw.group) && raw.group.trim()) style.group = raw.group.slice(0, 64)
+  return style.dash ||
+    style.opacity !== undefined ||
+    style.width !== undefined ||
+    style.group !== undefined
+    ? style
+    : null
 }
 
 /**
@@ -556,6 +627,7 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
   const candidates = new Map<string, FitResult[]>()
   const extraModels: Record<string, ModelSpec> = {}
   const exprSources: Record<string, string> = {}
+  const displaySources: Record<string, string> = {}
   const brokenExpr: Record<string, string> = {}
   let exprCounter = 0
 
@@ -598,6 +670,12 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
         problems.push(`“${source}” could not be restored: ${rebuilt.error}`)
         degraded = true
       }
+    }
+
+    // A family's own typed form. It never builds a model — it is only what
+    // the card prints — so it is read for every curve, expression or not.
+    if (isStr(stored.displaySource) && stored.displaySource.trim()) {
+      displaySources[curve.id] = stored.displaySource
     }
 
     const style = styleOf(stored.style)
@@ -662,6 +740,7 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
       candidates,
       extraModels,
       exprSources,
+      displaySources,
       brokenExpr,
       viewport,
       selectedId,
@@ -682,6 +761,7 @@ function blankHydrated(): HydratedBoard {
     candidates: new Map(),
     extraModels: {},
     exprSources: {},
+    displaySources: {},
     brokenExpr: {},
     viewport: { center: { x: 0, y: 0 }, pxPerUnit: 60 },
     selectedId: null,

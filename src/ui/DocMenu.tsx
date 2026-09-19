@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { BoardKind } from '../core/types'
 import type { DocMeta } from '../core/persist'
+import { describeCounts } from './docName'
 
 export type SaveState = 'saved' | 'saving' | 'error'
 
@@ -35,6 +36,40 @@ function relativeTime(ts: number): string {
   const day = Math.round(hr / 24)
   if (day < 7) return `${day} day${day === 1 ? '' : 's'} ago`
   return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+/**
+ * The kind of board a row is, as a glyph.
+ *
+ * A row used to be a name and a relative time, and when four boards are all
+ * called "Untitled" the only thing distinguishing them is "just now" versus
+ * "4 min ago". What actually tells them apart is what they ARE — a graph or a
+ * number line — and what is on them.
+ */
+function KindIcon({ kind }: { kind: BoardKind }) {
+  return kind === 'number-line' ? (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M1.5 8h13M2.6 6.6 1.3 8l1.3 1.4M13.4 6.6 14.7 8l-1.3 1.4"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="6" cy="8" r="2" fill="currentColor" />
+      <circle cx="11" cy="8" r="1.7" stroke="currentColor" strokeWidth="1.3" />
+    </svg>
+  ) : (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M2.2 2v11.8h11.6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <path
+        d="M3.6 11.4c2.1 0 2.6-6.4 4.6-6.4s2.5 3.2 4.6 3.2"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
 }
 
 export function DocMenu({
@@ -256,10 +291,20 @@ export function DocMenu({
                     <button
                       className="doc-open"
                       role="menuitem"
-                      title={`Open “${d.name}”`}
+                      title={`Open “${d.name}”${
+                        d.counts ? ` — ${describeCounts(d.kind ?? 'cartesian', d.counts)}` : ''
+                      }`}
                       onClick={pick(() => onOpen(d.id))}
                     >
+                      <span className="doc-open-icon" aria-hidden="true">
+                        <KindIcon kind={d.kind ?? 'cartesian'} />
+                      </span>
                       <span className="doc-open-name">{d.name}</span>
+                      {d.counts && (
+                        <span className="doc-open-count">
+                          {describeCounts(d.kind ?? 'cartesian', d.counts)}
+                        </span>
+                      )}
                       <span className="doc-open-date">{relativeTime(d.modifiedAt)}</span>
                     </button>
                     <button

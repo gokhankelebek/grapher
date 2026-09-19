@@ -3379,3 +3379,351 @@ button.card-eq {
 .readas-select {
   padding: 2px var(--sp-1);
 }
+
+/* ============================================================
+   WAVE 2b
+   ============================================================ */
+
+/* ---------------------------------------------- presentation mode ------
+   The board projected across a room. Three things at once: the sidebar
+   goes, the toolbar shrinks to a corner cluster that fades when the
+   pointer stops, and the equations move onto the canvas as a legend —
+   because hiding the cards is what took them away. */
+
+.present-mode .zoom-controls {
+  opacity: 0.35;
+  transition: opacity 180ms var(--ease);
+}
+
+.present-mode .zoom-controls:hover,
+.present-mode .zoom-controls:focus-within {
+  opacity: 1;
+}
+
+.present-bar {
+  position: absolute;
+  inset-block-start: var(--sp-3);
+  inset-inline-end: var(--sp-3);
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(19, 23, 34, 0.92);
+  box-shadow: var(--shadow);
+  /* Fades rather than disappears: a teacher who has forgotten Esc only has
+     to move the mouse, and focus keeps working while the pixels are gone. */
+  opacity: 0;
+  transform: translateY(-4px);
+  transition:
+    opacity 260ms var(--ease),
+    transform 260ms var(--ease);
+}
+
+.present-bar-awake {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.present-bar:not(.present-bar-awake) {
+  pointer-events: none;
+}
+
+.present-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-1);
+  min-width: 30px;
+  height: 30px;
+  padding: 0 var(--sp-2);
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition: background 140ms var(--ease), color 140ms var(--ease);
+}
+
+.present-btn:hover:not(:disabled) {
+  background: var(--panel-3);
+  color: var(--text);
+}
+
+.present-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.present-size {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 2px;
+  border-inline: 1px solid var(--border-soft);
+}
+
+.present-size-value {
+  min-width: 36px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.present-exit {
+  color: var(--text);
+  background: var(--panel-3);
+}
+
+/* ---- the legend: the equations, on the board, in their own colours ---- */
+
+.present-legend {
+  position: absolute;
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  max-width: 62%;
+  max-height: 62%;
+  overflow: auto;
+  padding: var(--sp-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: rgba(15, 17, 23, 0.78);
+  /* font-size is set inline from the presentation scale — see PresentLegend */
+}
+
+.canvas-light .present-legend {
+  border-color: rgba(20, 24, 34, 0.12);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.present-legend-top-left {
+  inset-block-start: var(--sp-3);
+  inset-inline-start: var(--sp-3);
+}
+
+.present-legend-top-right {
+  inset-block-start: var(--sp-3);
+  inset-inline-end: var(--sp-3);
+}
+
+.present-legend-bottom-left {
+  inset-block-end: var(--sp-3);
+  inset-inline-start: var(--sp-3);
+}
+
+.present-legend-bottom-right {
+  inset-block-end: var(--sp-3);
+  inset-inline-end: var(--sp-3);
+}
+
+.present-chip {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--text);
+  font-size: inherit;
+  line-height: 1.25;
+}
+
+.canvas-light .present-chip {
+  color: #101420;
+}
+
+.present-chip-swatch {
+  flex: 0 0 auto;
+  width: 0.62em;
+  height: 0.62em;
+  border-radius: 999px;
+  background: var(--curve);
+}
+
+.present-chip-tex {
+  min-width: 0;
+  color: var(--curve);
+  font-size: inherit;
+}
+
+.present-legend-move {
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+  opacity: 0.5;
+}
+
+.present-legend:hover .present-legend-move,
+.present-legend-move:focus-visible {
+  opacity: 1;
+}
+
+/* ------------------------------------------------ export: framing ------ */
+
+.exp-check {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: var(--sp-1) 2px;
+  cursor: pointer;
+}
+
+.exp-checkbox {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+
+.exp-check-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.exp-check-label {
+  color: var(--text);
+  font-size: var(--fs-md);
+}
+
+.exp-check-note {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+
+.exp-seg-wrap {
+  flex-wrap: wrap;
+}
+
+/* ------------------------------------------- documents: kind + count --- */
+
+.doc-open-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  color: var(--faint);
+}
+
+.doc-open-count {
+  flex: 0 0 auto;
+  margin-inline-start: auto;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.doc-row-current .doc-open-icon {
+  color: var(--accent);
+}
+
+/* --------------------------------------- number line: copy the notation */
+
+.nl-copy {
+  color: var(--faint);
+}
+
+.nl-copy-done {
+  color: #38c976;
+}
+
+/* The canvas half of the endpoint tip. The card teaches the same fact over
+   its toggle; whichever a teacher approaches first is the one that says it,
+   and it is said once (see coach.ts). */
+.nl-canvas-coach {
+  position: absolute;
+  z-index: 14;
+  max-width: 240px;
+  padding: var(--sp-2) var(--sp-3);
+  transform: translate(var(--sp-3), calc(-100% - var(--sp-3)));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  box-shadow: var(--shadow);
+  pointer-events: none;
+}
+
+/* ------------------------------------ handle popover: commit / cancel -- */
+
+.handle-pop-foot {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+
+.handle-pop-foot .handle-pop-hint {
+  margin-top: 0;
+}
+
+.handle-pop-acts {
+  flex: 0 0 auto;
+  display: flex;
+  gap: var(--sp-1);
+}
+
+.handle-pop-act {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 140ms var(--ease), color 140ms var(--ease);
+}
+
+.handle-pop-act:hover {
+  background: var(--panel-3);
+  color: var(--text);
+}
+
+.handle-pop-ok {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ------------------------------------------------------- touch layer --- */
+/* Everything wave 2b added that a finger has to hit. 44px is the floor the
+   rest of this stylesheet already keeps. */
+
+@media (pointer: coarse) {
+  .handle-pop-act,
+  .present-btn,
+  .present-legend-move {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .handle-pop-foot {
+    align-items: center;
+  }
+
+  .nl-copy {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}

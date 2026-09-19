@@ -11,10 +11,12 @@
 // are surfaced loudly rather than swallowed.
 // ============================================================================
 
-import type { DocMeta, StoredDoc } from '../core/persist'
-import { serializeDoc } from '../core/persist'
-import type { ExportSettings } from './renderBoard'
-import { DEFAULT_EXPORT, clampExportSettings } from './renderBoard'
+import type { BoardKind } from '../core/types'
+import type { DocCounts, DocMeta, StoredDoc } from '../core/persist'
+import { countBoard, serializeDoc } from '../core/persist'
+import { DEFAULT_EXPORT } from './renderBoard'
+import type { FitExportSettings } from './exportFit'
+import { clampFitSettings, defaultFit, isAspect } from './exportFit'
 
 const PREFIX = 'grapher.v1'
 const INDEX_KEY = `${PREFIX}.index`
@@ -114,15 +116,50 @@ function write(key: string, value: string): SaveOutcome {
 const isObj = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v)
 
+const countsOf = (v: unknown): DocCounts | undefined => {
+  if (!isObj(v)) return undefined
+  const n = (x: unknown): number =>
+    typeof x === 'number' && Number.isFinite(x) && x >= 0 ? Math.round(x) : 0
+  return { curves: n(v.curves), points: n(v.points), intervals: n(v.intervals) }
+}
+
 function metaOf(v: unknown): DocMeta | null {
   if (!isObj(v)) return null
   const { id, name, createdAt, modifiedAt } = v
   if (typeof id !== 'string' || !id) return null
+  const counts = countsOf(v.counts)
   return {
     id,
     name: typeof name === 'string' && name.trim() ? name : 'Untitled',
     createdAt: typeof createdAt === 'number' && Number.isFinite(createdAt) ? createdAt : 0,
     modifiedAt: typeof modifiedAt === 'number' && Number.isFinite(modifiedAt) ? modifiedAt : 0,
+    ...(v.kind === 'number-line' || v.kind === 'cartesian' ? { kind: v.kind } : {}),
+    ...(counts ? { counts } : {}),
+  }
+}
+
+/**
+ * What KIND of board a stored document is, and what is on it — read straight
+ * out of the record for an index entry that predates those fields.
+ *
+ * The documents list is where a teacher picks between four boards called
+ * "Untitled", so it has to be able to say "Graph · 4 curves" about a document
+ * that has not been saved since this existed. Every new save writes them into
+ * the index (see writeDoc), so this runs once per legacy document.
+ */
+function describeStored(id: string): { kind: BoardKind; counts: DocCounts } | null {
+  const raw = readDocJSON(id)
+  if (raw === null) return null
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!isObj(parsed) || !isObj(parsed.board)) return null
+    const board = parsed.board as unknown as Parameters<typeof countBoard>[0]
+    return {
+      kind: board.kind === 'number-line' ? 'number-line' : 'cartesian',
+      counts: countBoard(board),
+    }
+  } catch {
+    return null
   }
 }
 
@@ -163,9 +200,25 @@ export function writeIndex(index: DocIndex): SaveOutcome {
   return write(INDEX_KEY, JSON.stringify(index))
 }
 
-/** Documents newest-modified first — the order the Open menu wants. */
+/**
+ * Documents newest-modified first — the order the Open menu wants.
+ *
+ * Entries written before the index carried a kind and a count are filled in
+ * from the record itself and the index is rewritten, so the cost is paid once
+ * per document rather than on every listing.
+ */
 export function listDocs(): DocMeta[] {
-  return readIndex().docs.slice().sort((a, b) => b.modifiedAt - a.modifiedAt)
+  const index = readIndex()
+  let changed = false
+  const docs = index.docs.map((d) => {
+    if (d.kind !== undefined && d.counts !== undefined) return d
+    const described = describeStored(d.id)
+    if (!described) return d
+    changed = true
+    return { ...d, ...described }
+  })
+  if (changed) writeIndex({ ...index, docs })
+  return docs.slice().sort((a, b) => b.modifiedAt - a.modifiedAt)
 }
 
 // --------------------------------------------------------------- documents
@@ -223,6 +276,8 @@ export function writeDoc(doc: StoredDoc, opts: WriteOptions = {}): SaveOutcome {
     name: doc.name,
     createdAt: doc.createdAt,
     modifiedAt: doc.modifiedAt,
+    kind: doc.board.kind === 'number-line' ? 'number-line' : 'cartesian',
+    counts: countBoard(doc.board),
   }
   const docs = index.docs.filter((d) => d.id !== doc.id)
   docs.push(meta)
@@ -267,8 +322,8 @@ export interface Prefs {
   /** Ground the ON-SCREEN canvas is drawn on. Export has its own setting. */
   canvasTheme: 'dark' | 'light'
   /**
-   * Export size/margin/theme, per document id. Worksheet figures have to be
-   * consistent across a document, so the choice is remembered with the
+   * Export size/margin/theme/framing, per document id. Worksheet figures have
+   * to be consistent across a document, so the choice is remembered with the
    * document rather than globally.
    *
    * It lives here, beside the other preferences, and NOT inside StoredDoc:
@@ -277,27 +332,37 @@ export interface Prefs {
    * out also means an exported .grapher.json file stays byte-compatible with
    * every document already on disk — no schema bump, nothing to migrate.
    */
-  exportByDoc: Record<string, ExportSettings>
+  exportByDoc: Record<string, FitExportSettings>
   /** The last settings used, inherited by a document that has none yet. */
-  exportDefaults: ExportSettings
+  exportDefaults: FitExportSettings
+  /**
+   * The presentation type scale last used, so a teacher who sized the board
+   * for their room does not resize it at the start of every lesson. Nothing
+   * else about presentation mode is remembered: it is a thing you enter for a
+   * demo and leave, not a state a document is in.
+   */
+  presentScale: number
 }
 
 export const DEFAULT_PREFS: Prefs = {
   showAnalysis: true,
   canvasTheme: 'dark',
   exportByDoc: {},
-  exportDefaults: { ...DEFAULT_EXPORT },
+  exportDefaults: { ...DEFAULT_EXPORT, ...defaultFit('cartesian') },
+  presentScale: 2.5,
 }
 
 /** Never trust what came back from storage: a bad value falls back silently. */
-function exportOf(v: unknown, fallback: ExportSettings): ExportSettings {
+function exportOf(v: unknown, fallback: FitExportSettings): FitExportSettings {
   if (!isObj(v)) return { ...fallback }
   const scale = typeof v.scale === 'number' ? v.scale : fallback.scale
   const width =
     v.width === null ? null : typeof v.width === 'number' ? v.width : fallback.width
   const margin = typeof v.margin === 'number' ? v.margin : fallback.margin
   const theme = v.theme === 'dark' || v.theme === 'light' ? v.theme : fallback.theme
-  return clampExportSettings({ scale, width, margin, theme })
+  const fit = typeof v.fit === 'boolean' ? v.fit : fallback.fit
+  const aspect = isAspect(v.aspect) ? v.aspect : fallback.aspect
+  return clampFitSettings({ scale, width, margin, theme, fit, aspect })
 }
 
 export function readPrefs(): Prefs {
@@ -309,7 +374,7 @@ export function readPrefs(): Prefs {
     const parsed: unknown = JSON.parse(raw)
     if (!isObj(parsed)) return { ...DEFAULT_PREFS, exportByDoc: {} }
     const exportDefaults = exportOf(parsed.exportDefaults, DEFAULT_PREFS.exportDefaults)
-    const exportByDoc: Record<string, ExportSettings> = {}
+    const exportByDoc: Record<string, FitExportSettings> = {}
     if (isObj(parsed.exportByDoc)) {
       for (const [id, v] of Object.entries(parsed.exportByDoc)) {
         if (typeof id === 'string' && id) exportByDoc[id] = exportOf(v, exportDefaults)
@@ -323,10 +388,20 @@ export function readPrefs(): Prefs {
       canvasTheme: parsed.canvasTheme === 'light' ? 'light' : 'dark',
       exportByDoc,
       exportDefaults,
+      presentScale: clampPresentScale(parsed.presentScale),
     }
   } catch {
     return { ...DEFAULT_PREFS, exportByDoc: {} }
   }
+}
+
+/** Projected type is useful between 1.5x and 4x; outside that it is a mistake. */
+export const MIN_PRESENT_SCALE = 1.5
+export const MAX_PRESENT_SCALE = 4
+
+export function clampPresentScale(v: unknown): number {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return DEFAULT_PREFS.presentScale
+  return Math.min(MAX_PRESENT_SCALE, Math.max(MIN_PRESENT_SCALE, v))
 }
 
 export function writePrefs(prefs: Prefs): void {
@@ -342,23 +417,56 @@ export function updatePrefs(patch: Partial<Prefs>): Prefs {
   return next
 }
 
-/** The export settings for one document, falling back to the last used. */
-export function readExportSettings(docId: string): ExportSettings {
+/**
+ * The export settings for one document.
+ *
+ * Size, margin and background are inherited from the last document worked on,
+ * because a worksheet's figures should match. FRAMING is not: whether to crop
+ * to the content follows the KIND of board, since a number line is nearly all
+ * whitespace in any window and a graph's window is usually the framing the
+ * teacher chose. A document that has its own answer keeps it.
+ */
+export function readExportSettings(docId: string, kind: BoardKind): FitExportSettings {
   const prefs = readPrefs()
   const own = docId ? prefs.exportByDoc[docId] : undefined
-  return own ? { ...own } : { ...prefs.exportDefaults }
+  if (own) return { ...own }
+  return { ...prefs.exportDefaults, ...defaultFit(kind) }
+}
+
+/** True once this document has export settings of its own, stated by the user. */
+export function hasExportSettings(docId: string): boolean {
+  return !!docId && docId in readPrefs().exportByDoc
 }
 
 /**
  * Remember a document's export settings, and make them the default the next
  * new document starts from.
  */
-export function writeExportSettings(docId: string, settings: ExportSettings): void {
+export function writeExportSettings(docId: string, settings: FitExportSettings): void {
   const prefs = readPrefs()
-  const clean = clampExportSettings(settings)
+  const clean = clampFitSettings(settings)
   const byDoc = { ...prefs.exportByDoc }
   if (docId) byDoc[docId] = clean
   writePrefs({ ...prefs, exportByDoc: byDoc, exportDefaults: clean })
+}
+
+/**
+ * Carry one document's export settings across to another.
+ *
+ * A copy of a document is the same figure under a new id, so it must come out
+ * the same size. Relying on `exportDefaults` to do this quietly failed: the
+ * defaults are whatever was touched LAST anywhere in the app, so a copy made
+ * after visiting another board inherited that board's size instead — measured
+ * as a document set to 1x coming back as 2x, the built-in default, the moment
+ * it was saved as a copy from the conflict banner. Duplicate had the same hole
+ * and only looked healthy because it was usually used straight away.
+ */
+export function copyExportSettings(fromId: string, toId: string): void {
+  if (!fromId || !toId || fromId === toId) return
+  const prefs = readPrefs()
+  const own = prefs.exportByDoc[fromId]
+  if (!own) return
+  writePrefs({ ...prefs, exportByDoc: { ...prefs.exportByDoc, [toId]: { ...own } } })
 }
 
 /** Drop a deleted document's export settings so the map can't grow forever. */

@@ -1,12 +1,25 @@
-import { useEffect, useRef, useState } from 'react'
+import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import type { NLItem } from '../core/types'
-import { intervalNotation } from '../core/types'
 import type { CurveStyle } from '../core/persist'
 import { NL_BAR_WIDTH, NL_MAX_BAR_WIDTH, NL_MIN_BAR_WIDTH } from '../render/numberline'
 import { Latex } from './Latex'
 import { parseNumeric } from './numeric'
 import { itemEquationText } from './equationText'
+import { ENDPOINT_TIP, ENDPOINT_TIP_TEXT, TIP_MS, takeTip } from './coach'
+import {
+  answerClipboardText,
+  answerInequalityText,
+  answerNotationText,
+  answerPieces,
+  nlInequality,
+  nlNotation,
+} from './nlText'
+import { AnswerContext } from './answerContext'
+
+// Re-exported so the two notations keep one importable home while callers
+// that already knew them here carry on working.
+export { nlInequality, nlNotation }
 
 interface Props {
   item: NLItem
@@ -43,41 +56,6 @@ function fillStyle(value: number, min: number, max: number): CSSProperties {
   return { '--fill': `${pct}%` } as CSSProperties
 }
 
-function trimNum(v: number): string {
-  const s = v.toPrecision(6)
-  return s.includes('.') ? s.replace(/\.?0+$/, '') : s
-}
-
-/** What this item says, in the notation the worksheet asks for. */
-export function nlNotation(item: NLItem): string {
-  return item.kind === 'point' ? `\\{${trimNum(item.x)}\\}` : intervalNotation(item)
-}
-
-/** The same thing again as an inequality, which is how it was probably asked. */
-export function nlInequality(item: NLItem): string {
-  if (item.kind === 'point') return `x ${item.closed ? '=' : '\\neq'} ${trimNum(item.x)}`
-  const parts: string[] = []
-  if (item.lo !== null) parts.push(`${trimNum(item.lo)} ${item.loClosed ? '\\le' : '<'} x`)
-  if (item.hi !== null) {
-    if (parts.length > 0) {
-      parts[0] = `${parts[0]} ${item.hiClosed ? '\\le' : '<'} ${trimNum(item.hi)}`
-    } else {
-      parts.push(`x ${item.hiClosed ? '\\le' : '<'} ${trimNum(item.hi)}`)
-    }
-  }
-  return parts[0] ?? 'x \\in \\mathbb{R}'
-}
-
-/**
- * Shown once per session, the first time a teacher goes near an endpoint.
- *
- * It used to live in the canvas's empty state — a line of instructions about
- * endpoints, printed where there were no endpoints yet, and gone for good the
- * moment the first interval appeared. It belongs where the thing it describes
- * is, and only until it has been read.
- */
-let endpointTipSeen = false
-
 /** One endpoint: its value (typeable) and its closed/open state (clickable). */
 function EndpointRow({
   end,
@@ -102,11 +80,13 @@ function EndpointRow({
   const [tip, setTip] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
+  // Once per session, and counted in coach.ts rather than here: the canvas
+  // teaches the same fact over the dot itself, and a teacher must not be told
+  // twice.
   const maybeTip = (): void => {
-    if (endpointTipSeen || unbounded) return
-    endpointTipSeen = true
+    if (unbounded || !takeTip(ENDPOINT_TIP)) return
     setTip(true)
-    window.setTimeout(() => setTip(false), 5000)
+    window.setTimeout(() => setTip(false), TIP_MS)
   }
 
   useEffect(() => {
@@ -145,7 +125,11 @@ function EndpointRow({
           aria-invalid={editing.bad || undefined}
           value={editing.text}
           onChange={(e) => setEditing({ text: e.target.value, bad: false })}
-          onBlur={commit}
+          // Tapping outside ABANDONS the edit. On a tablet there is no Esc,
+          // so the only way out of a field that commits on blur is to commit
+          // a value you did not want; every inline editor on a card now
+          // cancels the same way, and Return is the way to mean it.
+          onBlur={() => setEditing(null)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault()
@@ -191,7 +175,7 @@ function EndpointRow({
       </button>
       {tip && (
         <span className="nl-coach" role="status">
-          Click an endpoint to switch it between included and excluded.
+          {ENDPOINT_TIP_TEXT}
         </span>
       )}
     </div>
@@ -239,6 +223,60 @@ export function NLCard({
     const err = onEquationCommit(eqEdit.text)
     if (err) setEqEdit({ ...eqEdit, error: err })
     else setEqEdit(null)
+  }
+
+  /**
+   * Copy the NOTATION, as text.
+   *
+   * Copy was PNG-only, and a picture is not what goes into an answer key —
+   * "(−∞, −2) ∪ [3, ∞)" is, and it had to be retyped, brackets and all. Both
+   * forms go on the clipboard, one per line, because which one the worksheet
+   * asks for is not knowable from here and deleting a line is cheaper than
+   * writing one.
+   */
+  // The whole answer this item is a piece of — a union is one answer in two
+  // items, and an answer key wants both of them.
+  const board = useContext(AnswerContext)
+  const answer = useMemo(() => {
+    const found = answerPieces(board.items, board.styles, item.id)
+    return found.length > 0 ? found : [item]
+  }, [board.items, board.styles, item])
+  const [copied, setCopied] = useState(false)
+  const copyTimer = useRef(0)
+  useEffect(() => () => window.clearTimeout(copyTimer.current), [])
+
+  const copyNotation = (): void => {
+    const text = answerClipboardText(answer)
+    const done = (): void => {
+      setCopied(true)
+      window.clearTimeout(copyTimer.current)
+      copyTimer.current = window.setTimeout(() => setCopied(false), 1600)
+    }
+    try {
+      const writer = navigator.clipboard?.writeText
+      if (typeof writer === 'function') {
+        navigator.clipboard.writeText(text).then(done, () => setCopied(false))
+        return
+      }
+    } catch {
+      /* fall through to the legacy path */
+    }
+    // Older WebViews and any page the Clipboard API refuses: a hidden
+    // textarea and execCommand still work, and silently doing nothing does not.
+    try {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.setAttribute('readonly', '')
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+      done()
+    } catch {
+      setCopied(false)
+    }
   }
 
   const activeDashKey =
@@ -315,6 +353,51 @@ export function NLCard({
           >
             <Latex tex={nlNotation(item)} className="card-latex" />
           </button>
+        )}
+        {!eqEdit && (
+        <button
+          className={`icon-btn nl-copy${copied ? ' nl-copy-done' : ''}`}
+          data-testid="nl-copy-notation"
+          data-copied={copied ? 'yes' : 'no'}
+          title={`Copy “${answerNotationText(answer)}” and “${answerInequalityText(
+            answer,
+          )}” as text`}
+          aria-label="Copy the interval notation as text"
+          onClick={(e) => {
+            e.stopPropagation()
+            copyNotation()
+          }}
+        >
+          {copied ? (
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path
+                d="M3.2 8.6l3 3 6.6-7"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          ) : (
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <rect
+                x="5.2"
+                y="5.2"
+                width="8.3"
+                height="8.3"
+                rx="1.6"
+                stroke="currentColor"
+                strokeWidth="1.4"
+              />
+              <path
+                d="M10.8 5.2V4a1.6 1.6 0 0 0-1.6-1.6H4A1.6 1.6 0 0 0 2.4 4v5.2A1.6 1.6 0 0 0 4 10.8h1.2"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                strokeLinecap="round"
+              />
+            </svg>
+          )}
+        </button>
         )}
         {!eqEdit && (
         <button
@@ -399,13 +482,15 @@ export function NLCard({
               placeholder="e.g. domain of f"
               value={labelDraft ?? item.label ?? ''}
               onChange={(e) => setLabelDraft(e.target.value)}
-              onBlur={() => {
-                if (labelDraft !== null) onLabel(labelDraft)
-                setLabelDraft(null)
-              }}
+              // Blur abandons, Return saves — the same rule as every other
+              // inline editor here, so "tap somewhere else" always means the
+              // same thing whichever field a teacher is in.
+              onBlur={() => setLabelDraft(null)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   e.preventDefault()
+                  if (labelDraft !== null) onLabel(labelDraft)
+                  setLabelDraft(null)
                   e.currentTarget.blur()
                 } else if (e.key === 'Escape') {
                   e.preventDefault()

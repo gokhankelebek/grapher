@@ -10,6 +10,8 @@ import {
 } from '../render/numberline'
 import type { NLPart } from '../render/numberline'
 import { renderBoard } from './renderBoard'
+import { paintScale } from '../render/grid'
+import type { PaintScale } from '../render/grid'
 import {
   classifyPointerDown,
   classifyWheel,
@@ -20,6 +22,7 @@ import {
 } from './gestures'
 import type { PointerKind } from './gestures'
 import type { Mode } from '../App'
+import { ENDPOINT_TIP, ENDPOINT_TIP_TEXT, TIP_MS, takeTip } from './coach'
 
 export interface NumberLineStageHandle {
   redraw(): void
@@ -34,6 +37,12 @@ interface Props {
   /** Colour a newly drawn item takes. */
   inkColor: string
   vpRef: MutableRefObject<Viewport>
+  /**
+   * Presentation scaling, for a line projected across a classroom. Absent
+   * means 1:1. It reaches renderBoard as the scene's own field, which grows
+   * the axis type, the tick labels, the bars and the endpoint dots together.
+   */
+  present?: PaintScale | null
   onSelect(id: string | null): void
   /** A click on the line: place a single point there. */
   onPlacePoint(x: number): void
@@ -93,6 +102,7 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
       mode,
       inkColor,
       vpRef,
+      present,
       onSelect,
       onPlacePoint,
       onCreateInterval,
@@ -115,6 +125,7 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
     const selectedRef = useRef<string | null>(selectedId)
     const modeRef = useRef<Mode>(mode)
     const inkColorRef = useRef(inkColor)
+    const presentRef = useRef<PaintScale | null | undefined>(present)
     const gestureRef = useRef<Gesture | null>(null)
     const pendingRef = useRef<NLItem | null>(null)
     const activePartRef = useRef<{ itemId: string; part: NLPart } | null>(null)
@@ -129,6 +140,17 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
     viewportChangeRef.current = onViewportChange
 
     const [cursor, setCursor] = useState('crosshair')
+    /**
+     * The endpoint tip, shown the first time a pointer goes near a dot.
+     *
+     * The fact it teaches — a filled dot includes the endpoint, a hollow one
+     * excludes it, and clicking swaps them — is the single most common thing a
+     * student gets wrong reading a solution set, and on the canvas there was
+     * nothing at all to say the dot was clickable. It is shown once per
+     * session, shared with the card's own toggle (see coach.ts).
+     */
+    const [tip, setTip] = useState<{ x: number; y: number } | null>(null)
+    const tipTimerRef = useRef(0)
 
     // ------------------------------------------------------------- rendering
     const draw = useCallback((): void => {
@@ -145,6 +167,7 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
         curves: [],
         styles: stylesRef.current,
         models: {},
+        ...(presentRef.current ? { present: paintScale(presentRef.current) } : {}),
         chrome: {
           selectedId: selectedRef.current,
           handles: [],
@@ -176,8 +199,11 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
       selectedRef.current = selectedId
       modeRef.current = mode
       inkColorRef.current = inkColor
+      presentRef.current = present
       scheduleRender()
-    }, [items, styles, theme, selectedId, mode, inkColor, scheduleRender])
+    }, [items, styles, theme, selectedId, mode, inkColor, present, scheduleRender])
+
+    useEffect(() => () => window.clearTimeout(tipTimerRef.current), [])
 
     // ---------------------------------------------------------------- sizing
     useEffect(() => {
@@ -437,6 +463,11 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
         // Idle hover: say what the pointer would do here.
         const hit = nlHitTest(itemsRef.current, vp, pos)
         const onLine = Math.abs(pos.y - numberLineAxisY(vp)) <= LINE_BAND
+        if (hit && hit.part !== 'body' && takeTip(ENDPOINT_TIP)) {
+          setTip({ x: pos.x, y: pos.y })
+          window.clearTimeout(tipTimerRef.current)
+          tipTimerRef.current = window.setTimeout(() => setTip(null), TIP_MS)
+        }
         setCursor(
           modeRef.current === 'pan' || spaceRef.current
             ? 'grab'
@@ -538,6 +569,16 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
           }}
           onContextMenu={(e) => e.preventDefault()}
         />
+        {tip && (
+          <div
+            className="nl-canvas-coach"
+            role="status"
+            data-testid="nl-endpoint-tip"
+            style={{ left: `${tip.x}px`, top: `${tip.y}px` }}
+          >
+            {ENDPOINT_TIP_TEXT}
+          </div>
+        )}
       </div>
     )
   },

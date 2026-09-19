@@ -16,6 +16,8 @@ import { parseInequality } from './core/parse/inequality'
 import { applyFeatureEdit, snapParams } from './core/fit/edit'
 import { analyzeCurve } from './core/analyze'
 import { curveBounds, splitNotice, unionBoxes } from './ui/curveState'
+import { answerPieces } from './ui/nlText'
+import { AnswerContext } from './ui/answerContext'
 import { AnalysisOverlay, drawContextMarkers } from './ui/AnalysisOverlay'
 import type { AnalysisOverlayHandle } from './ui/AnalysisOverlay'
 import type { FeatureEditResult, SpecialPoint } from './core/types'
@@ -33,14 +35,18 @@ import type { SaveState } from './ui/DocMenu'
 import { ExportMenu } from './ui/ExportMenu'
 import type { CopyState } from './ui/ExportMenu'
 import {
-  DEFAULT_EXPORT,
   canvasToPngBlob,
-  clampExportSettings,
   exportGeometry,
   exportTheme,
   renderBoardToCanvas,
 } from './ui/renderBoard'
-import type { BoardScene, ExportSettings } from './ui/renderBoard'
+import type { BoardScene } from './ui/renderBoard'
+import { clampFitSettings, contentBounds, exportViewport } from './ui/exportFit'
+import type { FitExportSettings } from './ui/exportFit'
+import { PresentBar } from './ui/PresentBar'
+import { PresentLegend } from './ui/PresentLegend'
+import { DEFAULT_PRESENT_TYPE, curveLegend, itemLegend, presentScale } from './ui/present'
+import { copyDocName, nextDocName } from './ui/docName'
 import {
   createDoc,
   deserializeDoc,
@@ -50,11 +56,14 @@ import {
 } from './core/persist'
 import type { BoardInput, DocMeta, HydratedBoard } from './core/persist'
 import {
+  clampPresentScale,
+  copyExportSettings,
   isGrapherKey,
   listDocs,
   readDocJSON,
   readDocStamp,
   readIndex,
+  hasExportSettings,
   readExportSettings,
   readPrefs,
   removeDoc,
@@ -225,9 +234,20 @@ export default function App() {
    * questions ("what do I want to look at" vs "what goes on the paper").
    */
   const [canvasTheme, setCanvasTheme] = useState<'dark' | 'light'>(() => readPrefs().canvasTheme)
-  const [exportSettings, setExportSettings] = useState<ExportSettings>(() => ({
+  const [exportSettings, setExportSettings] = useState<FitExportSettings>(() => ({
     ...readPrefs().exportDefaults,
   }))
+  /**
+   * Presentation mode: the board projected across a room. F enters and leaves,
+   * Esc leaves. Nothing about it is written to the document — it is a way of
+   * LOOKING at a board, not a property of one — except the size, which is a
+   * fact about the teacher's room and is remembered in preferences.
+   */
+  const [presentMode, setPresentMode] = useState(false)
+  const [presentType, setPresentType] = useState<number>(() => readPrefs().presentScale)
+  const [legendCorner, setLegendCorner] = useState<
+    'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
+  >('bottom-left')
   const [copyState, setCopyState] = useState<CopyState>({ kind: 'idle' })
   /** Index into the analysis array whose marker should be emphasised. */
   const [highlight, setHighlight] = useState<number | null>(null)
@@ -292,6 +312,7 @@ export default function App() {
     kind: BoardKind
     styles: StyleMap
     exprSources: Record<string, string>
+    displaySources: Record<string, string>
     selectedId: string | null
     name: string
   } | null>(null)
@@ -676,6 +697,7 @@ export default function App() {
       candidates: new Map(),
       extraModels: {},
       exprSources: {},
+      displaySources: {},
       brokenExpr: {},
       viewport: { center: { x: 0, y: 0 }, pxPerUnit: 60 },
       selectedId: null,
@@ -694,6 +716,7 @@ export default function App() {
       styles: stylesRef.current,
       candidates: candidatesRef.current,
       exprSources: exprSourcesRef.current,
+      displaySources: displaySourcesRef.current,
       viewport: { center: vpRef.current.center, pxPerUnit: vpRef.current.pxPerUnit },
       selectedId: selectedRef.current,
       mode: MODE,
@@ -775,6 +798,7 @@ export default function App() {
       kind: board.kind,
       styles: board.styles,
       exprSources: board.exprSources,
+      displaySources: board.displaySources,
       selectedId: board.selectedId,
       name: meta.name,
     }
@@ -785,9 +809,12 @@ export default function App() {
     candidatesRef.current = board.candidates
     exprSourcesRef.current = board.exprSources
     brokenExprRef.current = board.brokenExpr
-    // A freshly loaded board has no edit history of its own yet: every curve on
-    // it is exactly what the document said it was.
-    displaySourcesRef.current = {}
+    // The typed display form is part of the DOCUMENT — a factored cubic must
+    // still print factored after a reload — so it comes back with the board.
+    // The edit log does not: it is this session's account of what has been
+    // done since the curve was recognised, and a freshly loaded curve is
+    // exactly what the document said it was.
+    displaySourcesRef.current = board.displaySources
     editsRef.current = {}
     selectedRef.current = board.selectedId
     docMetaRef.current = meta
@@ -804,7 +831,7 @@ export default function App() {
     setStyles(board.styles)
     setExprSources(board.exprSources)
     setBrokenExpr(board.brokenExpr)
-    setDisplaySources({})
+    setDisplaySources(board.displaySources)
     setEdits({})
     setExtraModels(board.extraModels)
     setSelectedId(board.selectedId)
@@ -847,7 +874,7 @@ export default function App() {
         setLoadNotice({ problems: res.problems, fatal: true })
       }
     }
-    const doc = createDoc('Untitled', emptyBoard())
+    const doc = createDoc(nextDocName('cartesian', listDocs().map((d) => d.name)), emptyBoard())
     const meta: DocMeta = {
       id: doc.id,
       name: doc.name,
@@ -882,6 +909,7 @@ export default function App() {
       loaded.kind === kind &&
       loaded.styles === styles &&
       loaded.exprSources === exprSources &&
+      loaded.displaySources === displaySources &&
       loaded.selectedId === selectedId &&
       loaded.name === docMeta.name
     ) {
@@ -890,7 +918,17 @@ export default function App() {
     }
     loadedStateRef.current = null
     scheduleSave()
-  }, [curves, items, kind, styles, exprSources, selectedId, docMeta.name, scheduleSave])
+  }, [
+    curves,
+    items,
+    kind,
+    styles,
+    exprSources,
+    displaySources,
+    selectedId,
+    docMeta.name,
+    scheduleSave,
+  ])
 
   // Don't lose the debounce window to a closing tab or a backgrounded phone.
   useEffect(() => {
@@ -959,8 +997,11 @@ export default function App() {
     (nextKind: BoardKind = 'cartesian'): void => {
       // Refuse to replace the board when the work on it isn't on disk.
       if (!saveBeforeSwitch()) return
+      // "Untitled / Untitled copy / Untitled copy copy", told apart only by
+      // "just now" and "4 min ago", was the whole documents list. A board is
+      // named for what it IS and numbered from what is already there.
       const doc = createDoc(
-        nextKind === 'number-line' ? 'Number line' : 'Untitled',
+        nextDocName(nextKind, listDocs().map((d) => d.name)),
         emptyBoard(nextKind),
       )
       const meta: DocMeta = {
@@ -1029,6 +1070,7 @@ export default function App() {
    */
   const saveBoardAsNewDoc = useCallback(
     (name: string): boolean => {
+      const from = docMetaRef.current.id
       const fresh = createDoc(name, emptyBoard())
       const meta: DocMeta = {
         id: fresh.id,
@@ -1047,6 +1089,11 @@ export default function App() {
       // "newer than us" and reports a conflict against our own write.
       docMetaRef.current = { ...meta, modifiedAt: doc.modifiedAt }
       docStoredRef.current = true
+      // A copy is the same figure under a new id, so it has to come out the
+      // same size. Leaving that to the global "last used" defaults is what
+      // reset a 1x document to 2x when it was saved as a copy from the
+      // conflict banner — the copy must carry its own settings across.
+      copyExportSettings(from, meta.id)
       setDocMeta(meta)
       setCurrentDoc(meta.id)
       setDocs(listDocs())
@@ -1059,10 +1106,16 @@ export default function App() {
     [currentBoardInput],
   )
 
+  const copyName = useCallback(
+    (): string =>
+      copyDocName(kindRef.current, docMetaRef.current.name, listDocs().map((d) => d.name)),
+    [],
+  )
+
   const duplicateDocument = useCallback((): void => {
     if (!saveBeforeSwitch()) return
-    saveBoardAsNewDoc(`${docMetaRef.current.name} copy`)
-  }, [saveBeforeSwitch, saveBoardAsNewDoc])
+    saveBoardAsNewDoc(copyName())
+  }, [saveBeforeSwitch, saveBoardAsNewDoc, copyName])
 
   const deleteDocument = useCallback(
     (id: string): void => {
@@ -1887,20 +1940,33 @@ export default function App() {
     [],
   )
 
-  /** Add parsed items — one colour for the whole answer, however many parts. */
+  /**
+   * Add parsed items — one colour, and one GROUP, for the whole answer.
+   *
+   * "x < −2 or x ≥ 3" is one answer in two pieces. The label used to be given
+   * to the first piece only, which put the caption over the left ray and left
+   * the right ray with nothing: the label was a property of a piece when it is
+   * a property of the answer. It is now stamped on every piece, so it appears
+   * over each one rather than being orphaned on whichever came first, and the
+   * pieces carry a shared group stamp so the card can still edit and copy the
+   * answer as a whole.
+   */
   const addItems = useCallback(
     (drafts: NLItemDraft[], label?: string): NLItem[] => {
       if (drafts.length === 0) return []
       const color = pickColor()
-      const made: NLItem[] = drafts.map((d, i) => ({
+      const group = drafts.length > 1 ? nextId() : null
+      const made: NLItem[] = drafts.map((d) => ({
         ...d,
         id: nextId(),
         color,
-        // The label belongs to the answer, so only its first part carries it —
-        // repeating it over every piece of a union would print it three times.
-        ...(label && i === 0 ? { label } : {}),
+        ...(label ? { label } : {}),
       })) as NLItem[]
-      commitState({ items: [...itemsRef.current, ...made] })
+      const styles = group === null ? stylesRef.current : { ...stylesRef.current }
+      if (group !== null) {
+        for (const it of made) styles[it.id] = { ...styles[it.id], group }
+      }
+      commitState({ items: [...itemsRef.current, ...made], styles })
       setSelectedId(made[0].id)
       return made
     },
@@ -1976,17 +2042,26 @@ export default function App() {
     [commitState, mapItems],
   )
 
+  /**
+   * Label an answer. Every piece of it takes the label, because a caption that
+   * says "solution" belongs over the whole solution set and not over whichever
+   * ray happened to be parsed first.
+   */
   const setItemLabel = useCallback(
     (id: string, label: string): void => {
       const text = label.trim().slice(0, 60)
+      const pieces = new Set(
+        answerPieces(itemsRef.current, stylesRef.current, id).map((it) => it.id),
+      )
       commitState({
-        items: mapItems(id, (it) => {
+        items: itemsRef.current.map((it) => {
+          if (!pieces.has(it.id)) return it
           const { label: _old, ...rest } = it
           return (text ? { ...rest, label: text } : rest) as NLItem
         }),
       })
     },
-    [commitState, mapItems],
+    [commitState],
   )
 
   const cycleItemColor = useCallback(
@@ -2061,16 +2136,26 @@ export default function App() {
       if (!Array.isArray(outcome.items) || outcome.items.length === 0) {
         return 'That describes no numbers at all'
       }
-      // The first part keeps this item's id, so the selection, the style and
-      // the label all stay attached to the thing that was being edited.
+      // The first part keeps this item's id, so the selection and the style
+      // stay attached to the thing that was being edited. The label goes on
+      // every part: it describes the answer, not one of its rays.
       const made: NLItem[] = outcome.items.map((d, i) => ({
         ...d,
         id: i === 0 ? old.id : nextId(),
         color: old.color,
-        ...(old.label && i === 0 ? { label: old.label } : {}),
+        ...(old.label ? { label: old.label } : {}),
       })) as NLItem[]
+      const group = made.length > 1 ? (stylesRef.current[old.id]?.group ?? nextId()) : null
+      const styles = { ...stylesRef.current }
+      if (group !== null) {
+        for (const it of made) styles[it.id] = { ...styles[it.id], group }
+      } else if (styles[old.id]?.group !== undefined) {
+        const { group: _gone, ...rest } = styles[old.id]
+        styles[old.id] = rest
+      }
       commitState({
         items: [...itemsRef.current.slice(0, at), ...made, ...itemsRef.current.slice(at + 1)],
+        styles,
       })
       setSelectedId(made[0].id)
       return null
@@ -2172,7 +2257,7 @@ export default function App() {
   // see that is part of the figure — grid, curves with their dash/opacity/width,
   // analysis markers and labels — is therefore in the file by construction, and
   // cannot silently go missing the way it did when export had its own code.
-  const exportSettingsRef = useRef<ExportSettings>(exportSettings)
+  const exportSettingsRef = useRef<FitExportSettings>(exportSettings)
   exportSettingsRef.current = exportSettings
   const showAnalysisRef = useRef(showAnalysis)
   showAnalysisRef.current = showAnalysis
@@ -2184,16 +2269,38 @@ export default function App() {
 
   const boardTheme = canvasTheme === 'light' ? LIGHT_THEME : DARK_THEME
 
-  const buildExportScene = useCallback((settings: ExportSettings): BoardScene => {
+  /**
+   * The box every visible thing on the board occupies, in math coords — the
+   * same measurement "Fit to curves" makes, so the exported frame and the
+   * button that frames the screen agree by construction.
+   */
+  const exportContent = useCallback(() => {
+    const vp = vpRef.current
+    const half = vp.widthPx / 2 / vp.pxPerUnit
+    return contentBounds({
+      kind: kindRef.current,
+      curves: curvesRef.current,
+      items: itemsRef.current,
+      models: modelsRef.current,
+      window: [vp.center.x - half, vp.center.x + half],
+    })
+  }, [])
+
+  const buildExportScene = useCallback(
+    (settings: FitExportSettings): BoardScene => {
     const vp = vpRef.current
     const sel = curvesRef.current.find((c) => c.id === selectedRef.current) ?? null
     return {
-      vp: {
-        center: { x: vp.center.x, y: vp.center.y },
-        pxPerUnit: vp.pxPerUnit,
-        widthPx: vp.widthPx,
-        heightPx: vp.heightPx,
-      },
+      // Not the window — the FIGURE. A number line exported as the window was
+      // a 40px strip in a 2206x1826 image; a graph was whatever happened to be
+      // on screen when Download was pressed.
+      vp: exportViewport(
+        vp,
+        settings,
+        settings.fit ? exportContent() : null,
+        kindRef.current,
+        itemsRef.current,
+      ),
       theme: exportTheme(settings, DARK_THEME),
       kind: kindRef.current,
       items: itemsRef.current,
@@ -2214,10 +2321,12 @@ export default function App() {
       printColors: settings.theme === 'light',
       chrome: null,
     }
-  }, [])
+    },
+    [exportContent],
+  )
 
   const renderExportCanvas = useCallback((): HTMLCanvasElement | null => {
-    const settings = clampExportSettings(exportSettingsRef.current)
+    const settings = clampFitSettings(exportSettingsRef.current)
     const scene = buildExportScene(settings)
     const out = renderBoardToCanvas(scene, settings)
     if (!out) return null
@@ -2391,15 +2500,22 @@ export default function App() {
    * App, so the readout has to be computed when it is about to be shown.
    */
   const exportSizeOf = useCallback(
-    (s: ExportSettings): { w: number; h: number } => {
-      const geo = exportGeometry(vpRef.current, s)
+    (s: FitExportSettings): { w: number; h: number } => {
+      const vp = exportViewport(
+        vpRef.current,
+        s,
+        s.fit ? exportContent() : null,
+        kindRef.current,
+        itemsRef.current,
+      )
+      const geo = exportGeometry(vp, s)
       return { w: geo.w, h: geo.h }
     },
-    [],
+    [exportContent],
   )
 
-  const changeExportSettings = useCallback((next: ExportSettings): void => {
-    const clean = clampExportSettings(next)
+  const changeExportSettings = useCallback((next: FitExportSettings): void => {
+    const clean = clampFitSettings(next)
     setExportSettings(clean)
     writeExportSettings(docMetaRef.current.id, clean)
   }, [])
@@ -2410,11 +2526,24 @@ export default function App() {
    * settings used, so the choice is made once and then stops being a decision.
    */
   const exportDocRef = useRef<string | null>(null)
+  const exportKindRef = useRef<BoardKind | null>(null)
   useEffect(() => {
-    if (exportDocRef.current === docMeta.id) return
+    const sameDoc = exportDocRef.current === docMeta.id
+    if (sameDoc && exportKindRef.current === kind) return
     exportDocRef.current = docMeta.id
-    setExportSettings(readExportSettings(docMeta.id))
-  }, [docMeta.id])
+    exportKindRef.current = kind
+    // The kind decides only the FRAMING default (a number line is nearly all
+    // whitespace in any window); size, margin and ground still come from the
+    // last document worked on, so a worksheet's figures match.
+    //
+    // A board that CHANGES kind re-reads that default too — a graph turned
+    // into a number line would otherwise keep exporting the window, which is
+    // the 90%-whitespace strip this option exists to stop. Once the teacher
+    // has stated a framing for this document, it is theirs and nothing here
+    // overrules it.
+    if (sameDoc && hasExportSettings(docMeta.id)) return
+    setExportSettings(readExportSettings(docMeta.id, kind))
+  }, [docMeta.id, kind])
 
   const toggleCanvasTheme = useCallback((): void => {
     setCanvasTheme((t) => {
@@ -2500,6 +2629,15 @@ export default function App() {
           updatePrefs({ showAnalysis: next })
           return next
         })
+      } else if (key === 'f' && !meta && !e.shiftKey) {
+        // One key for the whole mode. A teacher walking to the projector has
+        // one hand free and no time to find a menu.
+        e.preventDefault()
+        setPresentMode((v) => !v)
+      } else if (e.key === 'Escape') {
+        // Unconditional: leaving a mode you are not in costs nothing, and the
+        // alternative is a stale closure deciding whether you are in it.
+        setPresentMode(false)
       }
     }
     const onKeyUp = (e: KeyboardEvent): void => {
@@ -2517,10 +2655,47 @@ export default function App() {
   const canUndo = undoRef.current.length > 0
   const canRedo = redoRef.current.length > 0
 
+  /**
+   * The presentation scaling handed to both stages. Null at 1:1, so a board
+   * that is not being presented builds exactly the scene it built before.
+   */
+  const present = useMemo(
+    () => (presentMode ? presentScale(presentType) : null),
+    [presentMode, presentType],
+  )
+
+  /** Each visible curve's equation, in its own colour, for the legend. */
+  const legend = useMemo(
+    () =>
+      !presentMode
+        ? []
+        : kind === 'number-line'
+          ? itemLegend(items)
+          : curveLegend(curves, models, displaySources),
+    [presentMode, kind, items, curves, models, displaySources],
+  )
+
+  const changePresentType = useCallback((next: number): void => {
+    const clean = clampPresentScale(next)
+    setPresentType(clean)
+    updatePrefs({ presentScale: clean })
+  }, [])
+
+  const hasBoardContent = kind === 'number-line' ? items.length > 0 : curves.length > 0
+
+  /** What every number-line card needs to speak for its whole answer. */
+  const answerBoard = useMemo(() => ({ items, styles }), [items, styles])
+
   return (
-    <div className={`app${canvasTheme === 'light' ? ' canvas-light' : ''}`}>
+    <div
+      className={`app${canvasTheme === 'light' ? ' canvas-light' : ''}${
+        presentMode ? ' present-mode' : ''
+      }`}
+      data-present={presentMode ? 'on' : 'off'}
+    >
+      <AnswerContext.Provider value={answerBoard}>
       <Sidebar
-        open={sidebarOpen}
+        open={sidebarOpen && !presentMode}
         kind={kind}
         onSetKind={setBoardKind}
         items={items}
@@ -2564,8 +2739,9 @@ export default function App() {
         onExprToggle={() => setExprOpen((o) => !o)}
         onExprSubmit={kind === 'number-line' ? addInequality : addExpression}
       />
+      </AnswerContext.Provider>
 
-      {sidebarOpen && (
+      {sidebarOpen && !presentMode && (
         <div className="scrim" onClick={() => setSidebarOpen(false)} aria-hidden="true" />
       )}
 
@@ -2607,6 +2783,7 @@ export default function App() {
             onEditEnd={editEnd}
             onEditCancel={editCancel}
             onViewportChange={viewportChanged}
+            present={present}
           />
         ) : (
         <CanvasStage
@@ -2634,6 +2811,7 @@ export default function App() {
           analysisHighlight={highlight}
           onFeatureEdit={applyFeature}
           theme={boardTheme}
+          present={present}
         />
         )}
 
@@ -2641,6 +2819,15 @@ export default function App() {
           <AnalysisOverlay ref={overlayRef} marked={contextAnalysis} theme={boardTheme} vpRef={vpRef} />
         )}
 
+        {presentMode ? (
+          <PresentBar
+            scale={presentType}
+            canUndo={canUndo}
+            onScale={changePresentType}
+            onUndo={undo}
+            onExit={() => setPresentMode(false)}
+          />
+        ) : (
         <Toolbar
           sidebarOpen={sidebarOpen}
           canUndo={canUndo}
@@ -2668,19 +2855,73 @@ export default function App() {
             />
           }
           exportMenu={
-            <ExportMenu
-              settings={exportSettings}
-              sizeOf={exportSizeOf}
-              copyState={copyState}
-              onChange={changeExportSettings}
-              onExport={exportPNG}
-              onCopy={copyPNG}
-            />
+            <>
+              {/* The presentation switch lives beside Download because both
+                  are "the board leaves this window": one to paper, one to a
+                  wall. The Toolbar component itself is untouched — it takes
+                  this slot as a node. */}
+              <button
+                className="tb-btn tb-icon"
+                onClick={() => setPresentMode(true)}
+                data-testid="present-enter"
+                aria-pressed={presentMode}
+                title="Present this board (F) — big type, no sidebar, equations on the canvas"
+                aria-label="Presentation mode"
+              >
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <rect
+                    x="1.4"
+                    y="2.4"
+                    width="13.2"
+                    height="9"
+                    rx="1.4"
+                    stroke="currentColor"
+                    strokeWidth="1.4"
+                  />
+                  <path
+                    d="M8 11.4v2.2M5.6 13.6h4.8"
+                    stroke="currentColor"
+                    strokeWidth="1.4"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              </button>
+              <div className="tb-sep" />
+              <ExportMenu
+                settings={exportSettings}
+                hasContent={hasBoardContent}
+                sizeOf={exportSizeOf}
+                copyState={copyState}
+                onChange={changeExportSettings}
+                onExport={exportPNG}
+                onCopy={copyPNG}
+              />
+            </>
           }
           onToggleSidebar={() => setSidebarOpen((o) => !o)}
           onUndo={undo}
           onRedo={redo}
         />
+        )}
+
+        {presentMode && (
+          <PresentLegend
+            entries={legend}
+            type={presentType}
+            corner={legendCorner}
+            onCycleCorner={() =>
+              setLegendCorner((c) =>
+                c === 'bottom-left'
+                  ? 'top-left'
+                  : c === 'top-left'
+                    ? 'top-right'
+                    : c === 'top-right'
+                      ? 'bottom-right'
+                      : 'bottom-left',
+              )
+            }
+          />
+        )}
 
         {toast && (
           <div key={toast.key} className="toast" role="status">
@@ -2794,7 +3035,7 @@ export default function App() {
               )}
               <button
                 className="banner-action"
-                onClick={() => saveBoardAsNewDoc(`${docMetaRef.current.name} copy`)}
+                onClick={() => saveBoardAsNewDoc(copyName())}
               >
                 Save as a copy
               </button>

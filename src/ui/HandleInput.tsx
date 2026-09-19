@@ -169,7 +169,56 @@ export function HandleInput({
           </label>
         ))}
       </div>
-      <div className="handle-pop-hint">{hint}</div>
+      {/*
+        Commit and cancel as BUTTONS, not only as keys.
+
+        On an iPad there is no Esc and no Option: the hint underneath promised
+        two modifiers that a soft keyboard does not have, so a typed value
+        could be committed (Return exists) but never abandoned — the only way
+        out of this popover was to commit a value you did not want and undo it.
+        Under `pointer: coarse` these are 44px targets; with a mouse they are
+        small, because there the keys really are faster.
+      */}
+      <div className="handle-pop-foot">
+        <div className="handle-pop-hint">{hint}</div>
+        <div className="handle-pop-acts">
+          <button
+            type="button"
+            className="handle-pop-act handle-pop-cancel"
+            data-testid="handle-cancel"
+            title="Cancel (Esc)"
+            aria-label="Cancel"
+            onClick={onCancel}
+          >
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path
+                d="M4 4l8 8M12 4l-8 8"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className="handle-pop-act handle-pop-ok"
+            data-testid="handle-commit"
+            title="Set this value (Enter)"
+            aria-label="Set this value"
+            onClick={() => commit(true)}
+          >
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path
+                d="M3.2 8.6l3 3 6.6-7"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

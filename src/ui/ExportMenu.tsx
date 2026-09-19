@@ -11,8 +11,9 @@
 // ============================================================================
 
 import { useEffect, useId, useRef, useState } from 'react'
-import type { ExportSettings } from './renderBoard'
 import { EXPORT_SCALES, MAX_EXPORT_MARGIN, MAX_EXPORT_WIDTH, MIN_EXPORT_WIDTH } from './renderBoard'
+import { ASPECTS, ASPECT_LABELS } from './exportFit'
+import type { AspectKey, FitExportSettings } from './exportFit'
 
 /** What the Copy button is currently saying. */
 export type CopyState =
@@ -23,20 +24,30 @@ export type CopyState =
   | { kind: 'fell-back'; reason: string }
 
 interface Props {
-  settings: ExportSettings
+  settings: FitExportSettings
+  /** True when there is something on the board to frame. */
+  hasContent: boolean
   /**
    * Output pixel size a setting would produce. A function rather than a value:
    * it depends on the live viewport, which pan/zoom change without re-rendering
    * the app, so it must be asked for at the moment it is shown.
    */
-  sizeOf(settings: ExportSettings): { w: number; h: number }
+  sizeOf(settings: FitExportSettings): { w: number; h: number }
   copyState: CopyState
-  onChange(next: ExportSettings): void
+  onChange(next: FitExportSettings): void
   onExport(): void
   onCopy(): void
 }
 
-export function ExportMenu({ settings, sizeOf, copyState, onChange, onExport, onCopy }: Props) {
+export function ExportMenu({
+  settings,
+  hasContent,
+  sizeOf,
+  copyState,
+  onChange,
+  onExport,
+  onCopy,
+}: Props) {
   const [open, setOpen] = useState(false)
   const size = sizeOf(settings)
   const [widthDraft, setWidthDraft] = useState<string>('')
@@ -213,6 +224,52 @@ export function ExportMenu({ settings, sizeOf, copyState, onChange, onExport, on
             />
             <span className="exp-unit">px</span>
           </label>
+
+          <div className="exp-menu-sep" />
+          <div className="exp-title">Framing</div>
+          <label className="exp-check" htmlFor={`${uid}-fit`}>
+            <input
+              id={`${uid}-fit`}
+              type="checkbox"
+              className="exp-checkbox"
+              checked={settings.fit}
+              data-testid="export-fit"
+              disabled={!hasContent}
+              onChange={(e) => onChange({ ...settings, fit: e.target.checked })}
+            />
+            <span className="exp-check-body">
+              <span className="exp-check-label">Fit to content</span>
+              <span className="exp-check-note">
+                {hasContent
+                  ? 'Frame everything on the board instead of the window.'
+                  : 'Nothing on the board to frame yet.'}
+              </span>
+            </span>
+          </label>
+
+          <div
+            className="seg exp-seg exp-seg-wrap"
+            role="group"
+            aria-label="Export shape"
+            data-testid="export-aspect"
+          >
+            {ASPECTS.map((a: AspectKey) => (
+              <button
+                key={a}
+                className={`seg-btn${settings.aspect === a ? ' seg-on' : ''}`}
+                data-testid={`export-aspect-${a}`}
+                disabled={!settings.fit}
+                onClick={() => onChange({ ...settings, aspect: a })}
+                title={
+                  a === 'auto'
+                    ? 'Keep the shape the board has on screen'
+                    : `Letterbox the fitted figure into ${ASPECT_LABELS[a]}`
+                }
+              >
+                {ASPECT_LABELS[a]}
+              </button>
+            ))}
+          </div>
 
           <div className="exp-menu-sep" />
           <div className="exp-title">Background</div>
