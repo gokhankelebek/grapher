@@ -5,19 +5,50 @@
 :root {
   --bg: #0f1117;
   --panel: #131722;
-  --panel-2: #171c2a;
-  --panel-3: #1c2233;
-  --border: #232838;
-  --border-soft: #1d2230;
-  --border-strong: #2c3350;
-  --track: #262d42;
+  /* Surface ladder. Each step is a real step: panel -> panel-2 is 1.10:1 and
+     panel-2 -> panel-3 (card hover / selected) is 1.30:1, so hovering a card
+     is visible rather than theoretical. */
+  --panel-2: #1a2031;
+  --panel-3: #2b334e;
+  --border: #2a3047;
+  --border-soft: #242a3e;
+  --border-strong: #404a75;
+  --track: #3a4362;
   --text: #e6eaf5;
-  --muted: #8b93b0;
-  --faint: #5c6480;
+  /* Contrast floors (worst case = on --panel-3, the lightest surface):
+     --muted 4.74:1, --faint 4.09:1. --faint is reserved for icons and for
+     hints on the dark surfaces (>=5.4:1 there); readable text uses --muted. */
+  --muted: #9aa1bd;
+  --faint: #8d95b3;
   --accent: #4f9cf9;
   --accent-soft: rgba(79, 156, 249, 0.14);
   --danger: #f95f62;
   --radius: 8px;
+
+  /* ---- spacing scale: 4 / 8 / 12 / 16 / 24.
+     2px and 6px survive only as control insets (pill paddings, hairline
+     segment gutters) where a 4px step would change the shape. ---- */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-6: 24px;
+
+  /* ---- type scale: 11 / 12 / 13 / 15 / 17. Nothing below 11px. ---- */
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 15px;
+  --fs-xl: 17px;
+  /* iOS Safari auto-zooms a focused field under 16px; touch layers use this. */
+  --fs-field-touch: 16px;
+
+  /* Distance from the top of the canvas to the bottom edge of the toolbar.
+     Anything that floats under the toolbar offsets from this, so the two
+     cannot drift apart when the toolbar wraps. */
+  --toolbar-h: 55px;
+  /* Vertical space the toolbar claims when it docks to the bottom (phones). */
+  --toolbar-reserve: 76px;
   --shadow: 0 4px 24px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.3);
   --font: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --font-mono: 'SF Mono', 'Menlo', 'Consolas', monospace;
@@ -39,7 +70,7 @@ body,
 
 body {
   font-family: var(--font);
-  font-size: 13px;
+  font-size: var(--fs-md);
   color: var(--text);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
@@ -62,11 +93,27 @@ button:disabled {
   cursor: default;
 }
 
-/* keyboard a11y — visible only for keyboard focus */
+/* keyboard a11y — visible only for keyboard focus.
+   border-radius: inherit so the ring follows the shape it is ringing (8px
+   cards, circular dots) instead of imposing a 4px rectangle on both. */
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-  border-radius: 4px;
+  border-radius: inherit;
+}
+
+/* Two-tone ring. The accent is also curve #1's colour, so on anything that
+   carries a curve colour the ring needs a dark gap to separate it from the
+   thing it is ringing. 1px of --bg, then 2px of accent. */
+.color-dot:focus-visible,
+.an-value:focus-visible,
+.cand-item:focus-visible,
+.nl-dot-toggle:focus-visible,
+.nl-end-value:focus-visible,
+button.card-formula:focus-visible,
+button.param-value:focus-visible {
+  outline-offset: 1px;
+  box-shadow: 0 0 0 1px var(--bg);
 }
 
 .expr-input:focus-visible {
@@ -221,19 +268,19 @@ input[type='range']:focus-visible::-moz-range-thumb {
 .sidebar-head {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px 16px 12px;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
   border-bottom: 1px solid var(--border-soft);
 }
 
 .sidebar-head-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-2);
 }
 
 .sidebar-title {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -242,12 +289,13 @@ input[type='range']:focus-visible::-moz-range-thumb {
 
 .sidebar-count {
   min-width: 20px;
-  padding: 1px 6px;
+  padding: 2px 6px;
   border-radius: 10px;
   background: var(--panel-3);
   border: 1px solid var(--border);
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   text-align: center;
 }
@@ -262,8 +310,8 @@ input[type='range']:focus-visible::-moz-range-thumb {
 .board-kind-seg {
   display: flex;
   flex-wrap: wrap;
-  gap: 3px;
-  padding: 3px;
+  gap: var(--sp-1);
+  padding: var(--sp-1);
   border-radius: 8px;
   background: var(--panel-3);
   border: 1px solid var(--border-soft);
@@ -276,10 +324,10 @@ input[type='range']:focus-visible::-moz-range-thumb {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 5px 8px;
+  padding: 6px var(--sp-2);
   border-radius: 6px;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   font-weight: 500;
   white-space: nowrap;
   transition:
@@ -320,10 +368,10 @@ input[type='range']:focus-visible::-moz-range-thumb {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 12px;
+  padding: var(--sp-3);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--sp-2);
   scrollbar-width: thin;
   scrollbar-color: #2a3047 transparent;
 }
@@ -347,12 +395,11 @@ input[type='range']:focus-visible::-moz-range-thumb {
 }
 
 .sidebar-empty {
-  margin: 24px 8px;
+  margin: var(--sp-6) var(--sp-2);
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: var(--fs-md);
   line-height: 1.6;
   text-align: center;
-  opacity: 0.8;
 }
 
 /* ------------------------------------------------------------ curve cards */
@@ -362,7 +409,7 @@ input[type='range']:focus-visible::-moz-range-thumb {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--panel-2);
-  padding: 12px 12px 10px;
+  padding: var(--sp-3);
   cursor: pointer;
   transition:
     border-color 0.15s var(--ease),
@@ -393,7 +440,7 @@ input[type='range']:focus-visible::-moz-range-thumb {
 .card-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-2);
 }
 
 .color-dot {
@@ -428,7 +475,7 @@ input[type='range']:focus-visible::-moz-range-thumb {
 }
 
 .card-latex {
-  font-size: 13px;
+  font-size: var(--fs-md);
   color: var(--text);
 }
 
@@ -437,8 +484,8 @@ button.card-formula {
   display: block;
   text-align: left;
   border-radius: 5px;
-  padding: 1px 3px;
-  margin: -1px -3px;
+  padding: 2px var(--sp-1);
+  margin: -2px -4px;
   cursor: text;
   transition: background 0.15s var(--ease);
 }
@@ -450,8 +497,8 @@ button.card-formula:hover {
 .card-formula-input {
   flex: 1;
   min-width: 0;
-  padding: 4px 7px;
-  font-size: 12px;
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-sm);
   border-color: color-mix(in srgb, var(--curve, var(--accent)) 45%, var(--border));
 }
 
@@ -461,7 +508,7 @@ button.card-formula:hover {
 }
 
 .card-eq-foot {
-  margin-top: 6px;
+  margin-top: var(--sp-2);
 }
 
 .card-eq-foot .expr-error,
@@ -470,7 +517,7 @@ button.card-formula:hover {
 }
 
 .card-eq-foot .expr-hint {
-  margin-top: 4px;
+  margin-top: var(--sp-1);
 }
 
 .icon-btn {
@@ -511,30 +558,35 @@ button.card-formula:hover {
   color: var(--danger);
 }
 
+/* The one badge that persists without hover: "this curve is hidden". It was
+   2.02:1 — the dimmest pixel in the app. Now 9.8:1 on a resting card and
+   7.5:1 on a selected one. */
 .eye-off {
-  color: #4a516b;
+  color: #c3c9dc;
 }
 
 .card-sub {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 6px;
-  padding-left: 20px;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
 }
 
 .model-name {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 
+/* Every numeric readout in the app is mono: .err-badge, .cand-err,
+   .sidebar-count, .exp-num, .doc-open-date, .param-value, .an-value. */
 .err-badge {
-  padding: 1px 6px;
+  padding: 2px 6px;
   border-radius: 5px;
-  background: rgba(139, 147, 176, 0.08);
+  background: rgba(154, 161, 189, 0.08);
   border: 1px solid var(--border);
-  color: var(--muted);
-  font-size: 10.5px;
+  color: #b3bad3; /* 5.9:1 through its own wash, even on a selected card */
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.01em;
 }
@@ -542,8 +594,8 @@ button.card-formula:hover {
 /* expanded section */
 
 .card-body {
-  margin-top: 12px;
-  padding-top: 12px;
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
   border-top: 1px solid var(--border-soft);
   cursor: default;
   animation: body-in 0.16s var(--ease) both;
@@ -563,19 +615,19 @@ button.card-formula:hover {
 .param-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--sp-2);
 }
 
 .param-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--sp-3);
 }
 
 .param-name {
   flex: 0 0 24px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   text-align: right;
 }
 
@@ -590,38 +642,39 @@ button.card-formula:hover {
   flex: 0 0 52px;
   color: var(--text);
   opacity: 0.88;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
 
 .cand-section {
-  margin-top: 12px;
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--border-soft);
 }
 
 .cand-title {
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--muted);
-  opacity: 0.9;
-  margin-bottom: 6px;
+  margin-bottom: var(--sp-2);
 }
 
 .cand-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--sp-1);
 }
 
 .cand-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 5px 8px;
+  gap: var(--sp-2);
+  padding: 6px var(--sp-2);
   border-radius: 6px;
   border: 1px solid transparent;
   color: var(--muted);
@@ -645,28 +698,33 @@ button.card-formula:hover {
 }
 
 .cand-name {
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .cand-err {
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   font-variant-numeric: tabular-nums;
-  opacity: 0.8;
+  color: var(--muted);
+  font-family: var(--font-mono);
 }
 
 /* ------------------------------------------------------------ toolbar */
 
+/* z-index 30 — ABOVE .banner (25). The toolbar is a stacking context, so the
+   menus it contains (.doc-menu / .exp-menu at z 40) can never climb out of it;
+   with the toolbar below the banner a conflict banner painted over the very
+   menu you need to dismiss it. The toolbar outranks the banner instead. */
 .toolbar {
   position: absolute;
-  top: 12px;
-  left: 12px;
-  z-index: 10;
+  top: var(--sp-3);
+  left: var(--sp-3);
+  z-index: 30;
   display: flex;
   align-items: center;
-  gap: 4px;
-  max-width: calc(100% - 24px);
+  gap: var(--sp-1);
+  max-width: calc(100% - var(--sp-6));
   flex-wrap: wrap;
-  padding: 6px 8px;
+  padding: 6px var(--sp-2);
   border-radius: 10px;
   background: rgba(19, 23, 34, 0.88);
   border: 1px solid var(--border);
@@ -676,8 +734,8 @@ button.card-formula:hover {
 }
 
 .brand {
-  padding: 0 8px 0 4px;
-  font-size: 14px;
+  padding: 0 var(--sp-2) 0 var(--sp-1);
+  font-size: var(--fs-lg);
   font-weight: 700;
   letter-spacing: -0.01em;
   background: linear-gradient(120deg, #7db4ff, #4f9cf9 55%, #2dd4bf);
@@ -689,16 +747,20 @@ button.card-formula:hover {
 
 .tb-sep {
   width: 1px;
-  height: 16px;
+  height: var(--sp-4);
   background: var(--border);
-  margin: 0 4px;
+  margin: 0 var(--sp-1);
 }
 
+/* Emphasis ladder on the toolbar, measured against its own background
+   (#121620): Download 13.9:1 > plain button 9.4:1 > Analysis-off 7.1:1 >
+   Clear 6.1:1 > disabled 3.9:1. The destructive action is no longer the
+   brightest thing in the app. */
 .tb-btn {
-  padding: 5px 10px;
+  padding: 6px var(--sp-2);
   border-radius: 6px;
-  color: var(--text);
-  font-size: 12.5px;
+  color: #b3bad3;
+  font-size: var(--fs-md);
   white-space: nowrap;
   transition:
     background 0.15s var(--ease),
@@ -708,6 +770,7 @@ button.card-formula:hover {
 
 .tb-btn:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.07);
+  color: var(--text);
 }
 
 .tb-btn:active:not(:disabled) {
@@ -715,14 +778,29 @@ button.card-formula:hover {
 }
 
 .tb-btn:disabled {
-  opacity: 0.35;
+  opacity: 0.5; /* 3.2:1 — plainly off, and a clear step below Clear's 6.1:1 */
+}
+
+/* Destructive, so deliberately the quietest enabled label — it only takes on
+   the danger colour once you are already pointing at it.
+   HOOK: add `tb-danger` to the Clear button; the [title] selector is a
+   stopgap so the fix works before the markup catches up. */
+.tb-danger,
+.tb-btn[title^='Remove all curves'] {
+  color: var(--faint);
+}
+
+.tb-danger:hover:not(:disabled),
+.tb-btn[title^='Remove all curves']:hover:not(:disabled) {
+  background: rgba(249, 95, 98, 0.12);
+  color: #ff9a9c;
 }
 
 .tb-icon {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 5px 7px;
+  padding: 6px var(--sp-2);
   color: var(--muted);
 }
 
@@ -733,7 +811,7 @@ button.card-formula:hover {
 .tb-primary {
   background: var(--accent-soft);
   border: 1px solid rgba(79, 156, 249, 0.35);
-  color: #9cc6ff;
+  color: #e8f1ff; /* 13.9:1 on the tinted primary background */
 }
 
 .tb-primary:hover:not(:disabled) {
@@ -754,10 +832,10 @@ button.card-formula:hover {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 11px;
+  padding: var(--sp-1) var(--sp-3);
   border-radius: 5px;
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: var(--fs-md);
   transition:
     background 0.15s var(--ease),
     color 0.15s var(--ease);
@@ -792,8 +870,8 @@ button.card-formula:hover {
 
 .zoom-controls {
   position: absolute;
-  right: 16px;
-  bottom: 16px;
+  right: var(--sp-4);
+  bottom: var(--sp-4);
   z-index: 10;
   display: flex;
   flex-direction: column;
@@ -841,7 +919,7 @@ button.card-formula:hover {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: var(--sp-2);
   pointer-events: none;
   animation: hint-in 0.6s var(--ease) both;
 }
@@ -851,18 +929,18 @@ button.card-formula:hover {
   color: var(--accent);
   opacity: 0.6;
   line-height: 1;
-  margin-bottom: 4px;
+  margin-bottom: var(--sp-1);
 }
 
 .empty-title {
-  font-size: 16px;
+  font-size: var(--fs-xl);
   font-weight: 600;
   color: var(--text);
   letter-spacing: -0.01em;
 }
 
 .empty-sub {
-  font-size: 13px;
+  font-size: var(--fs-md);
   color: var(--muted);
 }
 
@@ -896,7 +974,7 @@ button.card-formula:hover {
   border: 1px solid var(--border);
   background: var(--panel-3);
   color: var(--muted);
-  font-size: 15px;
+  font-size: var(--fs-lg);
   line-height: 1;
   transition:
     background 0.15s var(--ease),
@@ -908,7 +986,7 @@ button.card-formula:hover {
 .add-btn:hover {
   color: var(--text);
   border-color: var(--border-strong);
-  background: #202741;
+  background: #343d5e;
 }
 
 .add-open {
@@ -922,20 +1000,20 @@ button.card-formula:hover {
   border: 1px solid rgba(79, 156, 249, 0.35);
   border-radius: var(--radius);
   background: var(--panel-2);
-  padding: 10px;
+  padding: var(--sp-3);
   box-shadow: 0 0 0 1px var(--accent-soft);
   animation: body-in 0.16s var(--ease) both;
 }
 
 .expr-input {
   width: 100%;
-  padding: 7px 9px;
+  padding: var(--sp-2);
   border-radius: 6px;
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--fs-md);
   outline: none;
   transition:
     border-color 0.15s var(--ease),
@@ -958,18 +1036,17 @@ button.card-formula:hover {
 }
 
 .expr-error {
-  margin-top: 6px;
+  margin-top: var(--sp-2);
   color: var(--danger);
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   line-height: 1.4;
 }
 
 .expr-hint {
-  margin-top: 6px;
+  margin-top: var(--sp-2);
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   line-height: 1.5;
-  opacity: 0.8;
 }
 
 /* ------------------------------------------------------------ style row */
@@ -977,9 +1054,9 @@ button.card-formula:hover {
 .style-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-top: 12px;
-  padding-top: 12px;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
   border-top: 1px solid var(--border-soft);
 }
 
@@ -1007,10 +1084,10 @@ button.card-formula:hover {
 }
 
 .dash-btn {
-  padding: 2px 7px;
+  padding: var(--sp-1) 6px;
   border-radius: 4px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   letter-spacing: -0.02em;
   white-space: nowrap;
   transition:
@@ -1031,7 +1108,14 @@ button.card-formula:hover {
 
 /* ------------------------------------------------------------ small screens */
 
-@media (max-width: 720px) {
+/* Laptops and landscape tablets: the sidebar gives ground first, and the
+   toolbar wraps — which is why --toolbar-h grows here, so the banner that
+   hangs off it comes down with it. */
+@media (max-width: 1024px) {
+  :root {
+    --toolbar-h: 90px; /* measured: the toolbar wraps to two rows here */
+  }
+
   .sidebar,
   .sidebar-inner {
     width: 264px;
@@ -1043,7 +1127,7 @@ button.card-formula:hover {
 
   .toolbar {
     gap: 2px;
-    padding: 4px 6px;
+    padding: var(--sp-1) 6px;
   }
 
   .brand {
@@ -1051,40 +1135,78 @@ button.card-formula:hover {
   }
 }
 
-/* phones: sidebar floats over the canvas instead of crushing it;
-   toolbar becomes a single scrollable row along the bottom */
-@media (max-width: 540px) {
+@media (max-width: 760px) {
+  :root {
+    --toolbar-h: 126px; /* measured: three rows */
+  }
+}
+
+/* Portrait tablets and below: 264px of sidebar is still a third of the board,
+   so the sidebar stops taking room from the canvas and floats over it as a
+   drawer, dismissed by the scrim. */
+@media (max-width: 900px) {
   .app {
     position: relative;
   }
 
+  /* In drawer mode the sidebar is the frontmost thing on screen, so it has to
+     clear the toolbar (30) it now slides over — and the scrim with it. */
   .sidebar {
     position: absolute;
     top: 0;
     left: 0;
     bottom: 0;
-    z-index: 20;
+    height: auto; /* so `bottom` can hold it clear of the docked toolbar */
+    z-index: 34;
     box-shadow: 8px 0 32px rgba(0, 0, 0, 0.45);
   }
 
   .sidebar-closed {
     box-shadow: none;
   }
+}
+
+/* Phones: the toolbar docks to the bottom as a single scrolling row. */
+@media (max-width: 540px) {
+  :root {
+    --toolbar-h: 12px; /* nothing overhead any more — the toolbar is below */
+  }
+
+  /* The drawer stops above the docked toolbar instead of running under it;
+     the two used to overlap by 252px, with the toolbar (z 30) on top. */
+  .sidebar {
+    bottom: var(--toolbar-reserve);
+  }
 
   .toolbar {
     top: auto;
-    bottom: 16px;
-    left: 12px;
+    bottom: var(--sp-4);
+    left: var(--sp-3);
     right: 64px;
     max-width: none;
-    z-index: 30;
     flex-wrap: nowrap;
     overflow-x: auto;
-    scrollbar-width: none;
+    /* Two thirds of this row lives off-screen, so say so: a real scrollbar
+       plus an inset edge shadow that stays put while the content slides. */
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+    box-shadow:
+      inset -20px 0 16px -16px rgba(0, 0, 0, 0.75),
+      var(--shadow);
   }
 
   .toolbar::-webkit-scrollbar {
-    display: none;
+    display: block;
+    height: var(--sp-1);
+  }
+
+  .toolbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .toolbar::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+    border-radius: 2px;
   }
 }
 
@@ -1094,13 +1216,13 @@ button.card-formula:hover {
 .handle-tip {
   position: absolute;
   z-index: 12;
-  padding: 3px 8px;
+  padding: var(--sp-1) var(--sp-2);
   border-radius: 6px;
   background: rgba(19, 23, 34, 0.92);
   border: 1px solid var(--border);
   box-shadow: var(--shadow);
   color: var(--text);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-family: var(--font-mono);
   pointer-events: none;
   white-space: nowrap;
@@ -1122,8 +1244,8 @@ button.card-formula:hover {
 button.param-value {
   cursor: text;
   border-radius: 4px;
-  padding: 1px 3px;
-  margin-right: -3px;
+  padding: 2px var(--sp-1);
+  margin-right: -4px;
   transition: background 0.15s var(--ease), color 0.15s var(--ease);
 }
 
@@ -1135,12 +1257,12 @@ button.param-value:hover {
 .param-edit {
   flex: 0 0 58px;
   width: 58px;
-  padding: 1px 4px;
+  padding: 2px var(--sp-1);
   border-radius: 4px;
   border: 1px solid color-mix(in srgb, var(--curve, var(--accent)) 55%, var(--border));
   background: var(--bg);
   color: var(--text);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   text-align: right;
@@ -1212,13 +1334,13 @@ button.param-value:hover {
   bottom: 24px;
   transform: translateX(-50%);
   z-index: 20;
-  padding: 7px 14px;
+  padding: var(--sp-2) var(--sp-3);
   border-radius: 8px;
   background: rgba(19, 23, 34, 0.94);
   border: 1px solid var(--border);
   box-shadow: var(--shadow);
   color: var(--text);
-  font-size: 12.5px;
+  font-size: var(--fs-md);
   pointer-events: none;
   animation: toast-in 0.18s var(--ease) both;
 }
@@ -1245,9 +1367,9 @@ button.param-value:hover {
   z-index: 20;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--sp-3);
   max-width: min(560px, calc(100% - 32px));
-  padding: 8px 8px 8px 13px;
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-3);
   border-radius: 9px;
   background: rgba(19, 23, 34, 0.96);
   border: 1px solid var(--border);
@@ -1267,18 +1389,18 @@ button.param-value:hover {
 .feature-note-text {
   min-width: 0;
   color: var(--text);
-  font-size: 12.5px;
+  font-size: var(--fs-md);
   line-height: 1.45;
 }
 
 .feature-note-action {
   flex: 0 0 auto;
-  padding: 4px 9px;
+  padding: var(--sp-1) var(--sp-2);
   border-radius: 6px;
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.04);
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   white-space: nowrap;
   transition: background 0.15s var(--ease);
 }
@@ -1307,17 +1429,17 @@ button.param-value:hover {
 
 /* ------------------------------------------------------------ mobile scrim */
 
-/* desktop/tablet: inert. phones (drawer mode): tap outside to dismiss */
+/* Wide layouts: inert. Drawer mode (<=900px): tap outside to dismiss. */
 .scrim {
   display: none;
 }
 
-@media (max-width: 540px) {
+@media (max-width: 900px) {
   .scrim {
     display: block;
     position: absolute;
     inset: 0;
-    z-index: 15; /* above canvas/toolbar, below the sidebar drawer (20) */
+    z-index: 32; /* over the toolbar (30), under the sidebar drawer (34) */
     background: rgba(8, 10, 16, 0.45);
     animation: scrim-in 0.2s var(--ease) both;
   }
@@ -1341,13 +1463,13 @@ button.param-value:hover {
   border-left: 1px solid var(--border);
   color: var(--faint);
   font-family: var(--font);
-  font-size: 10px;
+  font-size: var(--fs-xs);
 }
 
 .handle-pop {
   position: absolute;
   z-index: 14;
-  padding: 8px 9px 7px;
+  padding: var(--sp-2);
   border-radius: 8px;
   background: rgba(19, 23, 34, 0.96);
   border: 1px solid color-mix(in srgb, var(--curve, var(--accent)) 40%, var(--border));
@@ -1371,9 +1493,9 @@ button.param-value:hover {
 }
 
 .handle-pop-title {
-  margin-bottom: 6px;
+  margin-bottom: var(--sp-2);
   padding-left: 2px;
-  font-size: 10px;
+  font-size: var(--fs-xs);
   font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -1383,28 +1505,28 @@ button.param-value:hover {
 .handle-pop-fields {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-2);
 }
 
 .handle-pop-field {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--sp-1);
 }
 
 .handle-pop-label {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 
 .handle-pop-input {
   width: 68px;
-  padding: 3px 6px;
+  padding: var(--sp-1) 6px;
   border-radius: 5px;
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   text-align: right;
@@ -1433,15 +1555,15 @@ button.param-value:hover {
 .handle-pop-suffix {
   margin-left: -2px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 
 .handle-pop-hint {
   max-width: 176px;
-  margin-top: 6px;
+  margin-top: var(--sp-2);
   padding-left: 2px;
   color: var(--faint);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   line-height: 1.45;
 }
 
@@ -1451,15 +1573,15 @@ button.param-value:hover {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-2);
 }
 
 .doc-name,
 .doc-rename {
   max-width: 160px;
-  padding: 4px 7px;
+  padding: var(--sp-1) var(--sp-2);
   border-radius: 6px;
-  font-size: 12.5px;
+  font-size: var(--fs-md);
   font-family: inherit;
   color: var(--text);
   white-space: nowrap;
@@ -1484,7 +1606,7 @@ button.param-value:hover {
    closing the laptop. --faint (#5c6480) on the toolbar measured ~3.4:1 at
    10.5px — under the 4.5:1 WCAG AA minimum for text this size. */
 .doc-save {
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   font-weight: 500;
   letter-spacing: 0.02em;
   color: #98a1bf; /* 7.2:1 on the toolbar */
@@ -1546,10 +1668,10 @@ button.param-value:hover {
 }
 
 .doc-item {
-  padding: 6px 8px;
+  padding: 6px var(--sp-2);
   border-radius: 6px;
   color: var(--text);
-  font-size: 12.5px;
+  font-size: var(--fs-md);
   text-align: left;
   transition: background 0.15s var(--ease);
 }
@@ -1560,13 +1682,13 @@ button.param-value:hover {
 
 .doc-menu-sep {
   height: 1px;
-  margin: 6px 2px;
+  margin: var(--sp-2) 2px;
   background: var(--border-soft);
 }
 
 .doc-menu-title {
-  padding: 2px 8px 6px;
-  font-size: 10px;
+  padding: 2px var(--sp-2) 6px;
+  font-size: var(--fs-xs);
   font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -1591,9 +1713,9 @@ button.param-value:hover {
 }
 
 .doc-empty {
-  padding: 4px 8px 8px;
+  padding: var(--sp-1) var(--sp-2) var(--sp-2);
   color: var(--faint);
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
 }
 
 .doc-row {
@@ -1617,10 +1739,10 @@ button.param-value:hover {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 8px;
-  padding: 6px 8px;
+  gap: var(--sp-2);
+  padding: 6px var(--sp-2);
   color: var(--text);
-  font-size: 12.5px;
+  font-size: var(--fs-md);
   text-align: left;
 }
 
@@ -1632,8 +1754,9 @@ button.param-value:hover {
 
 .doc-open-date {
   flex: 0 0 auto;
-  color: var(--faint);
-  font-size: 10.5px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1644,7 +1767,7 @@ button.param-value:hover {
   justify-content: center;
   width: 22px;
   height: 22px;
-  margin-right: 4px;
+  margin-right: var(--sp-1);
   border-radius: 5px;
   color: var(--faint);
   opacity: 0;
@@ -1667,9 +1790,9 @@ button.param-value:hover {
 .doc-confirm {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-2);
   width: 100%;
-  padding: 6px 8px;
+  padding: 6px var(--sp-2);
 }
 
 .doc-confirm-text {
@@ -1678,16 +1801,16 @@ button.param-value:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text);
 }
 
 .doc-confirm-yes,
 .doc-confirm-no {
   flex: 0 0 auto;
-  padding: 3px 8px;
+  padding: var(--sp-1) var(--sp-2);
   border-radius: 5px;
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   transition: background 0.15s var(--ease);
 }
 
@@ -1710,30 +1833,72 @@ button.param-value:hover {
   color: var(--text);
 }
 
+/* Viewport clamp. The anchoring itself is JS, but nothing should ever be able
+   to render a popover wider than the window it opens in. */
+.exp-menu,
+.doc-menu,
+.handle-pop {
+  max-width: calc(100vw - var(--sp-4));
+  max-height: calc(100vh - var(--sp-4));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+@supports (max-width: calc(100vw - max(16px, env(safe-area-inset-left)))) {
+  .exp-menu,
+  .doc-menu,
+  .handle-pop {
+    max-width: calc(
+      100vw - max(var(--sp-2), env(safe-area-inset-left)) -
+        max(var(--sp-2), env(safe-area-inset-right))
+    );
+  }
+}
+
 /* ------------------------------------------------------------ banners */
 
+/* The banner is centred with translateX(-50%), so it needs its own keyframes:
+   the shared `pop-in` ends on `transform: none` and, with fill-mode both, that
+   permanently deleted the centring — the banner settled 139px past the right
+   edge of the window. `banner-in` ends on the transform it started with.
+
+   It also sits under the toolbar, which wraps to two rows on narrower windows,
+   so it offsets from --toolbar-h rather than from a guessed 62px. */
 .banner {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  top: 62px;
+  inset-block-start: calc(var(--toolbar-h) + var(--sp-2));
   z-index: 25;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
-  max-width: min(680px, calc(100% - 32px));
-  padding: 9px 12px;
+  gap: var(--sp-2) var(--sp-3);
+  width: max-content;
+  max-width: min(680px, calc(100% - var(--sp-6)));
+  padding: var(--sp-2) var(--sp-3);
   border-radius: 9px;
   background: rgba(19, 23, 34, 0.96);
   border: 1px solid var(--border);
   box-shadow: var(--shadow);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
-  animation: pop-in 0.16s var(--ease) both;
+  animation: banner-in 0.16s var(--ease) both;
+}
+
+@keyframes banner-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(3px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%);
+  }
 }
 
 .banner + .banner {
-  top: 118px;
+  inset-block-start: calc(var(--toolbar-h) + 64px);
 }
 
 .banner-error {
@@ -1746,33 +1911,49 @@ button.param-value:hover {
   box-shadow: inset 2px 0 0 #f9a825, var(--shadow);
 }
 
+/* The message is the banner. It takes the room that is left; it was
+   `flex: 0 1 auto` and collapsed to 62px — one word per line, 340px tall —
+   next to 261px of buttons. */
 .banner-body {
+  flex: 1 1 260px;
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
 }
 
+/* HOOK: wrap the banner's buttons in <div class="banner-actions"> so they
+   travel as a group. Until then the direct-child rule below does the same
+   job, because .banner itself now wraps. */
+.banner-actions {
+  flex: 0 1 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-left: auto;
+}
+
 .banner-title {
-  font-size: 12.5px;
+  font-size: var(--fs-md);
   font-weight: 600;
   color: var(--text);
 }
 
 .banner-text {
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   line-height: 1.45;
   color: var(--muted);
 }
 
 .banner-action {
   flex: 0 0 auto;
-  padding: 5px 10px;
+  padding: 6px var(--sp-2);
   border-radius: 6px;
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.04);
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   white-space: nowrap;
   transition: background 0.15s var(--ease);
 }
@@ -1798,19 +1979,36 @@ button.param-value:hover {
 }
 
 .drop-inner {
-  padding: 12px 20px;
+  padding: var(--sp-3) var(--sp-6);
   border-radius: 10px;
   background: rgba(19, 23, 34, 0.95);
   border: 1px solid var(--border);
   color: var(--text);
-  font-size: 14px;
+  font-size: var(--fs-lg);
   font-weight: 600;
 }
 
 /* ------------------------------------------- broken (unrestorable) equation */
 
-.card-broken-state {
-  border-color: rgba(249, 95, 98, 0.42);
+/* Curve #2's colour IS --danger byte-for-byte, so a selected curve-2 card and
+   a broken card were the same picture. The broken state is told apart by shape
+   instead: a dashed edge no other state uses, its own tinted surface, and a
+   warning glyph in front of the reason. Hue carries none of the message. */
+.card-broken-state,
+.card-broken-state:hover,
+.card-broken-state.card-selected {
+  border-style: dashed;
+  border-color: rgba(249, 95, 98, 0.6);
+  background: #241b26;
+}
+
+.card-broken::before {
+  content: '⚠';
+  float: left;
+  margin-right: 6px;
+  color: #ff9a9c;
+  font-size: var(--fs-md);
+  line-height: 1.2;
 }
 
 .err-badge-bad {
@@ -1820,8 +2018,8 @@ button.param-value:hover {
 }
 
 .card-broken {
-  margin-top: 8px;
-  padding: 7px 8px;
+  margin-top: var(--sp-2);
+  padding: var(--sp-2);
   border-radius: 6px;
   background: rgba(249, 95, 98, 0.07);
   border: 1px solid rgba(249, 95, 98, 0.25);
@@ -1829,15 +2027,15 @@ button.param-value:hover {
 
 .card-broken-src {
   display: block;
-  margin-bottom: 4px;
+  margin-bottom: var(--sp-1);
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   color: var(--text);
   word-break: break-all;
 }
 
 .card-broken-why {
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   line-height: 1.5;
   color: var(--muted);
 }
@@ -1846,13 +2044,13 @@ button.param-value:hover {
 
 .empty-hint-error {
   pointer-events: auto;
-  gap: 6px;
-  padding: 0 32px;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-6);
   text-align: center;
 }
 
 .empty-hint-error .empty-title {
-  font-size: 15px;
+  font-size: var(--fs-lg);
 }
 
 .empty-hint-error .empty-sub {
@@ -1893,37 +2091,36 @@ button.param-value:hover {
 }
 
 .an-section {
-  margin-top: 12px;
-  padding-top: 12px;
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
   border-top: 1px solid var(--border-soft);
 }
 
 .an-title {
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--muted);
-  opacity: 0.9;
-  margin-bottom: 6px;
+  margin-bottom: var(--sp-2);
 }
 
 .an-table {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: var(--sp-1);
 }
 
 .an-row {
   display: grid;
   grid-template-columns: 78px 1fr;
   align-items: baseline;
-  gap: 8px;
+  gap: var(--sp-2);
 }
 
 .an-label {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   white-space: nowrap;
 }
 
@@ -1938,11 +2135,11 @@ button.param-value:hover {
 .an-value {
   display: inline-flex;
   align-items: baseline;
-  gap: 4px;
-  padding: 1px 4px;
+  gap: var(--sp-1);
+  padding: 2px var(--sp-1);
   border-radius: 4px;
   color: var(--text);
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   cursor: default;
@@ -1976,19 +2173,19 @@ button.an-value {
 }
 
 .an-edit-punct {
-  color: var(--faint);
+  color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
 }
 
 .an-edit-input {
   width: 52px;
-  padding: 1px 4px;
+  padding: 2px var(--sp-1);
   border-radius: 4px;
   border: 1px solid color-mix(in srgb, var(--curve, var(--accent)) 55%, var(--border));
   background: var(--bg);
   color: var(--text);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   text-align: right;
@@ -2021,7 +2218,7 @@ button.an-value {
 .an-note {
   color: var(--muted);
   font-family: var(--font);
-  font-size: 10px;
+  font-size: var(--fs-xs);
 }
 
 .an-value:hover .an-note {
@@ -2029,7 +2226,14 @@ button.an-value {
 }
 
 .an-sep {
-  color: var(--faint);
+  /* Cancels the flex gap in front of it, so the comma sits against the number
+     it follows — "−8.336, −0.9092" rather than "−8.336 , −0.9092". */
+  margin-left: calc(-1 * var(--sp-1));
+  color: var(--muted);
+}
+
+.an-edit .an-sep {
+  margin-left: -2px; /* .an-edit's gap is 2px, not 4px */
 }
 
 /* ------------------------------------------------- export: download / copy
@@ -2067,7 +2271,7 @@ button.an-value {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 6px 5px;
+  padding: 6px var(--sp-1);
   border-radius: 6px;
   color: var(--muted);
   transition:
@@ -2092,7 +2296,7 @@ button.an-value {
   right: 0;
   z-index: 40;
   width: 244px;
-  padding: 10px;
+  padding: var(--sp-3);
   border-radius: 10px;
   background: rgba(19, 23, 34, 0.97);
   border: 1px solid var(--border);
@@ -2103,8 +2307,8 @@ button.an-value {
 }
 
 .exp-title {
-  padding: 0 0 6px;
-  font-size: 10px;
+  padding: 0 0 var(--sp-2);
+  font-size: var(--fs-xs);
   font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -2124,9 +2328,9 @@ button.an-value {
 .exp-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 8px;
-  font-size: 12.5px;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  font-size: var(--fs-md);
   color: var(--text);
 }
 
@@ -2136,12 +2340,13 @@ button.an-value {
 
 .exp-num {
   width: 72px;
-  padding: 4px 6px;
+  padding: var(--sp-1) 6px;
   border-radius: 6px;
   border: 1px solid var(--border);
   background: rgba(15, 17, 23, 0.7);
   color: var(--text);
-  font-size: 12.5px;
+  font-size: var(--fs-md);
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
@@ -2154,25 +2359,25 @@ button.an-value {
 .exp-unit {
   width: 16px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 
 .exp-menu-sep {
   height: 1px;
-  margin: 10px 0 8px;
+  margin: var(--sp-3) 0 var(--sp-2);
   background: var(--border-soft);
 }
 
 .exp-readout {
-  margin-top: 10px;
-  font-size: 12px;
+  margin-top: var(--sp-3);
+  font-size: var(--fs-sm);
   font-variant-numeric: tabular-nums;
   color: var(--text);
 }
 
 .exp-note {
-  margin-top: 4px;
-  font-size: 10.5px;
+  margin-top: var(--sp-1);
+  font-size: var(--fs-xs);
   line-height: 1.35;
   color: var(--muted);
 }
@@ -2183,34 +2388,44 @@ button.an-value {
    figure is about — included vs excluded — statable in words as well as by
    clicking the dot on the board. */
 
+/* .nl-ineq borrows .err-badge's box but says the opposite thing — it is the
+   answer, not a complaint. Rounded, tinted with the item's own colour, set in
+   the text family rather than the numeric one. */
 .nl-ineq {
+  padding: 2px var(--sp-2);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--curve, var(--accent)) 16%, transparent);
+  border-color: color-mix(in srgb, var(--curve, var(--accent)) 40%, transparent);
+  color: var(--text);
   font-family: var(--font);
+  font-size: var(--fs-sm);
+  letter-spacing: 0;
 }
 
 .nl-ends {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--sp-2);
 }
 
 .nl-end-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-2);
 }
 
 .nl-end-label {
   flex: 0 0 34px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 
 .nl-end-value {
   flex: 0 0 60px;
-  padding: 2px 5px;
+  padding: 2px var(--sp-1);
   border-radius: 4px;
   color: var(--text);
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   text-align: right;
@@ -2225,12 +2440,12 @@ button.an-value {
 .nl-end-input {
   flex: 0 0 60px;
   width: 60px;
-  padding: 2px 5px;
+  padding: 2px var(--sp-1);
   border-radius: 4px;
   border: 1px solid var(--border-strong);
   background: var(--bg);
   color: var(--text);
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   font-family: var(--font-mono);
   text-align: right;
   outline: none;
@@ -2251,12 +2466,12 @@ button.an-value {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 2px 8px 2px 6px;
+  padding: var(--sp-1) var(--sp-2) var(--sp-1) 6px;
   border-radius: 999px;
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   cursor: pointer;
   transition:
     color 0.15s var(--ease),
@@ -2292,25 +2507,25 @@ button.an-value {
 .nl-label-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 10px;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
 }
 
 .nl-label-tag {
   flex: 0 0 34px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 
 .nl-label-input {
   flex: 1 1 auto;
   min-width: 0;
-  padding: 3px 7px;
+  padding: var(--sp-1) var(--sp-2);
   border-radius: 5px;
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   font-family: var(--font);
   outline: none;
 }
@@ -2320,38 +2535,38 @@ button.an-value {
 }
 
 .nl-card .style-row {
-  margin-top: 10px;
+  margin-top: var(--sp-3);
 }
 
 /* board kind, in the document menu */
 
 .doc-kind {
-  padding: 10px 12px 12px;
+  padding: var(--sp-3);
 }
 
 .doc-kind-title {
   display: block;
   color: var(--faint);
-  font-size: 10px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  margin-bottom: 6px;
+  margin-bottom: var(--sp-2);
 }
 
 .doc-kind-seg {
   display: flex;
-  gap: 4px;
-  padding: 3px;
+  gap: var(--sp-1);
+  padding: var(--sp-1);
   border-radius: 7px;
   background: var(--panel-3);
 }
 
 .doc-kind-btn {
   flex: 1 1 0;
-  padding: 4px 8px;
+  padding: var(--sp-1) var(--sp-2);
   border-radius: 5px;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   cursor: pointer;
   transition:
     background 0.15s var(--ease),
@@ -2371,8 +2586,430 @@ button.an-value {
 
 .doc-kind-note {
   display: block;
-  margin-top: 6px;
+  margin-top: var(--sp-2);
   color: var(--faint);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   line-height: 1.4;
+}
+
+/* ============================================================
+   One eyebrow, one rule
+
+   Seven labels do the same job — name the section under them — and were
+   styled four different ways (10px/400/#5c6480 sitting next to 10px/600/
+   #8b93b0 inside the same menu). They are one role, so they get one rule.
+   Layout (margins, padding) stays with each class; only the voice is shared.
+   ============================================================ */
+
+.sidebar-title,
+.an-title,
+.cand-title,
+.doc-menu-title,
+.exp-title,
+.handle-pop-title,
+.doc-kind-title {
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  line-height: 1.3;
+  text-transform: uppercase;
+  opacity: 1;
+}
+
+/* ============================================================
+   Telling the two style sliders apart
+
+   The width and opacity sliders were pixel-identical and unlabelled. Each one
+   now previews what it controls: the width track is a wedge that thickens as
+   it fills, the opacity track is an alpha checker under a transparent-to-solid
+   ramp of the curve's own colour.
+
+   HOOKS: `style-slider-width` / `style-slider-opacity`. The structural
+   selectors below match today's markup; the class selectors are there for
+   when the cards start naming them.
+   ============================================================ */
+
+.style-row > input[type='range']:first-child::-webkit-slider-runnable-track,
+.style-slider-width::-webkit-slider-runnable-track {
+  height: var(--sp-3);
+  border-radius: 2px;
+  clip-path: polygon(0 42%, 100% 8%, 100% 92%, 0 58%);
+}
+
+.style-row > input[type='range']:first-child::-moz-range-track,
+.style-slider-width::-moz-range-track {
+  height: var(--sp-3);
+  border-radius: 2px;
+  clip-path: polygon(0 42%, 100% 8%, 100% 92%, 0 58%);
+}
+
+.style-row > input[type='range']:last-child::-webkit-slider-runnable-track,
+.style-slider-opacity::-webkit-slider-runnable-track {
+  height: var(--sp-3);
+  border-radius: 3px;
+  background:
+    linear-gradient(
+      to right,
+      color-mix(in srgb, var(--curve, var(--accent)) 6%, transparent),
+      var(--curve, var(--accent))
+    ),
+    conic-gradient(
+        var(--track) 0 25%,
+        var(--panel-2) 0 50%,
+        var(--track) 0 75%,
+        var(--panel-2) 0
+      )
+      0 0 / var(--sp-2) var(--sp-2);
+}
+
+.style-row > input[type='range']:last-child::-moz-range-track,
+.style-slider-opacity::-moz-range-track {
+  height: var(--sp-3);
+  border-radius: 3px;
+  background:
+    linear-gradient(
+      to right,
+      color-mix(in srgb, var(--curve, var(--accent)) 6%, transparent),
+      var(--curve, var(--accent))
+    ),
+    conic-gradient(
+        var(--track) 0 25%,
+        var(--panel-2) 0 50%,
+        var(--track) 0 75%,
+        var(--panel-2) 0
+      )
+      0 0 / var(--sp-2) var(--sp-2);
+}
+
+.style-row > input[type='range']::-webkit-slider-thumb,
+.style-slider-width::-webkit-slider-thumb,
+.style-slider-opacity::-webkit-slider-thumb {
+  margin-top: 0;
+}
+
+/* ============================================================
+   Touch layer
+
+   A finger is not a mouse pointer. Everything that can be tapped gets 44x44,
+   range thumbs grow to 28px inside 44px rows, and every field goes to 16px —
+   under 16px, iOS Safari zooms the page the moment the field takes focus and
+   the teacher has to pinch back out.
+   ============================================================ */
+
+@media (pointer: coarse) {
+  :root {
+    --toolbar-h: 72px;
+    --toolbar-reserve: 88px;
+  }
+
+  .icon-btn,
+  .add-btn,
+  .doc-caret,
+  .exp-caret,
+  .doc-del,
+  .feature-note-close,
+  .zoom-btn {
+    width: 44px;
+    height: 44px;
+  }
+
+  .tb-btn,
+  .seg-btn,
+  .dash-btn,
+  .board-kind-btn,
+  .doc-kind-btn,
+  .doc-item,
+  .doc-open,
+  .cand-item,
+  .banner-action,
+  .feature-note-action,
+  .doc-confirm-yes,
+  .doc-confirm-no,
+  .nl-dot-toggle,
+  .doc-name,
+  .doc-rename {
+    min-height: 44px;
+  }
+
+  .tb-btn,
+  .seg-btn,
+  .dash-btn,
+  .board-kind-btn,
+  .doc-kind-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+  }
+
+  /* The dot stays small — a 44px colour swatch would read as a block, not a
+     dot — but it answers to a 44px target. The card head opens up by the same
+     amount so the target cannot reach into the equation beside it. */
+  .card-head {
+    gap: var(--sp-4);
+    min-height: 44px;
+  }
+
+  .color-dot {
+    position: relative;
+    width: var(--sp-4);
+    height: var(--sp-4);
+  }
+
+  .color-dot::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 44px;
+    height: 44px;
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+  }
+
+  /* Three 44px buttons and a 44px colour target do not fit beside an equation
+     in a 264px drawer, so the card head wraps: the equation takes a full-width
+     line of its own and the colour chip and actions share the line under it. */
+  .card-head {
+    flex-wrap: wrap;
+    row-gap: var(--sp-2);
+  }
+
+  .card-formula,
+  .card-formula-input {
+    flex: 1 1 100%;
+    order: -1;
+  }
+
+  .card-head .icon-btn:first-of-type {
+    margin-left: auto;
+  }
+
+  button.card-formula,
+  .param-value,
+  .an-value,
+  .nl-end-value {
+    display: flex;
+    align-items: center;
+    min-height: 44px;
+  }
+
+  .param-value,
+  .nl-end-value {
+    justify-content: flex-end;
+  }
+
+  /* same reason: two 44px sliders and a three-button segment need their own
+     lines rather than 26px of slider each */
+  .style-row {
+    flex-wrap: wrap;
+    row-gap: var(--sp-2);
+  }
+
+  .style-slider {
+    flex: 1 1 100%;
+  }
+
+  .dash-seg {
+    flex: 1 1 auto;
+  }
+
+  /* range: 28px thumb, 44px row */
+  input[type='range'],
+  .param-row input[type='range'],
+  .style-slider {
+    height: 44px;
+  }
+
+  input[type='range']::-webkit-slider-runnable-track {
+    height: var(--sp-1);
+    border-radius: 2px;
+  }
+
+  input[type='range']::-webkit-slider-thumb {
+    width: 28px;
+    height: 28px;
+    margin-top: -12px;
+  }
+
+  input[type='range']::-moz-range-track {
+    height: var(--sp-1);
+    border-radius: 2px;
+  }
+
+  input[type='range']::-moz-range-thumb {
+    width: 28px;
+    height: 28px;
+  }
+
+  .style-row > input[type='range']:first-child::-webkit-slider-runnable-track,
+  .style-row > input[type='range']:last-child::-webkit-slider-runnable-track,
+  .style-slider-width::-webkit-slider-runnable-track,
+  .style-slider-opacity::-webkit-slider-runnable-track {
+    height: var(--sp-4);
+  }
+
+  .style-row > input[type='range']::-webkit-slider-thumb,
+  .style-slider-width::-webkit-slider-thumb,
+  .style-slider-opacity::-webkit-slider-thumb {
+    margin-top: -6px;
+  }
+
+  /* 16px or iOS Safari zooms the page on focus. The fields that carry numbers
+     widen to match, so 16px digits still fit. */
+  input,
+  textarea,
+  select {
+    font-size: var(--fs-field-touch);
+  }
+
+  .param-value {
+    flex: 0 0 68px;
+  }
+
+  .param-edit {
+    flex: 0 0 80px;
+    width: 80px;
+  }
+
+  .an-edit-input {
+    width: 76px;
+  }
+
+  .handle-pop-input {
+    width: 92px;
+  }
+
+  .nl-end-value,
+  .nl-end-input {
+    flex: 0 0 84px;
+    width: 84px;
+  }
+
+  .exp-num {
+    width: 92px;
+  }
+}
+
+@media (pointer: coarse) and (max-width: 1024px) {
+  :root {
+    --toolbar-h: 132px;
+  }
+}
+
+@media (pointer: coarse) and (max-width: 540px) {
+  :root {
+    --toolbar-h: 12px;
+  }
+}
+
+/* ============================================================
+   Light canvas
+
+   When the board is white paper, the floating chrome cannot stay two dark
+   slabs sitting on it. The toolbar and the zoom stack re-declare the surface
+   tokens for themselves, so everything inside them — including the export and
+   document menus, which are toolbar descendants — comes along without a rule
+   each.
+
+   The sidebar deliberately stays dark: it is a panel beside the paper, not on
+   it, and keeping it dark is what lets the curve colours on the cards stay
+   legible and the two regions stay told apart.
+
+   HOOK: `canvas-light` on the app root, whenever the canvas theme is light.
+   ============================================================ */
+
+.canvas-light .toolbar,
+.canvas-light .zoom-controls {
+  --bg: #ffffff;
+  --panel: #ffffff;
+  --panel-2: #f3f5fb;
+  --panel-3: #e3e8f4;
+  --border: #c7cddf;
+  --border-soft: #dee3ef;
+  --border-strong: #a3abc2;
+  --track: #c7cddf;
+  --text: #1b2133;
+  --muted: #555d79;
+  --faint: #626a86;
+  --accent: #1f6dc8;
+  --accent-soft: rgba(31, 109, 200, 0.12);
+  --shadow: 0 4px 24px rgba(23, 30, 54, 0.16), 0 1px 3px rgba(23, 30, 54, 0.14);
+  background: rgba(252, 253, 255, 0.92);
+  border-color: var(--border);
+  box-shadow: var(--shadow);
+}
+
+/* the few colours that are literals rather than tokens */
+.canvas-light .tb-btn {
+  color: #3d4560;
+}
+
+/* On paper the primary earns its emphasis by being filled rather than by
+   being the brightest label — a pale-blue label would read as the quietest
+   thing on the toolbar, which is the inversion this whole pass is undoing. */
+.canvas-light .tb-primary {
+  background: #1f6dc8;
+  border-color: #1a5cac;
+  color: #ffffff; /* 5.1:1 */
+}
+
+.canvas-light .tb-btn:hover:not(:disabled),
+.canvas-light .zoom-btn:hover,
+.canvas-light .doc-caret:hover,
+.canvas-light .exp-caret:hover,
+.canvas-light .doc-name:hover {
+  background: rgba(23, 30, 54, 0.07);
+  color: var(--text);
+}
+
+.canvas-light .tb-btn:active:not(:disabled) {
+  background: rgba(23, 30, 54, 0.12);
+}
+
+.canvas-light .tb-primary:hover:not(:disabled),
+.canvas-light .tb-primary:active:not(:disabled) {
+  background: #1a5cac;
+  color: #ffffff;
+}
+
+.canvas-light .seg {
+  background: rgba(23, 30, 54, 0.06);
+}
+
+.canvas-light .seg-on,
+.canvas-light .seg-on:hover {
+  background: #ffffff;
+  box-shadow:
+    0 1px 3px rgba(23, 30, 54, 0.2),
+    inset 0 0 0 1px var(--border);
+}
+
+.canvas-light .brand {
+  background: linear-gradient(120deg, #1f6dc8, #1457a6 55%, #0f7a6b);
+}
+
+.canvas-light .doc-save {
+  color: #454d68; /* 8.6:1 on the light toolbar */
+}
+
+.canvas-light .doc-save-saving {
+  color: #1b2133;
+}
+
+.canvas-light .exp-copy-done {
+  background: rgba(15, 122, 70, 0.14);
+  border-color: rgba(15, 122, 70, 0.4);
+  color: #0c5c35;
+}
+
+.canvas-light .doc-confirm-yes {
+  color: #a3181c;
+}
+
+.canvas-light .tb-danger,
+.canvas-light .tb-btn[title^='Remove all curves'] {
+  color: #626a86;
 }
