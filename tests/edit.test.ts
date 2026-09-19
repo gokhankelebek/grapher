@@ -47,6 +47,8 @@ const FAMILY_FIXTURES: Array<[string, number[], [number, number] | null]> = [
   ['exp', [0.4, 0.6, -1], [-6, 4]],
   ['abs', [1.2, 0.7, -2], [-5, 6]],
   ['logistic', [4, 1.8, 0.5, -2], [-6, 7]],
+  ['log', [1.6, -4.5, 0], [-4.5, 6]],
+  ['recip', [1.5, -1, 0.5], [-6, 6]],
   ['sqrt', [2, -1, 0.5], [-1, 8]],
   ['cbrt', [1.7, 1, -0.5], [-6, 8]],
   ['power', [1, 0, 0, 2 / 3], [-4, 4]],
@@ -82,9 +84,12 @@ describe('getHandles', () => {
   it.each(FAMILY_FIXTURES)('%s: every handle sits on (or meaningfully near) its curve', (id, params, domain) => {
     // Domain / center / rotation handles are deliberately off-curve, and so
     // are the "knob" handles that set a scalar property rather than mark a
-    // point (poly2 curvature, sine midline, logistic steepness). Every other
-    // feature/radius handle must sit ON the curve.
-    const KNOBS = new Set(['width', 'midline', 'rate'])
+    // point (poly2 curvature, sine midline, logistic steepness). `asymptote`
+    // is off-curve BY DEFINITION: it marks the line the curve approaches and
+    // never reaches — for a log the vertical asymptote x = b, for a hyperbola
+    // the crossing point (b, c) of both asymptotes. Every other feature/radius
+    // handle must sit ON the curve.
+    const KNOBS = new Set(['width', 'midline', 'rate', 'asymptote'])
     const c = curve(id, params, domain)
     const hs = getHandles(c, MODELS)
     for (const h of hs) {
@@ -100,7 +105,9 @@ describe('getHandles', () => {
     // `sqrt` is the exception: its domain STARTS at the branch point, which is
     // already draggable as the "branch" handle. A domain-start handle there
     // would offer to trim into a region where the curve does not exist.
-    const NO_DOMAIN_START = new Set(['sqrt'])
+    // `log` is the same story one step further: it does not merely start at
+    // its asymptote, it is undefined there.
+    const NO_DOMAIN_START = new Set(['sqrt', 'log'])
     for (const [id, params, domain] of FAMILY_FIXTURES) {
       const spec = MODELS[id]
       if (spec.kind !== 'explicit' || !domain) continue
@@ -1560,5 +1567,84 @@ describe('applyFeatureEdit — never produces a broken curve', () => {
     }
     const per = (performance.now() - t0) / N
     expect(per, `${per.toFixed(3)} ms per edit`).toBeLessThan(10)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Asymptote families. The handle a student reaches for is the line the curve
+// never touches, so — uniquely — it is not a point of the curve at all.
+// ---------------------------------------------------------------------------
+
+describe('logarithm and reciprocal handles', () => {
+  it('a logarithm carries its asymptote handle at x = b', () => {
+    const params = [1.6, -4.5, 0]
+    const hs = getHandles(curve('log', params, [-4.5, 6]), MODELS)
+    const a = hs.find(h => h.id === 'asymptote')
+    expect(a, 'no asymptote handle').toBeDefined()
+    expect(a!.pos.x).toBeCloseTo(-4.5, 12)
+    expect(Number.isFinite(a!.pos.y), 'the handle needs a finite height to be grabbed').toBe(true)
+    expect(hs.find(h => h.id === 'scale'), 'no scale handle').toBeDefined()
+    expect(hs.find(h => h.id === 'domain-start')).toBeUndefined()
+  })
+
+  it("a reciprocal's handle sits where its two asymptotes cross", () => {
+    const params = [1.5, -1, 0.5]
+    const hs = getHandles(curve('recip', params, [-6, 6]), MODELS)
+    const a = hs.find(h => h.id === 'asymptote')!
+    expect(a.pos.x).toBeCloseTo(-1, 12)
+    expect(a.pos.y).toBeCloseTo(0.5, 12)
+  })
+
+  it('dragging the asymptote translates the curve rigidly, domain included', () => {
+    for (const [id, params, dom] of [
+      ['log', [1.6, -4.5, 0], [-4.5, 6]],
+      ['recip', [1.5, -1, 0.5], [-6, 6]],
+    ] as Array<[string, number[], [number, number]]>) {
+      const c = curve(id, params, dom)
+      const h = getHandles(c, MODELS).find(q => q.id === 'asymptote')!
+      const res = applyHandleDrag(c, MODELS, 'asymptote', { x: h.pos.x + 1.5, y: h.pos.y - 2 })
+      expect(res.params[1], `${id}: asymptote`).toBeCloseTo(params[1] + 1.5, 9)
+      expect(res.params[2], `${id}: offset`).toBeCloseTo(params[2] - 2, 9)
+      expect(res.params[0], `${id}: shape changed`).toBeCloseTo(params[0], 9)
+      expect(res.domain![0]).toBeCloseTo(dom[0] + 1.5, 9)
+      expect(res.domain![1]).toBeCloseTo(dom[1] + 1.5, 9)
+      // the curve is the same curve, moved
+      const ev = MODELS[id].evalExplicit!
+      for (const d of [0.7, 2, 4]) {
+        const before = ev(params, params[1] + d)
+        const after = ev(res.params, params[1] + 1.5 + d)
+        expect(after, `${id} at +${d}`).toBeCloseTo(before - 2, 9)
+      }
+    }
+  })
+
+  it('dragging the scale handle sets the coefficient in closed form', () => {
+    // log: y = a·ln(x - b) + c, so a = (y - c) / ln(x - b)
+    const lp = [1.6, -4.5, 0]
+    const lc = curve('log', lp, [-4.5, 6])
+    const ls = getHandles(lc, MODELS).find(h => h.id === 'scale')!
+    const lu = Math.log(ls.pos.x - lp[1])
+    const lres = applyHandleDrag(lc, MODELS, 'scale', { x: ls.pos.x, y: lp[2] + 2.75 * lu })
+    expect(lres.params[0]).toBeCloseTo(2.75, 9)
+    expect(lres.params[1], 'asymptote moved').toBeCloseTo(lp[1], 12)
+    expect(lres.params[2], 'offset moved').toBeCloseTo(lp[2], 12)
+
+    // recip: y = a/(x - b) + c, so a = (y - c)·(x - b)
+    const rp = [1.5, -1, 0.5]
+    const rc = curve('recip', rp, [-6, 6])
+    const rs = getHandles(rc, MODELS).find(h => h.id === 'scale')!
+    const ru = rs.pos.x - rp[1]
+    const rres = applyHandleDrag(rc, MODELS, 'scale', { x: rs.pos.x, y: rp[2] + 3.2 / ru })
+    expect(rres.params[0]).toBeCloseTo(3.2, 9)
+    expect(rres.params[1], 'pole moved').toBeCloseTo(rp[1], 12)
+    expect(rres.params[2], 'offset moved').toBeCloseTo(rp[2], 12)
+  })
+
+  it('a logarithm can never be trimmed into the half-plane it does not occupy', () => {
+    const c = curve('log', [1.6, -4.5, 0], [-4.5, 6])
+    const res = applyHandleDrag(c, MODELS, 'domain-start', { x: -20, y: 0 })
+    expect(res.domain![0], 'trimmed left of the asymptote').toBeGreaterThanOrEqual(-4.5)
+    const ev = MODELS.log.evalExplicit!
+    expect(Number.isFinite(ev(res.params, res.domain![0] + 1e-6))).toBe(true)
   })
 })

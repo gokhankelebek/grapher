@@ -120,25 +120,64 @@ function shiftPolyCoeffs(c: number[], x0: number): number[] {
 }
 
 /**
+ * How much of the shifted coefficient b_k is our own arithmetic rather than the
+ * curve.
+ *
+ * b_k = Σ_{j≥k} C(j,k)·c_j·x0^{j−k} is a sum of terms that can be far larger
+ * than the result — the vertex form of a parabola is exactly that case, where
+ * b_1 = p'(x0) is 2·c_2·x0 + c_1 with the two halves cancelling — so b_k
+ * arrives carrying ±eps·S_k of rounding. BELOW that, b_k is not a small
+ * coefficient: it is the residue of a cancellation, and printing it is how
+ * "y = 0.3(x − 3)² − 2.22·10⁻¹⁶(x − 3) − 2" happened. The estimate is the
+ * textbook one for a floating-point sum, with a small factor for the n
+ * additions the synthetic division makes.
+ */
+const RESIDUE = 8 * Number.EPSILON
+
+function shiftResidue(c: number[], n: number, x0: number): number[] {
+  const ax = Math.abs(x0)
+  const out = new Array<number>(n + 1).fill(0)
+  for (let k = 0; k <= n; k++) {
+    let s = 0
+    let binom = 1 // C(k, k)
+    for (let j = k; j <= n; j++) {
+      if (j > k) binom = (binom * j) / (j - k)
+      s += binom * Math.abs(c[j] ?? 0) * Math.pow(ax, j - k)
+    }
+    out[k] = Number.isFinite(s) ? RESIDUE * s : 0
+  }
+  return out
+}
+
+/**
  * The window a polynomial's own shape occupies: centred on its centre of
  * symmetry x0 = −c_{n−1}/(n·c_n), half-width W from the largest root magnitude
  * of the shifted coefficients, and R the y-range the shape spans there. The
  * constant term is deliberately left out of both — it is a vertical offset, not
  * a scale, and letting a curve drawn high above the axis widen its own error
  * budget is the vertical twin of the bug being fixed.
+ *
+ * Coefficients that are pure cancellation residue are left out as well, and
+ * that omission is load-bearing: a vertex-form parabola has b_1 = 0 in exact
+ * arithmetic and 2.2e-16 in floating point, and reading a window off THAT
+ * makes W ≈ 7e-16 and R ≈ 3e-31 — a curve the size of a rounding error, whose
+ * error budget is small enough to print the rounding error as a term.
  */
 function polyScale(c: number[], n: number): { x0: number; W: number; R: number } {
   const raw = -c[n - 1] / (n * c[n])
   const x0 = Number.isFinite(raw) ? raw : 0
   const b = shiftPolyCoeffs(c, x0)
+  const res = shiftResidue(c, n, x0)
+  const real = (k: number) => Math.abs(b[k]) > res[k]
   let W = 0
   for (let k = 1; k < n; k++) {
+    if (!real(k)) continue
     const q = Math.abs(b[k] / b[n])
     if (q > 0 && Number.isFinite(q)) W = Math.max(W, Math.pow(q, 1 / (n - k)))
   }
   if (!(W > 0) || !Number.isFinite(W)) W = 1 // a pure monomial sets no x-scale
   let R = 0
-  for (let k = 1; k <= n; k++) R += Math.abs(b[k]) * Math.pow(W, k)
+  for (let k = 1; k <= n; k++) if (real(k)) R += Math.abs(b[k]) * Math.pow(W, k)
   if (!(R > 0) || !Number.isFinite(R)) R = 1
   return { x0, W, R }
 }
@@ -182,7 +221,10 @@ function polyLatex(c: number[]): string {
   const x0d = digitsFor(x0, W)
   const x0r = Number(x0.toPrecision(x0d))
   const b = shiftPolyCoeffs(head, x0r)
-  const tol = b.map((_, k) => (1e-4 * R) / Math.pow(W, k))
+  const res = shiftResidue(head, n, x0r)
+  // A term is printed only if it is BOTH visible against the curve's own range
+  // over the window AND bigger than the rounding the shift itself introduced.
+  const tol = b.map((_, k) => Math.max((1e-4 * R) / Math.pow(W, k), res[k]))
   const bSigs = b.map((v, k) => digitsForAbs(v, tol[k]))
   const inner = shifted('x', x0r, W)
   const wrapped = inner === 'x' ? 'x' : `\\left(${inner}\\right)`
@@ -380,6 +422,28 @@ export const MODELS: Record<string, ModelSpec> = {
     },
   },
 
+  log: {
+    id: 'log',
+    kind: 'explicit',
+    name: 'Logarithm',
+    // params: [a, b, c] -> a·ln(x − b) + c. The vertical asymptote at x = b is
+    // the family's defining feature: the curve does not merely get steep there,
+    // it STOPS, so everything at or left of b is undefined and says so with
+    // NaN (the renderer lifts the pen on a non-finite sample).
+    evalExplicit: (p, x) => {
+      const u = x - p[1]
+      return u > 0 ? p[0] * Math.log(u) + p[2] : Number.NaN
+    },
+    latex: p => {
+      const [a, b, c] = p
+      const body = `\\ln\\left(${shifted('x', b)}\\right)`
+      return `y = ${termSum([a, c], [body, ''], [SIG, digitsFor(c, Math.abs(a))])}`
+    },
+    paramMeta: p => centeredMeta(['a', 'b', 'c'], p),
+    // a·ln((x − dx) − b) + c + dy = a·ln(x − (b + dx)) + (c + dy), exact
+    translate: (p, dx, dy) => [p[0], p[1] + dx, p[2] + dy],
+  },
+
   sqrt: {
     id: 'sqrt',
     kind: 'explicit',
@@ -472,6 +536,32 @@ export const MODELS: Record<string, ModelSpec> = {
     },
     paramMeta: p => centeredMeta(['a', 'b', 'c', 'd'], p),
     translate: (p, dx, dy) => [p[0], p[1], p[2] + dx, p[3] + dy],
+  },
+
+  recip: {
+    id: 'recip',
+    kind: 'explicit',
+    name: 'Reciprocal',
+    // params: [a, b, c] -> a/(x − b) + c. Both branches belong to the curve;
+    // the pole at x = b belongs to neither, so it evaluates to NaN and the
+    // renderer breaks the path there instead of drawing the vertical line
+    // between +∞ and −∞ that naive sampling produces.
+    evalExplicit: (p, x) => {
+      const u = x - p[1]
+      return u === 0 ? Number.NaN : p[0] / u + p[2]
+    },
+    latex: p => {
+      const [a, b, c] = p
+      if (!(Math.abs(a) > NEGLIGIBLE)) return `y = ${fmt(c)}`
+      // the numerator IS the coefficient, so the sign is carried outside the
+      // fraction rather than inside it ("-\frac{2}{x}", not "\frac{-2}{x}")
+      const frac = `\\frac{${fmt(Math.abs(a))}}{${shifted('x', b)}}`
+      const head = a < 0 ? `-${frac}` : frac
+      return `y = ${head}${term(c, '', false, digitsFor(c, Math.abs(a)))}`
+    },
+    paramMeta: p => centeredMeta(['a', 'b', 'c'], p),
+    // a/((x − dx) − b) + c + dy = a/(x − (b + dx)) + (c + dy), exact
+    translate: (p, dx, dy) => [p[0], p[1] + dx, p[2] + dy],
   },
 
   // ------------------------------------------------------------ parametric --

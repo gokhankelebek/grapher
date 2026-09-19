@@ -343,6 +343,45 @@ export function getHandles(
       addExplicitDomainHandles()
       break
     }
+    case 'log': {
+      // A logarithm's asymptote is its position: everything else about the
+      // curve is amplitude. The handle sits ON the asymptote (x = b) at the
+      // height the curve has mid-domain, so it can be grabbed even though no
+      // point of the curve is there.
+      const [x0, x1] = explicitDomain()
+      const lo = Math.max(x0, p[1])
+      const xm = lo + 0.5 * Math.max(x1 - lo, 0)
+      const ym = spec.evalExplicit ? spec.evalExplicit(p, xm) : p[2]
+      out.push(handle('asymptote', { x: p[1], y: Number.isFinite(ym) ? ym : p[2] }, 'feature', 'asymptote', 'move'))
+      if (spec.evalExplicit) {
+        const xs = lo + 0.6 * Math.max(x1 - lo, 0)
+        const ys = spec.evalExplicit(p, xs)
+        if (Number.isFinite(ys)) {
+          out.push(handle('scale', { x: xs, y: ys }, 'feature', 'steepness', 'ns-resize'))
+        }
+        // the curve does not exist left of b, so only the far end trims
+        out.push(handle('domain-end', { x: x1, y: spec.evalExplicit(p, x1) }, 'domain-end', 'trim end', 'ew-resize'))
+      }
+      break
+    }
+    case 'recip': {
+      // The two asymptotes cross at (b, c) — the centre of the hyperbola. It
+      // is not a point of the curve either, but it is the point that MOVES the
+      // curve, and it is what a student is asked to name.
+      out.push(handle('asymptote', { x: p[1], y: p[2] }, 'feature', 'asymptotes', 'move'))
+      if (spec.evalExplicit) {
+        const [x0, x1] = explicitDomain()
+        // a scale handle on whichever branch has more room to be dragged
+        const right = x1 - p[1] >= p[1] - x0
+        const xs = right ? p[1] + 0.4 * Math.max(x1 - p[1], 1e-6) : p[1] - 0.4 * Math.max(p[1] - x0, 1e-6)
+        const ys = spec.evalExplicit(p, xs)
+        if (Number.isFinite(ys)) {
+          out.push(handle('scale', { x: xs, y: ys }, 'feature', 'steepness', 'ns-resize'))
+        }
+      }
+      addExplicitDomainHandles()
+      break
+    }
     case 'sqrt':
     case 'cbrt':
     case 'power': {
@@ -599,6 +638,44 @@ export function applyHandleDrag(
       if (handleId === 'vertex') {
         params[1] = target.x
         params[2] = target.y
+        return { params, domain }
+      }
+      break
+    }
+    case 'log':
+    case 'recip': {
+      if (handleId === 'domain-start' || handleId === 'domain-end') {
+        const trimmed = trimExplicit()
+        // a logarithm starts AT its asymptote — never let a trim expose the
+        // empty half-plane left of it
+        if (curve.modelId === 'log' && trimmed.domain) {
+          trimmed.domain = [
+            Math.max(trimmed.domain[0], params[1]),
+            Math.max(trimmed.domain[1], params[1] + minSpan),
+          ]
+        }
+        return trimmed
+      }
+      if (handleId === 'asymptote') {
+        // moving the asymptote moves the curve with it: an exact translation
+        const hs = getHandles(curve, models)
+        const h = hs.find(x => x.id === 'asymptote')
+        const dx = target.x - (h ? h.pos.x : params[1])
+        const dy = target.y - (h ? h.pos.y : params[2])
+        const np = spec.translate ? spec.translate(params, dx, dy) : params
+        const nd: [number, number] | null = domain ? [domain[0] + dx, domain[1] + dx] : null
+        return { params: np, domain: nd }
+      }
+      if (handleId === 'scale') {
+        // closed form: with b and c pinned, a is linear in the dragged y
+        const b = params[1]
+        const c = params[2]
+        const u = target.x - b
+        const basis = curve.modelId === 'log' ? (u > 0 ? Math.log(u) : 0) : u === 0 ? 0 : 1 / u
+        if (Math.abs(basis) > 1e-9) {
+          const a = (target.y - c) / basis
+          if (Number.isFinite(a) && Math.abs(a) > 1e-12) params[0] = a
+        }
         return { params, domain }
       }
       break
@@ -1342,6 +1419,10 @@ const CAPS: Record<string, FamilyCaps> = {
   cbrt: { zeros: 1, extrema: 0, inflections: 1 },
   power: { zeros: 2, extrema: 1, inflections: 0 },
   logistic: { zeros: 1, extrema: 0, inflections: 1 },
+  // a logarithm crosses once and never turns; a hyperbola crosses once (never,
+  // when its horizontal asymptote is the axis itself) and never turns either
+  log: { zeros: 1, extrema: 0, inflections: 0 },
+  recip: { zeros: 1, extrema: 0, inflections: 0 },
 }
 
 /** Why a family with a single turning point cannot be given another. */

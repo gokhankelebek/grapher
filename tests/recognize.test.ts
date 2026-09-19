@@ -11,7 +11,7 @@
 import { describe, it, expect } from 'vitest'
 import type { FitResult, Vec2 } from '../src/core/types'
 import { processStroke } from '../src/core/stroke'
-import { recognize } from '../src/core/fit/recognize'
+import { fitQuality, recognize } from '../src/core/fit/recognize'
 import { MODELS } from '../src/core/fit/models'
 import {
   VP, JITTER, makeRng, makeGauss, trace, drawStroke, drawAndRecognize,
@@ -697,5 +697,203 @@ describe('recognize — pen-lift flattening does not change the family', () => {
       const res = drawAndRecognize(polarPath(() => 2.5), 0, 2 * Math.PI, makeRng(6100 + s))
       expectWinner(res, 'circle')
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Logarithms and reciprocals.
+//
+// Both were missing, and a missing family is worse than a wrong one: a sketched
+// `1.6 ln(x + 4.5)` came back "Exponential, −0.835e^(−0.408x) + 3.344" with no
+// "Logarithm" anywhere in the Interpretations list, so there was nothing for
+// the teacher to correct it TO.
+//
+// Their penalty weights were set from the sweep documented in
+// src/core/fit/recognize.ts. The invariant those weights have to keep is two-
+// sided, and both sides are asserted below: the new families must win their own
+// shapes, AND the families they imitate — sqrt, cbrt, exp, logistic for a log;
+// abs, power, line for a hyperbola — must keep winning theirs.
+// ---------------------------------------------------------------------------
+
+describe('recognize — logarithm and reciprocal', () => {
+  it('the curve that started this: 1.6 ln(x + 4.5) is a LOGARITHM', () => {
+    const res = drawAndRecognize(
+      explicitPath(x => 1.6 * Math.log(x + 4.5)), -4, 6, makeRng(7701),
+    )
+    const w = expectWinner(res, 'log')
+    // params [a, b, c] -> a·ln(x - b) + c
+    expect(relErr(w.params[0], 1.6)).toBeLessThan(0.2)
+    expect(Math.abs(w.params[1] + 4.5), `asymptote at ${w.params[1]}`).toBeLessThan(0.6)
+    expect(w.error).toBeLessThan(2 * JITTER)
+    expect(w.score).toBeLessThan(candidate(res, 'exp')!.score)
+  })
+
+  it('a logarithm reports a domain that starts at its asymptote', () => {
+    const res = drawAndRecognize(explicitPath(x => Math.log(x)), 0.2, 9, makeRng(7702))
+    const w = expectWinner(res, 'log')
+    expect(w.domain, 'log must carry its own domain').not.toBeNull()
+    const [lo, hi] = w.domain as [number, number]
+    expect(lo, 'the domain starts at b').toBeCloseTo(w.params[1], 12)
+    expect(hi).toBeGreaterThan(8)
+    // and nothing left of the asymptote is drawable
+    const ev = MODELS.log.evalExplicit!
+    expect(Number.isFinite(ev(w.params, lo - 1e-6))).toBe(false)
+    expect(Number.isFinite(ev(w.params, lo + 0.1))).toBe(true)
+  })
+
+  it('a hand-drawn 1/x is a reciprocal, with the pole located', () => {
+    const res = drawAndRecognize(explicitPath(x => 1 / x), 0.25, 6, makeRng(7703))
+    const w = expectWinner(res, 'recip')
+    expect(Math.abs(w.params[1]), `pole at ${w.params[1]}`).toBeLessThan(0.25)
+    // σ is a VERTICAL residual, and next to a pole the curve is nearly
+    // vertical: a third of a pixel of horizontal jitter at x = 0.25 is worth
+    // 0.05 in y. So the honest scale for this family is the curve's own
+    // height (1/0.25 - 1/6 ≈ 3.8), not the absolute jitter.
+    expect(w.error).toBeLessThan(0.05 * (1 / 0.25 - 1 / 6))
+  })
+
+  it('a shifted hyperbola finds its pole and its horizontal asymptote', () => {
+    const res = drawAndRecognize(
+      explicitPath(x => 2 / (x - 1) + 1), 1.3, 8, makeRng(7704),
+    )
+    const w = expectWinner(res, 'recip')
+    expect(Math.abs(w.params[1] - 1), `pole at ${w.params[1]}`).toBeLessThan(0.3)
+    expect(Math.abs(w.params[2] - 1), `offset ${w.params[2]}`).toBeLessThan(0.4)
+  })
+
+  it('the pole never lands inside the ink', () => {
+    for (const [f, a, b] of [
+      [(x: number) => 1 / x, 0.25, 6],
+      [(x: number) => 1 / x, -6, -0.25],
+      [(x: number) => -1.5 / (x + 2) - 1, -1.6, 6],
+      [(x: number) => 0.6 / (x - 3), 3.2, 9],
+    ] as Array<[(x: number) => number, number, number]>) {
+      for (let s = 0; s < 8; s++) {
+        const res = drawAndRecognize(explicitPath(f), a, b, makeRng(7800 + s * 97))
+        const r = candidate(res, 'recip')
+        if (!r) continue
+        const pole = r.params[1]
+        expect(pole < a || pole > b, `pole ${pole} inside the drawn span [${a}, ${b}]`).toBe(true)
+      }
+    }
+  })
+
+  it('both families win their own shapes across seeds', () => {
+    const shapes: Array<[string, (x: number) => number, number, number]> = [
+      ['log', x => Math.log(x), 0.2, 9],
+      ['log', x => 1.6 * Math.log(x + 4.5), -4, 6],
+      ['log', x => 2 * Math.log(x - 1) + 1, 1.2, 9],
+      ['log', x => -1.2 * Math.log(x + 2) + 3, -1.8, 8],
+      ['recip', x => 1 / x, 0.25, 6],
+      ['recip', x => 1 / x, -6, -0.25],
+      ['recip', x => 2 / (x - 1) + 1, 1.3, 8],
+      ['recip', x => 3 / (x + 1) + 2, -0.6, 8],
+    ]
+    for (const [want, fn, s0, s1] of shapes) {
+      let wins = 0
+      const SEEDS = 12
+      for (let s = 0; s < SEEDS; s++) {
+        const res = drawAndRecognize(explicitPath(fn), s0, s1, makeRng(9100 + s * 331))
+        if (winner(res).modelId === want) wins++
+      }
+      expect(wins, `${want} on [${s0}, ${s1}] won only ${wins}/${SEEDS}`)
+        .toBeGreaterThanOrEqual(SEEDS - 1)
+    }
+  })
+
+  it('does not take shapes that belong to the families it imitates', () => {
+    // A logarithm over a short span IS a square root to within hand jitter, and
+    // a hyperbola branch is an exponential decay. These are the seeds where the
+    // penalty weights earn their keep.
+    const shapes: Array<[string, (x: number) => number, number, number]> = [
+      ['sqrt', x => Math.sqrt(x), 0, 9],
+      ['sqrt', x => 2 * Math.sqrt(x), 0, 9],
+      ['sqrt', x => -1.5 * Math.sqrt(x + 1) + 2, -1, 7],
+      ['sqrt', x => 1.2 * Math.sqrt(x - 2) - 1, 2, 8],
+      ['cbrt', x => Math.cbrt(x), -8, 8],
+      ['exp', x => 2 * Math.exp(-1.1 * x), 0, 4],
+      ['exp', x => 3 * Math.exp(-0.6 * x) + 1, -2, 6],
+      ['logistic', x => 4 / (1 + Math.exp(-1.8 * (x - 0.5))) - 2, -5, 6],
+      ['abs', x => Math.abs(x - 1) - 2, -5, 6],
+      ['line', x => 0.8 * x - 1, -6, 6],
+    ]
+    for (const [want, fn, s0, s1] of shapes) {
+      for (let s = 0; s < 12; s++) {
+        const res = drawAndRecognize(explicitPath(fn), s0, s1, makeRng(9100 + s * 331))
+        expect(winner(res).modelId, `${want} seed ${s}: ${ranking(res.slice(0, 3))}`).toBe(want)
+      }
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// What the Interpretations list shows.
+//
+// The list is sorted by score; the sidebar printed σ. Those are different
+// quantities, so the visible column read as unsorted — "1.573, 0.830, 1.335,
+// 2.622" down a list labelled best-first — and a number printed beside a
+// ranked list is read as the ranking. fitQuality is the number that can sit
+// there: monotone by construction, because it is a decreasing function of the
+// very score the sort uses.
+// ---------------------------------------------------------------------------
+
+describe('fitQuality — the column that CAN sit beside a ranked list', () => {
+  const strokes: Array<[string, (x: number) => number, number, number]> = [
+    ['sinusoid', x => 1.5 * Math.sin(1.2 * x) + 0.4, -7, 7],
+    ['parabola', x => 0.4 * x * x - 1, -5, 5],
+    ['logarithm', x => 1.6 * Math.log(x + 4.5), -4, 6],
+    ['exponential', x => 0.4 * Math.exp(0.6 * x) - 1, -6, 4],
+    ['hyperbola', x => 2 / (x - 1) + 1, 1.3, 8],
+    ['V', x => 1.2 * Math.abs(x - 0.7) - 2, -5, 6],
+  ]
+
+  it.each(strokes)('%s: quality never rises as the list goes down', (label, fn, a, b) => {
+    for (let s = 0; s < 6; s++) {
+      const res = drawAndRecognize(explicitPath(fn), a, b, makeRng(3300 + s * 811))
+      const q = fitQuality(res)
+      expect(q.length).toBe(res.length)
+      expect(q[0], `${label}: the winner is not full quality`).toBe(1)
+      for (let i = 1; i < q.length; i++) {
+        expect(q[i], `${label}: row ${i} (${res[i].modelId}) rose above row ${i - 1}`)
+          .toBeLessThanOrEqual(q[i - 1])
+        expect(q[i], `${label}: row ${i} out of range`).toBeGreaterThanOrEqual(0)
+        expect(q[i]).toBeLessThanOrEqual(1)
+      }
+    }
+  })
+
+  it('σ itself is NOT monotone down the list — which is the whole problem', () => {
+    // If this ever starts passing, the column could just be σ and this whole
+    // function is unnecessary. It does not pass: a quartic fits a parabola
+    // more tightly than the parabola does and is still ranked below it.
+    const res = drawAndRecognize(explicitPath(x => 0.4 * x * x - 1), -5, 5, makeRng(1003))
+    const sigmas = res.map(r => r.error)
+    const sorted = sigmas.every((v, i) => i === 0 || v >= sigmas[i - 1])
+    expect(sorted, `σ happened to be sorted here: ${sigmas.map(v => v.toFixed(3)).join(', ')}`)
+      .toBe(false)
+  })
+
+  it('separates a decisive winner from a close call', () => {
+    // a sinusoid is unmistakable; a logarithm and a hyperbola branch are the
+    // same shape to within hand jitter, and the list should say so
+    const clear = drawAndRecognize(
+      explicitPath(x => 1.5 * Math.sin(1.2 * x) + 0.4), -7, 7, makeRng(1001),
+    )
+    const close = drawAndRecognize(
+      explicitPath(x => 1.6 * Math.log(x + 4.5)), -4, 6, makeRng(1001),
+    )
+    expect(fitQuality(clear)[1], 'a sinusoid has no serious rival').toBeLessThan(0.5)
+    expect(fitQuality(close)[1], 'log vs recip is a genuinely close call').toBeGreaterThan(0.7)
+  })
+
+  it('is safe on the degenerate inputs recognize() can return', () => {
+    expect(fitQuality([])).toEqual([])
+    const bogus: FitResult[] = [
+      { modelId: 'a', params: [], kind: 'explicit', domain: null, error: 1, score: Number.NaN },
+      { modelId: 'b', params: [], kind: 'explicit', domain: null, error: 1, score: -10 },
+    ]
+    const q = fitQuality(bogus)
+    expect(q.every(v => Number.isFinite(v) && v >= 0 && v <= 1)).toBe(true)
+    expect(q[1]).toBe(1)
   })
 })

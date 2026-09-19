@@ -45,6 +45,27 @@ const PENALTY: Record<string, number> = {
   // them loosely, on their own shapes.
   sqrt: 3,
   cbrt: 3,
+  // CHOSEN FROM A SEED SWEEP, not from taste. 36 shapes x 30 seeds (1080
+  // strokes), scoring every stroke at each candidate weight:
+  //
+  //   weight     2     2.5     3     3.5     4      4.5     5
+  //   sqrt     0/120  27/120 119/120 120/120 120/120 120/120 120/120
+  //   exp    141/150 150/150 150/150 150/150 150/150 150/150 150/150
+  //   log    179/180 179/180 179/180 179/180 163/180 129/180  95/180
+  //   recip  180/180 180/180 180/180 179/180 179/180 177/180 170/180
+  //
+  // Below 3 a logarithm eats the square roots outright — the two are the same
+  // shape over a short span, and the log has the freer asymptote. Above 4 it
+  // starts losing its own curves to `exp` and `cbrt`. 3.5 is the only value
+  // where NO existing family loses a single seed it used to win.
+  //
+  // They also have to be weighed against EACH OTHER: a reciprocal branch and a
+  // logarithm are both "steep end, flat end", so at log 3.5 / recip 3 the
+  // hyperbola takes 60 of the 180 log strokes. Equal weights keep each on its
+  // own shapes (log 179/180, recip 179/180; the stray seeds go to each other
+  // and to exp).
+  log: 3.5,
+  recip: 3.5,
   // A free exponent can imitate poly2 (p=2), abs (p=1) and sqrt (p=1/2), so it
   // is rated far less familiar: at 4 params it needs ~40% lower rms than a
   // fixed-exponent rival to win, which only a genuine odd power achieves.
@@ -508,6 +529,137 @@ function fitCbrt(pts: Vec2[]): { params: number[]; rms: number } | null {
 }
 
 /**
+ * y = a·ln(x − b) + c.
+ *
+ * Same trick as the roots — with b fixed the model is linear in (a, c) — but
+ * the seed matters more here, because a logarithm is ALL asymptote: shift b by
+ * a tenth of the stroke width and the plunge at the left end moves by a whole
+ * screen while the flat right end barely notices. So the sweep is packed
+ * against the steep end (the left edge of the ink, where the asymptote must
+ * live) and thins out to the left, where the curve flattens into a line.
+ *
+ * `inkMinX` is the left edge of the WHOLE stroke, trimmed ends included: b has
+ * to clear every drawn point, or part of the user's ink lies outside the
+ * curve's own domain and the reported σ is infinite.
+ */
+function fitLog(pts: Vec2[], inkMinX: number): { params: number[]; rms: number } | null {
+  const n = pts.length
+  if (n < 4) return null
+  let minX = Infinity, maxX = -Infinity
+  for (const p of pts) { if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x }
+  const w = maxX - minX
+  if (!(w > 0)) return null
+  // strictly left of the ink: AT x = b the curve is at ∓∞, not at a value
+  const bMax = Math.min(minX, inkMinX) - 1e-3 * w
+  const lo = bMax - 4 * w
+  const grid: number[] = []
+  const STEPS = 56
+  for (let i = 0; i <= STEPS; i++) {
+    const u = i / STEPS
+    grid.push(bMax - (bMax - lo) * u * u) // dense next to the asymptote
+  }
+  const spec = MODELS.log
+  if (!spec.evalExplicit) return null
+  const ev = spec.evalExplicit.bind(spec)
+  // LM needs a finite residual surface, so it sees a floored logarithm rather
+  // than the NaN the real family returns left of b
+  const floor = 1e-6 * w
+  const fit = fitByBranchPoint(
+    pts,
+    u => (u > 0 ? Math.log(u) : Number.NaN),
+    grid,
+    (p, x) => p[0] * Math.log(Math.max(x - p[1], floor)) + p[2],
+  )
+  if (!fit) return null
+  let [a, b, c] = fit.params
+  if (b > bMax) {
+    b = bMax
+    const rows: number[][] = []
+    for (const pt of pts) rows.push([Math.log(Math.max(pt.x - b, floor)), 1])
+    const sol = linearLeastSquares(rows, pts.map(pt => pt.y))
+    if (!sol) return null
+    a = sol[0]
+    c = sol[1]
+  }
+  // LM only polishes b from here; anything outside the swept band is either a
+  // runaway or a straight line wearing a logarithm's parameters. (A NaN fails
+  // both comparisons, which is the point of writing them this way round.)
+  if (!(b <= bMax) || !(b >= lo - w)) return null
+  const params = [a, b, c]
+  const rms = rmsExplicit(pts, x => ev(params, x))
+  if (!Number.isFinite(rms)) return null
+  return { params, rms }
+}
+
+/**
+ * y = a/(x − b) + c.
+ *
+ * The seed is the blow-up: a hand-drawn hyperbola branch runs away at one end,
+ * and the pole is just past it. So the sweep packs candidates against BOTH ink
+ * ends (either could be the runaway one) and thins outward — and it never
+ * places the pole inside the drawn span, where 1/(x − b) would be infinite at
+ * a point the user actually drew.
+ *
+ * A pole far from the ink makes a/(x − b) + c a straight line to within hand
+ * jitter, which is why the sweep stops a few stroke widths out: past that the
+ * family has stopped saying anything, and the line it is imitating is a better
+ * answer by construction (fewer parameters, same residual).
+ */
+const RECIP_REACH = 3
+
+function fitRecip(pts: Vec2[]): { params: number[]; rms: number } | null {
+  const n = pts.length
+  if (n < 4) return null
+  let minX = Infinity, maxX = -Infinity
+  for (const p of pts) { if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x }
+  const w = maxX - minX
+  if (!(w > 0)) return null
+  const gap = 1e-3 * w
+  const grid: number[] = []
+  const STEPS = 40
+  for (let i = 0; i <= STEPS; i++) {
+    const u = i / STEPS
+    grid.push(minX - gap - RECIP_REACH * w * u * u) // pole left of the ink
+    grid.push(maxX + gap + RECIP_REACH * w * u * u) // pole right of the ink
+  }
+  const spec = MODELS.recip
+  if (!spec.evalExplicit) return null
+  const ev = spec.evalExplicit.bind(spec)
+  const fit = fitByBranchPoint(
+    pts,
+    u => (u === 0 ? Number.NaN : 1 / u),
+    grid,
+    // clamped for LM: a pole dragged onto a sample must not produce Infinity
+    (p, x) => {
+      const u = x - p[1]
+      const safe = Math.abs(u) < gap ? (u < 0 ? -gap : gap) : u
+      return p[0] / safe + p[2]
+    },
+  )
+  if (!fit) return null
+  let [a, b, c] = fit.params
+  // LM is free to walk the pole into the ink (it lowers the residual on the
+  // points nearest it while ruining the curve); put it back outside and solve
+  // (a, c) exactly there.
+  const clamped = b < (minX + maxX) / 2 ? Math.min(b, minX - gap) : Math.max(b, maxX + gap)
+  if (clamped !== b) {
+    b = clamped
+    const rows: number[][] = []
+    for (const pt of pts) rows.push([1 / (pt.x - b), 1])
+    const sol = linearLeastSquares(rows, pts.map(pt => pt.y))
+    if (!sol) return null
+    a = sol[0]
+    c = sol[1]
+  }
+  if (!(b < minX - gap * 0.5 || b > maxX + gap * 0.5)) return null
+  if (b < minX - (RECIP_REACH + 1) * w || b > maxX + (RECIP_REACH + 1) * w) return null
+  const params = [a, b, c]
+  const rms = rmsExplicit(pts, x => ev(params, x))
+  if (!Number.isFinite(rms)) return null
+  return { params, rms }
+}
+
+/**
  * y = a·|x − b|^p + c with the exponent fitted. Powerful but imitative — it can
  * mimic a parabola (p = 2), a V (p = 1) or a square root (p = 1/2), so it is
  * scored with a much heavier complexity penalty and only reported when it is
@@ -948,6 +1100,56 @@ function fitSpiral(ps: PolarSamples): { params: number[]; rms: number } | null {
 }
 
 // ---------------------------------------------------------------------------
+// What the Interpretations list should show
+//
+// The list is ranked by `score`, and the sidebar prints each row's `error`
+// (σ). Those are not the same quantity, so the visible column reads as
+// unsorted — 1.573, 0.830, 1.335, 2.622 down a list the user was told is
+// best-first. Every part of that is working as designed and the result is
+// still a lie, because a number printed beside a ranked list is read AS the
+// ranking.
+//
+// σ cannot be made monotone: it is one input to the score, and the other
+// input — the complexity penalty — is exactly what stops a quartic with the
+// smallest σ from winning. So the column has to become the thing that IS
+// monotone. Not a bare rank, which throws away the part a teacher actually
+// needs (whether the top two are neck-and-neck or the winner is decisive).
+//
+// fitQuality is the score gap, per effective sample, read as a ratio:
+//
+//     q_i = exp(-(score_i - score_best) / (2 · N_EFF))
+//
+// It is 1 for the winner, strictly decreasing down the list (monotone BY
+// CONSTRUCTION — it is a decreasing function of the very number the sort
+// uses), and it has a plain meaning. For two candidates of equal complexity
+// the expression collapses to sqrt((σ_best² + floor)/(σ_i² + floor)) ≈
+// σ_best/σ_i: "this reading fits about 60% as tightly as the best one". Where
+// the complexity differs, that ratio is discounted by exactly the amount the
+// extra parameters were discounted in the ranking — which is the whole point,
+// and is why this number can sit beside a ranked list and σ cannot.
+// ---------------------------------------------------------------------------
+
+/**
+ * Display quality for each candidate, in (0, 1], parallel to `results` and
+ * monotone non-increasing when `results` is in the order recognize() returned.
+ * The best candidate is exactly 1.
+ *
+ * Intended use: the Interpretations rows show this (as a bar, or a percentage)
+ * INSTEAD OF σ. σ stays available on FitResult for the selected curve's own
+ * readout, where it is labelled and has room to mean what it says.
+ */
+export function fitQuality(results: FitResult[]): number[] {
+  let best = Infinity
+  for (const r of results) if (Number.isFinite(r.score) && r.score < best) best = r.score
+  if (!Number.isFinite(best)) return results.map(() => 0)
+  return results.map(r => {
+    if (!Number.isFinite(r.score)) return 0
+    const q = Math.exp(-(r.score - best) / (2 * N_EFF))
+    return Number.isFinite(q) ? Math.min(1, Math.max(0, q)) : 0
+  })
+}
+
+// ---------------------------------------------------------------------------
 // Main entry
 // ---------------------------------------------------------------------------
 
@@ -1031,6 +1233,7 @@ function recognizeInto(stroke: ProcessedStroke, out: FitResult[]): void {
       ['logistic', () => fitLogistic(core), 4],
       ['cbrt', () => fitCbrt(core), 3],
       ['power', () => fitPower(core), 4],
+      ['recip', () => fitRecip(core), 3],
     ]
     for (const [id, fitFn, k] of nonlinear) {
       try {
@@ -1050,6 +1253,18 @@ function recognizeInto(stroke: ProcessedStroke, out: FitResult[]): void {
         const sqrtDomain: [number, number] = [fit.params[1], stroke.bbox.max.x + padX]
         push(makeCandidate('sqrt', fit.params, 'explicit', sqrtDomain, fit.rms, diag, 3,
           fullRmsOf('sqrt', fit.params)))
+      }
+    } catch { /* skip */ }
+
+    // log likewise: nothing exists at or left of the asymptote. The domain
+    // starts AT b, where the single sample is non-finite and the renderer
+    // lifts the pen — so the drawn curve begins exactly where it should.
+    try {
+      const fit = fitLog(core, stroke.bbox.min.x)
+      if (fit) {
+        const logDomain: [number, number] = [fit.params[1], stroke.bbox.max.x + padX]
+        push(makeCandidate('log', fit.params, 'explicit', logDomain, fit.rms, diag, 3,
+          fullRmsOf('log', fit.params)))
       }
     } catch { /* skip */ }
   }

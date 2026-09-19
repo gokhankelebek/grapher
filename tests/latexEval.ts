@@ -123,6 +123,7 @@ export function delatex(src: string): string {
   s = s.split('\\cos\\theta').join('Math.cos(t)').split('\\sin\\theta').join('Math.sin(t)')
   s = s.split('\\cos t').join('Math.cos(t)').split('\\sin t').join('Math.sin(t)')
   s = s.split('\\cos').join('Math.cos').split('\\sin').join('Math.sin')
+  s = s.split('\\ln').join('Math.log')
   s = s.split('\\theta').join('t')
   // implicit multiplication: "2x", "2(", "3t", "1.5Math.sin(...)", "0.4xy"
   s = s.replace(/([\d)])(?=[xyt]|Math\.|\()/g, '$1*')
@@ -163,4 +164,55 @@ export function compileFourier(tex: string): (t: number) => { x: number; y: numb
   const fx = compileLatex(m[1])
   const fy = compileLatex(m[2])
   return t => ({ x: fx(0, 0, t), y: fy(0, 0, t) })
+}
+
+// ----------------------------------------------------------------------------
+// Muting a printed number
+//
+// A printed equation is a set of CLAIMS about the curve. The way to test that
+// it makes no claim it does not mean is to delete one number at a time and see
+// whether the curve notices: a coefficient the curve cannot feel is float dust
+// that got printed as mathematics ("−2.22·10⁻¹⁶(x − 3)").
+// ----------------------------------------------------------------------------
+
+/** An ordinary decimal literal. */
+const PLAIN_NUM = /^\d+(?:\.\d+)?/
+/** "2.22 \cdot 10^{-16}" — one number, written in two pieces. */
+const SCI_NUM = /^\d+(?:\.\d+)? \\cdot 10\^\{-?\d+\}/
+/** A power like ^{2}: structure, not a value the curve could have had. */
+const INT_GROUP = /^[+-]?\d+$/
+
+/**
+ * Spans of every number a printed equation ASSERTS — coefficients, offsets,
+ * centres, exponents that were fitted. Structure is skipped: the 3 in \sqrt[3]
+ * and an integer power's exponent are part of the family's spelling, not of
+ * what it claims about this particular curve.
+ */
+export function valueSpans(src: string): Array<[number, number]> {
+  const out: Array<[number, number]> = []
+  let i = 0
+  while (i < src.length) {
+    if (src.startsWith('\\sqrt[3]', i)) { i += '\\sqrt[3]'.length; continue }
+    if (src[i] === '^' && src[i + 1] === '{') {
+      const [g, j] = readGroup(src, i + 1)
+      if (!INT_GROUP.test(g)) {
+        const base = i + 2
+        for (const [s, e] of valueSpans(g)) out.push([base + s, base + e])
+      }
+      i = j
+      continue
+    }
+    const rest = src.slice(i)
+    const sci = SCI_NUM.exec(rest)
+    if (sci) { out.push([i, i + sci[0].length]); i += sci[0].length; continue }
+    const num = PLAIN_NUM.exec(rest)
+    if (num) { out.push([i, i + num[0].length]); i += num[0].length; continue }
+    i++
+  }
+  return out
+}
+
+/** The same expression with the number at `span` replaced by 0. */
+export function muteValue(src: string, span: [number, number]): string {
+  return `${src.slice(0, span[0])}0${src.slice(span[1])}`
 }

@@ -54,6 +54,32 @@ const HARD_ZERO = 1e-12
  * "at 1.05e-8" is at zero and the digits past that are noise, not precision.
  */
 const SOLVER_SLOP = 1e-7
+/**
+ * Significant digits these readouts carry. A value smaller than one unit in
+ * the last place of the curve's own scale is BELOW WHAT THE COLUMN CAN SHOW:
+ * printing "5.09e-4" beside a wave of height 6.5 states a midline to nine
+ * digits of precision that the row next to it does not have. That value is not
+ * wrong — it is simply zero at the resolution this table is drawn at.
+ */
+const DISPLAY_SIG = 4
+const DISPLAY_FLOOR = Math.pow(10, -DISPLAY_SIG)
+
+/**
+ * The floor below which a value is reported as 0, for a value of this
+ * provenance living on a curve of this size. Shared by formatCoord and
+ * formatSig so a coefficient and a coordinate never disagree about zero.
+ *
+ * `scale` is opt-in: with no scale there is no curve to be small against, and
+ * only pure arithmetic residue (and, for a numeric solve, the solver's own
+ * resolution) is snapped. That is what keeps a deliberate 1e-5 readable.
+ */
+function zeroFloor(scale: number | undefined, exact: boolean | undefined): number {
+  const known = scale !== undefined && Number.isFinite(scale) && scale > 0
+  const s = known ? (scale as number) : 1
+  let floor = exact === false ? Math.max(HARD_ZERO, SOLVER_SLOP * s) : HARD_ZERO * s
+  if (known) floor = Math.max(floor, DISPLAY_FLOOR * s)
+  return floor
+}
 
 /**
  * Format an analysis coordinate.
@@ -73,11 +99,7 @@ export function formatCoord(
   opts?: { scale?: number; exact?: boolean },
 ): string {
   if (!Number.isFinite(v)) return '—'
-  const scale =
-    opts?.scale !== undefined && Number.isFinite(opts.scale) && opts.scale > 0 ? opts.scale : 1
-  const floor =
-    opts?.exact === false ? Math.max(HARD_ZERO, SOLVER_SLOP * scale) : HARD_ZERO * scale
-  if (Math.abs(v) <= floor) return '0'
+  if (Math.abs(v) <= zeroFloor(opts?.scale, opts?.exact)) return '0'
   const abs = Math.abs(v)
   const s = abs >= 1e5 || abs < 1e-3 ? v.toExponential(2) : v.toPrecision(4)
   // NB: replace only the LEADING sign — a replace('-','−') on "1e-14" would
@@ -85,10 +107,18 @@ export function formatCoord(
   return s.startsWith('-') ? '−' + s.slice(1) : s
 }
 
-/** Compact 4-significant-digit rendering for pre-filled input values. */
-export function formatSig(v: number): string {
+/**
+ * Compact 4-significant-digit rendering for pre-filled input values.
+ *
+ * Same floors as formatCoord, for the same reason: a coefficient readout of
+ * "b = −2.93e−16" is a fit that cancelled to zero, and a card that shows it
+ * next to a curve drawn through the origin is showing its own arithmetic. The
+ * scale is optional and the one-argument call is unchanged, so a field with no
+ * curve behind it still only snaps genuine residue.
+ */
+export function formatSig(v: number, opts?: { scale?: number }): string {
   if (!Number.isFinite(v)) return '0'
-  if (v === 0) return '0'
+  if (Math.abs(v) <= zeroFloor(opts?.scale, undefined)) return '0'
   const abs = Math.abs(v)
   if (abs >= 1e6 || abs < 1e-4) return v.toExponential(3)
   return String(Number(v.toPrecision(4)))

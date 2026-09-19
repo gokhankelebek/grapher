@@ -893,3 +893,100 @@ describe('analyzeCurve — ellipses far from the origin', () => {
     }
   })
 })
+
+// ---------------------------------------------------------------------------
+// Logarithms and reciprocals — the two families where the interesting point is
+// the one that ISN'T on the curve.
+// ---------------------------------------------------------------------------
+
+describe('analyzeCurve — logarithm', () => {
+  it('crosses the axis exactly once, at b + e^(-c/a)', () => {
+    // y = 1.6 ln(x + 4.5): zero where ln(x + 4.5) = 0, i.e. x = -3.5
+    const pts = analyzeCurve(curve('log', [1.6, -4.5, 0], [-4.5, 6]), MODELS)
+    expect(xsOf(pts, 'zero')).toHaveLength(1)
+    expect(xsOf(pts, 'zero')[0]).toBeCloseTo(-3.5, 9)
+    expect(of(pts, 'zero')[0].exact, 'a log root is closed form').toBe(true)
+  })
+
+  it('places the zero by the same formula when it is shifted and scaled', () => {
+    // y = 2 ln(x - 1) + 1 -> ln(x-1) = -0.5 -> x = 1 + e^{-0.5}
+    const pts = analyzeCurve(curve('log', [2, 1, 1], [1, 9]), MODELS)
+    expect(xsOf(pts, 'zero')[0]).toBeCloseTo(1 + Math.exp(-0.5), 9)
+  })
+
+  it('has no maximum, no minimum and no inflection — ever', () => {
+    for (const p of [[1, 0, 0], [-1.4, 1, -0.5], [3, -2, 4]]) {
+      const pts = analyzeCurve(curve('log', p, [p[1], p[1] + 10]), MODELS)
+      expect(of(pts, 'maximum'), `params ${p}`).toHaveLength(0)
+      expect(of(pts, 'minimum'), `params ${p}`).toHaveLength(0)
+      expect(of(pts, 'inflection'), `params ${p}`).toHaveLength(0)
+    }
+  })
+
+  it('never reports anything at the asymptote itself', () => {
+    const pts = analyzeCurve(curve('log', [1.6, -4.5, 0], [-4.5, 6]), MODELS)
+    for (const p of pts) {
+      expect(Math.abs(p.pos.x + 4.5), `${p.kind} sits on the asymptote`).toBeGreaterThan(1e-6)
+      expect(Number.isFinite(p.pos.y), `${p.kind} has a non-finite y`).toBe(true)
+    }
+  })
+
+  it('reports a y-intercept only when the asymptote is left of the y-axis', () => {
+    const on = analyzeCurve(curve('log', [1.6, -4.5, 0], [-4.5, 6]), MODELS)
+    expect(of(on, 'y-intercept')).toHaveLength(1)
+    expect(of(on, 'y-intercept')[0].pos.y).toBeCloseTo(1.6 * Math.log(4.5), 9)
+    // y = ln(x - 1) does not exist at x = 0
+    const off = analyzeCurve(curve('log', [1, 1, 0], [1, 9]), MODELS)
+    expect(of(off, 'y-intercept')).toHaveLength(0)
+  })
+
+  it('keeps the zero inside the reported domain', () => {
+    // the zero of y = ln(x) is at 1; a curve trimmed to [3, 9] has none showing
+    const pts = analyzeCurve(curve('log', [1, 0, 0], [3, 9]), MODELS)
+    expect(of(pts, 'zero')).toHaveLength(0)
+  })
+})
+
+describe('analyzeCurve — reciprocal', () => {
+  it('reports the single zero of a/(x - b) + c and NOT the pole', () => {
+    // y = 2/(x - 1) + 1: zero where 2/(x-1) = -1, i.e. x = -1. Pole at x = 1.
+    const pts = analyzeCurve(curve('recip', [2, 1, 1], [-6, 8]), MODELS)
+    const zeros = xsOf(pts, 'zero')
+    expect(zeros).toHaveLength(1)
+    expect(zeros[0]).toBeCloseTo(-1, 9)
+    for (const z of zeros) expect(Math.abs(z - 1), 'the pole is not a root').toBeGreaterThan(0.5)
+  })
+
+  it('reports NO zero when the horizontal asymptote is the axis itself', () => {
+    // y = a/(x - b) never reaches 0 — and the pole must not be offered instead
+    const pts = analyzeCurve(curve('recip', [1, 0, 0], [-5, 5]), MODELS)
+    expect(of(pts, 'zero'), 'a hyperbola on the axis has no root').toHaveLength(0)
+    expect(of(pts, 'maximum')).toHaveLength(0)
+    expect(of(pts, 'minimum')).toHaveLength(0)
+    expect(of(pts, 'inflection')).toHaveLength(0)
+  })
+
+  it('has no turning point and no inflection on either branch', () => {
+    for (const p of [[1.5, -1, 0.5], [-2, 1, -1], [3, 0.5, 2]]) {
+      const pts = analyzeCurve(curve('recip', p, [p[1] - 6, p[1] + 6]), MODELS)
+      expect(of(pts, 'maximum'), `params ${p}`).toHaveLength(0)
+      expect(of(pts, 'minimum'), `params ${p}`).toHaveLength(0)
+      expect(of(pts, 'inflection'), `params ${p}`).toHaveLength(0)
+    }
+  })
+
+  it('never reports a point at the pole, from either side', () => {
+    for (const p of [[1, 0, 0], [2, 1, 1], [-1.5, -2, -1], [0.6, 3, 0]]) {
+      const pts = analyzeCurve(curve('recip', p, [p[1] - 5, p[1] + 5]), MODELS)
+      for (const q of pts) {
+        expect(Math.abs(q.pos.x - p[1]), `${q.kind} sits on the pole of ${p}`).toBeGreaterThan(1e-6)
+        expect(Number.isFinite(q.pos.y), `${q.kind} has a non-finite y`).toBe(true)
+      }
+    }
+  })
+
+  it('has no y-intercept when the pole is on the y-axis', () => {
+    const pts = analyzeCurve(curve('recip', [1, 0, 0], [-5, 5]), MODELS)
+    expect(of(pts, 'y-intercept')).toHaveLength(0)
+  })
+})

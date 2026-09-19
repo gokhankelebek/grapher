@@ -12,7 +12,9 @@ import type { ModelSpec, Vec2 } from '../src/core/types'
 import { MODELS } from '../src/core/fit/models'
 import { centerFormToConic, conicToCenterForm } from '../src/core/fit/optimize'
 import { makeRng } from './helpers'
-import { compileFourier, compileImplicit, compileRhs } from './latexEval'
+import {
+  compileFourier, compileImplicit, compileLatex, compileRhs, muteValue, valueSpans,
+} from './latexEval'
 
 // ---------------------------------------------------------------------------
 // Representative parameter sets per family. Each family gets several, chosen
@@ -30,6 +32,8 @@ const SAMPLES: Record<string, number[][]> = {
   exp: [[0.4, 0.6, -1], [1, 1, 0], [-2, -0.5, 3]],
   abs: [[1.2, 0.7, -2], [1, 0, 0], [-1, -1, -1]],
   logistic: [[4, 1.8, 0.5, -2], [1, 1, 0, 0], [-1, -2, -1, 1]],
+  log: [[1, 0, 0], [1.6, -1, 0.5], [-1.4, 1, -0.5]],
+  recip: [[1, 0, 0], [1.5, -1, 0.5], [-2, 1, -1]],
   sqrt: [[1, 0, 0], [2, -1.5, 0.5], [-1.4, 1, -0.5], [1, -4, 0]],
   cbrt: [[1, 0, 0], [1.7, 1, -0.5], [-1, -2, 1]],
   power: [[1, 0, 0, 2 / 3], [0.8, 1.2, -1, 0.25], [-2, -1, 0.5, 1.5]],
@@ -62,6 +66,10 @@ const NO_TRANSLATE = new Set(['polarRose', 'limacon', 'spiral'])
 const PARTIAL_DOMAIN: Record<string, (p: number[], x: number) => boolean> = {
   // defined for x >= b
   sqrt: (p, x) => x >= p[1],
+  // defined for x > b: AT the asymptote a logarithm is already gone
+  log: (p, x) => x > p[1],
+  // defined everywhere except the pole itself
+  recip: (p, x) => x !== p[1],
 }
 
 const IDS = Object.keys(MODELS)
@@ -437,7 +445,12 @@ interface Case { params: number[]; domain: [number, number] }
 /** One representative, deliberately un-round curve per family. */
 const FIDELITY_BASE: Record<string, Case[]> = {
   line: [{ params: [0.4321, 1.2345], domain: [-5, 5] }],
-  poly2: [{ params: [0.4321, -1.2345, 0.7654], domain: [-4, 4] }],
+  poly2: [
+    { params: [0.4321, -1.2345, 0.7654], domain: [-4, 4] },
+    // vertex form, expanded: p'(x0) cancels to 2.2e-16 rather than to 0, which
+    // is where "− 2.22·10⁻¹⁶(x − 3)" came from
+    { params: [0.7, -1.8, 0.3], domain: [-4, 6] },
+  ],
   poly3: [{ params: [0.4321, -1.2345, 0.7654, 0.1234], domain: [-5, 5] }],
   poly4: [{ params: [0.4321, -1.2345, 0.7654, 0.1234, -0.0432], domain: [-4, 4] }],
   sine: [{ params: [1.2345, 1.4321, 0.3456, 0.4321], domain: [-6, 6] }],
@@ -445,6 +458,10 @@ const FIDELITY_BASE: Record<string, Case[]> = {
   exp: [{ params: [1.2345, 0.4321, -0.7654], domain: [-3, 4] }],
   // domain starts right of the branch point, where the family is defined
   sqrt: [{ params: [1.7654, -1.2345, 0.4321], domain: [-0.7345, 8] }],
+  // likewise right of the asymptote at b = -1.2345
+  log: [{ params: [1.7654, -1.2345, 0.4321], domain: [-0.7345, 8] }],
+  // one branch, clear of the pole at b = -1.2345
+  recip: [{ params: [1.7654, -1.2345, 0.4321], domain: [-0.7345, 8] }],
   cbrt: [{ params: [1.7654, 0.4321, -0.5432], domain: [-5, 6] }],
   power: [{ params: [1.2345, 0.4321, -0.7654, 0.6667], domain: [-4, 5] }],
   abs: [{ params: [1.2345, 0.4321, -0.7654], domain: [-5, 5] }],
@@ -651,6 +668,68 @@ describe('MODELS — the printed equation IS the curve', () => {
         `${id} params=[${c.params.map(v => String(v)).join(', ')}] domain=[${c.domain}]\n` +
         `  printed: ${tex}\n  deviation ${dev} vs y-range ${range}`,
       ).toBeLessThan(0.01)
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// P0, the other half: the printed equation must say NOTHING BUT the curve.
+//
+// Fidelity above asks whether the printed equation reproduces the curve. It
+// cannot catch the opposite failure, because a term worth 1e-16 reproduces the
+// curve perfectly — it just makes a teacher's parabola read
+//
+//     y = 0.3(x − 3)² − 2.22·10⁻¹⁶(x − 3) − 2
+//
+// in front of a class. So: mute each printed number in turn and require the
+// curve to NOTICE. A number the curve cannot feel across its own domain, to
+// better than a billionth of its own y-range, is arithmetic residue that
+// escaped into the product, and the threshold is relative to the shape rather
+// than absolute — an absolute floor is what once erased a real exponential
+// amplitude of 1e-23.
+// ---------------------------------------------------------------------------
+
+/** Below this fraction of the curve's y-range, a term is not on the graph. */
+const INVISIBLE = 1e-9
+
+const EXPLICIT_IDS = IDS.filter((id) => MODELS[id].evalExplicit !== undefined)
+
+describe('MODELS — a printed equation asserts nothing it does not mean', () => {
+  it.each(EXPLICIT_IDS)('%s: every number it prints changes the curve it prints', (id) => {
+    const spec = MODELS[id]
+    for (const c of fidelityCases(id)) {
+      const tex = spec.latex(c.params)
+      const rhs = tex.slice(tex.indexOf(' = ') + 3)
+      const printed = compileLatex(rhs)
+      const [lo, hi] = c.domain
+      const n = 200
+      const xs: number[] = []
+      const ys: number[] = []
+      for (let i = 0; i <= n; i++) {
+        const x = lo + ((hi - lo) * i) / n
+        const yTrue = spec.evalExplicit!(c.params, x)
+        if (!Number.isFinite(yTrue)) continue
+        xs.push(x)
+        ys.push(printed(x, 0, 0))
+      }
+      const range = extentY(xs.map((x, i) => ({ x, y: ys[i] })))
+      expect(range, `${id}: degenerate fixture, no y-range`).toBeGreaterThan(0)
+
+      for (const span of valueSpans(rhs)) {
+        const muted = compileLatex(muteValue(rhs, span))
+        let dev = 0
+        for (let i = 0; i < xs.length; i++) {
+          const v = muted(xs[i], 0, 0)
+          dev = Math.max(dev, Number.isFinite(v) ? Math.abs(v - ys[i]) : Infinity)
+        }
+        expect(
+          dev / range,
+          `${id} params=[${c.params.map(String).join(', ')}]\n` +
+          `  printed: ${tex}\n` +
+          `  the number "${rhs.slice(span[0], span[1])}" is invisible: ` +
+          `muting it moves the curve by ${dev} against a y-range of ${range}`,
+        ).toBeGreaterThan(INVISIBLE)
+      }
     }
   })
 })

@@ -596,6 +596,38 @@ function closedForm(
       }
       return { points: out, handled: all }
     }
+    case 'log': {
+      // params [a, b, c] -> a ln(x - b) + c, defined only for x > b.
+      // a ln(u) + c = 0 at u = e^{-c/a}, which is positive for every c: a
+      // logarithm crosses the axis exactly once, always. It is monotonic
+      // (f' = a/u never vanishes) and its concavity never changes sign
+      // (f'' = -a/u² ), so it has neither extrema nor inflections — and the
+      // asymptote at x = b is NOT a zero, however close to it the curve runs.
+      const [a, b, c] = p
+      if (Math.abs(a) < 1e-15) return null
+      const out: SpecialPoint[] = []
+      const r = b + Math.exp(-c / a)
+      if (Number.isFinite(r) && r > b && inDom(r)) push(out, pt('zero', r, 0, 'zero', true))
+      return { points: out, handled: all }
+    }
+    case 'recip': {
+      // params [a, b, c] -> a/(x - b) + c, a hyperbola with a pole at x = b.
+      // a/(x-b) = -c has the single solution x = b - a/c when c != 0; when
+      // c = 0 the curve is a/(x-b), which approaches the axis but never
+      // reaches it, so there is no zero at all. THE POLE IS NOT A ZERO: it is
+      // where the curve stops existing, and the value there is undefined, not
+      // small. (The numeric scanner's value check says the same thing from the
+      // other side; this family never reaches it, being handled in closed form.)
+      const [a, b, c] = p
+      if (Math.abs(a) < 1e-15) return null
+      const out: SpecialPoint[] = []
+      if (Math.abs(c) > 1e-15) {
+        const r = b - a / c
+        if (Number.isFinite(r) && r !== b && inDom(r)) push(out, pt('zero', r, 0, 'zero', true))
+      }
+      // monotone on each branch (f' = -a/u²), no inflection (f'' = 2a/u³)
+      return { points: out, handled: all }
+    }
     case 'logistic': {
       // params [a, b, c, d] -> a/(1 + e^{-b(x-c)}) + d
       const [a, b, c, d] = p
