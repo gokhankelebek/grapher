@@ -29,6 +29,7 @@ import {
   nearestOnCurve,
 } from '../core/fit/edit'
 import { handleHitRadius, renderBoard } from './renderBoard'
+import type { AxisUnits } from './renderBoard'
 import {
   NEIGHBOURHOOD_PX,
   TOUCH_INK_HOLD_MS,
@@ -74,6 +75,14 @@ interface Props {
    * target part company the moment a teacher projects.
    */
   present?: PaintScale | null
+  /**
+   * How each axis is measured — 'decimal' or 'pi', per axis. Absent means the
+   * decimal grid, so a caller that never mentions it draws what it always drew.
+   * Threaded exactly like `present`: mirrored into a ref and handed to
+   * renderBoard as a field of the SCENE, because the export builds the same
+   * scene and the PNG has to be measured the way the screen is.
+   */
+  axisUnits?: AxisUnits | null
   selectedId: string | null
   mode: Mode
   inkColor: string
@@ -254,6 +263,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     models,
     theme,
     present,
+    axisUnits,
     selectedId,
     mode,
     inkColor,
@@ -297,6 +307,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   const inkColorRef = useRef(inkColor)
   const themeRef = useRef<Theme>(theme)
   const presentRef = useRef<PaintScale | null | undefined>(present)
+  const axisUnitsRef = useRef<AxisUnits | null | undefined>(axisUnits)
 
   const pointersRef = useRef<Map<number, PointerEntry>>(new Map())
   const gestureRef = useRef<Gesture | null>(null)
@@ -432,6 +443,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       vp,
       theme: themeRef.current,
       present: presentRef.current ? paintScale(presentRef.current) : undefined,
+      axisUnits: axisUnitsRef.current ?? undefined,
       curves: curvesRef.current,
       styles: stylesRef.current,
       models: modelsRef.current,
@@ -487,6 +499,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     inkColorRef.current = inkColor
     themeRef.current = theme
     presentRef.current = present
+    axisUnitsRef.current = axisUnits
     hitRef.current = hitRadii(coarseRef.current, present)
     analysisRef.current = analysis
     highlightRef.current = analysisHighlight
@@ -497,6 +510,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     models,
     theme,
     present,
+    axisUnits,
     selectedId,
     mode,
     inkColor,

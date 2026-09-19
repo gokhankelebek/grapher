@@ -3727,3 +3727,49 @@ button.card-eq {
     min-height: 44px;
   }
 }
+
+/* --------------------------------------------------------------- axis units */
+/* Per-axis units sit in the export/settings panel, not on the toolbar: the bar
+   was cut from 680px to 524px in a 704px canvas and must not grow back, and
+   this is a once-a-lesson decision that belongs beside the other once-a-lesson
+   ones. Three states per axis — Auto, 1, π — and a readout, because 'Auto' has
+   to be able to say what it currently resolved to. */
+
+.exp-axis {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+
+.exp-axis-name {
+  width: 10px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+  font-style: italic;
+  color: var(--muted);
+}
+
+.exp-axis-seg {
+  flex: 1;
+  min-width: 0;
+}
+
+.exp-axis-seg .seg-btn {
+  padding: var(--sp-1) 6px;
+  font-size: var(--fs-sm);
+}
+
+.exp-axis-read {
+  width: 54px;
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--muted);
+}
+
+@media (pointer: coarse) {
+  .exp-axis-seg .seg-btn {
+    min-height: 44px;
+  }
+}

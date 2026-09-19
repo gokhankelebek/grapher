@@ -39,8 +39,9 @@ import {
   exportGeometry,
   exportTheme,
   renderBoardToCanvas,
+  suggestAxisUnits,
 } from './ui/renderBoard'
-import type { BoardScene } from './ui/renderBoard'
+import type { AxisUnits, BoardScene } from './ui/renderBoard'
 import { clampFitSettings, contentBounds, exportViewport } from './ui/exportFit'
 import type { FitExportSettings } from './ui/exportFit'
 import { PresentBar } from './ui/PresentBar'
@@ -48,13 +49,22 @@ import { PresentLegend } from './ui/PresentLegend'
 import { DEFAULT_PRESENT_TYPE, curveLegend, itemLegend, presentScale } from './ui/present'
 import { copyDocName, nextDocName } from './ui/docName'
 import {
+  AUTO_AXIS_UNITS,
   createDoc,
   deserializeDoc,
   docFromBoard,
   emptyBoard,
+  resolveAxisUnits,
   serializeDoc,
 } from './core/persist'
-import type { BoardInput, DocMeta, HydratedBoard } from './core/persist'
+import type {
+  AxisUnitChoice,
+  AxisUnitChoices,
+  BoardInput,
+  DocMeta,
+  HydratedBoard,
+  ResolvedAxisUnits,
+} from './core/persist'
 import {
   clampPresentScale,
   copyExportSettings,
@@ -234,6 +244,20 @@ export default function App() {
    * questions ("what do I want to look at" vs "what goes on the paper").
    */
   const [canvasTheme, setCanvasTheme] = useState<'dark' | 'light'>(() => readPrefs().canvasTheme)
+  /**
+   * How each axis is MEASURED, as this document states it.
+   *
+   * 'auto' — the default, and both sides start there — means the board decides
+   * from what is on it, every time the curve set changes: a sine lands and the
+   * x-axis becomes π/2, π, 3π/2; the last trig curve is deleted and it goes
+   * back to 1, 2, 3. 'decimal'/'pi' is the teacher overruling that, and the
+   * override sticks until they hand the axis back to auto — a board that
+   * argued back every time a sketch landed would be unusable mid-lesson.
+   *
+   * It belongs to the DOCUMENT (persist.ts), not to preferences: a trig lesson
+   * is a trig lesson on any machine, while the next document is not.
+   */
+  const [axisUnitChoice, setAxisUnitChoice] = useState<AxisUnitChoices>(AUTO_AXIS_UNITS)
   const [exportSettings, setExportSettings] = useState<FitExportSettings>(() => ({
     ...readPrefs().exportDefaults,
   }))
@@ -286,6 +310,8 @@ export default function App() {
   const exprSourcesRef = useRef<Record<string, string>>({})
   const brokenExprRef = useRef<Record<string, string>>({})
   const displaySourcesRef = useRef<Record<string, string>>({})
+  const axisUnitChoiceRef = useRef<AxisUnitChoices>(axisUnitChoice)
+  axisUnitChoiceRef.current = axisUnitChoice
   const editsRef = useRef<Record<string, CurveEdit[]>>({})
   const docMetaRef = useRef<DocMeta>(docMeta)
   const saveTimerRef = useRef(0)
@@ -409,6 +435,35 @@ export default function App() {
       .map((curve) => ({ curve, points: analysisFor(curve) }))
       .filter((m) => m.points.length > 0)
   }, [showAnalysis, kind, curves, selectedId, analysisFor])
+
+  // -------------------------------------------------------------- axis units
+  //
+  // AUTO is re-asked whenever the curve set changes, which is what makes
+  // `y = sin(x)` turn the x-axis into π/2, π, 3π/2 on its own and deleting the
+  // last trig curve turn it back. suggestAxisUnits is the renderer's own
+  // recommendation — pure, and it reads a TYPED curve's family out of
+  // exprSources, the same map keyed by curve id the legend takes.
+  //
+  // A number line has no axis units to choose, so it never asks.
+  const axisSuggestion = useMemo<AxisUnits>(
+    () => (kind === 'cartesian' ? suggestAxisUnits(curves, exprSources) : {}),
+    [kind, curves, exprSources],
+  )
+  const suggestedX: 'decimal' | 'pi' = axisSuggestion.x === 'pi' ? 'pi' : 'decimal'
+  const suggestedXRef = useRef(suggestedX)
+  suggestedXRef.current = suggestedX
+  const { x: axisChoiceX, y: axisChoiceY } = axisUnitChoice
+  /**
+   * What the grid is actually drawn in. Memoised on the two RESOLVED strings
+   * rather than on the curve list, so a board whose units have not changed
+   * hands the stage the identical object it had last frame.
+   */
+  const axisUnits = useMemo<ResolvedAxisUnits>(
+    () => resolveAxisUnits({ x: axisChoiceX, y: axisChoiceY }, { x: suggestedX }),
+    [axisChoiceX, axisChoiceY, suggestedX],
+  )
+  const axisUnitsRef = useRef<ResolvedAxisUnits>(axisUnits)
+  axisUnitsRef.current = axisUnits
 
   const vpRef = useRef<Viewport>({
     center: { x: 0, y: 0 },
@@ -699,6 +754,7 @@ export default function App() {
       exprSources: {},
       displaySources: {},
       brokenExpr: {},
+      axisUnits: { ...AUTO_AXIS_UNITS },
       viewport: { center: { x: 0, y: 0 }, pxPerUnit: 60 },
       selectedId: null,
       mode: 'draw',
@@ -717,6 +773,7 @@ export default function App() {
       candidates: candidatesRef.current,
       exprSources: exprSourcesRef.current,
       displaySources: displaySourcesRef.current,
+      axisUnits: axisUnitChoiceRef.current,
       viewport: { center: vpRef.current.center, pxPerUnit: vpRef.current.pxPerUnit },
       selectedId: selectedRef.current,
       mode: MODE,
@@ -815,6 +872,7 @@ export default function App() {
     // done since the curve was recognised, and a freshly loaded curve is
     // exactly what the document said it was.
     displaySourcesRef.current = board.displaySources
+    axisUnitChoiceRef.current = board.axisUnits
     editsRef.current = {}
     selectedRef.current = board.selectedId
     docMetaRef.current = meta
@@ -832,6 +890,7 @@ export default function App() {
     setExprSources(board.exprSources)
     setBrokenExpr(board.brokenExpr)
     setDisplaySources(board.displaySources)
+    setAxisUnitChoice(board.axisUnits)
     setEdits({})
     setExtraModels(board.extraModels)
     setSelectedId(board.selectedId)
@@ -925,6 +984,9 @@ export default function App() {
     styles,
     exprSources,
     displaySources,
+    // A units change is a change to the document, so it has to reach the same
+    // debounced write everything else does.
+    axisUnitChoice,
     selectedId,
     docMeta.name,
     scheduleSave,
@@ -2319,6 +2381,10 @@ export default function App() {
       // (amber lands near 1.7:1 — a copier renders it as nothing), so a light
       // export swaps every curve for its print counterpart.
       printColors: settings.theme === 'light',
+      // The PNG is measured the way the screen is. This is the whole point of
+      // there being one scene type: a π axis a teacher set for a trig lesson
+      // has to be π in the file they paste into the worksheet.
+      axisUnits: axisUnitsRef.current,
       chrome: null,
     }
     },
@@ -2545,6 +2611,34 @@ export default function App() {
     setExportSettings(readExportSettings(docMeta.id, kind))
   }, [docMeta.id, kind])
 
+  /** State one axis. Idempotent — pressing the on segment again changes nothing. */
+  const setAxisUnit = useCallback((axis: 'x' | 'y', choice: AxisUnitChoice): void => {
+    setAxisUnitChoice((prev) => (prev[axis] === choice ? prev : { ...prev, [axis]: choice }))
+  }, [])
+
+  /**
+   * Shift+P: the x-axis, round the three states, with the answer said out loud.
+   *
+   * A cycle rather than a toggle because 'auto' is a state a teacher has to be
+   * able to get BACK to, and the shortcut is the only place the control is not
+   * on screen. The toast is what makes a three-way key learnable: it names the
+   * state it just landed on, including whether the board is deciding.
+   */
+  const cycleAxisUnitX = useCallback((): void => {
+    if (kindRef.current !== 'cartesian') return
+    const order: AxisUnitChoice[] = ['auto', 'pi', 'decimal']
+    const cur = axisUnitChoiceRef.current.x
+    const next = order[(order.indexOf(cur) + 1) % order.length]
+    setAxisUnitChoice((prev) => ({ ...prev, x: next }))
+    const shown = resolveAxisUnits({ x: next, y: axisUnitChoiceRef.current.y }, {
+      x: suggestedXRef.current,
+    }).x
+    showToast(
+      `x axis in ${shown === 'pi' ? 'multiples of π' : 'decimals'}${next === 'auto' ? ' (auto)' : ''}`,
+      { ms: 2200 },
+    )
+  }, [showToast])
+
   const toggleCanvasTheme = useCallback((): void => {
     setCanvasTheme((t) => {
       const next = t === 'dark' ? 'light' : 'dark'
@@ -2629,6 +2723,11 @@ export default function App() {
           updatePrefs({ showAnalysis: next })
           return next
         })
+      } else if (key === 'p' && e.shiftKey && !meta) {
+        // The units control lives in the export/settings panel, which is two
+        // clicks away mid-lesson; this is the one axis a trig class re-measures.
+        e.preventDefault()
+        cycleAxisUnitX()
       } else if (key === 'f' && !meta && !e.shiftKey) {
         // One key for the whole mode. A teacher walking to the projector has
         // one hand free and no time to find a menu.
@@ -2649,7 +2748,7 @@ export default function App() {
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
     }
-  }, [undo, redo, deleteCurve, deleteItem, nudgeSelected, commitWithSnap])
+  }, [undo, redo, deleteCurve, deleteItem, nudgeSelected, commitWithSnap, cycleAxisUnitX])
 
   // ------------------------------------------------------------------ render
   const canUndo = undoRef.current.length > 0
@@ -2812,6 +2911,7 @@ export default function App() {
           onFeatureEdit={applyFeature}
           theme={boardTheme}
           present={present}
+          axisUnits={axisUnits}
         />
         )}
 
@@ -2895,6 +2995,9 @@ export default function App() {
                 onChange={changeExportSettings}
                 onExport={exportPNG}
                 onCopy={copyPNG}
+                axisUnits={kind === 'cartesian' ? axisUnitChoice : null}
+                resolvedAxisUnits={axisUnits}
+                onAxisUnit={setAxisUnit}
               />
             </>
           }

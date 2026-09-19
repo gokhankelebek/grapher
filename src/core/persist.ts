@@ -63,6 +63,73 @@ export type StyleMap = Record<string, CurveStyle>
 
 export type BoardMode = 'draw' | 'pan'
 
+// --- axis units -------------------------------------------------------------
+//
+// How each axis is MEASURED is a property of the document, not of the window:
+// a trig lesson is a trig lesson on any machine, and a teacher who set the
+// x-axis to decimal because the class is reading amplitudes must find it
+// decimal again tomorrow.
+//
+// Three states per axis, not two. 'auto' is the default and the interesting
+// one: it asks the renderer's own recommendation (suggestAxisUnits) every time
+// the curve set changes, so typing y = sin(x) turns the x-axis into π/2, π,
+// 3π/2 by itself and deleting the last trig curve turns it back. 'decimal' and
+// 'pi' are a teacher overruling that, and an override has to STICK — a board
+// that argued back every time a sketch landed would be unusable.
+
+/** What a teacher has said about one axis. 'auto' = let the board decide. */
+export type AxisUnitChoice = 'auto' | 'decimal' | 'pi'
+
+/** The per-document choice. Both sides default to 'auto'. */
+export interface AxisUnitChoices {
+  x: AxisUnitChoice
+  y: AxisUnitChoice
+}
+
+/** What a document that has never been told anything about its axes means. */
+export const AUTO_AXIS_UNITS: AxisUnitChoices = { x: 'auto', y: 'auto' }
+
+/** A settled axis: what the renderer is actually handed. */
+export type ResolvedAxisUnit = 'decimal' | 'pi'
+
+export interface ResolvedAxisUnits {
+  x: ResolvedAxisUnit
+  y: ResolvedAxisUnit
+}
+
+/**
+ * Settle the choice against a recommendation.
+ *
+ * The recommendation is `suggestAxisUnits()`'s: it only ever speaks about an
+ * axis it wants in π, so a silent axis resolves to 'decimal' — the grid every
+ * board has always drawn. An explicit choice ignores the recommendation
+ * entirely, which is the whole point of making one.
+ *
+ * Pure, and free of anything React or canvas, so the rule the App runs on every
+ * curve change is the rule the tests run.
+ */
+export function resolveAxisUnits(
+  choices: AxisUnitChoices | undefined | null,
+  suggestion?: { x?: ResolvedAxisUnit; y?: ResolvedAxisUnit } | null,
+): ResolvedAxisUnits {
+  const settle = (
+    choice: AxisUnitChoice | undefined,
+    hint: ResolvedAxisUnit | undefined,
+  ): ResolvedAxisUnit => {
+    if (choice === 'pi' || choice === 'decimal') return choice
+    return hint === 'pi' ? 'pi' : 'decimal'
+  }
+  return {
+    x: settle(choices?.x, suggestion?.x),
+    y: settle(choices?.y, suggestion?.y),
+  }
+}
+
+/** Read one stored side. Anything that is not an explicit unit means 'auto'. */
+function storedAxisUnit(v: unknown): AxisUnitChoice {
+  return v === 'pi' || v === 'decimal' ? v : 'auto'
+}
+
 // --- defensive limits: a stored blob is untrusted input ----------------------
 const MAX_CURVES = 2000
 const MAX_ITEMS = 500
@@ -137,6 +204,16 @@ export interface StoredBoard {
   kind?: BoardKind
   /** Omitted when empty, for the same reason. */
   items?: StoredNLItem[]
+  /**
+   * Per-axis units, and ONLY the sides a teacher chose explicitly.
+   *
+   * Absent — the field, or either side of it — means 'auto', which is what
+   * every document written before this existed meant and still means. A board
+   * on automatic therefore serialises byte-for-byte as it did before, so no
+   * schema bump: an older reader drops a field it does not know, and dropping
+   * it lands exactly on the default.
+   */
+  axisUnits?: { x?: ResolvedAxisUnit; y?: ResolvedAxisUnit }
 }
 
 export interface StoredDoc {
@@ -199,6 +276,8 @@ export interface BoardInput {
   exprSources: Record<string, string>
   /** curveId -> the typed form to PRINT while the family still means it. */
   displaySources?: Record<string, string>
+  /** Per-axis units. Absent = both automatic, which writes nothing. */
+  axisUnits?: AxisUnitChoices
   viewport: { center: Vec2; pxPerUnit: number }
   selectedId: string | null
   mode: BoardMode
@@ -217,6 +296,8 @@ export interface HydratedBoard {
   displaySources: Record<string, string>
   /** curveId -> why its equation could not be rebuilt. */
   brokenExpr: Record<string, string>
+  /** Per-axis units as the document states them; 'auto' where it is silent. */
+  axisUnits: AxisUnitChoices
   viewport: { center: Vec2; pxPerUnit: number }
   selectedId: string | null
   mode: BoardMode
@@ -345,6 +426,12 @@ export function boardToStored(input: BoardInput): StoredBoard {
   // Written only when they carry information. A cartesian board with no items
   // produces the same JSON it produced before either field existed.
   if (input.kind === 'number-line') board.kind = 'number-line'
+  // Same rule for the axes: an automatic side is not a choice, so it is not
+  // written. Both automatic and the key never appears.
+  const ax: { x?: ResolvedAxisUnit; y?: ResolvedAxisUnit } = {}
+  if (input.axisUnits?.x === 'pi' || input.axisUnits?.x === 'decimal') ax.x = input.axisUnits.x
+  if (input.axisUnits?.y === 'pi' || input.axisUnits?.y === 'decimal') ax.y = input.axisUnits.y
+  if (ax.x !== undefined || ax.y !== undefined) board.axisUnits = ax
   const items = input.items ?? []
   if (items.length > 0) {
     board.items = items.slice(0, MAX_ITEMS).map((it) => itemToStored(it, input.styles[it.id]))
@@ -723,6 +810,13 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
     degraded = true
   }
 
+  // ---- axis units. Unreadable or absent is not a repair: it is the default.
+  const rawAxis = isObj(rawBoard.axisUnits) ? rawBoard.axisUnits : {}
+  const axisUnits: AxisUnitChoices = {
+    x: storedAxisUnit(rawAxis.x),
+    y: storedAxisUnit(rawAxis.y),
+  }
+
   const selectable = new Set<string>([...curves.map((c) => c.id), ...items.map((i) => i.id)])
   const selectedId =
     isStr(rawBoard.selectedId) && selectable.has(rawBoard.selectedId)
@@ -742,6 +836,7 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
       exprSources,
       displaySources,
       brokenExpr,
+      axisUnits,
       viewport,
       selectedId,
       mode,
@@ -763,6 +858,7 @@ function blankHydrated(): HydratedBoard {
     exprSources: {},
     displaySources: {},
     brokenExpr: {},
+    axisUnits: { ...AUTO_AXIS_UNITS },
     viewport: { center: { x: 0, y: 0 }, pxPerUnit: 60 },
     selectedId: null,
     mode: 'draw',

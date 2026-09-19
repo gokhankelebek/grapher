@@ -14,6 +14,7 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { EXPORT_SCALES, MAX_EXPORT_MARGIN, MAX_EXPORT_WIDTH, MIN_EXPORT_WIDTH } from './renderBoard'
 import { ASPECTS, ASPECT_LABELS } from './exportFit'
 import type { AspectKey, FitExportSettings } from './exportFit'
+import type { AxisUnitChoice, AxisUnitChoices, ResolvedAxisUnits } from '../core/persist'
 
 /** What the Copy button is currently saying. */
 export type CopyState =
@@ -34,16 +35,40 @@ interface Props {
    */
   sizeOf(settings: FitExportSettings): { w: number; h: number }
   copyState: CopyState
+  /**
+   * The document's per-axis units, or null on a board that has no axes to
+   * measure (a number line) — the section is then not drawn at all.
+   *
+   * This panel is where it lives because the toolbar has no room: it was cut
+   * from 680px to 524px in a 704px canvas last wave and must not grow back, and
+   * a units control is a once-a-lesson decision, which is exactly what this
+   * caret already holds. It is also the one panel where the choice can be seen
+   * next to what it does to the PNG.
+   */
+  axisUnits: AxisUnitChoices | null
+  /** What 'auto' currently comes out as, so the control can say so. */
+  resolvedAxisUnits: ResolvedAxisUnits
+  onAxisUnit(axis: 'x' | 'y', choice: AxisUnitChoice): void
   onChange(next: FitExportSettings): void
   onExport(): void
   onCopy(): void
 }
+
+/** The three states, in the order the segment shows them. */
+const UNIT_CHOICES: ReadonlyArray<{ value: AxisUnitChoice; label: string; title: string }> = [
+  { value: 'auto', label: 'Auto', title: 'Let the board choose: π as soon as a trig curve is on it' },
+  { value: 'decimal', label: '1', title: 'Always the 1–2–5 ladder: 1, 2, 5, 10 …' },
+  { value: 'pi', label: 'π', title: 'Always multiples of π: π/2, π, 3π/2, 2π …' },
+]
 
 export function ExportMenu({
   settings,
   hasContent,
   sizeOf,
   copyState,
+  axisUnits,
+  resolvedAxisUnits,
+  onAxisUnit,
   onChange,
   onExport,
   onCopy,
@@ -127,8 +152,8 @@ export function ExportMenu({
         className={`exp-caret${open ? ' exp-caret-open' : ''}`}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label="Export options"
-        title={`Copy to clipboard, export settings — ${size.w}×${size.h} px`}
+        aria-label="Board and export settings"
+        title={`Copy to clipboard, axis units, export settings — ${size.w}×${size.h} px`}
         data-testid="export-settings"
         onClick={() => setOpen((o) => !o)}
       >
@@ -138,7 +163,7 @@ export function ExportMenu({
       </button>
 
       {open && (
-        <div className="exp-menu" role="dialog" aria-label="Export options">
+        <div className="exp-menu" role="dialog" aria-label="Board and export settings">
           <button
             className="exp-item"
             onClick={onCopy}
@@ -158,6 +183,52 @@ export function ExportMenu({
             </svg>
             {copyLabel}
           </button>
+
+          {axisUnits && (
+            <>
+              <div className="exp-menu-sep" />
+              <div className="exp-title">Axis units</div>
+              {(['x', 'y'] as const).map((axis) => {
+                const choice = axisUnits[axis]
+                const resolved = resolvedAxisUnits[axis]
+                return (
+                  <div className="exp-axis" key={axis}>
+                    <span className="exp-axis-name">{axis}</span>
+                    <div
+                      className="seg exp-seg exp-axis-seg"
+                      role="group"
+                      aria-label={`${axis} axis units`}
+                      data-testid={`axis-units-${axis}`}
+                      data-choice={choice}
+                      data-resolved={resolved}
+                    >
+                      {UNIT_CHOICES.map((u) => (
+                        <button
+                          key={u.value}
+                          className={`seg-btn${choice === u.value ? ' seg-on' : ''}`}
+                          data-testid={`axis-units-${axis}-${u.value}`}
+                          aria-pressed={choice === u.value}
+                          onClick={() => onAxisUnit(axis, u.value)}
+                          title={u.title}
+                        >
+                          {u.label}
+                        </button>
+                      ))}
+                    </div>
+                    <span className="exp-axis-read" data-testid={`axis-units-${axis}-readout`}>
+                      {resolved === 'pi' ? 'π' : '1'}
+                      {choice === 'auto' ? ' (auto)' : ''}
+                    </span>
+                  </div>
+                )
+              })}
+              <div className="exp-note">
+                Auto follows the board: a sine or a typed sin/cos/tan puts the x-axis in π, and
+                removing it puts it back. Shift+P cycles the x-axis. The PNG is measured the same
+                way the screen is.
+              </div>
+            </>
+          )}
 
           <div className="exp-menu-sep" />
           <div className="exp-title">Output size</div>
