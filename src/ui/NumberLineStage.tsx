@@ -10,6 +10,15 @@ import {
 } from '../render/numberline'
 import type { NLPart } from '../render/numberline'
 import { renderBoard } from './renderBoard'
+import {
+  classifyPointerDown,
+  classifyWheel,
+  penGuardActive,
+  pointerKind,
+  wheelPanDelta,
+  TOUCH_PAN_SLOP,
+} from './CanvasStage'
+import type { PointerKind } from './CanvasStage'
 import type { Mode } from '../App'
 
 export interface NumberLineStageHandle {
@@ -110,6 +119,10 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
     const pendingRef = useRef<NLItem | null>(null)
     const activePartRef = useRef<{ itemId: string; part: NLPart } | null>(null)
     const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map())
+    /** Pointer kind owning the gesture, and the palms refused because of it. */
+    const gestureKindRef = useRef<PointerKind | null>(null)
+    const ignoredPointersRef = useRef<Set<number>>(new Set())
+    const lastPenAtRef = useRef(-Infinity)
     const spaceRef = useRef(false)
     const rafRef = useRef(0)
     const viewportChangeRef = useRef(onViewportChange)
@@ -232,11 +245,21 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
         const vp = vpRef.current
         const rect = canvas.getBoundingClientRect()
         const px = e.clientX - rect.left
-        const factor = Math.exp(-e.deltaY * (e.ctrlKey ? 0.012 : 0.0018))
-        const anchor = nlToMathX(px, vp)
-        vp.pxPerUnit = clampPpu(vp.pxPerUnit * factor)
-        // Zoom about the pointer, in x only — a number line has no other axis.
-        vp.center = { x: anchor - (px - vp.widthPx / 2) / vp.pxPerUnit, y: 0 }
+        if (classifyWheel(e) === 'pan') {
+          // A plain two-finger scroll travels ALONG the line. It used to
+          // rescale it instead, which on a number line silently changes what
+          // every tick means.
+          const { dx, dy } = wheelPanDelta(e, vp.heightPx)
+          // One axis: a vertical scroll still reads as "move along the line".
+          const travel = Math.abs(dx) >= Math.abs(dy) ? dx : dy
+          vp.center = { x: vp.center.x + travel / vp.pxPerUnit, y: 0 }
+        } else {
+          const factor = Math.exp(-e.deltaY * (e.ctrlKey ? 0.012 : 0.0018))
+          const anchor = nlToMathX(px, vp)
+          vp.pxPerUnit = clampPpu(vp.pxPerUnit * factor)
+          // Zoom about the pointer, in x only — a number line has no other axis.
+          vp.center = { x: anchor - (px - vp.widthPx / 2) / vp.pxPerUnit, y: 0 }
+        }
         viewportChangeRef.current?.()
         scheduleRender()
       }
@@ -309,15 +332,48 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
 
     const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>): void => {
       const canvas = e.currentTarget
+      const pos = getPos(e)
+      const kind = pointerKind(e.pointerType)
+      if (kind === 'pen') lastPenAtRef.current = performance.now()
+      if (gestureRef.current === null) {
+        pointersRef.current.clear()
+        ignoredPointersRef.current.clear()
+      }
+
+      // Same rule as the graph board, for the same reason: a palm landing
+      // beside the pen is not a second finger, and must not become a pinch.
+      let verdict = classifyPointerDown({
+        kind,
+        button: e.button,
+        spaceHeld: spaceRef.current,
+        activeKind: gestureRef.current ? gestureKindRef.current : null,
+        contacts: pointersRef.current.size,
+      })
+      if (verdict === 'ignore') {
+        ignoredPointersRef.current.add(e.pointerId)
+        return
+      }
       try {
         canvas.setPointerCapture(e.pointerId)
       } catch {
         /* best effort */
       }
-      const pos = getPos(e)
+      if (verdict === 'preempt') {
+        for (const pid of pointersRef.current.keys()) ignoredPointersRef.current.add(pid)
+        pointersRef.current.clear()
+        gestureRef.current = null
+        verdict = classifyPointerDown({
+          kind,
+          button: e.button,
+          spaceHeld: spaceRef.current,
+          activeKind: null,
+          contacts: 0,
+        })
+      }
       pointersRef.current.set(e.pointerId, pos)
+      gestureKindRef.current = kind
 
-      if (pointersRef.current.size >= 2) {
+      if (verdict === 'pinch') {
         const entries = [...pointersRef.current.entries()]
         const [p1, a] = entries[0]
         const [p2, b] = entries[1]
@@ -332,7 +388,16 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
         return
       }
 
-      const panning = e.button !== 0 || spaceRef.current || modeRef.current === 'pan'
+      // A lone finger still places and drags points here — a number line is
+      // worked with a fingertip as often as with a pen, and 'pan' is only the
+      // safe reading of a bare touch once a pen has been on the glass.
+      const fingerWorks =
+        verdict === 'pan' &&
+        kind === 'touch' &&
+        e.button === 0 &&
+        !spaceRef.current &&
+        !penGuardActive(lastPenAtRef.current, performance.now())
+      const panning = (verdict === 'pan' && !fingerWorks) || modeRef.current === 'pan'
       if (!panning) {
         const hit = nlHitTest(itemsRef.current, vpRef.current, pos)
         if (hit && hit.part !== 'body') {
@@ -367,6 +432,7 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
     }
 
     const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>): void => {
+      if (ignoredPointersRef.current.has(e.pointerId)) return
       const pos = getPos(e)
       const vp = vpRef.current
       const g = gestureRef.current
@@ -394,6 +460,7 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
         const dx = pos.x - g.lastX
         g.moved += Math.abs(dx)
         g.lastX = pos.x
+        if (gestureKindRef.current === 'touch' && g.moved < TOUCH_PAN_SLOP) return
         vp.center = { x: vp.center.x - dx / vp.pxPerUnit, y: 0 }
         viewportChangeRef.current?.()
         scheduleRender()
@@ -443,14 +510,20 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
     }
 
     const endPointer = (e: React.PointerEvent<HTMLCanvasElement>, cancelled: boolean): void => {
+      // A refused palm lifting is not the end of anything.
+      if (ignoredPointersRef.current.delete(e.pointerId)) return
       const pos = getPos(e)
       pointersRef.current.delete(e.pointerId)
       const g = gestureRef.current
       if (g && g.type === 'pinch') {
-        if (e.pointerId === g.p1 || e.pointerId === g.p2) gestureRef.current = null
+        if (e.pointerId === g.p1 || e.pointerId === g.p2) {
+          gestureRef.current = null
+          gestureKindRef.current = null
+        }
         return
       }
       if (!g || g.pointerId !== e.pointerId) return
+      gestureKindRef.current = null
       endGesture(cancelled, pos, e.altKey)
     }
 
