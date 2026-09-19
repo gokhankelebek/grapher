@@ -21,6 +21,7 @@ import type {
   Vec2,
 } from './types'
 import { parseExpression } from './parse'
+import { parseSlopeField } from './parse/slopeField'
 import { MODELS } from './fit/models'
 import { derivativeModel } from './calculus'
 import type { RiemannMethod } from './calculus'
@@ -128,6 +129,69 @@ export type CurveLink = TangentLink | DerivativeLink
 export const isCurveLink = (l: CalcLink): l is CurveLink =>
   l.kind === 'tangent' || l.kind === 'derivative'
 
+// --- slope fields -----------------------------------------------------------
+//
+// A slope field is dy/dx = f(x, y): a lattice of directions, plus however many
+// solution curves the class threaded through it. Exactly like a calculus link,
+// NOTHING computed is stored. What a document remembers is the sentence the
+// teacher typed, the constants its sliders are at, and the points the solution
+// curves were asked to pass through; the closure, the lattice and every
+// integrated polyline are rebuilt from those on load.
+//
+// That is the whole reason a reopened field is live rather than a photograph:
+// a slider dragged after a reload deforms its solution curves, because those
+// curves were never stored in the first place.
+
+/** One initial condition: the point a solution curve is asked to pass through. */
+export interface FieldSolution {
+  id: string
+  x: number
+  y: number
+}
+
+/** A slope field as the board holds it. `src` is the only source of truth. */
+export interface BoardField {
+  id: string
+  /** The differential equation exactly as it was typed. */
+  src: string
+  /** The free constants, in the parser's own order. */
+  params: number[]
+  color: string
+  /** Lattice spacing in CSS px — Sparse / Normal / Dense. */
+  spacingPx: number
+  visible: boolean
+  solutions: FieldSolution[]
+}
+
+/** Lattice spacings the card offers, coarse to fine. */
+export const FIELD_SPACINGS = { sparse: 40, normal: 28, dense: 18 } as const
+/** The renderer's own default; a field at this spacing writes no key. */
+export const FIELD_SPACING_DEFAULT = FIELD_SPACINGS.normal
+
+const SPACING_VALUES: readonly number[] = [
+  FIELD_SPACINGS.sparse,
+  FIELD_SPACINGS.normal,
+  FIELD_SPACINGS.dense,
+]
+
+/**
+ * The nearest offered spacing. The card and the loader must agree exactly, or
+ * a reopened document shows a segmented control with nothing selected.
+ */
+export function clampFieldSpacing(v: unknown): number {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return FIELD_SPACING_DEFAULT as number
+  let best: number = FIELD_SPACING_DEFAULT
+  let bestD = Infinity
+  for (const px of SPACING_VALUES) {
+    const d = Math.abs(px - v)
+    if (d < bestD) {
+      bestD = d
+      best = px
+    }
+  }
+  return best
+}
+
 /** Rectangle counts a board offers. 200 is also where the slider stops. */
 export const RIEMANN_N_MIN = 1
 export const RIEMANN_N_MAX = 200
@@ -224,6 +288,9 @@ const MAX_PARAMS = 64
 const MAX_CANDIDATES = 24
 /** A board with more calculus objects than this is a damaged record. */
 const MAX_CALC = 200
+/** Same for slope fields, and for the solution curves through any one of them. */
+const MAX_FIELDS = 100
+const MAX_SOLUTIONS = 100
 /** Stored stroke resolution. Keeps boards small; plenty for refit and hit tests. */
 export const MAX_STORED_STROKE = 120
 const MAX_STROKE_IN = 20000
@@ -314,6 +381,40 @@ export interface StoredBoard {
    * "this board has no calculus objects".
    */
   calc?: StoredCalcLink[]
+  /**
+   * The slope fields on this board, and the initial conditions their solution
+   * curves were drawn through. Never the curves themselves: those are RK4
+   * output, they are megabytes, and they would be a stale answer the moment a
+   * slider moved.
+   *
+   * Omitted entirely when there are none — which is every document written
+   * before this field existed, so such a board serialises byte-for-byte as it
+   * did then, and an older reader drops a key it does not know and lands
+   * exactly on "this board has no slope fields".
+   */
+  fields?: StoredField[]
+}
+
+/**
+ * One slope field as JSON: the sentence, its constants, and its points.
+ *
+ * Everything that has a default is omitted at that default, for the same
+ * reason `calc` is omitted when empty: a control nobody touched must not
+ * change the bytes of a saved document.
+ */
+export interface StoredField {
+  id: string
+  /** The differential equation as typed — the only thing that rebuilds it. */
+  src: string
+  color: string
+  /** Free constants. Omitted when the equation has none. */
+  params?: number[]
+  /** Lattice spacing in px. Omitted at the default. */
+  spacing?: number
+  /** Written only when the field is hidden. */
+  hidden?: true
+  /** Initial conditions, flat [x0,y0,x1,y1,...]. Omitted when there are none. */
+  through?: number[]
 }
 
 /** One link, flattened. Only the fields its own kind uses are ever written. */
@@ -394,6 +495,8 @@ export interface BoardInput {
   axisUnits?: AxisUnitChoices
   /** Calculus objects. Absent or empty writes nothing at all. */
   calc?: readonly CalcLink[]
+  /** Slope fields. Absent or empty writes nothing at all, by the same rule. */
+  fields?: readonly BoardField[]
   viewport: { center: Vec2; pxPerUnit: number }
   selectedId: string | null
   mode: BoardMode
@@ -422,6 +525,13 @@ export interface HydratedBoard {
    * exists to prevent.
    */
   calc: CalcLink[]
+  /**
+   * The slope fields that could be rebuilt. A field whose equation no longer
+   * parses is dropped and REPORTED: it is the one thing on the board that is
+   * pure text, so a silent drop would lose the lesson and leave no trace of
+   * what it said.
+   */
+  fields: BoardField[]
   viewport: { center: Vec2; pxPerUnit: number }
   selectedId: string | null
   mode: BoardMode
@@ -568,7 +678,87 @@ export function boardToStored(input: BoardInput): StoredBoard {
   const calc = input.calc ?? []
   if (calc.length > 0) board.calc = calc.slice(0, MAX_CALC).map(calcLinkToStored)
 
+  // And once more for the slope fields.
+  const fields = input.fields ?? []
+  if (fields.length > 0) board.fields = fields.slice(0, MAX_FIELDS).map(fieldToStored)
+
   return board
+}
+
+/**
+ * One slope field as JSON.
+ *
+ * The params and the initial conditions are NOT rounded, for the reason a
+ * calculus link's limits are not: a solution curve through (0, 2) that comes
+ * back through (0, 2.000001) is a different curve, and on a logistic field
+ * near an equilibrium it is a visibly different picture.
+ */
+export function fieldToStored(f: BoardField): StoredField {
+  const out: StoredField = { id: f.id, src: f.src, color: f.color }
+  if (f.params.length > 0) out.params = f.params.slice()
+  const spacing = clampFieldSpacing(f.spacingPx)
+  if (spacing !== FIELD_SPACING_DEFAULT) out.spacing = spacing
+  if (f.visible === false) out.hidden = true
+  if (f.solutions.length > 0) {
+    const flat: number[] = []
+    for (const s of f.solutions.slice(0, MAX_SOLUTIONS)) flat.push(s.x, s.y)
+    out.through = flat
+  }
+  return out
+}
+
+/**
+ * One slope field out of an untrusted blob, re-parsed.
+ *
+ * The equation is the only thing that can rebuild the closure, so a source
+ * that no longer parses is not salvageable: null, with the parser's own
+ * sentence, which the loader reports rather than swallowing.
+ */
+export function storedToField(raw: unknown): { field: BoardField } | { error: string } {
+  if (!isObj(raw)) return { error: 'it was not readable' }
+  const { id, src, color } = raw
+  if (!isStr(id) || !id) return { error: 'it had no id' }
+  if (!isStr(src) || src.trim() === '') return { error: 'it had no equation' }
+  let outcome: ReturnType<typeof parseSlopeField>
+  try {
+    outcome = parseSlopeField(src)
+  } catch {
+    return { error: 'the parser could not read it' }
+  }
+  if (!outcome.ok) return { error: outcome.error }
+
+  // The stored constants are matched to the equation's own list by POSITION,
+  // which is the order the parser reports them in and the order the sliders
+  // are shown in. A shorter list (an older save, a hand-edited file) falls
+  // back to the parser's defaults rather than leaving a slider at undefined.
+  const stored = Array.isArray(raw.params) ? raw.params : []
+  const params = outcome.defaultParams.map((d, i) => {
+    const v = stored[i]
+    return isNum(v) ? v : d
+  })
+
+  const solutions: FieldSolution[] = []
+  const through = Array.isArray(raw.through) ? raw.through : []
+  for (let i = 0; i + 1 < through.length && solutions.length < MAX_SOLUTIONS; i += 2) {
+    const x = through[i]
+    const y = through[i + 1]
+    // A non-finite initial condition is not a curve anyone can integrate; it
+    // is dropped on its own rather than taking the whole field with it.
+    if (!isNum(x) || !isNum(y)) continue
+    solutions.push({ id: newId(), x, y })
+  }
+
+  return {
+    field: {
+      id,
+      src,
+      params,
+      color: isStr(color) && color ? color : '#4f9cf9',
+      spacingPx: clampFieldSpacing(raw.spacing),
+      visible: raw.hidden !== true,
+      solutions,
+    },
+  }
 }
 
 /**
@@ -1130,6 +1320,43 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
     }
   }
 
+  // ---- slope fields
+  //
+  // A field is pure text plus a handful of numbers, so it is rebuilt exactly
+  // the way a typed curve is: re-parse the sentence, and if the parser refuses
+  // it now, say so. There is no half-field to keep — without the closure there
+  // is no lattice and no solution curve — so it is dropped, loudly.
+  const fields: BoardField[] = []
+  const rawFields = Array.isArray(rawBoard.fields) ? rawBoard.fields : []
+  if (rawBoard.fields !== undefined && !Array.isArray(rawBoard.fields)) {
+    problems.push('The list of slope fields was unreadable.')
+    degraded = true
+  }
+  if (rawFields.length > MAX_FIELDS) {
+    problems.push(`Only the first ${MAX_FIELDS} slope fields were loaded.`)
+    degraded = true
+  }
+  for (const raw of rawFields.slice(0, MAX_FIELDS)) {
+    const built = storedToField(raw)
+    if ('error' in built) {
+      const src = isObj(raw) && isStr(raw.src) ? raw.src : null
+      problems.push(
+        src
+          ? `The slope field “${src}” could not be restored: ${built.error}`
+          : `A slope field could not be restored: ${built.error}`,
+      )
+      degraded = true
+      continue
+    }
+    if (seen.has(built.field.id)) {
+      problems.push('A slope field was dropped: two of them claimed the same id.')
+      degraded = true
+      continue
+    }
+    seen.add(built.field.id)
+    fields.push(built.field)
+  }
+
   // ---- axis units. Unreadable or absent is not a repair: it is the default.
   const rawAxis = isObj(rawBoard.axisUnits) ? rawBoard.axisUnits : {}
   const axisUnits: AxisUnitChoices = {
@@ -1137,7 +1364,11 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
     y: storedAxisUnit(rawAxis.y),
   }
 
-  const selectable = new Set<string>([...curves.map((c) => c.id), ...items.map((i) => i.id)])
+  const selectable = new Set<string>([
+    ...curves.map((c) => c.id),
+    ...items.map((i) => i.id),
+    ...fields.map((f) => f.id),
+  ])
   const selectedId =
     isStr(rawBoard.selectedId) && selectable.has(rawBoard.selectedId)
       ? rawBoard.selectedId
@@ -1158,6 +1389,7 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
       brokenExpr,
       axisUnits,
       calc,
+      fields,
       viewport,
       selectedId,
       mode,
@@ -1182,6 +1414,7 @@ function blankHydrated(): HydratedBoard {
     brokenExpr: {},
     axisUnits: { ...AUTO_AXIS_UNITS },
     calc: [],
+    fields: [],
     viewport: { center: { x: 0, y: 0 }, pxPerUnit: 60 },
     selectedId: null,
     mode: 'draw',

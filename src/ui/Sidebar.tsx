@@ -10,6 +10,8 @@ import type { StyleMap } from '../App'
 import type { NLPart } from '../render/numberline'
 import { CurveCard } from './CurveCard'
 import type { CalcChange, CalcKind, CardCalc } from './calcLinks'
+import { FieldCard } from './FieldCard'
+import type { BoardField, FieldCardData } from './fieldLinks'
 import { NLCard } from './NLCard'
 import { ExprInput } from './ExprInput'
 import { BoardKindSwitch } from './BoardKindSwitch'
@@ -77,6 +79,29 @@ interface Props {
   onAddCalc(id: string, kind: CalcKind): void
   onCalcChange(change: CalcChange, live?: boolean): void
   onCalcRemove(linkId: string): void
+  /**
+   * The slope fields on this board. They are in the SAME list as the curves —
+   * one column of objects a teacher typed, each with a colour dot, a ⋯ menu
+   * and an equation you can click — because that is what they are. Splitting
+   * them into a second list would have made "what is on this board?" a
+   * question with two answers.
+   */
+  fields: BoardField[]
+  /** Everything one field's card prints, already computed. */
+  fieldCardFor(id: string): FieldCardData | undefined
+  /** The field whose next board click places a solution curve, if any. */
+  armedField: string | null
+  onFieldArm(id: string): void
+  onFieldDelete(id: string): void
+  onFieldToggleVisible(id: string): void
+  onFieldCycleColor(id: string): void
+  onFieldSpacing(id: string, px: number): void
+  onFieldParamChange(id: string, index: number, value: number): void
+  onFieldParamSetExact(id: string, index: number, value: number): void
+  /** Retype a differential equation. Error message to show, or null. */
+  onFieldEquation(id: string, src: string): string | null
+  onSolutionSet(fieldId: string, solutionId: string, to: { x?: number; y?: number }): void
+  onSolutionRemove(fieldId: string, solutionId: string): void
 }
 
 /** Stable empty array for the cards that aren't selected. */
@@ -130,6 +155,19 @@ export function Sidebar({
   onAddCalc,
   onCalcChange,
   onCalcRemove,
+  fields,
+  fieldCardFor,
+  armedField,
+  onFieldArm,
+  onFieldDelete,
+  onFieldToggleVisible,
+  onFieldCycleColor,
+  onFieldSpacing,
+  onFieldParamChange,
+  onFieldParamSetExact,
+  onFieldEquation,
+  onSolutionSet,
+  onSolutionRemove,
 }: Props) {
   const numberLine = kind === 'number-line'
 
@@ -140,7 +178,9 @@ export function Sidebar({
           <BoardKindSwitch kind={kind} onSetKind={onSetKind} />
           <div className="sidebar-head-row">
             <span className="sidebar-title">{numberLine ? 'Solution set' : 'Curves'}</span>
-            <span className="sidebar-count">{numberLine ? items.length : curves.length}</span>
+            <span className="sidebar-count">
+              {numberLine ? items.length : curves.length + fields.length}
+            </span>
             <button
               className={`add-btn${exprOpen ? ' add-open' : ''}`}
               title={
@@ -162,7 +202,7 @@ export function Sidebar({
             <ExprInput
               onSubmit={onExprSubmit}
               onClose={onExprToggle}
-              placeholder={numberLine ? '-2 <= x < 5' : 'y = 2sin(3x) + 1'}
+              placeholder={numberLine ? '-2 <= x < 5' : 'y = 2sin(3x) + 1   or   dy/dx = x - y'}
             />
           )}
           {numberLine &&
@@ -226,6 +266,33 @@ export function Sidebar({
               onCalcRemove={onCalcRemove}
             />
           ))}
+          {!numberLine &&
+            fields.map((field) => {
+              const data = fieldCardFor(field.id)
+              if (!data) return null
+              return (
+                <FieldCard
+                  key={field.id}
+                  field={field}
+                  data={data}
+                  selected={field.id === selectedId}
+                  arming={armedField === field.id || field.id === selectedId}
+                  onSelect={() => onSelect(field.id)}
+                  onDelete={() => onFieldDelete(field.id)}
+                  onToggleVisible={() => onFieldToggleVisible(field.id)}
+                  onCycleColor={() => onFieldCycleColor(field.id)}
+                  onArmSolution={() => onFieldArm(field.id)}
+                  onSpacing={(px) => onFieldSpacing(field.id, px)}
+                  onParamChange={(i, v) => onFieldParamChange(field.id, i, v)}
+                  onParamEditStart={onParamEditStart}
+                  onParamEditEnd={onParamEditEnd}
+                  onParamSetExact={(i, v) => onFieldParamSetExact(field.id, i, v)}
+                  onEquationCommit={(src) => onFieldEquation(field.id, src)}
+                  onSolutionSet={(solId, to) => onSolutionSet(field.id, solId, to)}
+                  onSolutionRemove={(solId) => onSolutionRemove(field.id, solId)}
+                />
+              )
+            })}
         </div>
       </div>
     </aside>

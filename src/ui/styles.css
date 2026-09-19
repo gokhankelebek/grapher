@@ -4005,3 +4005,56 @@ button.calc-field-btn {
     min-height: 44px;
   }
 }
+
+/* ------------------------------------------------------------ slope fields */
+/*
+ * A field's card is a curve's card. It borrows .card, .card-head, .card-eq-line,
+ * .param-row and the calc-* vocabulary wholesale, because on the board it is
+ * the same kind of object: something a teacher typed, can recolour, can hide
+ * and can throw away. Only the two things a field genuinely has that a curve
+ * does not — a lattice spacing, and a list of initial conditions — need rules
+ * of their own.
+ */
+
+.field-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.field-spacing {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+
+/* "through ( 0 , 2 ) ×" — one line per solution curve, both numbers typeable. */
+.field-sol-row {
+  align-items: center;
+}
+
+.field-sol-pt {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+.field-sol-num {
+  padding: 2px var(--sp-1);
+}
+
+.field-sol-input {
+  width: 52px;
+}
+
+/* Said once, in the place the answer will appear: where to click, and why. */
+.field-hint {
+  color: var(--faint);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}

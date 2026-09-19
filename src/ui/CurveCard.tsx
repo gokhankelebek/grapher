@@ -219,6 +219,132 @@ function deriveParamIndices(
   return out
 }
 
+/**
+ * One coefficient: its name, a slider, and the exact value as a field.
+ *
+ * Lifted out of CurveCard so a slope field's free constants are the SAME
+ * control rather than a second one that drifts from it. A field's `a` and a
+ * sine's amplitude are the same kind of thing — a number the class moves and
+ * watches — so they are moved the same way, magnetise the same way, and are
+ * typed exactly the same way.
+ *
+ * The inline editor's state lives here, one per row: opening another row's
+ * editor blurs this one, which closes it, so there is still exactly one open
+ * at a time without the card having to keep score.
+ */
+export interface ParamRowProps {
+  /** KaTeX for the name — "a", "\\omega", "k". */
+  name: string
+  value: number
+  /** What the card prints, column-aligned across the whole list. */
+  text: string
+  min: number
+  max: number
+  step: number
+  /** This value just magnetised: pulse it. */
+  snapped?: boolean
+  /** Bumped per snap, so the animation restarts when the class name repeats. */
+  snapKey?: number
+  onChange(value: number): void
+  /** Pointer/key down on the slider: open the live-edit bracket. */
+  onEditStart(): void
+  /** Release: close the bracket, magnetising where that applies. */
+  onCommit(): void
+  /** Blur without a release. */
+  onEditEnd(): void
+  /** Enter on the typed field: one undoable, exact value. */
+  onSetExact(value: number): void
+}
+
+export function ParamRow({
+  name,
+  value,
+  text,
+  min,
+  max,
+  step,
+  snapped = false,
+  snapKey = 0,
+  onChange,
+  onEditStart,
+  onCommit,
+  onEditEnd,
+  onSetExact,
+}: ParamRowProps) {
+  const [editing, setEditing] = useState<{ text: string; bad: boolean } | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const open = editing !== null
+  useEffect(() => {
+    if (open) inputRef.current?.select()
+  }, [open])
+
+  const commit = (): void => {
+    if (!editing) return
+    const v = Number(editing.text.trim())
+    if (editing.text.trim() === '' || !Number.isFinite(v)) {
+      setEditing({ ...editing, bad: true })
+      return
+    }
+    onSetExact(v)
+    setEditing(null)
+  }
+
+  return (
+    <div className="param-row">
+      <span className="param-name">
+        <Latex tex={name} />
+      </span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        aria-label={name}
+        style={fillStyle(value, min, max)}
+        onPointerDown={onEditStart}
+        onPointerUp={onCommit}
+        onKeyDown={onEditStart}
+        onKeyUp={onCommit}
+        onBlur={onEditEnd}
+        onChange={(e) => onChange(Number(e.target.value))}
+      />
+      {editing ? (
+        <input
+          ref={inputRef}
+          className={`param-edit${editing.bad ? ' param-edit-bad' : ''}`}
+          type="text"
+          inputMode="decimal"
+          spellCheck={false}
+          aria-label={`${name} exact value`}
+          value={editing.text}
+          onChange={(e) => setEditing({ text: e.target.value, bad: false })}
+          onKeyDown={(e) => {
+            e.stopPropagation()
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              commit()
+            } else if (e.key === 'Escape') {
+              e.preventDefault()
+              setEditing(null)
+            }
+          }}
+          onBlur={() => setEditing(null)}
+        />
+      ) : (
+        <button
+          key={snapped ? snapKey : 0}
+          className={`param-value${snapped ? ' param-snap' : ''}`}
+          title="Click to type an exact value"
+          onClick={() => setEditing({ text: String(value), bad: false })}
+        >
+          {text}
+        </button>
+      )}
+    </div>
+  )
+}
+
 export function CurveCard({
   curve,
   style,
@@ -260,19 +386,7 @@ export function CurveCard({
   /** A typed curve whose model couldn't be rebuilt: shown, but inert. */
   const broken = Boolean(brokenReason)
 
-  // Inline coefficient editing.
-  const [editing, setEditing] = useState<{ index: number; text: string; bad: boolean } | null>(
-    null,
-  )
-  const editInputRef = useRef<HTMLInputElement>(null)
-  useEffect(() => {
-    if (editing) editInputRef.current?.select()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editing?.index])
-  useEffect(() => {
-    if (!selected && editing) setEditing(null)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected])
+  // Inline coefficient editing lives in ParamRow, one editor per row.
 
   // Inline editing of an analysis value ("put this zero at x = −2").
   //
@@ -571,17 +685,6 @@ export function CurveCard({
     advanceRef.current = target
     setAdvanceTick((t) => t + 1)
     if (!target) closeFeatureEdit()
-  }
-
-  const commitInlineEdit = (): void => {
-    if (!editing) return
-    const v = Number(editing.text.trim())
-    if (editing.text.trim() === '' || !Number.isFinite(v)) {
-      setEditing({ ...editing, bad: true })
-      return
-    }
-    onParamSetExact(editing.index, v)
-    setEditing(null)
   }
 
   // ---------------------------------------------------------------- the menu
@@ -993,62 +1096,23 @@ export function CurveCard({
                 return meta.map((m, row) => {
                   // The parameter this row edits — NOT the row's own position.
                   const i = paramIndex[row] ?? row
-                  const value = values[row]
-                  const isEditing = editing?.index === i
-                  const snapped = snapMask?.[i] === true
                   return (
-                    <div className="param-row" key={`${curve.modelId}-${m.name}-${row}`}>
-                      <span className="param-name">
-                        <Latex tex={m.name} />
-                      </span>
-                      <input
-                        type="range"
-                        min={m.min}
-                        max={m.max}
-                        step={m.step}
-                        value={value}
-                        aria-label={m.name}
-                        style={fillStyle(value, m.min, m.max)}
-                        onPointerDown={onParamEditStart}
-                        onPointerUp={onParamCommit}
-                        onKeyDown={onParamEditStart}
-                        onKeyUp={onParamCommit}
-                        onBlur={onParamEditEnd}
-                        onChange={(e) => onParamChange(i, Number(e.target.value))}
-                      />
-                      {isEditing ? (
-                        <input
-                          ref={editInputRef}
-                          className={`param-edit${editing.bad ? ' param-edit-bad' : ''}`}
-                          type="text"
-                          inputMode="decimal"
-                          spellCheck={false}
-                          value={editing.text}
-                          onChange={(e) =>
-                            setEditing({ index: i, text: e.target.value, bad: false })
-                          }
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault()
-                              commitInlineEdit()
-                            } else if (e.key === 'Escape') {
-                              e.preventDefault()
-                              setEditing(null)
-                            }
-                          }}
-                          onBlur={() => setEditing(null)}
-                        />
-                      ) : (
-                        <button
-                          key={snapped ? snapKey : 0}
-                          className={`param-value${snapped ? ' param-snap' : ''}`}
-                          title="Click to type an exact value"
-                          onClick={() => setEditing({ index: i, text: String(value), bad: false })}
-                        >
-                          {texts[row]}
-                        </button>
-                      )}
-                    </div>
+                    <ParamRow
+                      key={`${curve.modelId}-${m.name}-${row}`}
+                      name={m.name}
+                      value={values[row]}
+                      text={texts[row]}
+                      min={m.min}
+                      max={m.max}
+                      step={m.step}
+                      snapped={snapMask?.[i] === true}
+                      snapKey={snapKey}
+                      onChange={(v) => onParamChange(i, v)}
+                      onEditStart={onParamEditStart}
+                      onCommit={onParamCommit}
+                      onEditEnd={onParamEditEnd}
+                      onSetExact={(v) => onParamSetExact(i, v)}
+                    />
                   )
                 })
               })()}

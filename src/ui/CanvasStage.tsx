@@ -29,7 +29,7 @@ import {
   nearestOnCurve,
 } from '../core/fit/edit'
 import { handleHitRadius, renderBoard } from './renderBoard'
-import type { AxisUnits, Overlay } from './renderBoard'
+import type { AxisUnits, Overlay, Polyline, SlopeField } from './renderBoard'
 import {
   NEIGHBOURHOOD_PX,
   TOUCH_INK_HOLD_MS,
@@ -73,6 +73,12 @@ export interface ExtraHandle {
   pos: Vec2
   /** Shown in the drag tip, e.g. "tangent point" or "a". */
   label: string
+  /**
+   * The colour to draw it in when there is no selected CURVE to borrow one
+   * from — a slope field's initial conditions. Ignored otherwise: a point on a
+   * curve is the curve's colour, which is what renderBoard already paints.
+   */
+  color?: string
   onDrag(pos: Vec2): void
 }
 
@@ -111,10 +117,34 @@ interface Props {
    */
   overlays?: readonly Overlay[] | null
   /**
-   * Extra grabbable points for the selected curve, owned by the App. Drawn as
+   * Slope fields — dy/dx = f(x, y) as a lattice of short tangent segments —
+   * and the open paths drawn over them, which on a calculus board are the RK4
+   * solution curves. Both go straight into the scene beside the overlays, so
+   * the screen and the exported PNG cannot disagree about them either.
+   */
+  fields?: readonly SlopeField[] | null
+  polylines?: readonly Polyline[] | null
+  /**
+   * Extra grabbable points for the selected object, owned by the App. Drawn as
    * handles; their drags go to `onDrag` instead of applyHandleDrag.
+   *
+   * They no longer require a selected CURVE. A slope field is selected the
+   * same way a curve is and has no FittedCurve behind it, so its solution
+   * curves' initial conditions would have been drawn and then refused the
+   * pointer — a handle you can see and cannot grab.
    */
   extraHandles?: readonly ExtraHandle[] | null
+  /**
+   * Arm the next tap on the board to report a math point instead of changing
+   * the selection — "+ solution through a point".
+   *
+   * `sticky` is the difference between the menu item (one shot: the very next
+   * press anywhere places the point and disarms) and simply having a field's
+   * card selected (every tap on empty board places one, while a tap ON a curve
+   * still selects that curve and a stroke is still a stroke). A teacher
+   * placing six initial conditions in a row must not have to re-arm six times.
+   */
+  pointPick?: { label: string; sticky: boolean; onPick(pos: Vec2): void } | null
   selectedId: string | null
   mode: Mode
   inkColor: string
@@ -184,6 +214,60 @@ function asCurveHandles(extra: readonly ExtraHandle[]): CurveHandle[] {
     out.push({ id: h.id, pos: h.pos, kind: 'feature', label: h.label, cursor: 'grab' })
   }
   return out
+}
+
+/**
+ * The cored dot, for App-owned points with no curve behind them.
+ *
+ * renderBoard draws chrome.handles only for the SELECTED CURVE — which is the
+ * right rule for a curve's own handles, and leaves nothing to draw the point a
+ * slope field's solution curve passes through, because a field is not a curve
+ * and the board has no FittedCurve selected while its card is open. The hit
+ * test, the drag and the tip all already work; this is only the picture.
+ *
+ * Deliberately the SAME glyph as renderBoard's 'feature' handle — a filled
+ * disc with a ground rim and a ground core ring — because it means the same
+ * thing: a point on the figure you can put a finger on.
+ */
+function drawOwnedPoints(
+  ctx: CanvasRenderingContext2D,
+  vp: Viewport,
+  theme: Theme,
+  handles: readonly ExtraHandle[],
+  activeId: string | null,
+  fallback: string,
+  scale: PaintScale | null | undefined,
+): void {
+  const { stroke } = paintScale(scale)
+  ctx.save()
+  for (const h of handles) {
+    if (!h.pos || !Number.isFinite(h.pos.x) || !Number.isFinite(h.pos.y)) continue
+    const sp = toScreen(h.pos, vp)
+    if (
+      !Number.isFinite(sp.x) ||
+      !Number.isFinite(sp.y) ||
+      sp.x < -24 ||
+      sp.y < -24 ||
+      sp.x > vp.widthPx + 24 ||
+      sp.y > vp.heightPx + 24
+    ) {
+      continue
+    }
+    const r = (5.5 + (h.id === activeId ? 3 : 0)) * stroke
+    ctx.beginPath()
+    ctx.arc(sp.x, sp.y, r, 0, Math.PI * 2)
+    ctx.fillStyle = h.color ?? fallback
+    ctx.fill()
+    ctx.lineWidth = 2 * stroke
+    ctx.strokeStyle = theme.bg
+    ctx.stroke()
+    ctx.beginPath()
+    ctx.arc(sp.x, sp.y, r * 0.42, 0, Math.PI * 2)
+    ctx.lineWidth = 1.4 * stroke
+    ctx.strokeStyle = theme.bg
+    ctx.stroke()
+  }
+  ctx.restore()
 }
 
 type Gesture =
@@ -336,7 +420,10 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     analysisHighlight,
     onFeatureEdit,
     overlays,
+    fields,
+    polylines,
     extraHandles,
+    pointPick,
   },
   handle,
 ) {
@@ -362,7 +449,10 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   const presentRef = useRef<PaintScale | null | undefined>(present)
   const axisUnitsRef = useRef<AxisUnits | null | undefined>(axisUnits)
   const overlaysRef = useRef<readonly Overlay[] | null | undefined>(overlays)
+  const fieldsRef = useRef<readonly SlopeField[] | null | undefined>(fields)
+  const polylinesRef = useRef<readonly Polyline[] | null | undefined>(polylines)
   const extraHandlesRef = useRef<readonly ExtraHandle[]>(extraHandles ?? [])
+  const pointPickRef = useRef<Props['pointPick']>(pointPick)
 
   const pointersRef = useRef<Map<number, PointerEntry>>(new Map())
   const gestureRef = useRef<Gesture | null>(null)
@@ -478,15 +568,19 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     const busy = g?.type === 'draw' || g?.type === 'pinch'
     const sel = curvesRef.current.find((c) => c.id === selectedRef.current && c.visible)
     let handles: CurveHandle[] = []
-    if (sel && !busy) {
-      try {
-        handles = getHandles(sel, modelsRef.current)
-      } catch {
-        /* no handles */
+    if (!busy) {
+      if (sel) {
+        try {
+          handles = getHandles(sel, modelsRef.current)
+        } catch {
+          /* no handles */
+        }
       }
       // The App's own grab points join the family's, in the same glyph
       // vocabulary, so a tangent's point and a parabola's vertex read as the
-      // same KIND of thing — which they are: somewhere to put a finger.
+      // same KIND of thing — which they are: somewhere to put a finger. They
+      // are drawn whether or not a CURVE is selected: the point a solution
+      // curve passes through belongs to a slope field, which has no curve.
       handles = handles.concat(asCurveHandles(extraHandlesRef.current))
     }
 
@@ -507,6 +601,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       styles: stylesRef.current,
       models: modelsRef.current,
       overlays: overlaysRef.current ?? undefined,
+      fields: fieldsRef.current ?? undefined,
+      polylines: polylinesRef.current ?? undefined,
       analysis:
         sel && !busy && analysisRef.current.length > 0
           ? { curve: sel, points: analysisRef.current }
@@ -533,6 +629,23 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
         curveAlpha: fade ? { id: fade.curveId, alpha: fadeT } : null,
       },
     })
+
+    // renderBoard paints chrome.handles only for the selected curve. When the
+    // selected object is not a curve at all — a slope field — its points have
+    // to be drawn here, on top of the same frame, in the same glyph.
+    if (!sel && !busy && extraHandlesRef.current.length > 0) {
+      drawOwnedPoints(
+        ctx,
+        vp,
+        themeRef.current,
+        extraHandlesRef.current,
+        g?.type === 'dragHandle'
+          ? g.handleId
+          : (handleEditRef.current?.handleId ?? hoverRef.current?.handleId ?? null),
+        inkColorRef.current,
+        presentRef.current,
+      )
+    }
   }, [vpRef])
 
   const frame = useCallback((): void => {
@@ -561,7 +674,10 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     presentRef.current = present
     axisUnitsRef.current = axisUnits
     overlaysRef.current = overlays
+    fieldsRef.current = fields
+    polylinesRef.current = polylines
     extraHandlesRef.current = extraHandles ?? []
+    pointPickRef.current = pointPick
     hitRef.current = hitRadii(coarseRef.current, present)
     analysisRef.current = analysis
     highlightRef.current = analysisHighlight
@@ -574,7 +690,10 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     present,
     axisUnits,
     overlays,
+    fields,
+    polylines,
     extraHandles,
+    pointPick,
     selectedId,
     mode,
     inkColor,
@@ -753,22 +872,49 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   }, [reanchorEditor, scheduleRender, vpRef])
 
   // ---------------------------------------------------------------- hit tests
-  const trySelectAt = useCallback(
-    (pos: Vec2, allowDeselect: boolean): void => {
+  const curveAt = useCallback(
+    (pos: Vec2): FittedCurve | null => {
       const vp = vpRef.current
       const list = curvesRef.current
       for (let i = list.length - 1; i >= 0; i--) {
         const curve = list[i]
         if (!curve.visible) continue
         const poly = sampleCurveScreen(curve, modelsRef.current, vp)
-        if (poly.length > 1 && distToPolyline(pos, poly) <= hitRef.current.body) {
-          onSelect(curve.id)
-          return
-        }
+        if (poly.length > 1 && distToPolyline(pos, poly) <= hitRef.current.body) return curve
       }
-      if (allowDeselect) onSelect(null)
+      return null
     },
-    [onSelect, vpRef],
+    [vpRef],
+  )
+
+  /**
+   * What a tap MEANS: select the curve under it, otherwise clear the
+   * selection — unless a point pick is armed, in which case empty board is
+   * where the teacher is pointing at a value rather than at an object.
+   *
+   * The two are never ambiguous: a tap that lands on a curve still selects
+   * that curve while a field's card is selected, so the sticky arming can
+   * never trap a board into refusing to select anything.
+   */
+  const tapAt = useCallback(
+    (pos: Vec2): void => {
+      const curve = curveAt(pos)
+      if (curve) {
+        onSelect(curve.id)
+        return
+      }
+      const pick = pointPickRef.current
+      if (pick) {
+        try {
+          pick.onPick(toMath(pos, vpRef.current))
+        } catch {
+          /* the App refused it — the selection is left exactly as it was */
+        }
+        return
+      }
+      onSelect(null)
+    },
+    [curveAt, onSelect, vpRef],
   )
 
   const selectedVisible = useCallback((): FittedCurve | null => {
@@ -780,14 +926,16 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   const handleAt = useCallback(
     (pos: Vec2): CurveHandle | null => {
       const sel = selectedVisible()
-      if (!sel) return null
       const vp = vpRef.current
       let hs: CurveHandle[] = []
-      try {
-        hs = getHandles(sel, modelsRef.current)
-      } catch {
-        hs = []
+      if (sel) {
+        try {
+          hs = getHandles(sel, modelsRef.current)
+        } catch {
+          hs = []
+        }
       }
+      // Never gated on a selected curve: see extraHandles in Props.
       hs = hs.concat(asCurveHandles(extraHandlesRef.current))
       if (hs.length === 0) return null
       let best: CurveHandle | null = null
@@ -1080,7 +1228,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
         // A tap is a tap whichever device made it: it selects what is under it
         // and clears the selection on empty board. Refusing to deselect here
         // meant the pen and the finger disagreed about the same gesture.
-        if (tapPos) trySelectAt(tapPos, true)
+        if (tapPos) tapAt(tapPos)
         scheduleRender()
         return
       }
@@ -1151,7 +1299,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       onStrokeRecognized,
       scheduleRender,
       setIntent,
-      trySelectAt,
+      tapAt,
       vpRef,
     ],
   )
@@ -1314,6 +1462,21 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     setHover(null)
 
     if (verdict === 'ink') {
+      // 0. A one-shot point pick takes the whole press. The teacher asked for
+      //    "+ solution through a point" and is now pointing at the point:
+      //    nothing else this press could mean is what they meant, so it never
+      //    selects, never starts a stroke, and disarms itself by reporting.
+      const pick = pointPickRef.current
+      if (pick && !pick.sticky) {
+        try {
+          pick.onPick(toMath(pos, vpRef.current))
+        } catch {
+          /* refused — nothing on the board changes */
+        }
+        scheduleRender()
+        return
+      }
+
       // 1. Handle grab beats everything (any mode) when a curve is selected.
       //    Markers are only consulted where no handle answered.
       const h = handleAt(pos)
@@ -1358,11 +1521,13 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       // A single press on a marker deliberately falls through: the marker sits
       // ON the curve, and dragging the curve there must keep working.
 
-      if (h && sel) {
+      // An App-owned point is grabbable without a selected curve: it belongs
+      // to whatever IS selected, which may be a slope field.
+      if (h && (sel || ownedByApp)) {
         gestureRef.current = {
           type: 'dragHandle',
           pointerId: e.pointerId,
-          curveId: sel.id,
+          curveId: sel?.id ?? '',
           handleId: h.id,
           label: h.label,
           moved: 0,
@@ -1456,7 +1621,17 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
             // 'pointer', not 'grab': the handle's best trick is the one a
             // grab cursor hides — double-click it and type the exact value.
             cursor: h.cursor ?? 'pointer',
-            tip: { x: sp.x, y: sp.y, label: h.label ?? h.id, hint: 'double-click to type' },
+            tip: {
+              x: sp.x,
+              y: sp.y,
+              label: h.label ?? h.id,
+              // An App-owned point has no popover of its own — its exact
+              // value is typed on the card that owns it — so promising one
+              // here would be a hint that does nothing.
+              hint: extraHandlesRef.current.some((x) => x.id === h.id)
+                ? 'drag to move'
+                : 'double-click to type',
+            },
           })
         } else if (marker) {
           const sp = toScreen(marker.point.pos, vp)
@@ -1718,7 +1893,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
         // the pen was in play is a palm, and changes nothing.
         const palm =
           g.kind === 'touch' && penGuardActive(lastPenAtRef.current, performance.now())
-        if (!palm) trySelectAt(pos, true)
+        if (!palm) tapAt(pos)
       }
     }
   }

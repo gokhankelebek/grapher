@@ -7,6 +7,7 @@ import type {
   NLItem,
   NLItemDraft,
   ProcessedStroke,
+  Vec2,
   Viewport,
 } from './core/types'
 import { CURVE_COLORS, DARK_THEME, LIGHT_THEME, nextId, toPrintColor } from './core/types'
@@ -35,6 +36,23 @@ import {
   riemannReadout,
 } from './ui/calcLinks'
 import type { CalcChange, CalcKind, CalcLink, CardCalc } from './ui/calcLinks'
+import {
+  carryParams,
+  compileFields,
+  fieldCard,
+  fieldLegend,
+  looksLikeField,
+  readField,
+  sceneFields,
+  solutionPolylines,
+  solveSpan,
+  spanCovers,
+  countPhrase as fieldCountPhrase,
+  throughLabel,
+  clampFieldSpacing,
+  FIELD_SPACING_DEFAULT,
+} from './ui/fieldLinks'
+import type { BoardField, CompiledField, FieldCardData } from './ui/fieldLinks'
 import { curveBounds, splitNotice, unionBoxes } from './ui/curveState'
 import { answerPieces } from './ui/nlText'
 import { AnswerContext } from './ui/answerContext'
@@ -61,7 +79,7 @@ import {
   renderBoardToCanvas,
   suggestAxisUnits,
 } from './ui/renderBoard'
-import type { AxisUnits, BoardScene, Overlay } from './ui/renderBoard'
+import type { AxisUnits, BoardScene, Overlay, Polyline, SlopeField } from './ui/renderBoard'
 import { clampFitSettings, contentBounds, exportViewport } from './ui/exportFit'
 import type { FitExportSettings } from './ui/exportFit'
 import { PresentBar } from './ui/PresentBar'
@@ -156,6 +174,12 @@ interface Snapshot {
    * undo has to bring both back or the board comes back half-built.
    */
   calc: CalcLink[]
+  /**
+   * The slope fields, in the same history for the same reason: a field and the
+   * solution curves through it are one object, and one undo has to bring the
+   * whole picture back rather than half of it.
+   */
+  fields: BoardField[]
   candidates: Map<string, FitResult[]>
   /**
    * What the action was, in three or four words: "set zero", "edit equation",
@@ -191,6 +215,7 @@ interface StatePatch {
   displaySources?: Record<string, string>
   edits?: Record<string, CurveEdit[]>
   calc?: CalcLink[]
+  fields?: BoardField[]
   candidates?: Map<string, FitResult[]>
 }
 
@@ -223,6 +248,20 @@ export default function App() {
    * a slider drag carry all four of them live.
    */
   const [calcLinks, setCalcLinks] = useState<CalcLink[]>([])
+  /**
+   * Slope fields: dy/dx = f(x, y), and the initial conditions the class threaded
+   * solution curves through. Like the calculus links, nothing in here is a
+   * result — not the closure, not the lattice, and above all not the integrated
+   * curves, which are re-solved from the equation on every change. That is what
+   * makes dragging `a` on a logistic field deform every solution curve at once.
+   */
+  const [fields, setFields] = useState<BoardField[]>([])
+  /**
+   * The field whose next board click places a solution curve, when the teacher
+   * armed one from its menu. Null means the sticky rule instead: a field's card
+   * being selected already makes a click on empty board an initial condition.
+   */
+  const [armedField, setArmedField] = useState<string | null>(null)
   const [snapFlash, setSnapFlash] = useState<{ id: string; mask: boolean[]; key: number } | null>(
     null,
   )
@@ -350,6 +389,7 @@ export default function App() {
   axisUnitChoiceRef.current = axisUnitChoice
   const editsRef = useRef<Record<string, CurveEdit[]>>({})
   const calcRef = useRef<CalcLink[]>([])
+  const fieldsRef = useRef<BoardField[]>([])
   /** Highest dfdx_N registered, so a new derivative cannot collide with one. */
   const derivCounterRef = useRef(0)
   /**
@@ -574,6 +614,7 @@ export default function App() {
       displaySources: displaySourcesRef.current,
       edits: editsRef.current,
       calc: calcRef.current,
+      fields: fieldsRef.current,
       candidates: candidatesRef.current,
       label,
     }),
@@ -617,6 +658,10 @@ export default function App() {
       calcRef.current = s.calc
       setCalcLinks(s.calc)
     }
+    if (s.fields) {
+      fieldsRef.current = s.fields
+      setFields(s.fields)
+    }
     // Replaced wholesale, never mutated in place, so snapshots stay immutable.
     if (s.candidates) candidatesRef.current = s.candidates
   }, [])
@@ -649,7 +694,10 @@ export default function App() {
     applyState(prev)
     bumpHistory((v) => v + 1)
     setSelectedId((sel) =>
-      sel && (prev.curves.some((c) => c.id === sel) || prev.items.some((i) => i.id === sel))
+      sel &&
+      (prev.curves.some((c) => c.id === sel) ||
+        prev.items.some((i) => i.id === sel) ||
+        prev.fields.some((f) => f.id === sel))
         ? sel
         : null,
     )
@@ -669,7 +717,10 @@ export default function App() {
     applyState(next)
     bumpHistory((v) => v + 1)
     setSelectedId((sel) =>
-      sel && (next.curves.some((c) => c.id === sel) || next.items.some((i) => i.id === sel))
+      sel &&
+      (next.curves.some((c) => c.id === sel) ||
+        next.items.some((i) => i.id === sel) ||
+        next.fields.some((f) => f.id === sel))
         ? sel
         : null,
     )
@@ -702,8 +753,10 @@ export default function App() {
         // Moving an integral's limit or dragging n changes NO curve — it
         // changes the link. Without this, the one gesture on the board that
         // leaves the curves alone was also the one gesture undo could not
-        // take back.
-        pre.calc !== calcRef.current)
+        // take back. A field's slider and a dragged initial condition are the
+        // same case: they move no curve at all.
+        pre.calc !== calcRef.current ||
+        pre.fields !== fieldsRef.current)
     ) {
       undoRef.current = [...undoRef.current.slice(-(HISTORY_LIMIT - 1)), pre]
       redoRef.current = []
@@ -814,6 +867,7 @@ export default function App() {
       brokenExpr: {},
       axisUnits: { ...AUTO_AXIS_UNITS },
       calc: [],
+      fields: [],
       viewport: { center: { x: 0, y: 0 }, pxPerUnit: 60 },
       selectedId: null,
       mode: 'draw',
@@ -835,6 +889,7 @@ export default function App() {
       displaySources: displaySourcesRef.current,
       axisUnits: axisUnitChoiceRef.current,
       calc: calcRef.current,
+      fields: fieldsRef.current,
       viewport: { center: vpRef.current.center, pxPerUnit: vpRef.current.pxPerUnit },
       selectedId: selectedRef.current,
       mode: MODE,
@@ -938,6 +993,8 @@ export default function App() {
     // sync pass below, against the models this load just registered. A
     // reopened board is therefore live, not a photograph.
     calcRef.current = board.calc
+    // Same rule: the equations come back, everything they DRAW is re-derived.
+    fieldsRef.current = board.fields
     calcSigRef.current = new Map()
     calcAutoHiddenRef.current = new Set()
     derivCounterRef.current = board.derivCounter
@@ -960,6 +1017,8 @@ export default function App() {
     setDisplaySources(board.displaySources)
     setAxisUnitChoice(board.axisUnits)
     setCalcLinks(board.calc)
+    setFields(board.fields)
+    setArmedField(null)
     setEdits({})
     setExtraModels(board.extraModels)
     setSelectedId(board.selectedId)
@@ -1060,6 +1119,9 @@ export default function App() {
     // untouched, so without this the change would be on screen and nowhere
     // else until the next thing a teacher happened to do.
     calcLinks,
+    // And a slope field. Its equation, its constants, its spacing and its
+    // initial conditions are the whole of it, and none of them touch a curve.
+    fields,
     selectedId,
     docMeta.name,
     scheduleSave,
@@ -1352,7 +1414,13 @@ export default function App() {
     const onBoard =
       kindRef.current === 'number-line'
         ? itemsRef.current.map((i) => i.color)
-        : curvesRef.current.map((c) => c.color)
+        : [
+            ...curvesRef.current.map((c) => c.color),
+            // A slope field is in the same list and the same palette: handing
+            // a new field the colour of the curve above it would be the one
+            // collision the cycle exists to prevent.
+            ...fieldsRef.current.map((f) => f.color),
+          ]
     const used = new Set(onBoard)
     for (const color of CURVE_COLORS) {
       if (!used.has(color)) return color
@@ -1464,7 +1532,7 @@ export default function App() {
       setSelectedId(null)
       return
     }
-    if (curvesRef.current.length === 0) return
+    if (curvesRef.current.length === 0 && fieldsRef.current.length === 0) return
     const styles: StyleMap = {}
     for (const it of itemsRef.current) {
       const st = stylesRef.current[it.id]
@@ -1474,6 +1542,7 @@ export default function App() {
       {
         curves: [],
         calc: [],
+        fields: [],
         styles,
         exprSources: {},
         brokenExpr: {},
@@ -2290,10 +2359,380 @@ export default function App() {
     syncCalc()
   }, [curves, models, calcLinks, syncCalc])
 
+  // ============================================================== slope fields
+  //
+  // dy/dx = f(x, y) is not a curve, so it is not a FittedCurve: there is no y
+  // to evaluate, only a direction at every point. What the board holds is the
+  // sentence the teacher typed, the constants its sliders are at, and the
+  // points the class asked a solution curve to pass through. The lattice and
+  // every solution curve are recomputed from those — see src/ui/fieldLinks.ts
+  // — which is why a slider drag carries all of them live and why a reopened
+  // document is live rather than a photograph.
+
+  /** One field, replaced in place. The list order is the sidebar's order. */
+  const mapField = useCallback(
+    (id: string, fn: (f: BoardField) => BoardField): BoardField[] =>
+      fieldsRef.current.map((f) => (f.id === id ? fn(f) : f)),
+    [],
+  )
+
+  /**
+   * Add a differential equation to the board.
+   *
+   * Returns the parser's own message when it refuses, so the equation box
+   * shows a slope field's complaint in exactly the place it shows an
+   * equation's.
+   */
+  const addField = useCallback(
+    (src: string): string | null => {
+      const outcome = readField(src)
+      if (!outcome.ok) return outcome.error
+      const field: BoardField = {
+        id: nextId(),
+        src,
+        params: outcome.defaultParams.slice(),
+        color: pickColor(),
+        spacingPx: FIELD_SPACING_DEFAULT,
+        visible: true,
+        solutions: [],
+      }
+      commitState({ fields: [...fieldsRef.current, field] }, 'add slope field')
+      setSelectedId(field.id)
+      return null
+    },
+    [commitState, pickColor],
+  )
+
+  /**
+   * Retype a field's equation.
+   *
+   * The constants that survive keep their values BY NAME (carryParams): the
+   * whole point of turning y' = a*y into y' = a*y*(1 - y/k) mid-lesson is that
+   * a is still the a the class just set. The initial conditions survive too —
+   * the point (0, 0.2) is a statement about the picture, not about the
+   * formula — so the same solution curves are re-integrated through the new
+   * field and the class sees what changed.
+   */
+  const setFieldEquation = useCallback(
+    (id: string, src: string): string | null => {
+      const field = fieldsRef.current.find((f) => f.id === id)
+      if (!field) return null
+      if (field.src === src) return null
+      const outcome = readField(src)
+      if (!outcome.ok) return outcome.error
+      const was = readField(field.src)
+      const params = carryParams(
+        was.ok ? was.paramNames : [],
+        field.params,
+        outcome.paramNames,
+        outcome.defaultParams,
+      )
+      commitState(
+        { fields: mapField(id, (f) => ({ ...f, src, params })) },
+        'edit equation',
+      )
+      setSelectedId(id)
+      return null
+    },
+    [commitState, mapField],
+  )
+
+  /** A constant in flight. Inside the bracket the slider's press opened. */
+  const setFieldParam = useCallback(
+    (id: string, index: number, value: number): void => {
+      if (!Number.isFinite(value)) return
+      relabelEdit('move slider')
+      applyState({
+        fields: mapField(id, (f) => {
+          const params = f.params.slice()
+          params[index] = value
+          return { ...f, params }
+        }),
+      })
+    },
+    [applyState, mapField, relabelEdit],
+  )
+
+  /** A typed exact constant: one commit, one undo entry, full precision. */
+  const setFieldParamExact = useCallback(
+    (id: string, index: number, value: number): void => {
+      if (!Number.isFinite(value)) return
+      commitState(
+        {
+          fields: mapField(id, (f) => {
+            const params = f.params.slice()
+            params[index] = value
+            return { ...f, params }
+          }),
+        },
+        'set value',
+      )
+      setSelectedId(id)
+    },
+    [commitState, mapField],
+  )
+
+  const setFieldSpacing = useCallback(
+    (id: string, px: number): void => {
+      const want = clampFieldSpacing(px)
+      const now = fieldsRef.current.find((f) => f.id === id)
+      if (!now || now.spacingPx === want) return
+      commitState(
+        { fields: mapField(id, (f) => ({ ...f, spacingPx: want })) },
+        'change field spacing',
+      )
+    },
+    [commitState, mapField],
+  )
+
+  const toggleFieldVisible = useCallback(
+    (id: string): void => {
+      const now = fieldsRef.current.find((f) => f.id === id)
+      commitState(
+        { fields: mapField(id, (f) => ({ ...f, visible: !f.visible })) },
+        now && now.visible ? 'hide slope field' : 'show slope field',
+      )
+    },
+    [commitState, mapField],
+  )
+
+  const cycleFieldColor = useCallback(
+    (id: string): void => {
+      const now = fieldsRef.current.find((f) => f.id === id)
+      if (!now) return
+      const i = CURVE_COLORS.indexOf(now.color)
+      const next = CURVE_COLORS[(i + 1) % CURVE_COLORS.length]
+      commitState({ fields: mapField(id, (f) => ({ ...f, color: next })) }, 'change colour')
+    },
+    [commitState, mapField],
+  )
+
+  /**
+   * Delete a field, and with it every solution curve threaded through it.
+   *
+   * They are one object: a solution curve is a claim about THIS field, and
+   * there is nothing left to integrate once the field is gone. So they go in
+   * one commit, the toast says how many went, and one undo brings all of it
+   * back — the same contract deleting a curve with a tangent on it has.
+   */
+  const deleteField = useCallback(
+    (id: string): void => {
+      const field = fieldsRef.current.find((f) => f.id === id)
+      if (!field) return
+      commitState(
+        { fields: fieldsRef.current.filter((f) => f.id !== id) },
+        'delete slope field',
+      )
+      setArmedField((a) => (a === id ? null : a))
+      setSelectedId((sel) => (sel === id ? null : sel))
+      const n = field.solutions.length
+      showToast(
+        n === 0
+          ? 'Deleted the slope field. Undo brings it back.'
+          : `Deleted the slope field and ${fieldCountPhrase(n, 'solution curve')} through it. Undo brings all of it back.`,
+        { ms: 5000, action: { label: 'Undo', run: undo } },
+      )
+    },
+    [commitState, showToast, undo],
+  )
+
+  // ------------------------------------------------------- solution curves
+
+  /** A tap on the board while a field is selected, or one its menu armed. */
+  const addSolution = useCallback(
+    (fieldId: string, at: Vec2): void => {
+      if (!Number.isFinite(at.x) || !Number.isFinite(at.y)) return
+      const field = fieldsRef.current.find((f) => f.id === fieldId)
+      if (!field) return
+      const sol = { id: nextId(), x: at.x, y: at.y }
+      commitState(
+        { fields: mapField(fieldId, (f) => ({ ...f, solutions: [...f.solutions, sol] })) },
+        'add solution curve',
+      )
+      setSelectedId(fieldId)
+    },
+    [commitState, mapField],
+  )
+
+  /**
+   * Move one initial condition. `live` is the drag: the point moves inside the
+   * bracket the press opened, so dragging it across the board is ONE undo
+   * called "move solution point" rather than one per frame.
+   */
+  const moveSolution = useCallback(
+    (fieldId: string, solutionId: string, to: { x?: number; y?: number }, live = false): void => {
+      const field = fieldsRef.current.find((f) => f.id === fieldId)
+      const sol = field?.solutions.find((s) => s.id === solutionId)
+      if (!field || !sol) return
+      const x = to.x !== undefined ? to.x : sol.x
+      const y = to.y !== undefined ? to.y : sol.y
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return
+      if (x === sol.x && y === sol.y) return
+      const patch = {
+        fields: mapField(fieldId, (f) => ({
+          ...f,
+          solutions: f.solutions.map((s) => (s.id === solutionId ? { ...s, x, y } : s)),
+        })),
+      }
+      if (live) {
+        relabelEdit('move solution point')
+        applyState(patch)
+      } else {
+        commitState(patch, 'move solution point')
+      }
+    },
+    [applyState, commitState, mapField, relabelEdit],
+  )
+
+  const removeSolution = useCallback(
+    (fieldId: string, solutionId: string): void => {
+      commitState(
+        {
+          fields: mapField(fieldId, (f) => ({
+            ...f,
+            solutions: f.solutions.filter((s) => s.id !== solutionId),
+          })),
+        },
+        'remove solution curve',
+      )
+    },
+    [commitState, mapField],
+  )
+
+  // -------------------------------------------------- what the fields draw
+
+  /** Every field's closure, its LaTeX and its slider names, in one pass. */
+  const fieldCompiled = useMemo<Map<string, CompiledField>>(
+    () => (kind === 'cartesian' ? compileFields(fields) : new Map()),
+    [kind, fields],
+  )
+
+  const fieldScene = useMemo<SlopeField[]>(
+    () => sceneFields(fields, fieldCompiled),
+    [fields, fieldCompiled],
+  )
+
+  /**
+   * The x-range the solution curves on the board have been integrated across.
+   *
+   * It is STATE rather than a reading of the viewport because the viewport is
+   * a mutable ref that pan and zoom change without re-rendering App — and
+   * because it must not move on every frame of a pan. It grows only when the
+   * window has actually reached past what was already solved (spanCovers), so
+   * zooming in, or panning inside the 50% margin, re-uses curve that is
+   * already there instead of re-integrating for an identical picture.
+   */
+  const [solvedSpan, setSolvedSpan] = useState<[number, number]>(() => [-10, 10])
+  const solvedSpanRef = useRef<[number, number]>(solvedSpan)
+  solvedSpanRef.current = solvedSpan
+  /** True while anything needs solving at all — checked on the pan hot path. */
+  const hasSolutionsRef = useRef(false)
+  hasSolutionsRef.current = fields.some((f) => f.visible && f.solutions.length > 0)
+
+  /** Re-solve if the window has grown past the margin. Cheap, and idempotent. */
+  const refreshSolveSpan = useCallback((): void => {
+    if (!hasSolutionsRef.current) return
+    const vp = vpRef.current
+    const half = vp.widthPx / 2 / vp.pxPerUnit
+    const window: [number, number] = [vp.center.x - half, vp.center.x + half]
+    if (spanCovers(solvedSpanRef.current, window)) return
+    const next = solveSpan(window)
+    solvedSpanRef.current = next
+    setSolvedSpan(next)
+  }, [])
+
+  // The first field on a board was solved across the startup default, which is
+  // not this window; a board opened zoomed out would show curves that stopped
+  // in mid-air. One check per change to the field list costs nothing.
+  useEffect(() => {
+    refreshSolveSpan()
+  }, [fields, refreshSolveSpan])
+
+  const fieldPolylines = useMemo<Polyline[]>(
+    () => solutionPolylines(fields, fieldCompiled, solvedSpan),
+    [fields, fieldCompiled, solvedSpan],
+  )
+
+  const fieldSceneRef = useRef<SlopeField[]>(fieldScene)
+  fieldSceneRef.current = fieldScene
+  const fieldPolylinesRef = useRef<Polyline[]>(fieldPolylines)
+  fieldPolylinesRef.current = fieldPolylines
+
+  /** Everything each field's card says, computed once for all of them. */
+  const fieldCards = useMemo<Record<string, FieldCardData>>(() => {
+    const out: Record<string, FieldCardData> = {}
+    for (const f of fields) out[f.id] = fieldCard(f, fieldCompiled)
+    return out
+  }, [fields, fieldCompiled])
+
+  /**
+   * Where a click on the board places an initial condition.
+   *
+   * Two ways in, and they differ only in how long they last. The menu item
+   * arms ONE press, anywhere, because the teacher has just said what they
+   * want. Simply having a field's card selected arms every tap on EMPTY board
+   * — a tap on a curve still selects that curve — because placing six initial
+   * conditions in a row is the actual gesture of the lesson.
+   */
+  const pointPick = useMemo(() => {
+    const armed = armedField && fields.some((f) => f.id === armedField) ? armedField : null
+    const selectedField = fields.some((f) => f.id === selectedId) ? selectedId : null
+    const target = armed ?? selectedField
+    if (kind !== 'cartesian' || !target) return null
+    return {
+      label: 'solution through this point',
+      sticky: armed === null,
+      onPick: (pos: Vec2): void => {
+        setArmedField(null)
+        addSolution(target, pos)
+      },
+    }
+  }, [kind, armedField, selectedId, fields, addSolution])
+
+  const fieldCardFor = useCallback(
+    (id: string): FieldCardData | undefined => fieldCards[id],
+    [fieldCards],
+  )
+
+  /** The menu item: the very next press on the board is an initial condition. */
+  const armSolution = useCallback(
+    (id: string): void => {
+      setSelectedId(id)
+      setArmedField(id)
+      showToast('Click the board where the solution curve should pass through.', { ms: 4000 })
+    },
+    [showToast],
+  )
+
+  /** Type one coordinate of an initial condition exactly. */
+  const setSolutionCoord = useCallback(
+    (fieldId: string, solutionId: string, to: { x?: number; y?: number }): void => {
+      moveSolution(fieldId, solutionId, to, false)
+    },
+    [moveSolution],
+  )
+
+  // A field that is no longer selected is no longer armed: the one-shot was
+  // about the card the teacher had open.
+  useEffect(() => {
+    if (armedField && armedField !== selectedId) setArmedField(null)
+  }, [armedField, selectedId])
+
   // ------------------------------------------------------- typed expressions
   /** Parse and add a typed expression. Returns an error message, or null on success. */
   const addExpression = useCallback(
     (src: string): string | null => {
+      // A differential equation is not an equation: "dy/dx = x - y" would be
+      // read by parseExpression as a product of d, y and x set equal to
+      // another, and the board would quietly draw an implicit curve nobody
+      // asked for. So the field parser is asked FIRST, and anything that even
+      // starts like a derivative stays on this branch — with the slope-field
+      // parser's own positioned complaint — rather than falling through to a
+      // second parser that can only be confused by it.
+      const asField = readField(src)
+      if (asField.ok) return addField(src)
+      if (looksLikeField(src)) return asField.error
+
       let outcome: ReturnType<typeof parseExpression>
       try {
         outcome = parseExpression(src)
@@ -2337,7 +2776,7 @@ export default function App() {
       setSelectedId(curve.id)
       return null
     },
-    [commitState, pickColor],
+    [addField, commitState, pickColor],
   )
 
   /**
@@ -2692,9 +3131,10 @@ export default function App() {
       stageRef.current?.redraw()
       nlStageRef.current?.redraw()
       overlayRef.current?.redraw()
+      refreshSolveSpan()
       scheduleSave()
     },
-    [scheduleSave],
+    [refreshSolveSpan, scheduleSave],
   )
 
   const resetView = useCallback((): void => {
@@ -2704,8 +3144,9 @@ export default function App() {
     stageRef.current?.redraw()
     nlStageRef.current?.redraw()
     overlayRef.current?.redraw()
+    refreshSolveSpan()
     scheduleSave()
-  }, [scheduleSave])
+  }, [refreshSolveSpan, scheduleSave])
 
   /** Fraction of the frame left as breathing room around the figure. */
   const FIT_MARGIN = 0.12
@@ -2737,11 +3178,31 @@ export default function App() {
     } else {
       const half = vp.widthPx / 2 / vp.pxPerUnit
       const window: [number, number] = [vp.center.x - half, vp.center.x + half]
-      box = unionBoxes(
-        curvesRef.current
-          .filter((c) => c.visible)
-          .map((c) => curveBounds(c, modelsRef.current[c.modelId], window)),
-      )
+      const boxes = curvesRef.current
+        .filter((c) => c.visible)
+        .map((c) => curveBounds(c, modelsRef.current[c.modelId], window))
+      // A differential-equations board often has no curves on it at all: the
+      // figure IS the solution curves threading the lattice, and "Fit to
+      // curves" on such a board used to say there was nothing to frame. The
+      // field itself fills the plane and has no extent to measure, so it is
+      // the polylines that are framed.
+      for (const poly of fieldPolylinesRef.current) {
+        let minX = Infinity
+        let minY = Infinity
+        let maxX = -Infinity
+        let maxY = -Infinity
+        for (const pt of poly.pts) {
+          if (!Number.isFinite(pt.x) || !Number.isFinite(pt.y)) continue
+          if (pt.x < minX) minX = pt.x
+          if (pt.x > maxX) maxX = pt.x
+          if (pt.y < minY) minY = pt.y
+          if (pt.y > maxY) maxY = pt.y
+        }
+        if (minX <= maxX && minY <= maxY) {
+          boxes.push({ min: { x: minX, y: minY }, max: { x: maxX, y: maxY } })
+        }
+      }
+      box = unionBoxes(boxes)
     }
     if (!box) {
       showToast('Nothing visible to frame.', { ms: 2000 })
@@ -2760,14 +3221,20 @@ export default function App() {
     stageRef.current?.redraw()
     nlStageRef.current?.redraw()
     overlayRef.current?.redraw()
+    refreshSolveSpan()
     scheduleSave()
-  }, [scheduleSave, showToast])
+  }, [refreshSolveSpan, scheduleSave, showToast])
 
   /** Pan/zoom happened: the marker layer rides the same viewport. */
   const viewportChanged = useCallback((): void => {
     overlayRef.current?.redraw()
+    // A solution curve is integrated across a fixed x-range, so a board panned
+    // or zoomed past that range would show it stopping in mid-air. This is the
+    // hot path — it fires on every frame of a pan — and refreshSolveSpan does
+    // nothing at all unless the window has genuinely left the solved span.
+    refreshSolveSpan()
     scheduleSave()
-  }, [scheduleSave])
+  }, [refreshSolveSpan, scheduleSave])
 
   // ------------------------------------------------------------------ export
   //
@@ -2877,8 +3344,25 @@ export default function App() {
           ),
       })
     }
+    // A solution curve's initial condition. It is free in BOTH directions —
+    // the whole question "what happens if it starts here instead?" is answered
+    // by dragging it off the curve it is currently on — so unlike a tangent's
+    // point it is not clamped to anything. The label names the point it is:
+    // dragging it is the same statement as typing it on the card.
+    const field = fields.find((f) => f.id === selectedId)
+    if (field && field.visible) {
+      for (const sol of field.solutions) {
+        out.push({
+          id: `field:${field.id}:${sol.id}`,
+          pos: { x: sol.x, y: sol.y },
+          label: throughLabel(sol.x, sol.y),
+          color: field.color,
+          onDrag: (pos) => moveSolution(field.id, sol.id, { x: pos.x, y: pos.y }, true),
+        })
+      }
+    }
     return out
-  }, [kind, selectedId, calcLinks, curves, models, changeCalc])
+  }, [kind, selectedId, calcLinks, curves, models, changeCalc, fields, moveSolution])
 
   const copyTimerRef = useRef(0)
 
@@ -2942,6 +3426,12 @@ export default function App() {
       // calculus board. A PNG that dropped them would be the same bug the
       // analysis markers once had.
       overlays: overlaysRef.current,
+      // A slope field and the solution curves through it ARE the figure on a
+      // differential-equations board — there is often nothing else on it at
+      // all — so they go into the exported scene by the same field the screen
+      // uses rather than by a second code path that could forget them.
+      fields: fieldSceneRef.current,
+      polylines: fieldPolylinesRef.current,
       chrome: null,
     }
     },
@@ -3265,7 +3755,9 @@ export default function App() {
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedRef.current) {
         e.preventDefault()
         if (kindRef.current === 'number-line') deleteItem(selectedRef.current)
-        else deleteCurve(selectedRef.current)
+        else if (fieldsRef.current.some((f) => f.id === selectedRef.current)) {
+          deleteField(selectedRef.current)
+        } else deleteCurve(selectedRef.current)
       } else if (NUDGE[e.key]) {
         const [ux, uy] = NUDGE[e.key]
         const step = e.shiftKey ? 1 : 0.1
@@ -3305,7 +3797,16 @@ export default function App() {
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
     }
-  }, [undo, redo, deleteCurve, deleteItem, nudgeSelected, commitWithSnap, cycleAxisUnitX])
+  }, [
+    undo,
+    redo,
+    deleteCurve,
+    deleteField,
+    deleteItem,
+    nudgeSelected,
+    commitWithSnap,
+    cycleAxisUnitX,
+  ])
 
   // ------------------------------------------------------------------ render
   const canUndo = undoRef.current.length > 0
@@ -3330,8 +3831,14 @@ export default function App() {
           // A derived curve's equation does not say what it IS: two cubic-ish
           // chips on a wall and the class has to guess which is f and which
           // is f′. The chip says so.
-          : labelLegend(curveLegend(curves, models, displaySources), calcLinks),
-    [presentMode, kind, items, curves, models, displaySources, calcLinks],
+          : [
+              ...labelLegend(curveLegend(curves, models, displaySources), calcLinks),
+              // A lattice says nothing about the equation that drew it, and a
+              // field has no card on the wall. Two fields projected side by
+              // side would otherwise be two grey textures.
+              ...fieldLegend(fields, fieldCompiled),
+            ],
+    [presentMode, kind, items, curves, models, displaySources, calcLinks, fields, fieldCompiled],
   )
 
   const changePresentType = useCallback((next: number): void => {
@@ -3340,7 +3847,8 @@ export default function App() {
     updatePrefs({ presentScale: clean })
   }, [])
 
-  const hasBoardContent = kind === 'number-line' ? items.length > 0 : curves.length > 0
+  const hasBoardContent =
+    kind === 'number-line' ? items.length > 0 : curves.length > 0 || fields.length > 0
 
   /** What every number-line card needs to speak for its whole answer. */
   const answerBoard = useMemo(() => ({ items, styles }), [items, styles])
@@ -3401,6 +3909,19 @@ export default function App() {
         onAddCalc={addCalcObject}
         onCalcChange={changeCalc}
         onCalcRemove={removeCalcObject}
+        fields={fields}
+        fieldCardFor={fieldCardFor}
+        armedField={armedField}
+        onFieldArm={armSolution}
+        onFieldDelete={deleteField}
+        onFieldToggleVisible={toggleFieldVisible}
+        onFieldCycleColor={cycleFieldColor}
+        onFieldSpacing={setFieldSpacing}
+        onFieldParamChange={setFieldParam}
+        onFieldParamSetExact={setFieldParamExact}
+        onFieldEquation={setFieldEquation}
+        onSolutionSet={setSolutionCoord}
+        onSolutionRemove={removeSolution}
       />
       </AnswerContext.Provider>
 
@@ -3477,7 +3998,10 @@ export default function App() {
           present={present}
           axisUnits={axisUnits}
           overlays={overlays}
+          fields={fieldScene}
+          polylines={fieldPolylines}
           extraHandles={extraHandles}
+          pointPick={pointPick}
         />
         )}
 
@@ -3509,7 +4033,7 @@ export default function App() {
               docs={docs}
               saveState={saveState}
               kind={kind}
-              hasContent={kind === 'number-line' ? items.length > 0 : curves.length > 0}
+              hasContent={hasBoardContent}
               onRename={renameDoc}
               onNew={newDocument}
               onClearBoard={clearAll}
@@ -3756,7 +4280,11 @@ export default function App() {
           </div>
         )}
 
-        {kind === 'cartesian' && curves.length === 0 && !drawingActive && !loadNotice?.fatal && (
+        {kind === 'cartesian' &&
+          curves.length === 0 &&
+          fields.length === 0 &&
+          !drawingActive &&
+          !loadNotice?.fatal && (
           <div className="empty-hint" aria-hidden="true">
             <div className="empty-glyph">∿</div>
             <div className="empty-title">Draw anything — a wave, a circle, a heart…</div>
@@ -3765,9 +4293,13 @@ export default function App() {
               double-click one to type exact values.
             </div>
           </div>
-        )}
+          )}
 
-        {curves.length === 0 && items.length === 0 && !drawingActive && loadNotice?.fatal && (
+        {curves.length === 0 &&
+          items.length === 0 &&
+          fields.length === 0 &&
+          !drawingActive &&
+          loadNotice?.fatal && (
           <div className="empty-hint empty-hint-error">
             <div className="empty-glyph empty-glyph-error">⚠</div>
             <div className="empty-title">This board is empty because a document couldn’t be opened</div>
@@ -3776,7 +4308,7 @@ export default function App() {
               open another document from the menu, or import a file you exported earlier.
             </div>
           </div>
-        )}
+          )}
 
         {dropActive && (
           <div className="drop-overlay" aria-hidden="true">
