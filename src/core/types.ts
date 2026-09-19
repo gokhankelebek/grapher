@@ -456,3 +456,44 @@ export type SlopeFieldOutcome =
       makeField(id: string, params: number[], color: string): SlopeField
     }
   | { ok: false; error: string; pos?: number }
+
+// ============================================================================
+// Shapes — points, segments, vectors and polygons (Math 3 transformations,
+// vector problems, geometric figures drawn to be measured).
+//
+// A shape is figure content in math coords, like a Polyline: it exports, it
+// is not chrome. Vertices are the editable thing; everything visible is
+// derived from them and the style.
+//
+//   src/core/parse/shapes.ts
+//     export function parseShape(src: string): ShapeOutcome
+//       "point (1, 2)"            "P = (1, 2)"
+//       "segment (0,0) (3,4)"     "AB = (0,0) (3,4)"
+//       "vector <3, 4>"           "v = <3, 4> from (1, 1)"    (tail optional, (0,0))
+//       "polygon (0,0) (4,0) (4,3)"   "triangle (0,0) (4,0) (4,3)"
+//       numbers may be expressions in free single-letter constants (sliders),
+//       exactly as parseExpression; latex is the KaTeX of the shape
+//   render: BoardScene.shapes?: readonly Shape[]   (src/render/shapes.ts)
+//     points: filled disc + label; segments: stroked; vectors: stroked with a
+//     filled arrowhead at the tip, sized in CSS px × present.stroke; polygons:
+//     closed path, optional translucent fill; vertex labels when `labels` is
+//     set (A, B, C… or the point's own name)
+// ============================================================================
+
+export type Shape =
+  | { kind: 'point'; id: string; at: Vec2; color: string; visible: boolean; label?: string }
+  | { kind: 'segment'; id: string; a: Vec2; b: Vec2; color: string; visible: boolean; labels?: [string, string] }
+  | { kind: 'vector'; id: string; tail: Vec2; v: Vec2; color: string; visible: boolean; label?: string }
+  | { kind: 'polygon'; id: string; pts: readonly Vec2[]; color: string; visible: boolean; fill?: boolean; labels?: readonly string[] }
+
+export type ShapeOutcome =
+  | {
+      ok: true
+      kind: Shape['kind']
+      latex: string
+      paramNames: string[]
+      defaultParams: number[]
+      /** Build the shape for a given param vector. */
+      makeShape(id: string, params: number[], color: string): Shape
+    }
+  | { ok: false; error: string; pos?: number }
