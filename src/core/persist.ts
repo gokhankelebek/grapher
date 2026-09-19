@@ -21,6 +21,9 @@ import type {
   Vec2,
 } from './types'
 import { parseExpression } from './parse'
+import { MODELS } from './fit/models'
+import { derivativeModel } from './calculus'
+import type { RiemannMethod } from './calculus'
 
 /**
  * Bump when the on-disk shape changes in a way older readers can't handle.
@@ -60,6 +63,89 @@ export interface CurveStyle {
   group?: string
 }
 export type StyleMap = Record<string, CurveStyle>
+
+// --- calculus objects -------------------------------------------------------
+//
+// A tangent line, a derivative curve, a shaded integral and a Riemann sum are
+// not four new kinds of thing on the board: two of them ARE curves (a `line`
+// and a member of f′'s own family) and two of them are overlays the renderer
+// already draws. What has to survive a reload is much smaller — the LINK that
+// says which curve each one was asked about, and with what numbers.
+//
+// Everything visible is then recomputed from the link on load, which is the
+// same code path a slider drag takes, so a reopened document is live rather
+// than a photograph of the last time it was open. The types live here, beside
+// the format that stores them, because the loader has to validate them and
+// core may not reach into src/ui.
+
+/** Which of the four calculus objects a link describes. */
+export type CalcKind = 'tangent' | 'derivative' | 'area' | 'riemann'
+
+/** A tangent line at one point of `parentId`, drawn as the curve `curveId`. */
+export interface TangentLink {
+  kind: 'tangent'
+  id: string
+  parentId: string
+  /** The `line` curve this link drives; it lives and dies with the link. */
+  curveId: string
+  x: number
+}
+
+/** f′ of `parentId`, drawn as the curve `curveId`. */
+export interface DerivativeLink {
+  kind: 'derivative'
+  id: string
+  parentId: string
+  curveId: string
+}
+
+/** The signed region between `parentId` and the x-axis over [from, to]. */
+export interface AreaLink {
+  kind: 'area'
+  id: string
+  parentId: string
+  from: number
+  to: number
+  /** Read out |∫| instead of the signed value. The picture is the same. */
+  abs: boolean
+}
+
+export interface RiemannLink {
+  kind: 'riemann'
+  id: string
+  parentId: string
+  from: number
+  to: number
+  n: number
+  method: RiemannMethod
+}
+
+export type CalcLink = TangentLink | DerivativeLink | AreaLink | RiemannLink
+
+/** The two links that own a curve of their own. */
+export type CurveLink = TangentLink | DerivativeLink
+
+export const isCurveLink = (l: CalcLink): l is CurveLink =>
+  l.kind === 'tangent' || l.kind === 'derivative'
+
+/** Rectangle counts a board offers. 200 is also where the slider stops. */
+export const RIEMANN_N_MIN = 1
+export const RIEMANN_N_MAX = 200
+export const RIEMANN_N_DEFAULT = 8
+
+/** Integerise and clamp n — the slider and the loader must agree exactly. */
+export function clampRiemannN(v: unknown): number {
+  const n = typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : RIEMANN_N_DEFAULT
+  return Math.min(RIEMANN_N_MAX, Math.max(RIEMANN_N_MIN, n))
+}
+
+const RIEMANN_METHODS: readonly RiemannMethod[] = ['left', 'right', 'midpoint', 'trapezoid']
+
+const isMethod = (v: unknown): v is RiemannMethod =>
+  typeof v === 'string' && (RIEMANN_METHODS as readonly string[]).includes(v)
+
+/** The model id a numerically-differentiated derivative registers under. */
+export const DERIV_MODEL_PREFIX = 'dfdx_'
 
 export type BoardMode = 'draw' | 'pan'
 
@@ -136,6 +222,8 @@ const MAX_ITEMS = 500
 const MAX_LABEL_CHARS = 120
 const MAX_PARAMS = 64
 const MAX_CANDIDATES = 24
+/** A board with more calculus objects than this is a damaged record. */
+const MAX_CALC = 200
 /** Stored stroke resolution. Keeps boards small; plenty for refit and hit tests. */
 export const MAX_STORED_STROKE = 120
 const MAX_STROKE_IN = 20000
@@ -214,6 +302,32 @@ export interface StoredBoard {
    * it lands exactly on the default.
    */
   axisUnits?: { x?: ResolvedAxisUnit; y?: ResolvedAxisUnit }
+  /**
+   * The calculus objects attached to curves on this board — tangents,
+   * derivative curves, shaded integrals, Riemann sums — as LINKS, never as
+   * results. Each one is a handful of numbers; everything they draw is
+   * recomputed on load.
+   *
+   * Omitted entirely when there are none, which is every document written
+   * before this field existed: such a board serialises byte-for-byte as it did
+   * then, and an older reader drops a key it does not know and lands exactly on
+   * "this board has no calculus objects".
+   */
+  calc?: StoredCalcLink[]
+}
+
+/** One link, flattened. Only the fields its own kind uses are ever written. */
+export interface StoredCalcLink {
+  kind: CalcKind
+  id: string
+  parentId: string
+  curveId?: string
+  x?: number
+  from?: number
+  to?: number
+  abs?: boolean
+  n?: number
+  method?: RiemannMethod
 }
 
 export interface StoredDoc {
@@ -278,6 +392,8 @@ export interface BoardInput {
   displaySources?: Record<string, string>
   /** Per-axis units. Absent = both automatic, which writes nothing. */
   axisUnits?: AxisUnitChoices
+  /** Calculus objects. Absent or empty writes nothing at all. */
+  calc?: readonly CalcLink[]
   viewport: { center: Vec2; pxPerUnit: number }
   selectedId: string | null
   mode: BoardMode
@@ -298,11 +414,21 @@ export interface HydratedBoard {
   brokenExpr: Record<string, string>
   /** Per-axis units as the document states them; 'auto' where it is silent. */
   axisUnits: AxisUnitChoices
+  /**
+   * The calculus links that survived: every one whose parent curve (and, for a
+   * tangent or a derivative, its own curve) is still on the board. A link that
+   * lost its parent is dropped AND reported — silently forgetting the tangent
+   * a lesson was built around is exactly the kind of quiet loss this file
+   * exists to prevent.
+   */
+  calc: CalcLink[]
   viewport: { center: Vec2; pxPerUnit: number }
   selectedId: string | null
   mode: BoardMode
   /** Highest expr_N seen, so new equations don't collide with restored ones. */
   exprCounter: number
+  /** Highest dfdx_N seen, for the same reason. */
+  derivCounter: number
 }
 
 export interface LoadResult {
@@ -437,7 +563,105 @@ export function boardToStored(input: BoardInput): StoredBoard {
     board.items = items.slice(0, MAX_ITEMS).map((it) => itemToStored(it, input.styles[it.id]))
   }
 
+  // Same rule again: no calculus objects, no key, so a board that has never
+  // had one writes exactly the JSON it wrote before this field existed.
+  const calc = input.calc ?? []
+  if (calc.length > 0) board.calc = calc.slice(0, MAX_CALC).map(calcLinkToStored)
+
   return board
+}
+
+/**
+ * One link as JSON: own properties only, and only the ones its kind uses.
+ *
+ * The numbers are NOT rounded, for the same reason a curve's params are not:
+ * a limit dragged exactly onto the end of a curve's domain, rounded up by a
+ * millionth, lands outside it — and the integral that was there before the
+ * reload politely refuses to exist after it.
+ */
+export function calcLinkToStored(l: CalcLink): StoredCalcLink {
+  switch (l.kind) {
+    case 'tangent':
+      return {
+        kind: 'tangent',
+        id: l.id,
+        parentId: l.parentId,
+        curveId: l.curveId,
+        x: l.x,
+      }
+    case 'derivative':
+      return { kind: 'derivative', id: l.id, parentId: l.parentId, curveId: l.curveId }
+    case 'area':
+      return {
+        kind: 'area',
+        id: l.id,
+        parentId: l.parentId,
+        from: l.from,
+        to: l.to,
+        // false is the default, so it is not written: an unsigned toggle
+        // nobody touched must not change the bytes.
+        ...(l.abs === true ? { abs: true } : {}),
+      }
+    case 'riemann':
+      return {
+        kind: 'riemann',
+        id: l.id,
+        parentId: l.parentId,
+        from: l.from,
+        to: l.to,
+        n: clampRiemannN(l.n),
+        method: l.method,
+      }
+  }
+}
+
+/**
+ * One link out of an untrusted blob. Null when it is not salvageable: every
+ * field a link carries is load-bearing, and half a link would shade a region
+ * the document never asked for.
+ */
+export function storedToCalcLink(raw: unknown): CalcLink | null {
+  if (!isObj(raw)) return null
+  const { id, parentId, curveId } = raw
+  if (!isStr(id) || !id || !isStr(parentId) || !parentId) return null
+  switch (raw.kind) {
+    case 'tangent':
+      if (!isStr(curveId) || !curveId || !isNum(raw.x)) return null
+      return { kind: 'tangent', id, parentId, curveId, x: raw.x }
+    case 'derivative':
+      if (!isStr(curveId) || !curveId) return null
+      return { kind: 'derivative', id, parentId, curveId }
+    case 'area':
+      if (!isNum(raw.from) || !isNum(raw.to)) return null
+      return { kind: 'area', id, parentId, from: raw.from, to: raw.to, abs: raw.abs === true }
+    case 'riemann':
+      if (!isNum(raw.from) || !isNum(raw.to)) return null
+      return {
+        kind: 'riemann',
+        id,
+        parentId,
+        from: raw.from,
+        to: raw.to,
+        n: clampRiemannN(raw.n),
+        method: isMethod(raw.method) ? raw.method : 'left',
+      }
+    default:
+      return null
+  }
+}
+
+/** How a dropped link names itself in the load report. */
+export function calcNoun(kind: CalcKind): string {
+  switch (kind) {
+    case 'tangent':
+      return 'tangent line'
+    case 'derivative':
+      return 'derivative curve'
+    case 'area':
+      return 'shaded area'
+    case 'riemann':
+      return 'Riemann sum'
+  }
 }
 
 /** Copy an item into a fresh, own-property-only record (no aliasing, no extras). */
@@ -810,6 +1034,102 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
     degraded = true
   }
 
+  // ---- calculus objects
+  //
+  // The links come back first, then the model closures the derivative curves
+  // among them need. A link is only kept when everything it names is still
+  // here; anything else is reported rather than dropped in silence, because a
+  // tangent that quietly stops existing is a lesson that quietly stops working.
+  const calc: CalcLink[] = []
+  const derivCounter = { value: 0 }
+  const rawCalc = Array.isArray(rawBoard.calc) ? rawBoard.calc : []
+  if (rawBoard.calc !== undefined && !Array.isArray(rawBoard.calc)) {
+    problems.push('The list of calculus objects was unreadable.')
+    degraded = true
+  }
+  if (rawCalc.length > MAX_CALC) {
+    problems.push(`Only the first ${MAX_CALC} calculus objects were loaded.`)
+    degraded = true
+  }
+  {
+    const curveIds = new Set(curves.map((c) => c.id))
+    const seenLinks = new Set<string>()
+    let damaged = 0
+    for (const raw of rawCalc.slice(0, MAX_CALC)) {
+      const link = storedToCalcLink(raw)
+      if (!link || seenLinks.has(link.id)) {
+        damaged++
+        continue
+      }
+      if (!curveIds.has(link.parentId)) {
+        problems.push(
+          `A ${calcNoun(link.kind)} was dropped: the curve it belonged to is no longer in this document.`,
+        )
+        degraded = true
+        continue
+      }
+      if (isCurveLink(link) && !curveIds.has(link.curveId)) {
+        problems.push(
+          `A ${calcNoun(link.kind)} was dropped: the curve it drew is no longer in this document.`,
+        )
+        degraded = true
+        continue
+      }
+      seenLinks.add(link.id)
+      calc.push(link)
+    }
+    if (damaged > 0) {
+      problems.push(
+        `${damaged} damaged calculus object${damaged === 1 ? '' : 's'} could not be read.`,
+      )
+      degraded = true
+    }
+  }
+
+  // A derivative that had to be differentiated numerically lives in a closure,
+  // exactly like a typed expression, and is rebuilt the same way: from the
+  // thing that defines it, which here is its parent curve rather than a line of
+  // text. A library-family derivative (a cubic's parabola) needs nothing.
+  {
+    const byId = new Map(curves.map((c) => [c.id, c]))
+    const lost = new Set<string>()
+    for (const link of calc) {
+      if (link.kind !== 'derivative') continue
+      const child = byId.get(link.curveId)
+      const parent = byId.get(link.parentId)
+      if (!child || !parent) continue
+      const m = new RegExp(`^${DERIV_MODEL_PREFIX}(\\d+)$`).exec(child.modelId)
+      if (m) derivCounter.value = Math.max(derivCounter.value, Number(m[1]))
+      if (MODELS[child.modelId] ?? extraModels[child.modelId]) continue
+      let built: ReturnType<typeof derivativeModel> = null
+      try {
+        built = derivativeModel(parent, { ...MODELS, ...extraModels }, child.modelId)
+      } catch {
+        built = null
+      }
+      if (built && built.spec.id === child.modelId) {
+        extraModels[child.modelId] = built.spec
+        continue
+      }
+      // Nothing can draw this curve any more. Its only reason to exist was the
+      // link, so both go, and the report says so.
+      problems.push(
+        'A derivative curve could not be rebuilt from the curve it came from, so it was removed.',
+      )
+      degraded = true
+      lost.add(link.id)
+      lost.add(`curve:${child.id}`)
+    }
+    if (lost.size > 0) {
+      for (let i = calc.length - 1; i >= 0; i--) {
+        if (lost.has(calc[i].id)) calc.splice(i, 1)
+      }
+      for (let i = curves.length - 1; i >= 0; i--) {
+        if (lost.has(`curve:${curves[i].id}`)) curves.splice(i, 1)
+      }
+    }
+  }
+
   // ---- axis units. Unreadable or absent is not a repair: it is the default.
   const rawAxis = isObj(rawBoard.axisUnits) ? rawBoard.axisUnits : {}
   const axisUnits: AxisUnitChoices = {
@@ -837,10 +1157,12 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
       displaySources,
       brokenExpr,
       axisUnits,
+      calc,
       viewport,
       selectedId,
       mode,
       exprCounter,
+      derivCounter: derivCounter.value,
     },
     problems,
     degraded,
@@ -859,10 +1181,12 @@ function blankHydrated(): HydratedBoard {
     displaySources: {},
     brokenExpr: {},
     axisUnits: { ...AUTO_AXIS_UNITS },
+    calc: [],
     viewport: { center: { x: 0, y: 0 }, pxPerUnit: 60 },
     selectedId: null,
     mode: 'draw',
     exprCounter: 0,
+    derivCounter: 0,
   }
 }
 

@@ -15,6 +15,26 @@ import { parseExpression } from './core/parse'
 import { parseInequality } from './core/parse/inequality'
 import { applyFeatureEdit, snapParams } from './core/fit/edit'
 import { analyzeCurve } from './core/analyze'
+import { derivativeModel, tangentAt } from './core/calculus'
+import {
+  N_DEFAULT,
+  clampN,
+  defaultBounds,
+  defaultTangentX,
+  dependentsOf,
+  fixed as fixedNum,
+  isCurveLink,
+  labelLegend,
+  linkNoun,
+  changeLabel,
+  countPhrase,
+  cardCalc,
+  overlaysFor,
+  tangentReadout,
+  areaReadout,
+  riemannReadout,
+} from './ui/calcLinks'
+import type { CalcChange, CalcKind, CalcLink, CardCalc } from './ui/calcLinks'
 import { curveBounds, splitNotice, unionBoxes } from './ui/curveState'
 import { answerPieces } from './ui/nlText'
 import { AnswerContext } from './ui/answerContext'
@@ -24,7 +44,7 @@ import type { FeatureEditResult, SpecialPoint } from './core/types'
 import { describePoints } from './ui/featureEdit'
 import { readCurveEquation } from './ui/equationText'
 import { CanvasStage } from './ui/CanvasStage'
-import type { CanvasStageHandle } from './ui/CanvasStage'
+import type { CanvasStageHandle, ExtraHandle } from './ui/CanvasStage'
 import { NumberLineStage } from './ui/NumberLineStage'
 import type { NumberLineStageHandle } from './ui/NumberLineStage'
 import type { NLPart } from './render/numberline'
@@ -41,13 +61,14 @@ import {
   renderBoardToCanvas,
   suggestAxisUnits,
 } from './ui/renderBoard'
-import type { AxisUnits, BoardScene } from './ui/renderBoard'
+import type { AxisUnits, BoardScene, Overlay } from './ui/renderBoard'
 import { clampFitSettings, contentBounds, exportViewport } from './ui/exportFit'
 import type { FitExportSettings } from './ui/exportFit'
 import { PresentBar } from './ui/PresentBar'
 import { PresentLegend } from './ui/PresentLegend'
 import { DEFAULT_PRESENT_TYPE, curveLegend, itemLegend, presentScale } from './ui/present'
 import { copyDocName, nextDocName } from './ui/docName'
+import { DERIV_MODEL_PREFIX } from './core/persist'
 import {
   AUTO_AXIS_UNITS,
   createDoc,
@@ -128,6 +149,13 @@ interface Snapshot {
   displaySources: Record<string, string>
   /** curveId -> the edits made since recognition, in the order they were made. */
   edits: Record<string, CurveEdit[]>
+  /**
+   * The calculus objects: tangents, derivative curves, shaded integrals,
+   * Riemann sums. They are in the SAME history as the curves because they are
+   * in the same breath — deleting a curve takes its tangent with it, and one
+   * undo has to bring both back or the board comes back half-built.
+   */
+  calc: CalcLink[]
   candidates: Map<string, FitResult[]>
   /**
    * What the action was, in three or four words: "set zero", "edit equation",
@@ -162,6 +190,7 @@ interface StatePatch {
   brokenExpr?: Record<string, string>
   displaySources?: Record<string, string>
   edits?: Record<string, CurveEdit[]>
+  calc?: CalcLink[]
   candidates?: Map<string, FitResult[]>
 }
 
@@ -187,6 +216,13 @@ export default function App() {
   const [drawingActive, setDrawingActive] = useState(false)
   const [exprOpen, setExprOpen] = useState(false)
   const [extraModels, setExtraModels] = useState<Record<string, ModelSpec>>({})
+  /**
+   * Tangent lines, derivative curves, shaded areas and Riemann sums, as the
+   * LINKS that describe them. Nothing here is a result: every number and every
+   * pixel they produce is recomputed from the parent curve, which is what lets
+   * a slider drag carry all four of them live.
+   */
+  const [calcLinks, setCalcLinks] = useState<CalcLink[]>([])
   const [snapFlash, setSnapFlash] = useState<{ id: string; mask: boolean[]; key: number } | null>(
     null,
   )
@@ -313,6 +349,28 @@ export default function App() {
   const axisUnitChoiceRef = useRef<AxisUnitChoices>(axisUnitChoice)
   axisUnitChoiceRef.current = axisUnitChoice
   const editsRef = useRef<Record<string, CurveEdit[]>>({})
+  const calcRef = useRef<CalcLink[]>([])
+  /** Highest dfdx_N registered, so a new derivative cannot collide with one. */
+  const derivCounterRef = useRef(0)
+  /**
+   * linkId -> the parent state the dependent was last rebuilt from. The sync
+   * pass compares against it, so a dependent is recomputed exactly when its
+   * parent moved — and a derivative curve whose own slider the teacher dragged
+   * is left alone until the parent says otherwise.
+   */
+  const calcSigRef = useRef<Map<string, string>>(new Map())
+  /**
+   * Links whose curve the BOARD hid because the mathematics went away (a
+   * tangent at a corner). Remembered so restoring it can never override a
+   * teacher who hid the curve themselves.
+   */
+  const calcAutoHiddenRef = useRef<Set<string>>(new Set())
+  /**
+   * linkId -> the parent family a numerically-differentiated derivative's
+   * closure was built from. It only has to be rebuilt when THAT changes; on a
+   * slider tick the same closure with new params is the same mathematics.
+   */
+  const calcSpecOriginRef = useRef<Map<string, string>>(new Map())
   const docMetaRef = useRef<DocMeta>(docMeta)
   const saveTimerRef = useRef(0)
   /** Nothing may be written until the stored document has been read in. */
@@ -515,6 +573,7 @@ export default function App() {
       brokenExpr: brokenExprRef.current,
       displaySources: displaySourcesRef.current,
       edits: editsRef.current,
+      calc: calcRef.current,
       candidates: candidatesRef.current,
       label,
     }),
@@ -553,6 +612,10 @@ export default function App() {
     if (s.edits) {
       editsRef.current = s.edits
       setEdits(s.edits)
+    }
+    if (s.calc) {
+      calcRef.current = s.calc
+      setCalcLinks(s.calc)
     }
     // Replaced wholesale, never mutated in place, so snapshots stay immutable.
     if (s.candidates) candidatesRef.current = s.candidates
@@ -635,7 +698,12 @@ export default function App() {
       pre &&
       (pre.curves !== curvesRef.current ||
         pre.items !== itemsRef.current ||
-        pre.styles !== stylesRef.current)
+        pre.styles !== stylesRef.current ||
+        // Moving an integral's limit or dragging n changes NO curve — it
+        // changes the link. Without this, the one gesture on the board that
+        // leaves the curves alone was also the one gesture undo could not
+        // take back.
+        pre.calc !== calcRef.current)
     ) {
       undoRef.current = [...undoRef.current.slice(-(HISTORY_LIMIT - 1)), pre]
       redoRef.current = []
@@ -711,16 +779,6 @@ export default function App() {
     setEdits(next)
   }, [])
 
-  /** Everything this curve owns, minus the curve. */
-  const forgetCurve = useCallback(
-    (id: string): { displaySources: Record<string, string>; edits: Record<string, CurveEdit[]> } => {
-      const { [id]: _src, ...displaySources } = displaySourcesRef.current
-      const { [id]: _ed, ...edits } = editsRef.current
-      return { displaySources, edits }
-    },
-    [],
-  )
-
   // Track Alt so slider/nudge commits can honor "hold Alt to skip snapping".
   useEffect(() => {
     const onDown = (e: KeyboardEvent): void => {
@@ -755,10 +813,12 @@ export default function App() {
       displaySources: {},
       brokenExpr: {},
       axisUnits: { ...AUTO_AXIS_UNITS },
+      calc: [],
       viewport: { center: { x: 0, y: 0 }, pxPerUnit: 60 },
       selectedId: null,
       mode: 'draw',
       exprCounter: 0,
+      derivCounter: 0,
     }),
     [],
   )
@@ -774,6 +834,7 @@ export default function App() {
       exprSources: exprSourcesRef.current,
       displaySources: displaySourcesRef.current,
       axisUnits: axisUnitChoiceRef.current,
+      calc: calcRef.current,
       viewport: { center: vpRef.current.center, pxPerUnit: vpRef.current.pxPerUnit },
       selectedId: selectedRef.current,
       mode: MODE,
@@ -873,6 +934,13 @@ export default function App() {
     // exactly what the document said it was.
     displaySourcesRef.current = board.displaySources
     axisUnitChoiceRef.current = board.axisUnits
+    // The links come back; everything they DRAW is rebuilt from them by the
+    // sync pass below, against the models this load just registered. A
+    // reopened board is therefore live, not a photograph.
+    calcRef.current = board.calc
+    calcSigRef.current = new Map()
+    calcAutoHiddenRef.current = new Set()
+    derivCounterRef.current = board.derivCounter
     editsRef.current = {}
     selectedRef.current = board.selectedId
     docMetaRef.current = meta
@@ -891,6 +959,7 @@ export default function App() {
     setBrokenExpr(board.brokenExpr)
     setDisplaySources(board.displaySources)
     setAxisUnitChoice(board.axisUnits)
+    setCalcLinks(board.calc)
     setEdits({})
     setExtraModels(board.extraModels)
     setSelectedId(board.selectedId)
@@ -987,6 +1056,10 @@ export default function App() {
     // A units change is a change to the document, so it has to reach the same
     // debounced write everything else does.
     axisUnitChoice,
+    // So is a calculus object. Moving a limit or changing n leaves the curves
+    // untouched, so without this the change would be on screen and nowhere
+    // else until the next thing a teacher happened to do.
+    calcLinks,
     selectedId,
     docMeta.name,
     scheduleSave,
@@ -1316,27 +1389,65 @@ export default function App() {
     [commitState, pickColor],
   )
 
-  const deleteCurve = useCallback(
-    (id: string): void => {
-      const { [id]: _gone, ...restStyles } = stylesRef.current
-      const { [id]: _src, ...restSources } = exprSourcesRef.current
-      const { [id]: _broken, ...restBroken } = brokenExprRef.current
-      // Everything the curve owns goes through commitState in one call, so the
-      // snapshot it pushes still holds the equation text that rebuilds it.
-      const forgotten = forgetCurve(id)
+  /** Everything `ids` owns, transitively: the curves and the links. */
+  const removeWithDependents = useCallback(
+    (ids: string[], label: string): { curves: FittedCurve[]; lost: CalcLink[] } => {
+      const dead = dependentsOf(calcRef.current, ids)
+      const lost = calcRef.current.filter((l) => dead.linkIds.has(l.id))
+      const curves = curvesRef.current.filter((c) => !dead.curveIds.has(c.id))
+      const styles: StyleMap = {}
+      for (const [id, st] of Object.entries(stylesRef.current)) {
+        if (!dead.curveIds.has(id)) styles[id] = st
+      }
+      const exprSources: Record<string, string> = {}
+      for (const [id, src] of Object.entries(exprSourcesRef.current)) {
+        if (!dead.curveIds.has(id)) exprSources[id] = src
+      }
+      const brokenExpr: Record<string, string> = {}
+      for (const [id, why] of Object.entries(brokenExprRef.current)) {
+        if (!dead.curveIds.has(id)) brokenExpr[id] = why
+      }
+      const displaySources: Record<string, string> = {}
+      for (const [id, src] of Object.entries(displaySourcesRef.current)) {
+        if (!dead.curveIds.has(id)) displaySources[id] = src
+      }
+      const edits: Record<string, CurveEdit[]> = {}
+      for (const [id, list] of Object.entries(editsRef.current)) {
+        if (!dead.curveIds.has(id)) edits[id] = list
+      }
       commitState(
         {
-          curves: curvesRef.current.filter((c) => c.id !== id),
-          styles: restStyles,
-          exprSources: restSources,
-          brokenExpr: restBroken,
-          ...forgotten,
+          curves,
+          calc: calcRef.current.filter((l) => !dead.linkIds.has(l.id)),
+          styles,
+          exprSources,
+          brokenExpr,
+          displaySources,
+          edits,
         },
-        'delete curve',
+        label,
       )
-      setSelectedId((sel) => (sel === id ? null : sel))
+      setSelectedId((sel) => (sel && dead.curveIds.has(sel) ? null : sel))
+      return { curves, lost }
     },
-    [commitState, forgetCurve],
+    [commitState],
+  )
+
+  const deleteCurve = useCallback(
+    (id: string): void => {
+      // Everything the curve owns goes in ONE commit — its styles, its
+      // equation text, and the calculus objects that only exist because it
+      // does. A tangent left behind pointing at nothing is not a curve the
+      // board can draw, and a second undo to finish the job is not an undo.
+      const { lost } = removeWithDependents([id], 'delete curve')
+      if (lost.length === 0) return
+      const kinds = [...new Set(lost.map((l) => linkNoun(l.kind)))].join(', ')
+      showToast(
+        `Deleted the curve and ${countPhrase(lost.length, 'thing')} that depended on it (${kinds}). Undo brings all of it back.`,
+        { ms: 5000, action: { label: 'Undo', run: undo } },
+      )
+    },
+    [removeWithDependents, showToast, undo],
   )
 
   const clearAll = useCallback((): void => {
@@ -1360,7 +1471,15 @@ export default function App() {
       if (st) styles[it.id] = st
     }
     commitState(
-      { curves: [], styles, exprSources: {}, brokenExpr: {}, displaySources: {}, edits: {} },
+      {
+        curves: [],
+        calc: [],
+        styles,
+        exprSources: {},
+        brokenExpr: {},
+        displaySources: {},
+        edits: {},
+      },
       'remove all curves',
     )
     setSelectedId(null)
@@ -1830,6 +1949,346 @@ export default function App() {
     },
     [applyState],
   )
+
+
+  // ======================================================= calculus objects
+  //
+  // Four things a class does TO a graph — a tangent at a point, f′, the area
+  // under it, a Riemann sum — added from the curve's own card.
+  //
+  // None of them is a new kind of object. A tangent is a `line` curve; a
+  // derivative is a curve in f′'s own family (so it arrives with sliders,
+  // handles and an analysis table already working); an area and a Riemann sum
+  // are overlays the renderer already draws. What the board REMEMBERS is only
+  // the link — which curve, at which x, over which interval, with how many
+  // rectangles — and everything visible is recomputed from it by syncCalc()
+  // below, on every change to the parent. That is why dragging the cubic's
+  // slider carries the tangent, the parabola, the shading and 200 rectangles
+  // with it: none of them is a stored answer that could go stale.
+
+  /** The derivative's line style: f and f′ read as a pair, not as two curves. */
+  const DERIV_DASH = [8, 6]
+
+  /** What a curve is CALLED in a sentence, e.g. "tangent to Cubic at x = 2". */
+  const curveLabel = useCallback((curve: FittedCurve): string => {
+    const spec = modelsRef.current[curve.modelId]
+    if (spec && !curve.modelId.startsWith('expr_') && spec.name) return spec.name
+    const typed = exprSourcesRef.current[curve.id] ?? displaySourcesRef.current[curve.id]
+    if (typed && typed.trim()) {
+      const t = typed.trim()
+      return t.length > 24 ? `${t.slice(0, 23)}…` : t
+    }
+    return spec?.name ?? curve.modelId
+  }, [])
+
+  /** The x-range on screen — the fallback a fresh interval is measured in. */
+  const viewWindow = useCallback((): [number, number] => {
+    const vp = vpRef.current
+    const half = vp.widthPx / 2 / vp.pxPerUnit
+    return [vp.center.x - half, vp.center.x + half]
+  }, [])
+
+  /** Rename the edit bracket a gesture already opened, so undo says the truth. */
+  const relabelEdit = useCallback((label: string): void => {
+    const pre = preEditRef.current
+    if (pre && pre.label !== label) preEditRef.current = { ...pre, label }
+  }, [])
+
+  const addCalcObject = useCallback(
+    (parentId: string, kind: CalcKind): void => {
+      const parent = curvesRef.current.find((c) => c.id === parentId)
+      if (!parent) return
+      const models = modelsRef.current
+      const spec = models[parent.modelId]
+      if (!spec || spec.kind !== 'explicit') {
+        showToast('Only a curve that is a function of x can carry calculus objects.')
+        return
+      }
+      const linkId = nextId()
+      const win = viewWindow()
+
+      if (kind === 'tangent') {
+        const x = defaultTangentX(parent, models, win)
+        let t: ReturnType<typeof tangentAt> = null
+        try {
+          t = tangentAt(parent, models, x)
+        } catch {
+          t = null
+        }
+        if (!t) {
+          showToast(`This curve has no tangent line at x = ${fixedNum(x, 2)}.`)
+          return
+        }
+        // A REAL line curve: params [b, m], its own card, its own handles, and
+        // it exports because every curve does.
+        const curve: FittedCurve = {
+          id: nextId(),
+          modelId: 'line',
+          params: [t.b, t.m],
+          kind: 'explicit',
+          domain: null,
+          color: parent.color,
+          strokeWidth: 2,
+          visible: true,
+          error: 0,
+        }
+        commitState(
+          {
+            curves: [...curvesRef.current, curve],
+            calc: [...calcRef.current, { kind: 'tangent', id: linkId, parentId, curveId: curve.id, x }],
+          },
+          'add tangent',
+        )
+        setSelectedId(curve.id)
+        return
+      }
+
+      if (kind === 'derivative') {
+        // The id is only SPENT if the derivative turns out to need a closure of
+        // its own; a cubic's derivative is a library parabola and registers
+        // nothing at all.
+        const n = derivCounterRef.current + 1
+        const wantId = `${DERIV_MODEL_PREFIX}${n}`
+        let d: ReturnType<typeof derivativeModel> = null
+        try {
+          d = derivativeModel(parent, models, wantId)
+        } catch {
+          d = null
+        }
+        if (!d) {
+          showToast('This curve cannot be differentiated.')
+          return
+        }
+        if (d.spec.id === wantId) {
+          derivCounterRef.current = n
+          const built = d.spec
+          setExtraModels((prev) => ({ ...prev, [wantId]: built }))
+          calcSpecOriginRef.current.set(linkId, parent.modelId)
+        }
+        const curve: FittedCurve = {
+          id: nextId(),
+          modelId: d.spec.id,
+          params: d.params.slice(),
+          kind: 'explicit',
+          domain: d.domain,
+          color: parent.color,
+          strokeWidth: 2.5,
+          visible: true,
+          error: 0,
+        }
+        commitState(
+          {
+            curves: [...curvesRef.current, curve],
+            calc: [...calcRef.current, { kind: 'derivative', id: linkId, parentId, curveId: curve.id }],
+            styles: {
+              ...stylesRef.current,
+              [curve.id]: { ...stylesRef.current[curve.id], dash: DERIV_DASH.slice() },
+            },
+          },
+          'add derivative',
+        )
+        setSelectedId(curve.id)
+        return
+      }
+
+      const [from, to] = defaultBounds(parent, win)
+      if (kind === 'area') {
+        commitState(
+          { calc: [...calcRef.current, { kind: 'area', id: linkId, parentId, from, to, abs: false }] },
+          'add area',
+        )
+      } else {
+        commitState(
+          {
+            calc: [
+              ...calcRef.current,
+              { kind: 'riemann', id: linkId, parentId, from, to, n: N_DEFAULT, method: 'left' },
+            ],
+          },
+          'add Riemann sum',
+        )
+      }
+      setSelectedId(parentId)
+    },
+    [commitState, showToast, viewWindow],
+  )
+
+  /**
+   * One stated change to one link.
+   *
+   * `live` is a drag or a slider in flight: the state moves without a history
+   * entry of its own, inside the bracket the gesture opened, so a drag from
+   * a = 0 to a = 3 is ONE undo called "move area bound" rather than forty.
+   */
+  const changeCalc = useCallback(
+    (change: CalcChange, live = false): void => {
+      const links = calcRef.current
+      const i = links.findIndex((l) => l.id === change.linkId)
+      if (i < 0) return
+      const l = links[i]
+      let next: CalcLink | null = null
+      if (change.kind === 'tangentX' && l.kind === 'tangent') {
+        if (!Number.isFinite(change.x) || change.x === l.x) return
+        next = { ...l, x: change.x }
+      } else if (change.kind === 'bound' && (l.kind === 'area' || l.kind === 'riemann')) {
+        if (!Number.isFinite(change.value) || l[change.which] === change.value) return
+        next = { ...l, [change.which]: change.value } as CalcLink
+      } else if (change.kind === 'abs' && l.kind === 'area') {
+        if (l.abs === change.abs) return
+        next = { ...l, abs: change.abs }
+      } else if (change.kind === 'n' && l.kind === 'riemann') {
+        const n = clampN(change.n)
+        if (n === l.n) return
+        next = { ...l, n }
+      } else if (change.kind === 'method' && l.kind === 'riemann') {
+        if (l.method === change.method) return
+        next = { ...l, method: change.method }
+      }
+      if (!next) return
+      const list = links.slice()
+      list[i] = next
+      if (live) {
+        relabelEdit(changeLabel(change))
+        applyState({ calc: list })
+      } else {
+        commitState({ calc: list }, changeLabel(change))
+      }
+    },
+    [applyState, commitState, relabelEdit],
+  )
+
+  /** Take one calculus object off the board, with its curve when it has one. */
+  const removeCalcObject = useCallback(
+    (linkId: string): void => {
+      const link = calcRef.current.find((l) => l.id === linkId)
+      if (!link) return
+      const label = `remove ${linkNoun(link.kind)}`
+      if (isCurveLink(link)) {
+        removeWithDependents([link.curveId], label)
+        return
+      }
+      commitState({ calc: calcRef.current.filter((l) => l.id !== linkId) }, label)
+    },
+    [commitState, removeWithDependents],
+  )
+
+  /**
+   * Rebuild every dependent whose parent has moved.
+   *
+   * Runs after any change to the curves, the models or the links, and does
+   * nothing at all unless a parent's family, params, domain or colour actually
+   * changed — which is what lets a teacher drag the DERIVATIVE's own slider
+   * without the parent immediately overruling them.
+   *
+   * It never pushes history: a dependent moving is not a thing the teacher
+   * did, it is the consequence of the thing they did, and it rides inside that
+   * action's own undo entry.
+   */
+  const syncCalc = useCallback((): void => {
+    const links = calcRef.current
+    if (links.length === 0) return
+    const models = modelsRef.current
+    const before = curvesRef.current
+    const byId = new Map(before.map((c) => [c.id, c]))
+    const patches = new Map<string, Partial<FittedCurve>>()
+    const register: Record<string, ModelSpec> = {}
+
+    for (const link of links) {
+      if (!isCurveLink(link)) continue
+      const parent = byId.get(link.parentId)
+      const child = byId.get(link.curveId)
+      if (!parent || !child) continue
+      const sig = `${parent.modelId}|${parent.params.join(',')}|${
+        parent.domain ? parent.domain.join(',') : ''
+      }|${parent.color}|${link.kind === 'tangent' ? link.x : ''}`
+      if (calcSigRef.current.get(link.id) === sig) continue
+      calcSigRef.current.set(link.id, sig)
+
+      let patch: Partial<FittedCurve> | null = null
+      if (link.kind === 'tangent') {
+        let t: ReturnType<typeof tangentAt> = null
+        try {
+          t = tangentAt(parent, models, link.x)
+        } catch {
+          t = null
+        }
+        // No tangent at a corner, a pole or outside the domain: the line HIDES
+        // rather than keeping the last one it had. A stale tangent on a
+        // projector is a wrong answer that looks like a right one.
+        if (t) patch = { params: [t.b, t.m], color: parent.color }
+      } else {
+        // A library derivative registers nothing; only a closure needs an id,
+        // and asking for one under the child's CURRENT id would overwrite a
+        // library family (poly2) with a difference quotient if the parent had
+        // just been retyped into an expression.
+        const fresh = MODELS[child.modelId] !== undefined
+        const n = derivCounterRef.current + 1
+        const wantId = fresh ? `${DERIV_MODEL_PREFIX}${n}` : child.modelId
+        let d: ReturnType<typeof derivativeModel> = null
+        try {
+          d = derivativeModel(parent, models, wantId)
+        } catch {
+          d = null
+        }
+        if (d) {
+          if (d.spec.id === wantId) {
+            // The closure closes over the PARENT'S spec, so it only has to be
+            // rebuilt when the parent changed family — not on every slider tick.
+            if (fresh) derivCounterRef.current = n
+            if (fresh || calcSpecOriginRef.current.get(link.id) !== parent.modelId) {
+              register[wantId] = d.spec
+              calcSpecOriginRef.current.set(link.id, parent.modelId)
+            }
+          }
+          patch = {
+            modelId: d.spec.id,
+            params: d.params.slice(),
+            domain: d.domain,
+            kind: 'explicit',
+            color: parent.color,
+          }
+        }
+      }
+
+      if (!patch) {
+        if (child.visible) {
+          patches.set(child.id, { visible: false })
+          calcAutoHiddenRef.current.add(link.id)
+        }
+        continue
+      }
+      if (calcAutoHiddenRef.current.delete(link.id) && !child.visible) patch.visible = true
+      patches.set(child.id, patch)
+    }
+
+    if (Object.keys(register).length > 0) setExtraModels((prev) => ({ ...prev, ...register }))
+    if (patches.size === 0) return
+    const after = before.map((c) => {
+      const patch = patches.get(c.id)
+      if (!patch) return c
+      const merged = { ...c, ...patch }
+      // Identical values must not produce a new object: a fresh curve array on
+      // every frame would re-run every memo the board has for nothing.
+      const same =
+        merged.modelId === c.modelId &&
+        merged.color === c.color &&
+        merged.visible === c.visible &&
+        merged.params.length === c.params.length &&
+        merged.params.every((v, i) => Object.is(v, c.params[i])) &&
+        String(merged.domain) === String(c.domain)
+      return same ? c : merged
+    })
+    if (after.every((c, i) => c === before[i])) return
+    applyState({ curves: after })
+  }, [applyState])
+
+  // The sync is an EFFECT, not a callback on each mutation, because a parent
+  // can move in a dozen different ways (slider, handle, typed equation, undo,
+  // document load) and every one of them has to carry its dependents. One
+  // place that notices the board changed is one place that can be right.
+  useEffect(() => {
+    syncCalc()
+  }, [curves, models, calcLinks, syncCalc])
 
   // ------------------------------------------------------- typed expressions
   /** Parse and add a typed expression. Returns an error message, or null on success. */
@@ -2327,6 +2786,100 @@ export default function App() {
   canvasThemeRef.current = canvasTheme
   const contextAnalysisRef = useRef(contextAnalysis)
   contextAnalysisRef.current = contextAnalysis
+
+  // ------------------------------------------------- what the board draws
+  //
+  // The shading and the rectangles are FIGURE, not chrome: they carry the
+  // mathematics the lesson is about, so they go into the scene and reach the
+  // exported PNG through exactly the same field the screen uses.
+  const overlays = useMemo<Overlay[]>(
+    () => (kind === 'cartesian' ? overlaysFor(calcLinks, curves, models) : []),
+    [kind, calcLinks, curves, models],
+  )
+  const overlaysRef = useRef<Overlay[]>(overlays)
+  overlaysRef.current = overlays
+
+  /** Everything the cards say about calculus, computed once for all of them. */
+  const calcCards = useMemo<Record<string, CardCalc>>(
+    () => (kind === 'cartesian' ? cardCalc(calcLinks, curves, models, curveLabel) : {}),
+    [kind, calcLinks, curves, models, curveLabel],
+  )
+  const calcFor = useCallback(
+    (id: string): CardCalc | undefined => calcCards[id],
+    [calcCards],
+  )
+
+  /**
+   * The points a teacher can grab that belong to a calculus object rather than
+   * to a curve family: a tangent's point (which slides ALONG the parent) and
+   * an interval's two ends (which slide along the x-axis).
+   *
+   * Only the selected curve's, because that is what the board draws handles
+   * for — select the cubic to move its interval, select the tangent line to
+   * move the point it touches.
+   */
+  const extraHandles = useMemo<ExtraHandle[]>(() => {
+    if (kind !== 'cartesian' || !selectedId) return []
+    const out: ExtraHandle[] = []
+    const byId = new Map(curves.map((c) => [c.id, c]))
+    // A dragged point stays ON the curve it belongs to. Typing a limit outside
+    // the domain is still allowed — and still answered with the reason it
+    // cannot be integrated — but a drag that runs off the end of the sketch
+    // and leaves a dead readout behind is not a statement anyone made.
+    const onCurve = (parent: FittedCurve, x: number): number => {
+      const d = parent.domain
+      if (!d || !Number.isFinite(d[0]) || !Number.isFinite(d[1])) return x
+      return Math.min(Math.max(x, Math.min(d[0], d[1])), Math.max(d[0], d[1]))
+    }
+    for (const link of calcLinks) {
+      const parent = byId.get(link.parentId)
+      if (!parent) continue
+      if (link.kind === 'tangent') {
+        // Reachable from either card: the line's own, and the curve it is on.
+        if (link.curveId !== selectedId && link.parentId !== selectedId) continue
+        let t: ReturnType<typeof tangentAt> = null
+        try {
+          t = tangentAt(parent, models, link.x)
+        } catch {
+          t = null
+        }
+        if (!t) continue
+        out.push({
+          id: `calc:${link.id}:point`,
+          pos: t.point,
+          label: 'tangent point',
+          onDrag: (pos) =>
+            changeCalc({ kind: 'tangentX', linkId: link.id, x: onCurve(parent, pos.x) }, true),
+        })
+        continue
+      }
+      if (link.kind !== 'area' && link.kind !== 'riemann') continue
+      if (link.parentId !== selectedId) continue
+      // The limits live ON the axis, which is where a teacher points at them.
+      out.push({
+        id: `calc:${link.id}:from`,
+        pos: { x: link.from, y: 0 },
+        label: 'a',
+        onDrag: (pos) =>
+          changeCalc(
+            { kind: 'bound', linkId: link.id, which: 'from', value: onCurve(parent, pos.x) },
+            true,
+          ),
+      })
+      out.push({
+        id: `calc:${link.id}:to`,
+        pos: { x: link.to, y: 0 },
+        label: 'b',
+        onDrag: (pos) =>
+          changeCalc(
+            { kind: 'bound', linkId: link.id, which: 'to', value: onCurve(parent, pos.x) },
+            true,
+          ),
+      })
+    }
+    return out
+  }, [kind, selectedId, calcLinks, curves, models, changeCalc])
+
   const copyTimerRef = useRef(0)
 
   const boardTheme = canvasTheme === 'light' ? LIGHT_THEME : DARK_THEME
@@ -2385,6 +2938,10 @@ export default function App() {
       // there being one scene type: a π axis a teacher set for a trig lesson
       // has to be π in the file they paste into the worksheet.
       axisUnits: axisUnitsRef.current,
+      // The shaded integral and the Riemann rectangles ARE the figure on a
+      // calculus board. A PNG that dropped them would be the same bug the
+      // analysis markers once had.
+      overlays: overlaysRef.current,
       chrome: null,
     }
     },
@@ -2770,8 +3327,11 @@ export default function App() {
         ? []
         : kind === 'number-line'
           ? itemLegend(items)
-          : curveLegend(curves, models, displaySources),
-    [presentMode, kind, items, curves, models, displaySources],
+          // A derived curve's equation does not say what it IS: two cubic-ish
+          // chips on a wall and the class has to guess which is f and which
+          // is f′. The chip says so.
+          : labelLegend(curveLegend(curves, models, displaySources), calcLinks),
+    [presentMode, kind, items, curves, models, displaySources, calcLinks],
   )
 
   const changePresentType = useCallback((next: number): void => {
@@ -2837,6 +3397,10 @@ export default function App() {
         onOpacity={setOpacity}
         onExprToggle={() => setExprOpen((o) => !o)}
         onExprSubmit={kind === 'number-line' ? addInequality : addExpression}
+        calcFor={calcFor}
+        onAddCalc={addCalcObject}
+        onCalcChange={changeCalc}
+        onCalcRemove={removeCalcObject}
       />
       </AnswerContext.Provider>
 
@@ -2912,6 +3476,8 @@ export default function App() {
           theme={boardTheme}
           present={present}
           axisUnits={axisUnits}
+          overlays={overlays}
+          extraHandles={extraHandles}
         />
         )}
 

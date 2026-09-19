@@ -3773,3 +3773,235 @@ button.card-eq {
     min-height: 44px;
   }
 }
+
+/* ============================================================================
+   Calculus objects — what a curve carries, and what a derived curve IS.
+   ========================================================================= */
+
+/* The line under a tangent's or a derivative's equation that says what it is.
+   Outside `.card-body` on purpose: a tangent that has just stopped existing
+   has to say so whether or not the card is expanded. */
+.calc-origin {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: var(--sp-1);
+}
+
+.calc-origin-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.calc-origin-text {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+/* A refusal is a shape as well as a colour: the same dashed-and-tinted
+   treatment a card that cannot restore its equation wears. */
+.calc-origin-bad .calc-origin-text {
+  color: var(--text);
+}
+
+.calc-why {
+  padding: var(--sp-1) var(--sp-2);
+  border-left: 2px solid var(--danger);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  color: var(--text);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.calc-section {
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--border-soft);
+}
+
+/* Not folded into the shared eyebrow rule: that selector list is checked
+   verbatim by tests/styles.test.ts, so this states the same four properties. */
+.calc-title {
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  line-height: 1.3;
+  text-transform: uppercase;
+  margin-bottom: var(--sp-2);
+}
+
+.calc-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.calc-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.calc-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.calc-tag {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+/* The answer. Mono and tabular, like every other number in this app, so a
+   sum converging on an integral lines up digit for digit as n grows. */
+.calc-read {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.calc-note {
+  color: var(--faint);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.calc-drop {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  color: var(--faint);
+  font-size: var(--fs-md);
+  line-height: 1;
+}
+
+.calc-drop:hover {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--text);
+}
+
+.calc-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+/* a = 0 / b = 2 / x = 2.00 — a label and a number that is also a field. */
+.calc-field {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border-soft);
+}
+
+.calc-field-btn:hover,
+.calc-field-btn:focus-visible {
+  border-color: var(--border-strong);
+  background: var(--panel-3);
+}
+
+button.calc-field-btn {
+  cursor: text;
+}
+
+.calc-field-label {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.calc-field-value {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.calc-input {
+  width: 64px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+.calc-chip {
+  padding: 2px var(--sp-2);
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.calc-chip:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.calc-chip-on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.calc-select {
+  padding: 2px var(--sp-1);
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: var(--fs-sm);
+}
+
+/* n, the number the class is actually watching. */
+.calc-n {
+  display: grid;
+  grid-template-columns: 14px 1fr 34px;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.calc-n-label {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.calc-n-value {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+@media (pointer: coarse) {
+  .calc-drop,
+  .calc-chip,
+  .calc-field-btn {
+    min-height: 44px;
+  }
+}

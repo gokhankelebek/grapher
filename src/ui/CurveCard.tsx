@@ -15,6 +15,8 @@ import { formatCoord, parseNumeric } from './numeric'
 import { alignedValues, curveScale, derivesFromInk } from './curveState'
 import { axisKeys, featureAxes } from './featureEdit'
 import { curveEquationText, displayEquationLatex } from './equationText'
+import { N_MAX, N_MIN, RIEMANN_METHODS } from './calcLinks'
+import type { CalcChange, CalcKind, CardCalc } from './calcLinks'
 
 interface Props {
   curve: FittedCurve
@@ -74,6 +76,32 @@ interface Props {
   onStrokeWidth(width: number): void
   onDash(dash: number[] | undefined): void
   onOpacity(opacity: number): void
+  /**
+   * The calculus objects this curve is part of, already computed: what it IS
+   * (a tangent, an f′) and what is attached TO it (a shaded integral, a
+   * Riemann sum). Absent on a curve with none, which is most of them — the
+   * card gains nothing at all until a teacher asks for something.
+   */
+  calc?: CardCalc
+  onAddCalc(kind: CalcKind): void
+  /** State one change to one object. `live` = a drag or slider in flight. */
+  onCalcChange(change: CalcChange, live?: boolean): void
+  onCalcRemove(linkId: string): void
+}
+
+/** The order the ⋯ menu offers them: the order an AP class meets them. */
+const CALC_ITEMS: { kind: CalcKind; label: string }[] = [
+  { kind: 'tangent', label: 'Tangent line' },
+  { kind: 'derivative', label: 'Derivative f\u2032' },
+  { kind: 'area', label: 'Area under curve' },
+  { kind: 'riemann', label: 'Riemann sum' },
+]
+
+const METHOD_LABELS: Record<string, string> = {
+  left: 'left',
+  right: 'right',
+  midpoint: 'midpoint',
+  trapezoid: 'trapezoid',
 }
 
 const DASH_STYLES: { key: string; label: string; title: string; dash: number[] | undefined }[] = [
@@ -222,6 +250,10 @@ export function CurveCard({
   onStrokeWidth,
   onDash,
   onOpacity,
+  calc,
+  onAddCalc,
+  onCalcChange,
+  onCalcRemove,
 }: Props) {
   const spec: ModelSpec | undefined = models[curve.modelId]
   const isExpression = curve.modelId.startsWith('expr_')
@@ -268,6 +300,22 @@ export function CurveCard({
       setFeatureEdit(null)
       onAnalysisHover(null)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected])
+
+  // Inline editing of a calculus number: the x a tangent touches, and the two
+  // limits of an interval. Keyed by "<linkId>:<field>" so one editor is open
+  // at a time no matter how many objects the curve carries.
+  const [calcEdit, setCalcEdit] = useState<{ key: string; text: string; bad: boolean } | null>(
+    null,
+  )
+  const calcInputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (calcEdit) calcInputRef.current?.select()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [calcEdit?.key])
+  useEffect(() => {
+    if (!selected && calcEdit) setCalcEdit(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected])
 
@@ -604,6 +652,94 @@ export function CurveCard({
     onBlur: onParamEditEnd,
   }
 
+
+  // ----------------------------------------------------------- calculus bits
+  //
+  // Every number here is click-to-edit for the same reason the coefficients
+  // and the analysis values are: "make the interval [0, 2]" is a sentence a
+  // teacher says out loud, and hunting for it with a mouse is not.
+  const calcNumber = (
+    key: string,
+    label: string,
+    value: number,
+    commit: (v: number) => void,
+  ): JSX.Element => {
+    if (calcEdit?.key === key) {
+      return (
+        <span className="calc-field">
+          <span className="calc-field-label">{label}</span>
+          <input
+            ref={calcInputRef}
+            className={`calc-input${calcEdit.bad ? ' param-edit-bad' : ''}`}
+            type="text"
+            inputMode="decimal"
+            spellCheck={false}
+            aria-label={label}
+            value={calcEdit.text}
+            onChange={(e) => setCalcEdit({ key, text: e.target.value, bad: false })}
+            onKeyDown={(e) => {
+              e.stopPropagation()
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                const v = parseNumeric(calcEdit.text)
+                if (v === null) {
+                  setCalcEdit({ ...calcEdit, bad: true })
+                  return
+                }
+                commit(v)
+                setCalcEdit(null)
+              } else if (e.key === 'Escape') {
+                e.preventDefault()
+                setCalcEdit(null)
+              }
+            }}
+            onBlur={() => setCalcEdit(null)}
+          />
+        </span>
+      )
+    }
+    return (
+      <button
+        type="button"
+        className="calc-field calc-field-btn"
+        title={`Click to type an exact ${label}`}
+        onClick={() =>
+          setCalcEdit({ key, text: String(Number(value.toFixed(6))), bad: false })
+        }
+      >
+        <span className="calc-field-label">{label}</span>
+        <span className="calc-field-value">{formatCoord(value, { scale })}</span>
+      </button>
+    )
+  }
+
+  const boundFields = (
+    linkId: string,
+    from: number,
+    to: number,
+  ): JSX.Element => (
+    <>
+      {calcNumber(`${linkId}:from`, 'a', from, (v) =>
+        onCalcChange({ kind: 'bound', linkId, which: 'from', value: v }),
+      )}
+      {calcNumber(`${linkId}:to`, 'b', to, (v) =>
+        onCalcChange({ kind: 'bound', linkId, which: 'to', value: v }),
+      )}
+    </>
+  )
+
+  const dropBtn = (linkId: string, what: string): JSX.Element => (
+    <button
+      type="button"
+      className="calc-drop"
+      title={`Remove this ${what}`}
+      aria-label={`Remove this ${what}`}
+      onClick={() => onCalcRemove(linkId)}
+    >
+      ×
+    </button>
+  )
+
   // ------------------------------------------------------------- read as row
   const quality = useMemo(() => {
     try {
@@ -692,6 +828,15 @@ export function CurveCard({
               {menuItem(curve.visible ? 'Hide' : 'Show', onToggleVisible)}
               {menuItem(copied ? 'Copied' : 'Copy LaTeX', copyLatex)}
               {menuItem('Delete', onDelete, 'card-menu-danger')}
+              {calc?.canAdd && (
+                <>
+                  <div className="card-menu-sep" />
+                  <div className="card-menu-title">Calculus</div>
+                  {CALC_ITEMS.map((item) =>
+                    menuItem(item.label, () => onAddCalc(item.kind)),
+                  )}
+                </>
+              )}
               <div className="card-menu-sep" />
               <div className="card-menu-title">Line</div>
               <div className="style-row card-menu-style">
@@ -791,6 +936,33 @@ export function CurveCard({
           </button>
         )}
       </div>
+
+      {/* What this curve IS, when it is not a sketch: the tangent's point and
+          its slope, or f′ and whose. Always visible, never only when the card
+          is open — a tangent that has just gone away (a corner, a pole) has to
+          say so whether or not anybody expanded it. */}
+      {calc?.origin && (
+        <div
+          className={`calc-origin${calc.origin.problem ? ' calc-origin-bad' : ''}`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="calc-origin-line">
+            <span className="calc-origin-text">{calc.origin.lead}</span>
+            {calc.origin.x !== null &&
+              calcNumber(`${calc.origin.linkId}:x`, 'x', calc.origin.x, (v) =>
+                onCalcChange({ kind: 'tangentX', linkId: calc.origin!.linkId, x: v }),
+              )}
+            {calc.origin.tail && (
+              <span className="calc-origin-text">{calc.origin.tail}</span>
+            )}
+          </div>
+          {calc.origin.problem && (
+            <div className="calc-why">
+              {`No line is drawn: ${calc.origin.problem}.`}
+            </div>
+          )}
+        </div>
+      )}
 
       {eqEdit && (
         <div className="card-eq-foot" onClick={(e) => e.stopPropagation()}>
@@ -986,6 +1158,113 @@ export function CurveCard({
                         )
                       })}
                     </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {calc && (calc.areas.length > 0 || calc.riemanns.length > 0) && (
+            <div className="calc-section">
+              <div className="calc-title">Calculus</div>
+              <div className="calc-list">
+                {calc.areas.map((a) => (
+                  <div className="calc-row" key={a.linkId}>
+                    <div className="calc-line">
+                      <span className="calc-tag">Area</span>
+                      <span className="calc-read">{a.text}</span>
+                      {a.samples !== null && (
+                        <span
+                          className="calc-note"
+                          title="This integral has no closed form, so it was measured — at this many evaluations of the function."
+                        >
+                          {`${a.samples} samples`}
+                        </span>
+                      )}
+                      {dropBtn(a.linkId, 'shaded area')}
+                    </div>
+                    <div className="calc-controls">
+                      {boundFields(a.linkId, a.from, a.to)}
+                      <button
+                        type="button"
+                        className={`calc-chip${a.abs ? ' calc-chip-on' : ''}`}
+                        aria-pressed={a.abs}
+                        title={
+                          a.abs
+                            ? 'Showing total area. Click for the signed integral (the AP convention).'
+                            : 'Showing the signed integral (the AP convention). Click for total area.'
+                        }
+                        onClick={() =>
+                          onCalcChange({ kind: 'abs', linkId: a.linkId, abs: !a.abs })
+                        }
+                      >
+                        |area|
+                      </button>
+                    </div>
+                    {a.problem && <div className="calc-why">{a.problem}</div>}
+                  </div>
+                ))}
+
+                {calc.riemanns.map((r) => (
+                  <div className="calc-row" key={r.linkId}>
+                    <div className="calc-line">
+                      <span className="calc-tag">Riemann</span>
+                      <span className="calc-read">{r.text}</span>
+                      {dropBtn(r.linkId, 'Riemann sum')}
+                    </div>
+                    <div className="calc-controls">
+                      {boundFields(r.linkId, r.from, r.to)}
+                      <select
+                        className="calc-select"
+                        aria-label="Riemann method"
+                        value={r.method}
+                        onChange={(e) =>
+                          onCalcChange({
+                            kind: 'method',
+                            linkId: r.linkId,
+                            method: e.target.value as typeof r.method,
+                          })
+                        }
+                      >
+                        {RIEMANN_METHODS.map((m) => (
+                          <option key={m} value={m}>
+                            {METHOD_LABELS[m] ?? m}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    {/* n is a slider because the lesson is watching it move:
+                        drag it to 200 and the sum walks onto the integral. */}
+                    <div className="calc-n">
+                      <span className="calc-n-label">n</span>
+                      <input
+                        type="range"
+                        min={N_MIN}
+                        max={N_MAX}
+                        step={1}
+                        value={r.n}
+                        aria-label="Number of rectangles"
+                        style={fillStyle(r.n, N_MIN, N_MAX)}
+                        onPointerDown={onParamEditStart}
+                        onPointerUp={onParamEditEnd}
+                        onKeyDown={onParamEditStart}
+                        onKeyUp={onParamEditEnd}
+                        onBlur={onParamEditEnd}
+                        onChange={(e) =>
+                          onCalcChange(
+                            { kind: 'n', linkId: r.linkId, n: Number(e.target.value) },
+                            true,
+                          )
+                        }
+                      />
+                      <span className="calc-n-value">{r.n}</span>
+                    </div>
+                    {r.problem && <div className="calc-why">{r.problem}</div>}
+                    {r.skipped > 0 && (
+                      <div className="calc-why">
+                        {`${r.skipped} rectangle${r.skipped === 1 ? '' : 's'} sit where the curve is undefined, and count for nothing.`}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

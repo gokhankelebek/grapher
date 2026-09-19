@@ -9,6 +9,7 @@ import type {
 import type { StyleMap } from '../App'
 import type { NLPart } from '../render/numberline'
 import { CurveCard } from './CurveCard'
+import type { CalcChange, CalcKind, CardCalc } from './calcLinks'
 import { NLCard } from './NLCard'
 import { ExprInput } from './ExprInput'
 import { BoardKindSwitch } from './BoardKindSwitch'
@@ -71,6 +72,11 @@ interface Props {
   onOpacity(id: string, opacity: number): void
   onExprToggle(): void
   onExprSubmit(src: string): string | null
+  /** What this curve's card says about calculus. Undefined = nothing to say. */
+  calcFor(id: string): CardCalc | undefined
+  onAddCalc(id: string, kind: CalcKind): void
+  onCalcChange(change: CalcChange, live?: boolean): void
+  onCalcRemove(linkId: string): void
 }
 
 /** Stable empty array for the cards that aren't selected. */
@@ -120,6 +126,10 @@ export function Sidebar({
   onOpacity,
   onExprToggle,
   onExprSubmit,
+  calcFor,
+  onAddCalc,
+  onCalcChange,
+  onCalcRemove,
 }: Props) {
   const numberLine = kind === 'number-line'
 
@@ -210,6 +220,10 @@ export function Sidebar({
               onStrokeWidth={(w) => onStrokeWidth(curve.id, w)}
               onDash={(d) => onDash(curve.id, d)}
               onOpacity={(o) => onOpacity(curve.id, o)}
+              calc={calcFor(curve.id)}
+              onAddCalc={(kind) => onAddCalc(curve.id, kind)}
+              onCalcChange={onCalcChange}
+              onCalcRemove={onCalcRemove}
             />
           ))}
         </div>

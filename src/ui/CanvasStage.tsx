@@ -29,7 +29,7 @@ import {
   nearestOnCurve,
 } from '../core/fit/edit'
 import { handleHitRadius, renderBoard } from './renderBoard'
-import type { AxisUnits } from './renderBoard'
+import type { AxisUnits, Overlay } from './renderBoard'
 import {
   NEIGHBOURHOOD_PX,
   TOUCH_INK_HOLD_MS,
@@ -55,6 +55,26 @@ import type { PaintScale } from '../render/grid'
 import type { Mode, StyleMap } from '../App'
 
 export type { DrawIntent } from './gestures'
+
+/**
+ * A draggable point the BOARD owns rather than a model does.
+ *
+ * getHandles() answers "what can be grabbed on this curve" from the curve's
+ * family — a parabola's vertex, a circle's radius. The point a tangent line
+ * touches is not one of those: it belongs to the tangent, which is a separate
+ * object that happens to live on this curve. So the App passes those points
+ * down, and the stage draws them in the SAME handle vocabulary (cored dot,
+ * grown when active) and routes their drags straight back out. The stage
+ * knows nothing about what they mean; it knows only where they are and who to
+ * tell when they move.
+ */
+export interface ExtraHandle {
+  id: string
+  pos: Vec2
+  /** Shown in the drag tip, e.g. "tangent point" or "a". */
+  label: string
+  onDrag(pos: Vec2): void
+}
 
 export interface CanvasStageHandle {
   /** Schedule a redraw (e.g. after external viewport mutation). */
@@ -83,6 +103,18 @@ interface Props {
    * scene and the PNG has to be measured the way the screen is.
    */
   axisUnits?: AxisUnits | null
+  /**
+   * Filled figure content painted between the grid and the curves — the shaded
+   * area under a curve, Riemann rectangles. Passed straight through to the
+   * scene, exactly as the export does, so the screen and the PNG cannot
+   * disagree about what is shaded.
+   */
+  overlays?: readonly Overlay[] | null
+  /**
+   * Extra grabbable points for the selected curve, owned by the App. Drawn as
+   * handles; their drags go to `onDrag` instead of applyHandleDrag.
+   */
+  extraHandles?: readonly ExtraHandle[] | null
   selectedId: string | null
   mode: Mode
   inkColor: string
@@ -137,6 +169,23 @@ const POINTER_STALE_MS = 3000
 
 const noop = (): void => {}
 
+/**
+ * An App-owned grab point, in the shape renderBoard already draws.
+ *
+ * 'feature' is deliberate: it is the cored dot, the glyph that means "a point
+ * on this curve you can move", which is exactly what a tangent's point and an
+ * integral's limit are. Nothing new had to be invented, and nothing else on
+ * the board changed meaning.
+ */
+function asCurveHandles(extra: readonly ExtraHandle[]): CurveHandle[] {
+  const out: CurveHandle[] = []
+  for (const h of extra) {
+    if (!h || !h.pos || !Number.isFinite(h.pos.x) || !Number.isFinite(h.pos.y)) continue
+    out.push({ id: h.id, pos: h.pos, kind: 'feature', label: h.label, cursor: 'grab' })
+  }
+  return out
+}
+
 type Gesture =
   | {
       type: 'draw'
@@ -158,6 +207,8 @@ type Gesture =
       handleId: string
       label?: string
       moved: number
+      /** The App owns this point: its drags go out, not into applyHandleDrag. */
+      extra: boolean
     }
   | {
       type: 'dragPoint'
@@ -284,6 +335,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     analysis,
     analysisHighlight,
     onFeatureEdit,
+    overlays,
+    extraHandles,
   },
   handle,
 ) {
@@ -308,6 +361,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   const themeRef = useRef<Theme>(theme)
   const presentRef = useRef<PaintScale | null | undefined>(present)
   const axisUnitsRef = useRef<AxisUnits | null | undefined>(axisUnits)
+  const overlaysRef = useRef<readonly Overlay[] | null | undefined>(overlays)
+  const extraHandlesRef = useRef<readonly ExtraHandle[]>(extraHandles ?? [])
 
   const pointersRef = useRef<Map<number, PointerEntry>>(new Map())
   const gestureRef = useRef<Gesture | null>(null)
@@ -429,6 +484,10 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       } catch {
         /* no handles */
       }
+      // The App's own grab points join the family's, in the same glyph
+      // vocabulary, so a tangent's point and a parabola's vertex read as the
+      // same KIND of thing — which they are: somewhere to put a finger.
+      handles = handles.concat(asCurveHandles(extraHandlesRef.current))
     }
 
     const openFeature = handleEditRef.current?.feature
@@ -447,6 +506,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       curves: curvesRef.current,
       styles: stylesRef.current,
       models: modelsRef.current,
+      overlays: overlaysRef.current ?? undefined,
       analysis:
         sel && !busy && analysisRef.current.length > 0
           ? { curve: sel, points: analysisRef.current }
@@ -500,6 +560,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     themeRef.current = theme
     presentRef.current = present
     axisUnitsRef.current = axisUnits
+    overlaysRef.current = overlays
+    extraHandlesRef.current = extraHandles ?? []
     hitRef.current = hitRadii(coarseRef.current, present)
     analysisRef.current = analysis
     highlightRef.current = analysisHighlight
@@ -511,6 +573,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     theme,
     present,
     axisUnits,
+    overlays,
+    extraHandles,
     selectedId,
     mode,
     inkColor,
@@ -722,8 +786,10 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       try {
         hs = getHandles(sel, modelsRef.current)
       } catch {
-        return null
+        hs = []
       }
+      hs = hs.concat(asCurveHandles(extraHandlesRef.current))
+      if (hs.length === 0) return null
       let best: CurveHandle | null = null
       let bestD = hitRef.current.handle
       for (const h of hs) {
@@ -758,6 +824,9 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
         handlePts = getHandles(sel, modelsRef.current).map((h) => toScreen(h.pos, vp))
       } catch {
         /* no handles — nothing masks the markers */
+      }
+      for (const h of asCurveHandles(extraHandlesRef.current)) {
+        handlePts.push(toScreen(h.pos, vp))
       }
       let best: { point: SpecialPoint; index: number } | null = null
       let bestD = hitRef.current.marker
@@ -1252,7 +1321,12 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       const marker = h ? null : markerAt(pos)
 
       // 1a. Double-click/tap a handle OR a marker: type exact values.
-      const tapKey = h ? `h:${h.id}` : marker ? `m:${marker.index}` : null
+      const ownedByApp =
+        h !== null && extraHandlesRef.current.some((x) => x.id === h.id)
+      // A family handle opens the exact-value popover on a double tap. An
+      // App-owned point has no such editor — its exact value is typed on the
+      // card that owns it — so a second tap just starts another drag.
+      const tapKey = h && !ownedByApp ? `h:${h.id}` : marker ? `m:${marker.index}` : null
       if (tapKey && sel) {
         const prev = lastTapRef.current
         const isDouble =
@@ -1292,6 +1366,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
           handleId: h.id,
           label: h.label,
           moved: 0,
+          extra: ownedByApp,
         }
         gestureKindRef.current = kind
         onCurveEditStart()
@@ -1455,6 +1530,19 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       scheduleRender()
     } else if (g.type === 'dragHandle' && g.pointerId === e.pointerId) {
       g.moved += 1
+      if (g.extra) {
+        const owner = extraHandlesRef.current.find((x) => x.id === g.handleId)
+        if (owner) {
+          try {
+            owner.onDrag(toMath(pos, vp))
+          } catch {
+            /* the App refused this position — leave everything as it is */
+          }
+        }
+        if (g.label) setDragTip({ x: pos.x, y: pos.y, label: g.label })
+        scheduleRender()
+        return
+      }
       const curve = curvesRef.current.find((c) => c.id === g.curveId)
       if (curve) {
         try {
@@ -1609,6 +1697,10 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       if (cancelled || g.moved < 2) {
         // Cancelled, or a plain click on the curve/handle — no edit.
         onCurveEditCancel()
+      } else if (g.type === 'dragHandle' && g.extra) {
+        // The curve under an App-owned point was never edited, so magnetizing
+        // its coefficients here would be an edit nobody asked for.
+        onCurveEditEnd(null, true)
       } else {
         onCurveEditEnd(g.curveId, e.altKey)
       }
