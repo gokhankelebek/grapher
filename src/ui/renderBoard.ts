@@ -37,6 +37,7 @@ import { LIGHT_THEME, toPrintColor, toScreen } from '../core/types'
 import type { StyleMap } from '../core/persist'
 import type { AxisUnit, AxisUnits, PaintScale } from '../render/grid'
 import { drawGrid, paintScale } from '../render/grid'
+import { drawPolarGrid } from '../render/polarGrid'
 import { drawCurve, drawInk } from '../render/curves'
 import type { Overlay } from '../render/overlays'
 import { drawOverlays } from '../render/overlays'
@@ -127,6 +128,23 @@ export interface BoardScene {
    * existing caller keeps drawing exactly what it drew before.
    */
   kind?: BoardKind
+  /**
+   * Which RULING the cartesian board is drawn on — the square lattice, or the
+   * concentric circles and radial spokes a polar curve is actually read off.
+   *
+   * Absent means 'cartesian', and an explicit 'cartesian' is the same thing
+   * said out loud: both go through `drawGrid` with the same arguments, so a
+   * scene that never mentions this field draws the identical command stream it
+   * drew before the field existed.
+   *
+   * It is a property of the BOARD, not of any curve: a rose and its cartesian
+   * r-vs-θ companion can be on screen together, and the teacher chooses which
+   * frame the class is reading. `axisUnits` still applies — the radius ladder
+   * honours `x: 'pi'` exactly as the x axis does.
+   *
+   * Cartesian boards only; a number-line board ignores it.
+   */
+  grid?: 'cartesian' | 'polar'
   /** Number-line boards draw these instead of curves. */
   items?: readonly NLItem[]
   /** Markers + labels for one curve. Null/absent when the toggle is off. */
@@ -879,8 +897,11 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
     return
   }
 
+  // The ruling is the board's, not the curve's: one dispatch, one grid, and
+  // the export takes whichever one the screen took because it is the same call.
   try {
-    drawGrid(ctx, vp, theme, scale, scene.axisUnits ?? null)
+    if (scene.grid === 'polar') drawPolarGrid(ctx, vp, theme, scale, scene.axisUnits ?? null)
+    else drawGrid(ctx, vp, theme, scale, scene.axisUnits ?? null)
   } catch {
     /* grid module absent or failed — keep going */
   }

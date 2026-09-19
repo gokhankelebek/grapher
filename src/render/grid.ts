@@ -195,12 +195,12 @@ export function formatPiTick(n: number, d = 1): string {
 }
 
 /** True when a step came off the π ladder and must be labelled as one. */
-function isPiStep(s: GridStep | PiStep): s is PiStep {
+export function isPiStep(s: GridStep | PiStep): s is PiStep {
   return (s as PiStep).den !== undefined
 }
 
 /** The label for tick index `k` on whichever ladder `step` came from. */
-function tickLabel(step: GridStep | PiStep, k: number): string {
+export function tickLabel(step: GridStep | PiStep, k: number): string {
   return isPiStep(step) ? formatPiTick(k * step.num, step.den) : formatTick(k * step.major)
 }
 
@@ -216,13 +216,13 @@ function clamp(v: number, lo: number, hi: number): number {
  * across a classroom, 11px is not readable from the back row, so every font
  * here is a base size times a presentation scale rather than a literal.
  */
-const LABEL_PX = 11
+export const LABEL_PX = 11
 
-const gridFont = (px: number): string =>
+export const gridFont = (px: number): string =>
   `${px}px system-ui, -apple-system, "Segoe UI", sans-serif`
 
-const ARROW_LEN = 8
-const ARROW_HALF = 3.5
+export const ARROW_LEN = 8
+export const ARROW_HALF = 3.5
 
 /**
  * Line weight is a LADDER, exactly like the grid colours in types.ts:
@@ -262,7 +262,7 @@ export function paintScale(o?: PaintScale | null): { type: number; stroke: numbe
  * The DECIMAL ladder keeps its own 70px rule untouched — a board without
  * `axisUnits` must draw the pixels it drew before this file learned about π.
  */
-const PI_LABEL_MIN_PX = 80
+export const PI_LABEL_MIN_PX = 80
 
 export function drawGrid(
   ctx: CanvasRenderingContext2D,
