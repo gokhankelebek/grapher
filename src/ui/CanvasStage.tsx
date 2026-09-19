@@ -28,14 +28,32 @@ import {
   oversketch,
   nearestOnCurve,
 } from '../core/fit/edit'
-import { HANDLE_HIT_RADIUS, renderBoard } from './renderBoard'
+import { handleHitRadius, renderBoard } from './renderBoard'
+import {
+  NEIGHBOURHOOD_PX,
+  TOUCH_INK_HOLD_MS,
+  TOUCH_PAN_SLOP,
+  classifyPointerDown,
+  classifyWheel,
+  hitRadii,
+  penGuardActive,
+  pointerKind,
+  strokeLeftBand,
+  tipPlacement,
+  wheelPanDelta,
+} from './gestures'
+import type { DrawIntent, HitRadii, PointerKind } from './gestures'
 import { sampleCurveScreen, distToPolyline } from './sample'
 import { formatCoord } from './numeric'
 import { axesPhrase, axisKeys, featureAxes } from './featureEdit'
 import type { FeatureAxes } from './featureEdit'
 import { HandleInput } from './HandleInput'
 import type { HandleField } from './HandleInput'
+import { paintScale } from '../render/grid'
+import type { PaintScale } from '../render/grid'
 import type { Mode, StyleMap } from '../App'
+
+export type { DrawIntent } from './gestures'
 
 export interface CanvasStageHandle {
   /** Schedule a redraw (e.g. after external viewport mutation). */
@@ -48,6 +66,14 @@ interface Props {
   models: Record<string, ModelSpec>
   /** Ground the on-screen board is drawn on. Dark by default; light projects. */
   theme: Theme
+  /**
+   * Presentation scaling for a board read from the back of a room. Absent
+   * means 1:1. It reaches renderBoard as the scene's own field, and it scales
+   * the HIT radii through renderBoard's handleHitRadius() — a handle drawn
+   * twice as big has to be grabbable twice as far out, or the glyph and its
+   * target part company the moment a teacher projects.
+   */
+  present?: PaintScale | null
   selectedId: string | null
   mode: Mode
   inkColor: string
@@ -94,13 +120,6 @@ interface Props {
 const MIN_PPU = 0.001
 const MAX_PPU = 100000
 const FADE_MS = 250
-const HIT_RADIUS = 8
-/**
- * Strictly smaller than HANDLE_HIT_RADIUS, and only ever consulted after
- * handleAt() has already missed: an edit handle keeps first refusal on the
- * pointer everywhere the two vocabularies meet.
- */
-const MARKER_HIT_RADIUS = 9
 const OVERSKETCH_RADIUS = 12
 /** dragPoint → ink conversion threshold (stroke ran away from the curve). */
 const ESCAPE_PX = 28
@@ -109,126 +128,19 @@ const POINTER_STALE_MS = 3000
 
 const noop = (): void => {}
 
-// ---------------------------------------------------------------------------
-// Gesture policy — pure, and exported so it can be read and tested without a
-// DOM.
-//
-// Everything here decides WHAT A CONTACT MEANS before any state is touched.
-// That separation is the fix for the worst bug the stage had: any second
-// pointer was promoted to a pinch, so a palm landing mid-stroke destroyed the
-// stroke — no curve, no toast, nothing to undo.
-// ---------------------------------------------------------------------------
-
-export type PointerKind = 'pen' | 'touch' | 'mouse'
-
-/** Which way the stroke in progress will be read near the selected curve. */
-export type DrawIntent = 'reshape' | 'new'
-
-/** A touch is distrusted this long after the pen was last seen. */
-export const PEN_GUARD_MS = 2000
-/** Travel a finger must cover before it pans — a resting palm never nudges. */
-export const TOUCH_PAN_SLOP = 6
-/** How far a stroke may sit from a curve and still count as drawn "on" it. */
-export const NEIGHBOURHOOD_PX = 60
-
-export const pointerKind = (t: string | undefined | null): PointerKind =>
-  t === 'pen' || t === 'touch' ? t : 'mouse'
-
-export type PointerVerdict =
-  /** Ink — or, first, a handle/curve drag: the caller refines this one. */
-  | 'ink'
-  /** Held pan: space, middle/right button, or a single finger. */
-  | 'pan'
-  /** Second finger: pinch-zoom. */
-  | 'pinch'
-  /** Palm rejection — this contact does not exist as far as the board cares. */
-  | 'ignore'
-  /** Pen/mouse over a touch gesture: drop the touch, the pen wins. */
-  | 'preempt'
-
-/**
- * The single place a contact becomes an intention.
- *
- * `contacts` counts the pointers already down, NOT including this one.
- */
-export function classifyPointerDown(i: {
-  kind: PointerKind
-  button: number
-  spaceHeld: boolean
-  /** Pointer kind owning the gesture in progress; null when idle. */
-  activeKind: PointerKind | null
-  contacts: number
-}): PointerVerdict {
-  // Palm rejection: a finger arriving while the pen is working is not a pinch,
-  // not a pan, and above all not a reason to throw the stroke away.
-  if (i.kind === 'touch' && i.activeKind === 'pen') return 'ignore'
-  // The pen outranks a palm that happened to get there first.
-  if (i.kind !== 'touch' && i.activeKind === 'touch') return 'preempt'
-  if (i.button !== 0) return 'pan'
-  if (i.spaceHeld) return 'pan'
-  // A finger never inks: it pans alone and pinches in pairs. Ink is the pen's
-  // and the mouse's, which is what makes two-finger pinch flash-free.
-  if (i.kind === 'touch') return i.contacts >= 1 ? 'pinch' : 'pan'
-  // A second pen/mouse contact is a phantom, never a pinch.
-  if (i.contacts >= 1) return 'ignore'
-  return 'ink'
-}
-
-/** True while the pen was seen recently enough to distrust a bare touch. */
-export const penGuardActive = (lastPenAt: number, now: number): boolean =>
-  now - lastPenAt < PEN_GUARD_MS
-
-/**
- * A plain (or two-axis) wheel is a SCROLL, and must pan. Only a pinch — which
- * browsers deliver as a ctrlKey wheel — or an explicit modifier zooms.
- */
-export const classifyWheel = (e: { ctrlKey: boolean; metaKey: boolean }): 'zoom' | 'pan' =>
-  e.ctrlKey || e.metaKey ? 'zoom' : 'pan'
-
-/** Wheel deltas in CSS px, whichever unit the event chose to speak in. */
-export function wheelPanDelta(
-  e: { deltaX: number; deltaY: number; deltaMode?: number },
-  pageH: number,
-): { dx: number; dy: number } {
-  const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? Math.max(1, pageH) : 1
-  const fin = (v: number): number => (Number.isFinite(v) ? v : 0)
-  return { dx: fin(e.deltaX) * unit, dy: fin(e.deltaY) * unit }
-}
-
-/**
- * Did the stroke spend most of itself away from the curve it started on? Then
- * it is a new object drawn NEXT TO that curve — a tangent, an asymptote, a
- * translated copy — and blending it in would rewrite the wrong thing.
- */
-export const strokeLeftBand = (inside: number, total: number): boolean =>
-  total > 0 && inside * 2 < total
-
-/** Hit radii grow for fingers. The DRAWN sizes are renderBoard's and do not. */
-export const hitRadii = (coarse: boolean): { handle: number; marker: number; body: number } =>
-  coarse
-    ? { handle: 18, marker: 16, body: 14 }
-    : { handle: HANDLE_HIT_RADIUS, marker: MARKER_HIT_RADIUS, body: HIT_RADIUS }
-
-/**
- * Tooltips go ABOVE-LEFT of the pointer: down-right is precisely where a
- * right-handed hand and the barrel of the pen already are. Flips at the edges
- * of the stage so it can never be pushed out of the frame.
- */
-export function tipPlacement(
-  x: number,
-  y: number,
-): { left: number; top: number; transform: string } {
-  const flipX = x < 150
-  const flipY = y < 44
-  return {
-    left: flipX ? x + 14 : x - 12,
-    top: flipY ? y + 16 : y - 12,
-    transform: `translate(${flipX ? '0' : '-100%'}, ${flipY ? '0' : '-100%'})`,
-  }
-}
-
 type Gesture =
-  | { type: 'draw'; pointerId: number; kind: PointerKind }
+  | {
+      type: 'draw'
+      pointerId: number
+      kind: PointerKind
+      /**
+       * Finger ink stays invisible until this moment. The second finger of a
+       * pinch arrives tens of ms after the first, and cancels it; holding the
+       * first strokes back means that cancelled stroke is never SEEN. The
+       * points are collected all along, so a real stroke loses nothing.
+       */
+      inkHoldUntil: number
+    }
   | { type: 'pan'; pointerId: number; kind: PointerKind; lastX: number; lastY: number; moved: number }
   | {
       type: 'dragHandle'
@@ -326,7 +238,7 @@ const clampPpu = (v: number): number => Math.min(MAX_PPU, Math.max(MIN_PPU, v))
 // is revealed on approach instead (dashed halo + cursor + tooltip on hover).
 //
 // The priority rule is unchanged and enforced in two places: markers are
-// suppressed wherever a handle sits within HANDLE_HIT_RADIUS (a parabola's
+// suppressed wherever a handle sits within the handle hit radius (a parabola's
 // vertex is both a handle and a minimum), and markerAt() applies the same mask,
 // so a marker that isn't drawn can never be clicked and a handle always wins
 // the pointer. Handles are hit-tested first regardless.
@@ -341,6 +253,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     styles,
     models,
     theme,
+    present,
     selectedId,
     mode,
     inkColor,
@@ -383,6 +296,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   const modeRef = useRef<Mode>(mode)
   const inkColorRef = useRef(inkColor)
   const themeRef = useRef<Theme>(theme)
+  const presentRef = useRef<PaintScale | null | undefined>(present)
 
   const pointersRef = useRef<Map<number, PointerEntry>>(new Map())
   const gestureRef = useRef<Gesture | null>(null)
@@ -404,7 +318,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   /** Running tally of how much of the live stroke sits on the target curve. */
   const bandRef = useRef({ inside: 0, total: 0 })
   /** Hit radii. Fatter for fingers; the drawn sizes never change with them. */
-  const hitRef = useRef(hitRadii(false))
+  const hitRef = useRef<HitRadii>(hitRadii(false))
+  const coarseRef = useRef(false)
   const intentRef = useRef<DrawIntent | null>(null)
 
   const rafRef = useRef(0)
@@ -516,6 +431,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     renderBoard(ctx, {
       vp,
       theme: themeRef.current,
+      present: presentRef.current ? paintScale(presentRef.current) : undefined,
       curves: curvesRef.current,
       styles: stylesRef.current,
       models: modelsRef.current,
@@ -535,7 +451,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
         hoverIdx: hoverRef.current?.markerIndex ?? null,
         fade: fade ? { pts: fade.pts, color: fade.color, alpha: Math.max(0, 1 - fadeT) } : null,
         ink:
-          inkRef.current.length > 1
+          inkRef.current.length > 1 && !(g?.type === 'draw' && now < g.inkHoldUntil)
             ? {
                 pts: inkRef.current,
                 // Oversketch ink borrows the target curve's color.
@@ -570,6 +486,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     modeRef.current = mode
     inkColorRef.current = inkColor
     themeRef.current = theme
+    presentRef.current = present
+    hitRef.current = hitRadii(coarseRef.current, present)
     analysisRef.current = analysis
     highlightRef.current = analysisHighlight
     scheduleRender()
@@ -578,6 +496,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     styles,
     models,
     theme,
+    present,
     selectedId,
     mode,
     inkColor,
@@ -645,7 +564,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       return
     }
     const apply = (): void => {
-      hitRef.current = hitRadii(mq.matches)
+      coarseRef.current = mq.matches
+      hitRef.current = hitRadii(mq.matches, presentRef.current)
     }
     apply()
     mq.addEventListener?.('change', apply)
@@ -778,7 +698,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     return sel && sel.visible ? sel : null
   }, [])
 
-  /** Nearest handle of the selected curve within HANDLE_HIT_RADIUS (screen px). */
+  /** Nearest handle of the selected curve within the handle hit radius (px). */
   const handleAt = useCallback(
     (pos: Vec2): CurveHandle | null => {
       const sel = selectedVisible()
@@ -806,7 +726,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   )
 
   /**
-   * Nearest editable analysis marker within MARKER_HIT_RADIUS.
+   * Nearest editable analysis marker within the marker hit radius.
    *
    * Only ever called once handleAt() has come back empty, and it independently
    * refuses any marker sitting under a handle — the same mask drawAnalysis uses
@@ -833,9 +753,11 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
         const sp = toScreen(p.pos, vp)
         const d = Math.hypot(sp.x - pos.x, sp.y - pos.y)
         if (d > bestD) continue
-        const masked = handlePts.some(
-          (hp) => Math.hypot(hp.x - sp.x, hp.y - sp.y) <= HANDLE_HIT_RADIUS,
-        )
+        // renderBoard suppresses a marker within this radius of a handle, and
+        // asks handleHitRadius() for it. A marker it did not draw must never
+        // be clickable, so this side has to ask the very same question.
+        const maskR = handleHitRadius(presentRef.current)
+        const masked = handlePts.some((hp) => Math.hypot(hp.x - sp.x, hp.y - sp.y) <= maskR)
         if (masked) continue
         bestD = d
         best = { point: p, index: i }
@@ -1248,6 +1170,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       spaceHeld: spaceRef.current,
       activeKind: gestureRef.current ? gestureKindRef.current : null,
       contacts: pointersRef.current.size,
+      penRecent: penGuardActive(lastPenAtRef.current, now),
     })
 
     if (verdict === 'ignore') {
@@ -1277,6 +1200,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
         spaceHeld: spaceRef.current,
         activeKind: null,
         contacts: 0,
+        penRecent: penGuardActive(lastPenAtRef.current, now),
       })
     }
 
@@ -1393,7 +1317,12 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       oversketchForRef.current = over
       bandRef.current = { inside: 0, total: 0 }
       if (sel) setIntent(over ? 'reshape' : 'new', pos)
-      gestureRef.current = { type: 'draw', pointerId: e.pointerId, kind }
+      gestureRef.current = {
+        type: 'draw',
+        pointerId: e.pointerId,
+        kind,
+        inkHoldUntil: kind === 'touch' ? now + TOUCH_INK_HOLD_MS : 0,
+      }
       gestureKindRef.current = kind
       inkRef.current = [toMath(pos, vpRef.current)]
       setDrawing(true)
@@ -1579,6 +1508,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
                 type: 'draw',
                 pointerId: e.pointerId,
                 kind: gestureKindRef.current ?? 'mouse',
+                // Already a deliberate, committed gesture — nothing to hold back.
+                inkHoldUntil: 0,
               }
               setIntent('new', pos)
               setDraggingCurve(false)

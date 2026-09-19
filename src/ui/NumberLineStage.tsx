@@ -17,8 +17,8 @@ import {
   pointerKind,
   wheelPanDelta,
   TOUCH_PAN_SLOP,
-} from './CanvasStage'
-import type { PointerKind } from './CanvasStage'
+} from './gestures'
+import type { PointerKind } from './gestures'
 import type { Mode } from '../App'
 
 export interface NumberLineStageHandle {
@@ -348,6 +348,7 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
         spaceHeld: spaceRef.current,
         activeKind: gestureRef.current ? gestureKindRef.current : null,
         contacts: pointersRef.current.size,
+        penRecent: penGuardActive(lastPenAtRef.current, performance.now()),
       })
       if (verdict === 'ignore') {
         ignoredPointersRef.current.add(e.pointerId)
@@ -368,6 +369,7 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
           spaceHeld: spaceRef.current,
           activeKind: null,
           contacts: 0,
+          penRecent: penGuardActive(lastPenAtRef.current, performance.now()),
         })
       }
       pointersRef.current.set(e.pointerId, pos)
@@ -388,16 +390,10 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
         return
       }
 
-      // A lone finger still places and drags points here — a number line is
-      // worked with a fingertip as often as with a pen, and 'pan' is only the
-      // safe reading of a bare touch once a pen has been on the glass.
-      const fingerWorks =
-        verdict === 'pan' &&
-        kind === 'touch' &&
-        e.button === 0 &&
-        !spaceRef.current &&
-        !penGuardActive(lastPenAtRef.current, performance.now())
-      const panning = (verdict === 'pan' && !fingerWorks) || modeRef.current === 'pan'
+      // A lone finger still places and drags points here, exactly as it draws
+      // on the graph board: classifyPointerDown only calls a bare touch 'pan'
+      // once a pen has been on the glass.
+      const panning = verdict === 'pan' || modeRef.current === 'pan'
       if (!panning) {
         const hit = nlHitTest(itemsRef.current, vpRef.current, pos)
         if (hit && hit.part !== 'body') {

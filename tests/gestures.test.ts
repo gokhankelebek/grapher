@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   NEIGHBOURHOOD_PX,
   PEN_GUARD_MS,
+  TOUCH_INK_HOLD_MS,
   TOUCH_PAN_SLOP,
   classifyPointerDown,
   classifyWheel,
@@ -11,8 +12,8 @@ import {
   strokeLeftBand,
   tipPlacement,
   wheelPanDelta,
-} from '../src/ui/CanvasStage'
-import type { PointerKind, PointerVerdict } from '../src/ui/CanvasStage'
+} from '../src/ui/gestures'
+import type { PointerKind, PointerVerdict } from '../src/ui/gestures'
 
 // ---------------------------------------------------------------------------
 // The gesture policy of the sketch board, tested where it actually lives: as
@@ -30,6 +31,7 @@ const down = (o: Partial<Parameters<typeof classifyPointerDown>[0]>): PointerVer
     spaceHeld: false,
     activeKind: null,
     contacts: 0,
+    penRecent: false,
     ...o,
   })
 
@@ -48,6 +50,10 @@ describe('palm rejection', () => {
     // The stroke-destroying case: pen drawing, palm lands mid-stroke.
     expect(down({ kind: 'touch', activeKind: 'pen', contacts: 1 })).toBe('ignore')
     expect(down({ kind: 'touch', activeKind: 'pen', contacts: 2 })).toBe('ignore')
+    // And still ignored whether or not the guard window is open.
+    expect(down({ kind: 'touch', activeKind: 'pen', contacts: 1, penRecent: true })).toBe(
+      'ignore',
+    )
   })
 
   it('never turns a palm into a pinch, whatever button it claims', () => {
@@ -78,6 +84,11 @@ describe('palm rejection', () => {
     expect(down({ kind: 'mouse', activeKind: null, contacts: 0, spaceHeld: true })).toBe('pan')
     expect(down({ kind: 'mouse', activeKind: null, contacts: 0, button: 1 })).toBe('pan')
   })
+
+  it('space and the buttons outrank the finger-draws rule', () => {
+    expect(down({ kind: 'touch', spaceHeld: true, penRecent: false })).toBe('pan')
+    expect(down({ kind: 'touch', button: 2, penRecent: false })).toBe('pan')
+  })
 })
 
 describe('what a contact means', () => {
@@ -86,9 +97,19 @@ describe('what a contact means', () => {
     expect(down({ kind: 'mouse' })).toBe('ink')
   })
 
-  it('never inks for a finger: one pans, two pinch', () => {
-    expect(down({ kind: 'touch', contacts: 0 })).toBe('pan')
-    expect(down({ kind: 'touch', contacts: 1 })).toBe('pinch')
+  it('lets a lone finger DRAW on a board that has never seen a pen', () => {
+    // A teacher on a phone, or an iPad with no Pencil, has only a finger.
+    // Refusing it ink strands them with no way to sketch at all.
+    expect(down({ kind: 'touch', contacts: 0, penRecent: false })).toBe('ink')
+  })
+
+  it('takes ink away from the finger once the pen has been used', () => {
+    expect(down({ kind: 'touch', contacts: 0, penRecent: true })).toBe('pan')
+  })
+
+  it('pinches on the second finger either way', () => {
+    expect(down({ kind: 'touch', contacts: 1, penRecent: false })).toBe('pinch')
+    expect(down({ kind: 'touch', contacts: 1, penRecent: true })).toBe('pinch')
     expect(down({ kind: 'touch', contacts: 1, activeKind: 'touch' })).toBe('pinch')
   })
 
@@ -102,17 +123,28 @@ describe('what a contact means', () => {
     expect(down({ kind: 'pen', contacts: 1, activeKind: 'pen' })).toBe('ignore')
   })
 
-  it('a two-finger pinch never starts ink with the first finger', () => {
-    // The first finger pans (no ink to flash), the second turns it into zoom.
-    const first = down({ kind: 'touch', contacts: 0 })
-    const second = down({ kind: 'touch', contacts: 1, activeKind: 'touch' })
+  it('a pinch after the pen never starts ink with the first finger', () => {
+    const first = down({ kind: 'touch', contacts: 0, penRecent: true })
+    const second = down({ kind: 'touch', contacts: 1, activeKind: 'touch', penRecent: true })
     expect([first, second]).toEqual(['pan', 'pinch'])
+  })
+
+  it('a pen-less pinch does start ink — which is why the ink is held back', () => {
+    // On a device with no pen the first finger legitimately inks, and the
+    // second cancels it a few tens of ms later. TOUCH_INK_HOLD_MS is what
+    // keeps that cancelled stroke from ever being drawn.
+    const first = down({ kind: 'touch', contacts: 0, penRecent: false })
+    const second = down({ kind: 'touch', contacts: 1, activeKind: 'touch', penRecent: false })
+    expect([first, second]).toEqual(['ink', 'pinch'])
+    expect(TOUCH_INK_HOLD_MS).toBeGreaterThan(40)
+    expect(TOUCH_INK_HOLD_MS).toBeLessThan(200)
   })
 })
 
 describe('penGuardActive', () => {
-  it('distrusts a bare touch for about two seconds after the pen', () => {
-    expect(PEN_GUARD_MS).toBe(2000)
+  it('keeps the pen in charge long enough to be set down between strokes', () => {
+    // 2s handed ink back to a resting palm in the gap between two strokes.
+    expect(PEN_GUARD_MS).toBeGreaterThanOrEqual(30_000)
     expect(penGuardActive(1000, 1000)).toBe(true)
     expect(penGuardActive(1000, 1000 + PEN_GUARD_MS - 1)).toBe(true)
     expect(penGuardActive(1000, 1000 + PEN_GUARD_MS)).toBe(false)
@@ -177,6 +209,25 @@ describe('hit radii', () => {
   it('keeps a handle ahead of a marker on both, so handles win the pointer', () => {
     expect(hitRadii(false).handle).toBeGreaterThan(hitRadii(false).marker)
     expect(hitRadii(true).handle).toBeGreaterThan(hitRadii(true).marker)
+  })
+
+  it('follows the board when it is scaled up for a projector', () => {
+    // A handle drawn twice as big has to be grabbable twice as far out, or the
+    // glyph and its target part company the moment the board is projected.
+    const at1 = hitRadii(false)
+    const at2 = hitRadii(false, { stroke: 2 })
+    expect(at2.handle).toBeCloseTo(at1.handle * 2)
+    expect(at2.marker).toBeCloseTo(at1.marker * 2)
+    expect(at2.body).toBeCloseTo(at1.body * 2)
+    const coarse2 = hitRadii(true, { stroke: 2 })
+    expect(coarse2.body).toBeCloseTo(hitRadii(true).body * 2)
+  })
+
+  it('treats an absent or nonsense present as 1:1', () => {
+    const base = hitRadii(false)
+    expect(hitRadii(false, null)).toEqual(base)
+    expect(hitRadii(false, {})).toEqual(base)
+    expect(hitRadii(false, { stroke: NaN })).toEqual(base)
   })
 })
 
