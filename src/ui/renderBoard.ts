@@ -35,7 +35,8 @@ import type {
 } from '../core/types'
 import { LIGHT_THEME, toPrintColor, toScreen } from '../core/types'
 import type { StyleMap } from '../core/persist'
-import { drawGrid } from '../render/grid'
+import type { PaintScale } from '../render/grid'
+import { drawGrid, paintScale } from '../render/grid'
 import { drawCurve, drawInk } from '../render/curves'
 import { drawNLItem, drawNumberLineAxis, nlLanes } from '../render/numberline'
 import type { NLPart } from '../render/numberline'
@@ -51,8 +52,24 @@ const TWO_PI = Math.PI * 2
  */
 export const HANDLE_HIT_RADIUS = 10
 
-const LABEL_FONT = '11px "SF Mono", Menlo, Consolas, monospace'
-/** Above this many on-screen points, labels would be an unreadable pile. */
+/**
+ * The grab radius at a given presentation scale.
+ *
+ * The renderer masks an analysis marker wherever a handle sits within this
+ * radius, and CanvasStage refuses to hit-test a marker it masked — a marker
+ * that isn't drawn must never be clickable. Both sides therefore have to ask
+ * the SAME function once handles start growing with `present.stroke`: the UI
+ * wiring must call handleHitRadius(present) rather than the bare constant.
+ * At the default scale the two are identical, so nothing changes until then.
+ */
+export function handleHitRadius(present?: PaintScale | null): number {
+  return HANDLE_HIT_RADIUS * paintScale(present).stroke
+}
+
+/** Analysis labels: mono, so digits line up column-wise between labels. */
+const LABEL_PX = 11
+const labelFont = (px: number): string => `${px}px "SF Mono", Menlo, Consolas, monospace`
+/** Above this many labels the board is an unreadable pile, whatever they say. */
 const MAX_LABELS = 8
 /** Two labels closer than this along the curve collapse to markers only. */
 const MIN_LABEL_GAP = 28
@@ -110,8 +127,30 @@ export interface BoardScene {
   items?: readonly NLItem[]
   /** Markers + labels for one curve. Null/absent when the toggle is off. */
   analysis?: { curve: FittedCurve; points: readonly SpecialPoint[] } | null
-  /** Map curve colours to their print counterparts (export on white). */
+  /**
+   * Force the print palette on.
+   *
+   * Normally this does not need to be said: a light GROUND selects the print
+   * palette by itself (see renderBoard), because the screen palette is tuned
+   * against near-black and measures 1.51-3.07:1 on white. This flag only
+   * exists so a caller can ask for print colours on a ground the luminance
+   * test would call dark. It can no longer be the reason screen and export
+   * disagree -- that was the bug.
+   */
   printColors?: boolean
+  /**
+   * Presentation scaling, for a board projected across a classroom.
+   *
+   *   type   — multiplies every on-canvas font: axis tick labels, analysis
+   *            labels, number-line tick and item labels.
+   *   stroke — multiplies every line weight: curve strokes, grid and axis
+   *            rules, marker and handle glyphs, number-line bars and dots.
+   *
+   * Absent means { type: 1, stroke: 1 }; values are clamped to [0.5, 6]. At
+   * 1:1 nothing on this canvas renders above ~13.65px, which is not legible
+   * at 1280x720 from the back of a room.
+   */
+  present?: { type: number; stroke: number }
   /** Editing chrome. Null = the figure alone. */
   chrome?: BoardChrome | null
 }
@@ -170,6 +209,34 @@ function roundRect(
   ctx.closePath()
 }
 
+/**
+ * READ-ONLY vocabulary. A marker says what a point IS; it is never grabbable,
+ * and it must not borrow a glyph from anything that is:
+ *
+ *   hollow ring  zero           ring diameter carries no meaning
+ *   filled dot   max / min      the value the class is usually after
+ *   diamond      inflection     deliberately not a circle
+ *   faint dot    y-intercept    present, but the least interesting point
+ *
+ * Handles (drawHandles) use a disjoint set of shapes. Sizes scale with the
+ * presentation stroke scale so the label layout can reserve the right room.
+ */
+function markerRadius(p: SpecialPoint, s: number, grow = 0): number {
+  switch (p.kind) {
+    case 'zero':
+      return (4 + grow) * s
+    case 'inflection':
+      return (4.6 + grow) * s
+    case 'maximum':
+    case 'minimum':
+      return (3.5 + grow) * s
+    case 'y-intercept':
+      return (2.6 + grow) * s
+    default:
+      return (3 + grow) * s
+  }
+}
+
 function drawMarker(
   ctx: CanvasRenderingContext2D,
   p: SpecialPoint,
@@ -178,23 +245,25 @@ function drawMarker(
   color: string,
   bg: string,
   grow: number,
+  s = 1,
 ): void {
-  const ring = (r: number, lw: number): void => {
+  const r = markerRadius(p, s, grow)
+  const ring = (lw: number): void => {
     ctx.beginPath()
     ctx.arc(sx, sy, r, 0, TWO_PI)
     ctx.fillStyle = bg
     ctx.fill()
-    ctx.lineWidth = lw
+    ctx.lineWidth = lw * s
     ctx.strokeStyle = color
     ctx.stroke()
   }
-  const dot = (r: number, alpha: number): void => {
+  const dot = (alpha: number): void => {
     ctx.globalAlpha = alpha
     ctx.beginPath()
     ctx.arc(sx, sy, r, 0, TWO_PI)
     ctx.fillStyle = color
     ctx.fill()
-    ctx.lineWidth = 1.5
+    ctx.lineWidth = 1.5 * s
     ctx.strokeStyle = bg
     ctx.stroke()
     ctx.globalAlpha = 1
@@ -203,33 +272,32 @@ function drawMarker(
   switch (p.kind) {
     case 'zero':
       // hollow ring, sitting on the axis
-      ring(4 + grow, 1.8)
+      ring(1.8)
       break
     case 'maximum':
     case 'minimum':
-      dot(3.5 + grow, 1)
+      dot(1)
       break
     case 'inflection': {
       // diamond — deliberately not a circle, so concavity reads at a glance
-      const d = 4.6 + grow
       ctx.beginPath()
-      ctx.moveTo(sx, sy - d)
-      ctx.lineTo(sx + d, sy)
-      ctx.lineTo(sx, sy + d)
-      ctx.lineTo(sx - d, sy)
+      ctx.moveTo(sx, sy - r)
+      ctx.lineTo(sx + r, sy)
+      ctx.lineTo(sx, sy + r)
+      ctx.lineTo(sx - r, sy)
       ctx.closePath()
       ctx.fillStyle = bg
       ctx.fill()
-      ctx.lineWidth = 1.7
+      ctx.lineWidth = 1.7 * s
       ctx.strokeStyle = color
       ctx.stroke()
       break
     }
     case 'y-intercept':
-      dot(2.6 + grow, 0.62)
+      dot(0.62)
       break
     default:
-      dot(3 + grow, 0.74)
+      dot(0.74)
       break
   }
 }
@@ -248,17 +316,74 @@ function drawMarkerHalo(
   sy: number,
   color: string,
   open: boolean,
+  s = 1,
 ): void {
   ctx.save()
   ctx.beginPath()
-  ctx.arc(sx, sy, 10, 0, TWO_PI)
+  ctx.arc(sx, sy, 10 * s, 0, TWO_PI)
   ctx.strokeStyle = color
   ctx.globalAlpha = open ? 0.92 : 0.5
-  ctx.lineWidth = open ? 1.6 : 1.2
-  if (!open) ctx.setLineDash([2.5, 3])
+  ctx.lineWidth = (open ? 1.6 : 1.2) * s
+  if (!open) ctx.setLineDash([2.5 * s, 3 * s])
   ctx.stroke()
   ctx.restore()
 }
+
+/**
+ * Label priority — the ORDER the crowding budget is spent in.
+ *
+ * Measured on y = 0.3(x-3)^2 - 2: the board labelled the y-intercept
+ * "(0, 0.7000)" and left the minimum (3, -2) as a bare dot. With the two close
+ * together, that label sits between them and reads as the vertex's
+ * coordinates, which is a wrong answer printed on the board. The vertex is the
+ * number the class wants; the y-intercept is the one it can read off the axis
+ * by itself, so it goes last.
+ */
+function labelRank(p: SpecialPoint): number {
+  switch (p.kind) {
+    case 'maximum':
+    case 'minimum':
+    case 'petal-tip':
+      return 0
+    case 'inflection':
+      return 1
+    case 'extreme':
+      return 2
+    case 'zero':
+      return 3
+    case 'y-intercept':
+      return 4
+    default:
+      return 3
+  }
+}
+
+/**
+ * Which way the label steps off the curve.
+ *
+ * A label box used to be placed up-and-right of its marker whatever the curve
+ * was doing, so it regularly sat ON the stroke — and with a 0.86-alpha plate,
+ * the curve showed through it mottled. The fix is geometric: leave along the
+ * NORMAL to the local tangent, which is the one direction guaranteed to move
+ * away from the curve rather than along it.
+ *
+ * At a turning point the tangent is horizontal and the arms are the constraint
+ * instead, so a minimum labels below itself and a maximum above.
+ */
+function labelNormal(
+  p: SpecialPoint,
+  slopeAt?: ((x: number) => number) | null,
+): { x: number; y: number } {
+  if (p.kind === 'minimum') return { x: 0, y: 1 }
+  if (p.kind === 'maximum' || p.kind === 'petal-tip') return { x: 0, y: -1 }
+  const m = slopeAt ? slopeAt(p.pos.x) : 0
+  if (!Number.isFinite(m) || m === 0) return { x: 0, y: -1 }
+  // screen tangent of math slope m is (1, -m); its normals are ±(-m, -1)
+  const L = Math.hypot(m, 1)
+  return { x: -m / L, y: -1 / L }
+}
+
+interface LabelBox { x: number; y: number; w: number; h: number }
 
 interface AnalysisOpts {
   color: string
@@ -270,6 +395,20 @@ interface AnalysisOpts {
   hoverIdx: number | null
   /** Hover/open rings are chrome; suppressed when chrome is off. */
   halos: boolean
+  /** Presentation scale; see BoardScene.present. */
+  scale?: PaintScale | null
+  /**
+   * df/dx in math units, when the family can supply it. Only used to choose
+   * which side of the curve a label sits on.
+   */
+  slopeAt?: ((x: number) => number) | null
+  /**
+   * The curve itself, in SCREEN pixels: screen x -> screen y, or null where it
+   * is undefined or outside its own domain. The tangent picks a side; this
+   * settles it, because a tangent says nothing about where the curve bends
+   * back to. Absent for families that are not a function of screen x.
+   */
+  screenY?: ((px: number) => number | null) | null
 }
 
 export function drawAnalysis(
@@ -279,96 +418,196 @@ export function drawAnalysis(
   o: AnalysisOpts,
 ): void {
   if (points.length === 0) return
+  const { type, stroke } = paintScale(o.scale)
+  const mask = handleHitRadius(o.scale)
 
   const handlePts = o.handles.map((h) => toScreen(h.pos, vp))
-  const shown: { p: SpecialPoint; sx: number; sy: number; i: number }[] = []
+  const shown: { p: SpecialPoint; sx: number; sy: number; i: number; masked: boolean }[] = []
 
   for (let i = 0; i < points.length; i++) {
     const p = points[i]
     if (!p || !p.pos || !Number.isFinite(p.pos.x) || !Number.isFinite(p.pos.y)) continue
     const s = toScreen(p.pos, vp)
     if (s.x < -30 || s.y < -30 || s.x > vp.widthPx + 30 || s.y > vp.heightPx + 30) continue
-    // Yield the spot to an interactive handle, unless this is the one the user
-    // is pointing at in the readout.
+    // Yield the GLYPH to an interactive handle (a parabola's vertex is both a
+    // minimum and a handle), unless this is the one the user is pointing at in
+    // the readout. The LABEL is not given up with it: the coordinates are the
+    // whole reason the point is on the board, and a handle does not state them.
+    // That is how the vertex ended up as the one feature never labelled.
+    let masked = false
     if (i !== o.highlight && i !== o.openIdx) {
-      let masked = false
       for (const hp of handlePts) {
-        if (Math.hypot(hp.x - s.x, hp.y - s.y) <= HANDLE_HIT_RADIUS) {
+        if (Math.hypot(hp.x - s.x, hp.y - s.y) <= mask) {
           masked = true
           break
         }
       }
-      if (masked) continue
     }
-    shown.push({ p, sx: s.x, sy: s.y, i })
+    shown.push({ p, sx: s.x, sy: s.y, i, masked })
   }
   if (shown.length === 0) return
 
   const bg = o.theme.bg
-  for (const m of shown) {
-    const emphasised = m.i === o.highlight || m.i === o.openIdx
-    if (o.halos && (m.i === o.openIdx || m.i === o.hoverIdx)) {
-      drawMarkerHalo(ctx, m.sx, m.sy, o.color, m.i === o.openIdx)
-    }
-    const grow = emphasised ? 2.5 : o.halos && m.i === o.hoverIdx ? 1.2 : 0
-    drawMarker(ctx, m.p, m.sx, m.sy, o.color, bg, grow)
-  }
-
-  // --- labels, only while they can still be read
-  if (shown.length > MAX_LABELS) return
-  const ordered = shown.slice().sort((a, b) => a.sx - b.sx)
-  ctx.font = LABEL_FONT
-  ctx.textBaseline = 'middle'
-  const placed: { x: number; y: number; w: number; h: number }[] = []
-  let lastX = -Infinity
-  const text0 = textColor(o.theme)
-
   const emph = (i: number): boolean => i === o.highlight || i === o.openIdx
 
-  for (const m of ordered) {
-    // crowded neighbours: keep the markers, drop the text
-    if (!emph(m.i) && m.sx - lastX < MIN_LABEL_GAP) continue
-    const text = labelFor(m.p)
-    const w = ctx.measureText(text).width + 10
-    const h = 16
-    // try above-right first, then a few vertical nudges
-    const candidates = [m.sy - 14, m.sy - 30, m.sy + 16, m.sy + 32, m.sy - 46]
-    let box: { x: number; y: number; w: number; h: number } | null = null
-    for (const cy of candidates) {
-      const x = Math.min(Math.max(m.sx + 8, 2), vp.widthPx - w - 2)
-      const y = cy - h / 2
-      if (y < 2 || y + h > vp.heightPx - 2) continue
-      const clash = placed.some(
-        (r) => x < r.x + r.w && x + w > r.x && y < r.y + r.h && y + h > r.y,
-      )
-      if (!clash) {
-        box = { x, y, w, h }
-        break
-      }
+  for (const m of shown) {
+    if (m.masked) continue
+    const emphasised = emph(m.i)
+    if (o.halos && (m.i === o.openIdx || m.i === o.hoverIdx)) {
+      drawMarkerHalo(ctx, m.sx, m.sy, o.color, m.i === o.openIdx, stroke)
     }
+    const grow = emphasised ? 2.5 : o.halos && m.i === o.hoverIdx ? 1.2 : 0
+    drawMarker(ctx, m.p, m.sx, m.sy, o.color, bg, grow, stroke)
+  }
+
+  // --- labels: the same crowding budget, spent on the points a class reads
+  // first. MAX_LABELS no longer means "more than eight points, so draw none";
+  // it means "label the eight that matter most".
+  const fpx = LABEL_PX * type
+  const gap = MIN_LABEL_GAP * type
+  const h = 16 * type
+  ctx.font = labelFont(fpx)
+  ctx.textBaseline = 'middle'
+  const placed: LabelBox[] = []
+  const anchors: number[] = []
+  const text0 = textColor(o.theme)
+
+  const ranked = shown.slice().sort((a, b) => {
+    const ra = emph(a.i) ? -1 : labelRank(a.p)
+    const rb = emph(b.i) ? -1 : labelRank(b.p)
+    return ra !== rb ? ra - rb : a.sx - b.sx
+  })
+
+  for (const m of ranked) {
+    if (placed.length >= MAX_LABELS) break
+    // crowded neighbours: keep the marker, drop the text
+    if (!emph(m.i) && anchors.some((a) => Math.abs(a - m.sx) < gap)) continue
+
+    const text = labelFor(m.p)
+    const w = ctx.measureText(text).width + 10 * type
+    // A masked point has a handle standing on it, which is bigger than any
+    // marker: step off from the handle's radius so the plate clears it too.
+    const mr = m.masked
+      ? 7 * stroke
+      : markerRadius(m.p, stroke, emph(m.i) ? 2.5 : 0)
+    const n = labelNormal(m.p, o.slopeAt)
+    const box = placeLabel(vp, m.sx, m.sy, w, h, mr, n, type, placed, o.screenY ?? null)
     if (!box) continue
 
-    ctx.globalAlpha = 0.86
-    roundRect(ctx, box.x, box.y, box.w, box.h, 4)
+    // A 1px leader from the marker to the plate: the label is off the curve,
+    // so something has to say which point it belongs to. Drawn first, so the
+    // opaque plate covers the half that would otherwise run under the text.
+    ctx.save()
+    ctx.globalAlpha = 0.55
+    ctx.strokeStyle = o.color
+    ctx.lineWidth = 1 * stroke
+    ctx.beginPath()
+    ctx.moveTo(m.sx, m.sy)
+    ctx.lineTo(box.x + box.w / 2, box.y + box.h / 2)
+    ctx.stroke()
+    ctx.restore()
+
+    // FULL opacity: a 0.86 plate let the curve through the text mottled.
+    ctx.globalAlpha = 1
+    roundRect(ctx, box.x, box.y, box.w, box.h, 4 * type)
     ctx.fillStyle = bg
     ctx.fill()
-    ctx.globalAlpha = 1
-    ctx.lineWidth = 1
+    ctx.lineWidth = 1 * stroke
     ctx.strokeStyle = emph(m.i) ? o.color : o.theme.gridMajor
     ctx.stroke()
     ctx.fillStyle = emph(m.i) ? o.color : text0
-    ctx.fillText(text, box.x + 5, box.y + h / 2)
+    ctx.fillText(text, box.x + 5 * type, box.y + h / 2)
 
     placed.push(box)
-    lastX = m.sx
+    anchors.push(m.sx)
   }
   ctx.textBaseline = 'alphabetic'
+}
+
+/**
+ * Step out along `n` (then along -n) until the plate is on the canvas, clear of
+ * every plate already placed, and clear of its own marker. Null when the label
+ * has nowhere to go — in which case the marker stands alone, which is honest.
+ */
+function placeLabel(
+  vp: Viewport,
+  sx: number,
+  sy: number,
+  w: number,
+  h: number,
+  markerR: number,
+  n: { x: number; y: number },
+  type: number,
+  placed: readonly LabelBox[],
+  screenY: ((px: number) => number | null) | null,
+): LabelBox | null {
+  /** Does the curve actually pass through this plate? The tangent can't say. */
+  const onCurve = (b: LabelBox): boolean => {
+    if (!screenY) return false
+    const step = Math.max(1, b.w / 32)
+    for (let px = b.x; px <= b.x + b.w; px += step) {
+      const py = screenY(px)
+      if (py === null) continue
+      if (py >= b.y - 1 && py <= b.y + b.h + 1) return true
+    }
+    return false
+  }
+  // How far along the normal the plate has to start.
+  //
+  // Offsetting the CENTRE by "half a line height" is not enough: the plate also
+  // extends along the TANGENT, which is where the curve is, so a wide label on
+  // a sloped curve still crossed the stroke with its corners. Project the box's
+  // half-extents onto the normal — that is the distance at which the whole
+  // plate, corners included, clears the local tangent.
+  const clearance = Math.abs(n.x) * (w / 2) + Math.abs(n.y) * (h / 2)
+  const base = markerR + clearance + 6 * type
+  for (const dir of [n, { x: -n.x, y: -n.y }]) {
+    for (let k = 0; k < 5; k++) {
+      const d = base + k * 16 * type
+      const cx = sx + dir.x * d
+      const cy = sy + dir.y * d
+      const x = Math.min(Math.max(cx - w / 2, 2), Math.max(2, vp.widthPx - w - 2))
+      const y = cy - h / 2
+      if (y < 2 || y + h > vp.heightPx - 2) continue
+      // Clamping x back onto the canvas can slide the plate over its own
+      // marker; that is exactly the "label sits on the curve" case.
+      if (sx > x - 2 && sx < x + w + 2 && sy > y - 2 && sy < y + h + 2) continue
+      const clash = placed.some(
+        (r) => x < r.x + r.w && x + w > r.x && y < r.y + r.h && y + h > r.y,
+      )
+      if (clash) continue
+      const box = { x, y, w, h }
+      if (onCurve(box)) continue
+      return box
+    }
+  }
+  return null
 }
 
 // ---------------------------------------------------------------------------
 // Handles (chrome)
 // ---------------------------------------------------------------------------
 
+/**
+ * INTERACTIVE vocabulary — deliberately disjoint from the analysis markers.
+ *
+ * Before this, a handle and a marker differed by 1.5-2px of radius and nothing
+ * else, and the domain-trim handle was a hollow circle: the same glyph as a
+ * ZERO marker, and the same glyph this app's own number line uses for "endpoint
+ * excluded". One shape meant three things. Now:
+ *
+ *   cored dot   feature / radius / rotation   filled disc with a ground-coloured
+ *                                             core ring — reads as "grab me",
+ *                                             never as a hollow ring
+ *   bracket     domain-start / domain-end     [ and ], facing into the domain.
+ *                                             Never a circle, and it says
+ *                                             "interval end" in the notation a
+ *                                             class already writes
+ *   crosshair   center                        arms + a small square knob
+ *
+ * No handle is a plain filled dot (extremum), a hollow ring (zero) or a diamond
+ * (inflection). Emphasis stays a size step, so activeHandleId still reads.
+ */
 function drawHandles(
   ctx: CanvasRenderingContext2D,
   vp: Viewport,
@@ -376,7 +615,12 @@ function drawHandles(
   color: string,
   handles: readonly CurveHandle[],
   activeId: string | null,
+  scale?: PaintScale | null,
 ): void {
+  const { stroke } = paintScale(scale)
+  // The bracket glyph needs round caps/joins; save so that preference cannot
+  // leak into whatever the caller draws next.
+  ctx.save()
   for (const h of handles) {
     const sp = toScreen(h.pos, vp)
     if (
@@ -391,38 +635,111 @@ function drawHandles(
     }
     const grow = h.id === activeId ? 1.5 : 0
     if (h.kind === 'domain-start' || h.kind === 'domain-end') {
-      // slightly larger, ring only
-      ctx.beginPath()
-      ctx.arc(sp.x, sp.y, 6 + grow, 0, TWO_PI)
-      ctx.fillStyle = theme.bg
-      ctx.fill()
-      ctx.lineWidth = 2
+      // A bracket: vertical stem with two arms turning INTO the domain, so the
+      // pair reads as [ ... ] — an interval, which is what a trimmed domain is.
+      const half = (9 + grow) * stroke
+      const arm = (5 + grow * 0.6) * stroke
+      const dir = h.kind === 'domain-start' ? 1 : -1
+      const bracket = (): void => {
+        ctx.beginPath()
+        ctx.moveTo(sp.x + dir * arm, sp.y - half)
+        ctx.lineTo(sp.x, sp.y - half)
+        ctx.lineTo(sp.x, sp.y + half)
+        ctx.lineTo(sp.x + dir * arm, sp.y + half)
+        ctx.stroke()
+      }
+      // ground-coloured underlay first: the bracket sits ON its own curve
+      ctx.lineCap = 'round'
+      ctx.lineJoin = 'round'
+      ctx.strokeStyle = theme.bg
+      ctx.lineWidth = (2.4 + grow * 0.5) * stroke + 2.6 * stroke
+      bracket()
       ctx.strokeStyle = color
-      ctx.stroke()
+      ctx.lineWidth = (2.4 + grow * 0.5) * stroke
+      bracket()
     } else if (h.kind === 'center') {
-      // crosshair dot
-      const arm = 7 + grow
+      // crosshair with a square knob — angular, so it cannot be read as a dot
+      const arm = (7 + grow) * stroke
       ctx.strokeStyle = color
-      ctx.lineWidth = 1.5
+      ctx.lineWidth = 1.5 * stroke
       ctx.beginPath()
       ctx.moveTo(sp.x - arm, sp.y)
       ctx.lineTo(sp.x + arm, sp.y)
       ctx.moveTo(sp.x, sp.y - arm)
       ctx.lineTo(sp.x, sp.y + arm)
       ctx.stroke()
-      ctx.beginPath()
-      ctx.arc(sp.x, sp.y, 2.5 + grow * 0.5, 0, TWO_PI)
+      const k = (2.6 + grow * 0.5) * stroke
       ctx.fillStyle = color
-      ctx.fill()
+      ctx.fillRect(sp.x - k, sp.y - k, 2 * k, 2 * k)
     } else {
-      // feature point: filled dot with bg ring
+      // cored dot: filled disc, ground rim, and a ground core ring inside it
+      const r = (5.5 + grow) * stroke
       ctx.beginPath()
-      ctx.arc(sp.x, sp.y, 5 + grow, 0, TWO_PI)
+      ctx.arc(sp.x, sp.y, r, 0, TWO_PI)
       ctx.fillStyle = color
       ctx.fill()
-      ctx.lineWidth = 2
+      ctx.lineWidth = 2 * stroke
       ctx.strokeStyle = theme.bg
       ctx.stroke()
+      ctx.beginPath()
+      ctx.arc(sp.x, sp.y, r * 0.42, 0, TWO_PI)
+      ctx.lineWidth = 1.4 * stroke
+      ctx.strokeStyle = theme.bg
+      ctx.stroke()
+    }
+  }
+  ctx.restore()
+}
+
+/**
+ * df/dx for an explicit family, by central difference — only ever used to pick
+ * which side of the curve a label steps off to, so a cheap estimate is exactly
+ * the right amount of work. Null for families where "the local tangent" is not
+ * a single number.
+ */
+function explicitSlope(
+  curve: FittedCurve,
+  models: Record<string, ModelSpec>,
+): ((x: number) => number) | null {
+  if (curve.kind !== 'explicit') return null
+  const model = models[curve.modelId]
+  const f = model?.evalExplicit
+  if (!f) return null
+  return (x: number): number => {
+    const h = 1e-4 * (1 + Math.abs(x))
+    try {
+      const a = f.call(model, curve.params, x - h)
+      const b = f.call(model, curve.params, x + h)
+      if (!Number.isFinite(a) || !Number.isFinite(b)) return 0
+      return (b - a) / (2 * h)
+    } catch {
+      return 0
+    }
+  }
+}
+
+/**
+ * The same family sampled in screen pixels, so the label placer can ask "is the
+ * curve inside this rectangle?" without knowing anything about maths space.
+ */
+function explicitScreenY(
+  curve: FittedCurve,
+  models: Record<string, ModelSpec>,
+  vp: Viewport,
+): ((px: number) => number | null) | null {
+  if (curve.kind !== 'explicit') return null
+  const model = models[curve.modelId]
+  const f = model?.evalExplicit
+  if (!f) return null
+  return (px: number): number | null => {
+    const x = vp.center.x + (px - vp.widthPx / 2) / vp.pxPerUnit
+    if (curve.domain && (x < curve.domain[0] || x > curve.domain[1])) return null
+    try {
+      const y = f.call(model, curve.params, x)
+      if (!Number.isFinite(y)) return null
+      return vp.heightPx / 2 - (y - vp.center.y) * vp.pxPerUnit
+    } catch {
+      return null
     }
   }
 }
@@ -442,7 +759,19 @@ function drawHandles(
 export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): void {
   const { vp, theme, models } = scene
   const chrome = scene.chrome ?? null
-  const print = scene.printColors === true
+  const scale = paintScale(scene.present)
+
+  // The palette follows the GROUND, not the export flag.
+  //
+  // toPrintColor() used to be applied only while exporting, so the live light
+  // theme kept a palette tuned against near-black: measured on white, lime
+  // 1.51:1, teal 1.86:1, amber 1.97:1, green 2.15:1, against 4.9-7.3:1 for the
+  // print palette the PNG used. A teacher previewing "for projecting on white"
+  // therefore saw a figure that was both illegible AND not the one they would
+  // get. Deriving it from the theme makes screen and export agree by
+  // construction; `printColors` survives only as a force-on.
+  const lightGround = !isDarkGround(theme)
+  const print = scene.printColors === true || lightGround
   const paint = (c: string): string => (print ? toPrintColor(c) : c)
 
   ctx.fillStyle = theme.bg
@@ -452,12 +781,12 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
   // no grid, no y axis, no models. It goes through this same routine — and so
   // through the same export — precisely so it can never grow a second path.
   if (scene.kind === 'number-line') {
-    renderNumberLine(ctx, scene, chrome, paint)
+    renderNumberLine(ctx, scene, chrome, paint, scale)
     return
   }
 
   try {
-    drawGrid(ctx, vp, theme)
+    drawGrid(ctx, vp, theme, scale)
   } catch {
     /* grid module absent or failed — keep going */
   }
@@ -476,7 +805,12 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
       // anything about the maths, so it must not reach the exported figure.
       const selected = chrome !== null && curve.id === chrome.selectedId
       const c = print ? { ...curve, color: paint(curve.color) } : curve
-      drawCurve(ctx, c, models, vp, selected)
+      // lightGround: the selection halo is a wash of the curve's own colour,
+      // and at 25% on white it was invisible — the same bug as the palette.
+      drawCurve(ctx, c, models, vp, selected, {
+        strokeScale: scale.stroke,
+        lightGround,
+      })
     } catch {
       /* curve render failed — skip */
     }
@@ -495,6 +829,9 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
         openIdx: chrome?.openIdx ?? null,
         hoverIdx: chrome?.hoverIdx ?? null,
         halos: chrome !== null,
+        scale,
+        slopeAt: explicitSlope(an.curve, models),
+        screenY: explicitScreenY(an.curve, models, vp),
       })
     } catch {
       /* analysis render failed — the board still stands */
@@ -504,12 +841,12 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
   if (chrome) {
     const sel = scene.curves.find((c) => c.id === chrome.selectedId && c.visible)
     if (sel && chrome.handles.length > 0) {
-      drawHandles(ctx, vp, theme, sel.color, chrome.handles, chrome.activeHandleId)
+      drawHandles(ctx, vp, theme, paint(sel.color), chrome.handles, chrome.activeHandleId, scale)
     }
     if (chrome.fade) {
       ctx.globalAlpha = Math.max(0, Math.min(1, chrome.fade.alpha))
       try {
-        drawInk(ctx, chrome.fade.pts as Vec2[], vp, chrome.fade.color)
+        drawInk(ctx, chrome.fade.pts as Vec2[], vp, paint(chrome.fade.color), scale.stroke)
       } catch {
         /* ignore */
       }
@@ -517,7 +854,7 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
     }
     if (chrome.ink && chrome.ink.pts.length > 1) {
       try {
-        drawInk(ctx, chrome.ink.pts as Vec2[], vp, chrome.ink.color)
+        drawInk(ctx, chrome.ink.pts as Vec2[], vp, paint(chrome.ink.color), scale.stroke)
       } catch {
         /* ignore */
       }
@@ -538,12 +875,13 @@ function renderNumberLine(
   scene: BoardScene,
   chrome: BoardChrome | null,
   paint: (c: string) => string,
+  scale: { type: number; stroke: number },
 ): void {
   const { vp, theme } = scene
   const items = scene.items ?? []
 
   try {
-    drawNumberLineAxis(ctx, vp, theme)
+    drawNumberLineAxis(ctx, vp, theme, scale)
   } catch {
     /* axis render failed — items still stand */
   }
@@ -557,6 +895,7 @@ function renderNumberLine(
         theme,
         y,
         barWidth: style?.width,
+        scale,
         ...(style?.dash ? { dash: style.dash } : {}),
         ...(style?.opacity !== undefined ? { opacity: style.opacity } : {}),
         selected: chrome !== null && item.id === chrome.selectedId,
@@ -582,6 +921,7 @@ function renderNumberLine(
         color: paint(chrome.pending.color),
         theme,
         y: spot ? spot.y : numberLineTopY(vp),
+        scale,
         // Slightly ghosted: it is a promise, not yet a fact.
         opacity: 0.85,
         selected: false,

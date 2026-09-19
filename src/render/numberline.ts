@@ -17,12 +17,30 @@
 // ============================================================================
 
 import type { NLItem, Theme, Viewport } from '../core/types'
-import { formatTick, pickTickStep } from './grid'
+import type { PaintScale } from './grid'
+import { formatTick, paintScale, pickTickStep } from './grid'
 
 const TWO_PI = Math.PI * 2
 
-/** Tick ladder target: denser than the cartesian grid — see pickTickStep. */
-const NL_TICK_MIN_PX = 44
+/**
+ * Tick ladder target.
+ *
+ * A number line has no vertical labels competing for room, so it can run
+ * denser than the cartesian grid -- but not as dense as it used to. At 44px a
+ * projected line labelled every integer is a picket fence, and the reviewer
+ * measured exactly that. 56px keeps "every unit" at a normal zoom (60 px/unit)
+ * and thins the labels to every 2 / 5 / 10 as soon as the board zooms out,
+ * which is the whole job of the 1-2-5 ladder.
+ *
+ * It scales with the presentation TYPE scale: bigger labels need more room
+ * between them, so a projected board thins out one rung earlier.
+ */
+export const NL_TICK_MIN_PX = 56
+
+/** The label ladder this board is using, at this zoom and this type scale. */
+export function nlTickStep(vp: Viewport, typeScale = 1): ReturnType<typeof pickTickStep> {
+  return pickTickStep(vp.pxPerUnit, NL_TICK_MIN_PX * typeScale)
+}
 
 /** Bar thickness when an item states none. */
 export const NL_BAR_WIDTH = 6
@@ -45,8 +63,11 @@ const AXIS_ARROW_HALF = 4
 const BAR_ARROW_LEN = 11
 const TICK_MAJOR = 7
 const TICK_MINOR = 3.5
-const LABEL_FONT = '11px system-ui, -apple-system, "Segoe UI", sans-serif'
-const ITEM_LABEL_FONT = '12px system-ui, -apple-system, "Segoe UI", sans-serif'
+/** Base type sizes; both multiply by the presentation `type` scale. */
+const TICK_LABEL_PX = 11
+const ITEM_LABEL_PX = 12
+const nlFont = (px: number): string =>
+  `${px}px system-ui, -apple-system, "Segoe UI", sans-serif`
 const DARK_TEXT = '#e6eaf5'
 
 // ---------------------------------------------------------------------------
@@ -81,7 +102,7 @@ export function nlRange(vp: Viewport): { min: number; max: number } {
 
 /** Nearest minor tick to `x`, for click/drag snapping. */
 export function nlSnapX(x: number, vp: Viewport): number {
-  const { major, minorDiv } = pickTickStep(vp.pxPerUnit, NL_TICK_MIN_PX)
+  const { major, minorDiv } = nlTickStep(vp)
   const minor = major / minorDiv
   const snapped = Math.round(x / minor) * minor
   // A tick further than a few px away isn't what the user was pointing at.
@@ -240,31 +261,37 @@ export function drawNumberLineAxis(
   ctx: CanvasRenderingContext2D,
   vp: Viewport,
   theme: Theme,
+  opts?: PaintScale | null,
 ): void {
   const W = vp.widthPx
   const H = vp.heightPx
   const ppu = vp.pxPerUnit
   if (W <= 0 || H <= 0 || !(ppu > 0)) return
 
+  const { type, stroke } = paintScale(opts)
+  const fpx = TICK_LABEL_PX * type
+  const tickMajor = TICK_MAJOR * stroke
+  const tickMinor = TICK_MINOR * stroke
+
   const y = numberLineAxisY(vp)
-  const { major, minorDiv } = pickTickStep(ppu, NL_TICK_MIN_PX)
+  const { major, minorDiv } = nlTickStep(vp, type)
   const minor = major / minorDiv
   const { min: xMin, max: xMax } = nlRange(vp)
 
   ctx.save()
 
-  // ---- minor ticks (only while they are far enough apart to read) ---------
-  if (minor * ppu >= 7) {
+  // ---- minor ticks, never labelled (only while far enough apart to read) --
+  if (minor * ppu >= 7 * stroke) {
     ctx.strokeStyle = theme.gridMajor
-    ctx.lineWidth = 1
+    ctx.lineWidth = 1 * stroke
     ctx.beginPath()
     const k0 = Math.ceil(xMin / minor)
     const k1 = Math.floor(xMax / minor)
     for (let k = k0; k <= k1; k++) {
       if (((k % minorDiv) + minorDiv) % minorDiv === 0) continue
       const px = nlToScreenX(k * minor, vp)
-      ctx.moveTo(px, y - TICK_MINOR)
-      ctx.lineTo(px, y + TICK_MINOR)
+      ctx.moveTo(px, y - tickMinor)
+      ctx.lineTo(px, y + tickMinor)
     }
     ctx.stroke()
   }
@@ -272,34 +299,35 @@ export function drawNumberLineAxis(
   // ---- the line, with an arrowhead at each end ----------------------------
   ctx.strokeStyle = theme.axis
   ctx.fillStyle = theme.axis
-  ctx.lineWidth = 1.6
+  ctx.lineWidth = 1.6 * stroke
   ctx.beginPath()
   ctx.moveTo(0, y)
   ctx.lineTo(W, y)
   ctx.stroke()
-  arrowHead(ctx, W, y, 1, AXIS_ARROW_LEN, AXIS_ARROW_HALF)
-  arrowHead(ctx, 0, y, -1, AXIS_ARROW_LEN, AXIS_ARROW_HALF)
+  arrowHead(ctx, W, y, 1, AXIS_ARROW_LEN * stroke, AXIS_ARROW_HALF * stroke)
+  arrowHead(ctx, 0, y, -1, AXIS_ARROW_LEN * stroke, AXIS_ARROW_HALF * stroke)
 
   // ---- major ticks + labels ----------------------------------------------
-  ctx.lineWidth = 1.6
+  ctx.lineWidth = 1.6 * stroke
   ctx.beginPath()
   const j0 = Math.ceil(xMin / major)
   const j1 = Math.floor(xMax / major)
   for (let j = j0; j <= j1; j++) {
     const px = nlToScreenX(j * major, vp)
-    ctx.moveTo(px, y - TICK_MAJOR)
-    ctx.lineTo(px, y + TICK_MAJOR)
+    ctx.moveTo(px, y - tickMajor)
+    ctx.lineTo(px, y + tickMajor)
   }
   ctx.stroke()
 
-  ctx.font = LABEL_FONT
+  ctx.font = nlFont(fpx)
   ctx.fillStyle = theme.label
   ctx.textAlign = 'center'
   ctx.textBaseline = 'top'
   for (let j = j0; j <= j1; j++) {
     const px = nlToScreenX(j * major, vp)
-    if (px < 12 || px > W - 12) continue // keep clear of the arrowheads
-    ctx.fillText(formatTick(j * major), px, y + TICK_MAJOR + 3)
+    const edge = Math.max(12, AXIS_ARROW_LEN * stroke + 3)
+    if (px < edge || px > W - edge) continue // keep clear of the arrowheads
+    ctx.fillText(formatTick(j * major), px, y + tickMajor + 3 * type)
   }
 
   ctx.textAlign = 'left'
@@ -322,6 +350,12 @@ export interface NLItemPaint {
   activePart?: NLPart | null
   /** Draw the optional text label above the item. */
   showLabel?: boolean
+  /**
+   * Presentation scaling: `type` multiplies the label font, `stroke` the bar
+   * thickness and the endpoint dots. A number line is a ~40px strip in a tall
+   * canvas; projected, it needs to be able to grow.
+   */
+  scale?: PaintScale | null
 }
 
 /**
@@ -337,10 +371,11 @@ export function drawNLItem(
 ): void {
   const theme = o.theme
   const y = o.y
-  const w = Math.max(
-    NL_MIN_BAR_WIDTH,
-    Math.min(NL_MAX_BAR_WIDTH, o.barWidth ?? NL_BAR_WIDTH),
-  )
+  const { type, stroke } = paintScale(o.scale)
+  // The user's own thickness choice is clamped to its slider range FIRST, then
+  // scaled for the projector -- presentation scale is not a way past the range.
+  const w =
+    Math.max(NL_MIN_BAR_WIDTH, Math.min(NL_MAX_BAR_WIDTH, o.barWidth ?? NL_BAR_WIDTH)) * stroke
   const r = nlDotRadius(w)
   const alpha = o.opacity === undefined ? 1 : Math.max(0.05, Math.min(1, o.opacity))
   const W = vp.widthPx
@@ -429,14 +464,14 @@ export function drawNLItem(
     const a = s.lo === -Infinity ? 0 : nlToScreenX(s.lo, vp)
     const b = s.hi === Infinity ? W : nlToScreenX(s.hi, vp)
     let cx = (Math.max(0, Math.min(W, a)) + Math.max(0, Math.min(W, b))) / 2
-    ctx.font = ITEM_LABEL_FONT
+    ctx.font = nlFont(ITEM_LABEL_PX * type)
     const tw = ctx.measureText(label).width
     cx = Math.max(tw / 2 + 4, Math.min(W - tw / 2 - 4, cx))
-    const ly = y - r - 12
+    const ly = y - r - 12 * type
     // A ground-coloured plate so a label over a tick or a bar stays readable.
     ctx.globalAlpha = 0.9
     ctx.fillStyle = theme.bg
-    roundRect(ctx, cx - tw / 2 - 5, ly - 9, tw + 10, 18, 5)
+    roundRect(ctx, cx - tw / 2 - 5, ly - 9 * type, tw + 10, 18 * type, 5)
     ctx.fill()
     ctx.globalAlpha = 1
     ctx.fillStyle = isDarkGround(theme) ? DARK_TEXT : theme.label

@@ -657,12 +657,30 @@ function buildImplicit(
 // Public API
 // ---------------------------------------------------------------------------
 
+/** Paint-time options that are about the BOARD, not about the curve itself. */
+export interface CurvePaintOpts {
+  /** Presentation scale on the stroke width (BoardScene.present.stroke). */
+  strokeScale?: number
+  /**
+   * True when the figure sits on a light ground. The selection halo is a wash
+   * of the curve's own colour, and a wash that reads at 25% against near-black
+   * is very nearly white-on-white on paper: two reviewers could not see the
+   * selection at all in the light theme. On white it needs real weight.
+   */
+  lightGround?: boolean
+}
+
+/** Selection-halo alpha: a soft wash on black, an actually visible one on white. */
+export const HALO_ALPHA_DARK = 0.25
+export const HALO_ALPHA_LIGHT = 0.42
+
 export function drawCurve(
   ctx: CanvasRenderingContext2D,
   curve: FittedCurve,
   models: Record<string, ModelSpec>,
   vp: Viewport,
   selected?: boolean,
+  opts?: CurvePaintOpts | null,
 ): void {
   if (!curve.visible) return
   const model = models[curve.modelId]
@@ -687,15 +705,20 @@ export function drawCurve(
   }
   if (!drawn) return
 
-  const w = curve.strokeWidth > 0 ? curve.strokeWidth : DEFAULT_STROKE
+  const sc =
+    opts && typeof opts.strokeScale === 'number' && Number.isFinite(opts.strokeScale) &&
+    opts.strokeScale > 0
+      ? Math.min(6, Math.max(0.5, opts.strokeScale))
+      : 1
+  const w = (curve.strokeWidth > 0 ? curve.strokeWidth : DEFAULT_STROKE) * sc
   ctx.save()
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
   ctx.strokeStyle = curve.color
   if (selected) {
-    // soft halo underlay: same geometry, ~3× width, ~25% alpha
+    // soft halo underlay: same geometry, ~3× width
     // (a single stroke() of one Path2D never double-blends its overlaps)
-    ctx.globalAlpha = 0.25
+    ctx.globalAlpha = opts?.lightGround ? HALO_ALPHA_LIGHT : HALO_ALPHA_DARK
     ctx.lineWidth = w * 3
     ctx.stroke(path)
     ctx.globalAlpha = 1
@@ -714,6 +737,7 @@ export function drawInk(
   pts: Vec2[],
   vp: Viewport,
   color: string,
+  strokeScale = 1,
 ): void {
   const n = pts.length
   if (n === 0) return
@@ -727,7 +751,10 @@ export function drawInk(
   ctx.globalAlpha = 0.85
   ctx.strokeStyle = color
   ctx.fillStyle = color
-  ctx.lineWidth = 2.5
+  const sc = Number.isFinite(strokeScale) && strokeScale > 0
+    ? Math.min(6, Math.max(0.5, strokeScale))
+    : 1
+  ctx.lineWidth = 2.5 * sc
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
 
@@ -736,7 +763,7 @@ export function drawInk(
 
   if (n === 1) {
     ctx.beginPath()
-    ctx.arc(x0, y0, 1.25, 0, TWO_PI)
+    ctx.arc(x0, y0, 1.25 * sc, 0, TWO_PI)
     ctx.fill()
     ctx.restore()
     return

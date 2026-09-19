@@ -125,12 +125,19 @@ export interface Theme {
   label: string
 }
 
+/**
+ * Grid contrast is a LADDER, not a texture. Two independent reviews measured
+ * the old values at 1.17:1 minor / 1.45:1 major / 6.2:1 axis -- a flat wash
+ * that a projector's ambient light erases, then a cliff. Minor and major now
+ * sit at real steps, and the axis line is separated from its labels so the
+ * structure and its annotation stop being the same colour.
+ */
 export const DARK_THEME: Theme = {
   bg: '#0f1117',
-  gridMinor: '#1c2030',
-  gridMajor: '#2a3047',
-  axis: '#8b93b0',
-  label: '#8b93b0',
+  gridMinor: '#232a40',   // ~1.45:1
+  gridMajor: '#39415f',   // ~2.1:1
+  axis: '#8b93b0',        // ~6.2:1
+  label: '#a3abc6',       // annotation, a step above the axis line
 }
 
 /**
@@ -139,10 +146,10 @@ export const DARK_THEME: Theme = {
  */
 export const LIGHT_THEME: Theme = {
   bg: '#ffffff',
-  gridMinor: '#e6e8ef',
-  gridMajor: '#c9ced9',
-  axis: '#4a5163',
-  label: '#3a4050',
+  gridMinor: '#dfe3ec',   // ~1.6:1
+  gridMajor: '#b9c0cf',   // ~2.5:1
+  axis: '#4a5163',        // ~7.9:1
+  label: '#2b3140',
 }
 
 export const CURVE_COLORS = [

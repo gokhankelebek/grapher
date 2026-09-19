@@ -12,8 +12,24 @@ import type { FittedCurve, ModelSpec, Vec2, Viewport } from '../src/core/types'
 import { DARK_THEME, toMath } from '../src/core/types'
 import { MODELS } from '../src/core/fit/models'
 import { parseExpression } from '../src/core/parse'
-import { drawGrid, formatTick } from '../src/render/grid'
-import { drawCurve, drawInk } from '../src/render/curves'
+import {
+  GRID_AXIS_WIDTH,
+  GRID_MAJOR_WIDTH,
+  GRID_MINOR_WIDTH,
+  drawGrid,
+  formatTick,
+} from '../src/render/grid'
+import { HALO_ALPHA_DARK, HALO_ALPHA_LIGHT, drawCurve, drawInk } from '../src/render/curves'
+import {
+  NL_BAR_WIDTH,
+  drawNLItem,
+  drawNumberLineAxis,
+  nlDotRadius,
+  nlTickStep,
+  numberLineAxisY,
+} from '../src/render/numberline'
+import { LIGHT_THEME } from '../src/core/types'
+import type { NLItem } from '../src/core/types'
 import { MockCtx, MockPath2D, withMockPath2D } from './mockCanvas'
 import { VP, makeRng, polarPath, trace } from './helpers'
 
@@ -580,5 +596,192 @@ describe('drawInk', () => {
     }
     expect(ctx.strokeCount).toBe(1)
     expect(ctx.saveCount).toBe(ctx.restoreCount)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The grid as a LADDER: three steps in weight, matching the three steps in
+// colour that types.ts now defines — and an axis whose LINE and whose LABELS
+// are not the same value. A reviewer measured both as flat.
+// ---------------------------------------------------------------------------
+
+/** MockCtx that remembers the width/alpha each stroke was drawn at. */
+class WeighedCtx extends MockCtx {
+  strokes: Array<{ style: string; lw: number; alpha: number; path: boolean }> = []
+  labels: Array<{ text: string; style: string; font: string }> = []
+
+  stroke(path?: MockPath2D): void {
+    this.strokes.push({
+      style: this.strokeStyle, lw: this.lineWidth, alpha: this.globalAlpha, path: !!path,
+    })
+    super.stroke(path)
+  }
+  fillText(text: string, x: number, y: number): void {
+    this.labels.push({ text, style: this.fillStyle, font: this.font })
+    super.fillText(text, x, y)
+  }
+}
+
+function weighGrid(vp: Viewport, opts?: { type?: number; stroke?: number }): WeighedCtx {
+  const ctx = new WeighedCtx()
+  drawGrid(ctx as unknown as Ctx2D, vp, DARK_THEME, opts)
+  return ctx
+}
+
+describe('drawGrid — the ladder', () => {
+  it('minor, major and axis are three distinct weights, in that order', () => {
+    const ctx = weighGrid(vpAt(60))
+    const at = (style: string): number =>
+      ctx.strokes.filter(s => s.style === style).map(s => s.lw)[0]
+    const minor = at(DARK_THEME.gridMinor)
+    const major = at(DARK_THEME.gridMajor)
+    const axis = at(DARK_THEME.axis)
+    expect(minor).toBe(GRID_MINOR_WIDTH)
+    expect(major).toBe(GRID_MAJOR_WIDTH)
+    expect(axis).toBe(GRID_AXIS_WIDTH)
+    expect(minor).toBeLessThan(major)
+    expect(major).toBeLessThan(axis)
+  })
+
+  it('the three weights go with three distinct colours', () => {
+    const shades = [DARK_THEME.gridMinor, DARK_THEME.gridMajor, DARK_THEME.axis]
+    expect(new Set(shades).size, 'the grid colours collapsed to a wash').toBe(3)
+  })
+
+  it('tick labels use theme.label, and the axis line theme.axis', () => {
+    const ctx = weighGrid(vpAt(60))
+    expect(DARK_THEME.label, 'label and axis are the same value again')
+      .not.toBe(DARK_THEME.axis)
+    for (const l of ctx.labels) expect(l.style).toBe(DARK_THEME.label)
+    expect(ctx.strokes.some(s => s.style === DARK_THEME.axis)).toBe(true)
+    expect(ctx.labels.length).toBeGreaterThan(3)
+  })
+
+  it('present.type sizes the tick labels and present.stroke the rules', () => {
+    const big = weighGrid(vpAt(60), { type: 1.5, stroke: 2 })
+    for (const l of big.labels) expect(l.font.startsWith('16.5px')).toBe(true)
+    const at = (style: string): number =>
+      big.strokes.filter(s => s.style === style).map(s => s.lw)[0]
+    expect(at(DARK_THEME.gridMinor)).toBe(GRID_MINOR_WIDTH * 2)
+    expect(at(DARK_THEME.gridMajor)).toBe(GRID_MAJOR_WIDTH * 2)
+    expect(at(DARK_THEME.axis)).toBe(GRID_AXIS_WIDTH * 2)
+    // scaled labels still stay on the canvas
+    for (const t of big.texts) {
+      expect(t.x).toBeGreaterThanOrEqual(0)
+      expect(t.x).toBeLessThanOrEqual(1200)
+      expect(t.y).toBeGreaterThanOrEqual(0)
+      expect(t.y).toBeLessThanOrEqual(800)
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The selection halo, and the presentation stroke scale.
+// ---------------------------------------------------------------------------
+
+describe('drawCurve — the selection halo survives a white ground', () => {
+  function haloAlpha(light: boolean): { alpha: number; lw: number } {
+    return withMockPath2D(() => {
+      const ctx = new WeighedCtx()
+      drawCurve(
+        ctx as unknown as Ctx2D, curveOf('line', [-1, 0.8], 'explicit', null),
+        MODELS, vpAt(60), true, { lightGround: light },
+      )
+      const halo = ctx.strokes.filter(s => s.alpha < 1)
+      expect(halo).toHaveLength(1)
+      return { alpha: halo[0].alpha, lw: halo[0].lw }
+    })
+  }
+
+  it('is weighted for the ground it is drawn on', () => {
+    expect(haloAlpha(false).alpha).toBe(HALO_ALPHA_DARK)
+    expect(haloAlpha(true).alpha).toBe(HALO_ALPHA_LIGHT)
+    expect(HALO_ALPHA_LIGHT).toBeGreaterThan(HALO_ALPHA_DARK)
+  })
+
+  it('present.stroke multiplies the line and its halo together', () => {
+    const widths = (scale?: number): number[] =>
+      withMockPath2D(() => {
+        const ctx = new WeighedCtx()
+        drawCurve(
+          ctx as unknown as Ctx2D, curveOf('line', [-1, 0.8], 'explicit', null),
+          MODELS, vpAt(60), true, scale === undefined ? null : { strokeScale: scale },
+        )
+        return ctx.strokes.map(s => s.lw)
+      })
+    expect(widths()).toEqual([7.5, 2.5])       // halo = 3x the line
+    expect(widths(2)).toEqual([15, 5])
+    expect(widths(0)).toEqual([7.5, 2.5])      // nonsense scales are ignored
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Number-line density: projected, a label on every unit is a picket fence.
+// ---------------------------------------------------------------------------
+
+describe('number line — tick density and weight', () => {
+  const NLVP = (ppu: number): Viewport =>
+    ({ center: { x: 0, y: 0 }, pxPerUnit: ppu, widthPx: 900, heightPx: 700 })
+
+  function axis(vp: Viewport, opts?: { type?: number; stroke?: number }): WeighedCtx {
+    const ctx = new WeighedCtx()
+    drawNumberLineAxis(ctx as unknown as Ctx2D, vp, DARK_THEME, opts)
+    return ctx
+  }
+
+  it('thins the labels to every 2 / 5 / 10 as the board zooms out', () => {
+    const steps = [60, 30, 15, 8, 4].map(ppu => nlTickStep(NLVP(ppu)).major)
+    expect(steps).toEqual([1, 2, 5, 10, 20])
+    // and every label is at least NL_TICK_MIN_PX apart on screen
+    for (const ppu of [60, 30, 15, 8, 4, 100, 250]) {
+      expect(nlTickStep(NLVP(ppu)).major * ppu).toBeGreaterThanOrEqual(56)
+    }
+  })
+
+  it('a bigger type scale thins them one rung earlier', () => {
+    expect(nlTickStep(NLVP(60), 1).major).toBe(1)
+    expect(nlTickStep(NLVP(60), 2).major).toBe(2)
+  })
+
+  it('minor ticks are drawn but never labelled', () => {
+    const ctx = axis(NLVP(60))
+    const labelled = ctx.labels.map(l => Number(l.text)).filter(Number.isFinite)
+    for (const v of labelled) expect(Math.abs(v - Math.round(v))).toBeLessThan(1e-9)
+    expect(labelled.every(v => Math.abs(v % 1) < 1e-9)).toBe(true)
+    // the minors exist as ticks: short vertical strokes in the grid colour
+    expect(ctx.strokes.some(s => s.style === DARK_THEME.gridMajor)).toBe(true)
+  })
+
+  it('the line itself gains weight with present.stroke', () => {
+    const plain = axis(NLVP(60))
+    const big = axis(NLVP(60), { type: 1, stroke: 2 })
+    const axisLw = (c: WeighedCtx): number =>
+      Math.max(...c.strokes.filter(s => s.style === DARK_THEME.axis).map(s => s.lw))
+    expect(axisLw(big)).toBeCloseTo(axisLw(plain) * 2, 6)
+    for (const l of axis(NLVP(60), { type: 2 }).labels) {
+      expect(l.font.startsWith('22px')).toBe(true)
+    }
+  })
+
+  it('bar thickness and dot radius scale with present.stroke', () => {
+    const item: NLItem = {
+      kind: 'interval', id: 'i1', lo: -2, hi: 5,
+      loClosed: true, hiClosed: false, color: '#4f9cf9',
+    }
+    const paint = (stroke: number): WeighedCtx => {
+      const ctx = new WeighedCtx()
+      drawNLItem(ctx as unknown as Ctx2D, item, NLVP(60), {
+        color: '#4f9cf9', theme: LIGHT_THEME, y: numberLineAxisY(NLVP(60)),
+        scale: { type: 1, stroke },
+      })
+      return ctx
+    }
+    const bar = (c: WeighedCtx): number => Math.max(...c.strokes.map(s => s.lw))
+    expect(bar(paint(1))).toBe(NL_BAR_WIDTH)
+    expect(bar(paint(2))).toBe(NL_BAR_WIDTH * 2)
+    const dot = (c: WeighedCtx): number =>
+      Math.max(...c.own.cmds.filter(cm => cm.op === 'arc').map(cm => (cm as { r: number }).r))
+    expect(dot(paint(1))).toBeCloseTo(nlDotRadius(NL_BAR_WIDTH), 6)
+    expect(dot(paint(2))).toBeCloseTo(nlDotRadius(NL_BAR_WIDTH * 2), 6)
   })
 })
