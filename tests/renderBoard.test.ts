@@ -9,7 +9,13 @@
 // ============================================================================
 
 import { describe, it, expect } from 'vitest'
-import { renderBoard, type BoardScene, type BoardChrome } from '../src/ui/renderBoard'
+import {
+  renderBoard,
+  type BoardChrome,
+  type BoardScene,
+  type Polyline,
+  type SlopeField,
+} from '../src/ui/renderBoard'
 import { MockCtx, MockPath2D, withMockPath2D } from './mockCanvas'
 import { MODELS } from '../src/core/fit/models'
 import { analyzeCurve } from '../src/core/analyze'
@@ -562,5 +568,65 @@ describe('renderBoard — overlays absent change nothing', () => {
     const plain = render(scene({ chrome: null }))
     expect(shaded.fillCount, 'the shaded area never reached the export')
       .toBeGreaterThan(plain.fillCount)
+  })
+})
+
+// ===========================================================================
+// Slope fields and solution curves.
+//
+// Same claim as the overlays above, one layer further down: a board that
+// never mentions `fields`/`polylines` must emit the byte-identical command
+// stream it emitted before the layer existed, and a field that IS present
+// must reach the export. The layer's own behaviour is pinned in
+// tests/fields.test.ts.
+// ===========================================================================
+
+describe('renderBoard — slope fields absent change nothing', () => {
+  const stream = (ctx: MockCtx): string =>
+    JSON.stringify({
+      cmds: ctx.own.cmds,
+      texts: ctx.texts,
+      fills: ctx.fills,
+      strokeStyles: ctx.strokeStyles,
+      fillStyles: ctx.fillStyles,
+      counts: [ctx.strokeCount, ctx.fillCount, ctx.textCount,
+               ctx.saveCount, ctx.restoreCount, ctx.arcCount],
+      paths: ctx.strokedPaths.map((p) => p.cmds),
+    })
+
+  const FIELD: SlopeField = {
+    id: 'sf', f: (x, y) => x - y, latex: 'dy/dx = x - y',
+    color: CURVE_COLORS[1], visible: true,
+  }
+  const SOLUTION: Polyline = {
+    id: 'sol',
+    pts: [{ x: -2, y: 1 }, { x: -1, y: 0.2 }, { x: 0, y: 0 }, { x: 1, y: 0.37 }],
+    color: CURVE_COLORS[2],
+  }
+
+  it('`fields: []` / `polylines: []` are byte-identical to the fields absent', () => {
+    for (const chrome of [null, chromeOn()]) {
+      const before = render(scene({ chrome }))
+      const after = render(scene({ chrome, fields: [], polylines: [] }))
+      expect(stream(after)).toBe(stream(before))
+    }
+  })
+
+  it('a field and its solution curve reach the figure (chrome:null)', () => {
+    const plain = render(scene({ chrome: null }))
+    const withField = render(scene({ chrome: null, fields: [FIELD], polylines: [SOLUTION] }))
+    expect(withField.strokeCount, 'the field never reached the export')
+      .toBeGreaterThan(plain.strokeCount)
+    expect(withField.strokeStyles).toContain(CURVE_COLORS[1])
+    expect(withField.strokeStyles).toContain(CURVE_COLORS[2])
+  })
+
+  it('both map to the print palette on a light ground, like every stroke', () => {
+    const ctx = render(scene({
+      theme: LIGHT_THEME, chrome: null, fields: [FIELD], polylines: [SOLUTION],
+    }))
+    expect(ctx.strokeStyles).toContain(PRINT_CURVE_COLORS[1])
+    expect(ctx.strokeStyles).toContain(PRINT_CURVE_COLORS[2])
+    expect(ctx.strokeStyles).not.toContain(CURVE_COLORS[1])
   })
 })

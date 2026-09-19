@@ -404,3 +404,55 @@ export type NLItemDraft = DistributiveOmit<NLItem, 'id' | 'color'>
 export type InequalityOutcome =
   | { ok: true; items: NLItemDraft[]; latex: string }
   | { ok: false; error: string; pos?: number }
+
+// ============================================================================
+// Slope fields and solution curves — AP Calculus differential equations.
+//
+// A slope field is not a curve: it is a direction at every point, dy/dx =
+// f(x, y), drawn as a lattice of short segments. A solution curve is the path
+// through a chosen point that follows those directions (RK4 both ways).
+//
+//   src/core/parse/slopeField.ts
+//     export function parseSlopeField(src: string): SlopeFieldOutcome
+//       accepts "dy/dx = x - y", "y' = x*y", "dy/dx = a*x + b" (free constants
+//       become sliders, exactly like parseExpression)
+//   src/core/ode.ts
+//     export function solveField(f, through: Vec2, range: [number, number],
+//                                opts?): Vec2[]
+//       RK4 from `through` in both x directions across `range`, stopping on
+//       blow-up or non-finite; returns the polyline in order of increasing x
+//   render: BoardScene.fields?: readonly SlopeField[]
+//           BoardScene.polylines?: readonly Polyline[]   (solution curves, and
+//           any other open path the App wants drawn as figure content)
+// ============================================================================
+
+export interface SlopeField {
+  id: string
+  /** dy/dx = f(x, y) at the current params */
+  f: (x: number, y: number) => number
+  latex: string
+  color: string
+  visible: boolean
+  /** lattice spacing in CSS px; the renderer picks a default (~28) when absent */
+  spacingPx?: number
+}
+
+/** An open path in math coords drawn as figure content (exports, not chrome). */
+export interface Polyline {
+  id: string
+  pts: readonly Vec2[]
+  color: string
+  width?: number
+  dash?: readonly number[]
+}
+
+export type SlopeFieldOutcome =
+  | {
+      ok: true
+      latex: string
+      paramNames: string[]
+      defaultParams: number[]
+      /** Build the field closure for a given param vector. */
+      makeField(id: string, params: number[], color: string): SlopeField
+    }
+  | { ok: false; error: string; pos?: number }

@@ -40,6 +40,8 @@ import { drawGrid, paintScale } from '../render/grid'
 import { drawCurve, drawInk } from '../render/curves'
 import type { Overlay } from '../render/overlays'
 import { drawOverlays } from '../render/overlays'
+import type { Polyline, SlopeField } from '../render/fields'
+import { drawPolylines, drawSlopeFields } from '../render/fields'
 import { drawNLItem, drawNumberLineAxis, nlLanes } from '../render/numberline'
 import type { NLPart } from '../render/numberline'
 import { formatCoord } from './numeric'
@@ -179,6 +181,31 @@ export interface BoardScene {
    * Cartesian only; a number-line board ignores it.
    */
   overlays?: readonly Overlay[]
+  /**
+   * Slope fields: dy/dx = f(x, y) as a lattice of short tangent segments,
+   * painted under everything the class is meant to look AT.
+   *
+   * The field is the ground, not the subject. A solution curve threading it,
+   * and the teacher's own sketched curves, must read on top of it — so it
+   * goes below the polylines and below the strokes, at a reduced alpha.
+   *
+   * FIGURE, not chrome: it exports.
+   *
+   * Cartesian only; a number-line board ignores it.
+   */
+  fields?: readonly SlopeField[]
+  /**
+   * Open paths in math coords — the RK4 solution curve through a chosen
+   * point, and anything else the App wants drawn as a plain path.
+   *
+   * These are not FittedCurves: there is no model and no closed form to
+   * re-sample, only the points the integrator produced. They are still
+   * FIGURE, and a solution curve missing from the exported PNG would be the
+   * same bug the analysis layer had.
+   *
+   * Cartesian only; a number-line board ignores it.
+   */
+  polylines?: readonly Polyline[]
   /** Editing chrome. Null = the figure alone. */
   chrome?: BoardChrome | null
 }
@@ -186,6 +213,7 @@ export interface BoardScene {
 /** Re-exported so the App can name the field's type without reaching into render/. */
 export type { AxisUnit, AxisUnits }
 export type { Overlay, OverlayRect } from '../render/overlays'
+export type { Polyline, SlopeField } from '../render/fields'
 
 /**
  * Trig by name, at a word boundary, so `sinh`/`cosh`/`tanh` (not periodic) and
@@ -872,6 +900,28 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
       })
     } catch {
       /* overlay render failed — the figure still stands */
+    }
+  }
+
+  // Slope fields: under the polylines, under every curve. The lattice is the
+  // ground the solution stands on; a curve broken up by it could not be read.
+  const fields = scene.fields
+  if (fields && fields.length > 0) {
+    try {
+      drawSlopeFields(ctx, fields, { vp, paint, scale })
+    } catch {
+      /* field render failed — the figure still stands */
+    }
+  }
+
+  // Solution curves and other open paths: above the field they solve, below
+  // the fitted curves, and — like both — part of the figure, never chrome.
+  const polylines = scene.polylines
+  if (polylines && polylines.length > 0) {
+    try {
+      drawPolylines(ctx, polylines, { vp, paint, scale })
+    } catch {
+      /* polyline render failed — the figure still stands */
     }
   }
 

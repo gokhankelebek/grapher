@@ -1477,3 +1477,59 @@ export function analyzeExpr(src: string): ExprAnalysis {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }
 }
+
+// ----------------------------------------------------------------------------
+// Whole-expression compilation — used by the slope-field parser
+// (./slopeField.ts), which needs the compiled closure that `analyzeExpr` only
+// constant-folds away. Same tokenizer, same Pratt parser, same LaTeX emitter;
+// the only difference is that the caller keeps the evaluator and decides for
+// itself which variables are legal.
+//
+// No cycle: ./slopeField.ts imports this module, never the other way round.
+// ----------------------------------------------------------------------------
+
+export interface CompiledExpr {
+  /** `(params, x, y) => value` — one closure, no per-call parsing */
+  ev: (params: readonly number[], x: number, y: number) => number
+  latex: string
+  /** reserved variables actually used, e.g. ['x', 'y'] */
+  vars: string[]
+  /** single-letter free constants, in order of first appearance */
+  paramNames: string[]
+}
+
+export type CompileOutcome =
+  | { ok: true; expr: CompiledExpr }
+  | { ok: false; error: string; pos?: number }
+
+/**
+ * Parse and compile one self-contained expression (no '='). Positions in
+ * errors are relative to `src`.
+ */
+export function compileExpr(src: string): CompileOutcome {
+  try {
+    if (!src || src.trim() === '') return { ok: false, error: 'Empty expression' }
+    const parser = new Parser(src)
+    const { lhs, rhs } = parser.parseInput()
+    if (rhs !== null) return { ok: false, error: "Unexpected '='" }
+    const vars = new Set<VarName>()
+    collectVars(lhs, vars)
+    const ev = compile(lhs)
+    return {
+      ok: true,
+      expr: {
+        ev: (params, x, y) => ev(params, x, y),
+        latex: toLatex(lhs),
+        vars: [...vars],
+        paramNames: [...parser.paramNames],
+      },
+    }
+  } catch (err) {
+    if (err instanceof ParseError) {
+      return err.pos !== undefined
+        ? { ok: false, error: err.message, pos: err.pos }
+        : { ok: false, error: err.message }
+    }
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
