@@ -35,7 +35,7 @@ import type {
 } from '../core/types'
 import { LIGHT_THEME, toPrintColor, toScreen } from '../core/types'
 import type { StyleMap } from '../core/persist'
-import type { PaintScale } from '../render/grid'
+import type { AxisUnit, AxisUnits, PaintScale } from '../render/grid'
 import { drawGrid, paintScale } from '../render/grid'
 import { drawCurve, drawInk } from '../render/curves'
 import { drawNLItem, drawNumberLineAxis, nlLanes } from '../render/numberline'
@@ -151,8 +151,58 @@ export interface BoardScene {
    * at 1280x720 from the back of a room.
    */
   present?: { type: number; stroke: number }
+  /**
+   * How each axis is measured — 'decimal' (the 1–2–5 ladder) or 'pi' (ticks at
+   * rational multiples of π, labelled π/2, π, 3π/2, 2π …).
+   *
+   * Absent, or either side absent, means 'decimal': a scene that never mentions
+   * this draws exactly the grid it drew before the field existed. The two axes
+   * are independent on purpose — a polar-to-cartesian lesson puts θ in π along
+   * x while y stays a plain length, and a lesson going the other way wants the
+   * opposite.
+   *
+   * This is a CARTESIAN property; a number-line board ignores it.
+   */
+  axisUnits?: AxisUnits
   /** Editing chrome. Null = the figure alone. */
   chrome?: BoardChrome | null
+}
+
+/** Re-exported so the App can name the field's type without reaching into render/. */
+export type { AxisUnit, AxisUnits }
+
+/**
+ * Trig by name, at a word boundary, so `sinh`/`cosh`/`tanh` (not periodic) and
+ * `asin`/`arccos` (periodic in the OUTPUT, so it is y that wants π, not x) are
+ * both left alone. A leading backslash is a non-letter, so `\sin(x)` matches.
+ */
+const TRIG_SOURCE = /(?:^|[^A-Za-z])(sin|cos|tan|sec|csc|cot)(?![A-Za-z])/i
+
+/**
+ * AUTO mode: what the axes would ideally be for this set of curves.
+ *
+ * A RECOMMENDATION, not a decision — it returns `{ x: 'pi' }` when anything on
+ * the board is trigonometric and `{}` otherwise, and the App chooses whether to
+ * honour it (a teacher who has deliberately set decimal axes must not have them
+ * changed underneath by the next sketch).
+ *
+ * A fitted `sine` is self-identifying. A typed expression is not: its family is
+ * `expr_N` and the text the teacher wrote lives in the App's source map, so it
+ * is passed in — keyed by curve id, the same shape `curveLegend` takes.
+ */
+export function suggestAxisUnits(
+  curves: readonly FittedCurve[],
+  sources?: Record<string, string>,
+): { x?: 'pi' } {
+  for (const curve of curves) {
+    if (!curve.visible) continue
+    if (curve.modelId === 'sine') return { x: 'pi' }
+    if (curve.modelId.startsWith('expr_')) {
+      const src = sources?.[curve.id]
+      if (typeof src === 'string' && TRIG_SOURCE.test(src)) return { x: 'pi' }
+    }
+  }
+  return {}
 }
 
 // ---------------------------------------------------------------------------
@@ -786,7 +836,7 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
   }
 
   try {
-    drawGrid(ctx, vp, theme, scale)
+    drawGrid(ctx, vp, theme, scale, scene.axisUnits ?? null)
   } catch {
     /* grid module absent or failed — keep going */
   }
