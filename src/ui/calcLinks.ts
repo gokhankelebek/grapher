@@ -515,27 +515,87 @@ export function defaultTangentX(
 }
 
 /**
- * [a, b] for a fresh area or Riemann sum: the curve's own domain when it has
- * one, otherwise the span its ink occupies, rounded to halves. Never a window
- * the curve is not on — a shaded region off the end of the sketch is a picture
- * of nothing.
+ * [a, b] for a fresh area or Riemann sum.
+ *
+ * A curve with a domain — every sketch, every restricted equation — opens
+ * on the WHOLE of it, end to end: that is the region the teacher just drew,
+ * and limits sitting on the ends follow the ends when they are dragged
+ * (`followDomains`). A curve that is everywhere gets the visible window
+ * rounded inward to halves, the numbers a teacher would have typed. Never a
+ * window the curve is not on — a shaded region off the end of the sketch is
+ * a picture of nothing.
  */
 export function defaultBounds(
   curve: FittedCurve,
   window: [number, number],
 ): [number, number] {
+  const d = curve.domain
+  if (d && Number.isFinite(d[0]) && Number.isFinite(d[1]) && d[1] > d[0]) {
+    return [round6(d[0]), round6(d[1])]
+  }
   const [lo, hi] = spanOf(curve, window)
-  // Round INWARD. A sketch whose ink runs over [-3.42, 4.47] has a domain
-  // that ends there, and `nice()` would hand back [-3.5, 4.5] — a window the
-  // curve is not on, which areaUnder rightly refuses ("undefined on …").
-  // The halves are chosen inside the span, with a hair of slack so a domain
-  // that already sits on a half (1.0000000001) is not pushed to the next one.
+  // Round INWARD: [-3.42, 4.47] must never become [-3.5, 4.5], which areaUnder
+  // would rightly refuse ("undefined on …"). A hair of slack keeps a span that
+  // already sits on a half (1.0000000001) from being pushed to the next one.
   const slack = 1e-9 * Math.max(1, Math.abs(lo), Math.abs(hi))
   const a = Math.ceil((lo - slack) * 2) / 2
   const b = Math.floor((hi + slack) * 2) / 2
-  if (b - a >= 0.5) return [Math.max(a, lo), Math.min(b, hi)].map(round6) as [number, number]
+  if (b - a >= 0.5) return [round6(Math.max(a, lo)), round6(Math.min(b, hi))]
   return [round6(lo), round6(hi)]
 }
+
+/**
+ * Carry an interval with the ends of its curve.
+ *
+ * A limit sitting ON an end of the sketch means "to the end": when the
+ * teacher drags that end out (or in), the limit goes with it, so the shading
+ * keeps covering the whole curve they extended. A limit strictly inside the
+ * sketch is a number they chose and stays put — unless the sketch shrank
+ * past it, in which case it is pulled back to the new end rather than left
+ * pointing at nothing. `prev` maps curve id → the domain that curve had the
+ * last time this ran; a curve missing from it is skipped (a freshly loaded
+ * document, not a drag). Returns null when no link had to move.
+ */
+export function followDomains(
+  links: readonly CalcLink[],
+  prev: ReadonlyMap<string, [number, number] | null>,
+  curves: readonly FittedCurve[],
+): CalcLink[] | null {
+  const byId = new Map(curves.map((c) => [c.id, c]))
+  let out: CalcLink[] | null = null
+  links.forEach((link, i) => {
+    if (link.kind !== 'area' && link.kind !== 'riemann') return
+    if (!prev.has(link.parentId)) return
+    const parent = byId.get(link.parentId)
+    if (!parent) return
+    const was = sorted(prev.get(link.parentId) ?? null)
+    const now = sorted(parent.domain)
+    if (String(was) === String(now)) return
+    const carry = (v: number): number => {
+      let x = v
+      if (was && now) {
+        const tol = 1e-9 * Math.max(1, Math.abs(was[0]), Math.abs(was[1]))
+        if (Math.abs(v - was[0]) <= tol) x = now[0]
+        else if (Math.abs(v - was[1]) <= tol) x = now[1]
+      }
+      if (now) x = Math.min(Math.max(x, now[0]), now[1])
+      // Not rounded: an end is wherever the drag left it, and a limit a
+      // millionth past it would be refused as outside the domain.
+      return x
+    }
+    const from = carry(link.from)
+    const to = carry(link.to)
+    if (from === link.from && to === link.to) return
+    if (!out) out = links.slice()
+    out[i] = { ...link, from, to } as CalcLink
+  })
+  return out
+}
+
+const sorted = (d: [number, number] | null): [number, number] | null =>
+  d && Number.isFinite(d[0]) && Number.isFinite(d[1])
+    ? [Math.min(d[0], d[1]), Math.max(d[0], d[1])]
+    : null
 
 /** Where this curve lives in x: its domain, its ink, or the visible window. */
 function spanOf(curve: FittedCurve, window: [number, number]): [number, number] {

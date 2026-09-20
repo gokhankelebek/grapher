@@ -30,6 +30,7 @@ import {
   changeLabel,
   countPhrase,
   cardCalc,
+  followDomains,
   overlaysFor,
   tangentReadout,
   areaReadout,
@@ -448,6 +449,11 @@ export default function App() {
    * is left alone until the parent says otherwise.
    */
   const calcSigRef = useRef<Map<string, string>>(new Map())
+  /**
+   * Each curve's domain the last time the calculus sync ran, so a limit that
+   * sat on an end of the sketch can ride that end when it is dragged.
+   */
+  const calcDomainRef = useRef<Map<string, [number, number] | null>>(new Map())
   /**
    * Links whose curve the BOARD hid because the mathematics went away (a
    * tangent at a corner). Remembered so restoring it can never override a
@@ -1063,6 +1069,7 @@ export default function App() {
     boardGridRef.current = board.grid
     polarOfferedRef.current = false
     calcSigRef.current = new Map()
+    calcDomainRef.current = new Map()
     calcAutoHiddenRef.current = new Set()
     derivCounterRef.current = board.derivCounter
     editsRef.current = {}
@@ -2338,9 +2345,18 @@ export default function App() {
    */
   const syncCalc = useCallback((): void => {
     const links = calcRef.current
+    const before = curvesRef.current
+    // Limits first: an area whose limits sat on the ends of the sketch keeps
+    // covering the whole sketch after the teacher drags an end. This is a
+    // consequence of their drag, so it rides inside the drag's own undo entry.
+    const followed = links.length > 0 ? followDomains(links, calcDomainRef.current, before) : null
+    calcDomainRef.current = new Map(before.map((c) => [c.id, c.domain]))
+    if (followed) {
+      applyState({ calc: followed })
+      return // the effect re-runs on the new links and finishes the sync
+    }
     if (links.length === 0) return
     const models = modelsRef.current
-    const before = curvesRef.current
     const byId = new Map(before.map((c) => [c.id, c]))
     const patches = new Map<string, Partial<FittedCurve>>()
     const register: Record<string, ModelSpec> = {}

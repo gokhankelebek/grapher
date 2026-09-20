@@ -26,6 +26,7 @@ import {
   cardCalc,
   defaultBounds,
   dependentsOf,
+  followDomains,
   fixed,
   integralSymbol,
   labelLegend,
@@ -604,21 +605,21 @@ describe('the projected legend says what a derived curve is', () => {
 describe('defaultBounds', () => {
   const sketched = (domain: [number, number]): FittedCurve => ({ ...cubic(), domain })
 
-  it('rounds a sketched domain INWARD to halves, never outside it', () => {
-    // A stroke over [-3.42, 4.47] used to default to [-3.5, 4.5], which
-    // areaUnder refused as "undefined on [-3.50, 4.50]".
+  it('opens on the whole of a sketched domain, end to end', () => {
+    // Used to round outward to [-3.5, 4.5], which areaUnder refused as
+    // "undefined on [-3.50, 4.50]".
     const [a, b] = defaultBounds(sketched([-3.42, 4.47]), [-10, 10])
-    expect([a, b]).toEqual([-3, 4])
+    expect([a, b]).toEqual([-3.42, 4.47])
     expect(areaUnder(sketched([-3.42, 4.47]), MODELS, a, b)).not.toBeNull()
   })
 
-  it('keeps a domain that already sits on halves, float hair included', () => {
-    expect(defaultBounds(sketched([-3.5, 4.5]), [-10, 10])).toEqual([-3.5, 4.5])
-    expect(defaultBounds(sketched([1.0000000001, 2.9999999999]), [-10, 10])).toEqual([1, 3])
+  it('rounds the visible window INWARD to halves for a curve that is everywhere', () => {
+    expect(defaultBounds(cubic(), [-3.42, 4.47])).toEqual([-3, 4])
+    expect(defaultBounds(cubic(), [1.0000000001, 2.9999999999])).toEqual([1, 3])
   })
 
-  it('falls back to the raw span when the halves inside it would collapse', () => {
-    const [a, b] = defaultBounds(sketched([1.1, 1.4]), [-10, 10])
+  it('falls back to the raw window when the halves inside it would collapse', () => {
+    const [a, b] = defaultBounds(cubic(), [1.1, 1.4])
     expect(a).toBeCloseTo(1.1, 6)
     expect(b).toBeCloseTo(1.4, 6)
   })
@@ -626,10 +627,48 @@ describe('defaultBounds', () => {
   it('always yields limits the integral exists on', () => {
     for (const d of [[-3.42, 4.47], [0.26, 0.74], [-0.49, 5.01], [2.5, 2.51]] as [number, number][]) {
       const [a, b] = defaultBounds(sketched(d), [-10, 10])
-      expect(a).toBeGreaterThanOrEqual(d[0] - 1e-6)
-      expect(b).toBeLessThanOrEqual(d[1] + 1e-6)
       expect(areaUnder(sketched(d), MODELS, a, b)).not.toBeNull()
     }
+  })
+})
+
+describe('followDomains — limits ride the ends of the sketch', () => {
+  const sketched = (domain: [number, number] | null): FittedCurve => ({ ...cubic(), domain })
+  const area = (from: number, to: number): AreaLink =>
+    ({ kind: 'area', id: 'A', parentId: 'f', from, to, abs: false }) as AreaLink
+  const prev = (d: [number, number] | null) => new Map([['f', d]])
+
+  it('carries a limit that sat on an end when that end is dragged out', () => {
+    const next = followDomains([area(-3.42, 4.47)], prev([-3.42, 4.47]), [sketched([-3.42, 6.1])])
+    expect(next?.[0]).toMatchObject({ from: -3.42, to: 6.1 })
+  })
+
+  it('carries both ends, and a limit dragged in with the end', () => {
+    const next = followDomains([area(-3.42, 4.47)], prev([-3.42, 4.47]), [sketched([-5, 2])])
+    expect(next?.[0]).toMatchObject({ from: -5, to: 2 })
+  })
+
+  it('leaves a limit the teacher chose inside the sketch alone', () => {
+    const next = followDomains([area(0, 2)], prev([-3.42, 4.47]), [sketched([-3.42, 6.1])])
+    expect(next).toBeNull()
+  })
+
+  it('pulls an interior limit back when the sketch shrinks past it', () => {
+    const next = followDomains([area(0, 4)], prev([-3.42, 4.47]), [sketched([-3.42, 3])])
+    expect(next?.[0]).toMatchObject({ from: 0, to: 3 })
+  })
+
+  it('does nothing for a curve it has not seen before, or whose domain did not change', () => {
+    expect(followDomains([area(-3.42, 4.47)], new Map(), [sketched([0, 1])])).toBeNull()
+    expect(followDomains([area(-3.42, 4.47)], prev([-3.42, 4.47]), [sketched([-3.42, 4.47])])).toBeNull()
+  })
+
+  it('applies to Riemann sums and ignores tangents', () => {
+    const r = { kind: 'riemann', id: 'R', parentId: 'f', from: -3.42, to: 4.47, n: 8, method: 'left' } as CalcLink
+    const t = { kind: 'tangent', id: 'T', parentId: 'f', curveId: 't', x: -3.42 } as CalcLink
+    const next = followDomains([r, t], prev([-3.42, 4.47]), [sketched([-4, 5])])
+    expect(next?.[0]).toMatchObject({ from: -4, to: 5 })
+    expect(next?.[1]).toBe(t)
   })
 })
 
