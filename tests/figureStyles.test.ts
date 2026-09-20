@@ -346,10 +346,10 @@ describe('numbers — every unit, thinned rather than overlapped', () => {
     const ctx = grid({ spacing: 'unit', numbers: 'unit' })
     const xs = labelsAlongX(ctx).map((l) => l.text)
     expect(xs).toEqual(
-      ['-7', '-6', '-5', '-4', '-3', '-2', '-1', '1', '2', '3', '4', '5', '6', '7'],
+      ['−7', '−6', '−5', '−4', '−3', '−2', '−1', '1', '2', '3', '4', '5', '6', '7'],
     )
     const ys = ctx.texts.filter((t) => t.baseline === 'middle').map((t) => t.text)
-    expect(ys).toEqual(['-4', '-3', '-2', '-1', '1', '2', '3', '4'])
+    expect(ys).toEqual(['−4', '−3', '−2', '−1', '1', '2', '3', '4'])
   })
 
   it('thins at 20 px per unit, and no two labels touch', () => {
@@ -357,7 +357,8 @@ describe('numbers — every unit, thinned rather than overlapped', () => {
     const ctx = grid({ spacing: 'unit', numbers: 'unit' }, vp)
     const labels = labelsAlongX(ctx)
     expect(labels.length, 'the row was emptied instead of thinned').toBeGreaterThan(6)
-    for (const l of labels) expect(Math.abs(Number(l.text) % 2)).toBe(0) // thinned by 2
+    // thinned by 2 (drawn labels use a true minus, U+2212)
+    for (const l of labels) expect(Math.abs(Number(l.text.replace('−', '-')) % 2)).toBe(0)
     for (let i = 1; i < labels.length; i++) {
       const left = labels[i - 1]
       const right = labels[i]

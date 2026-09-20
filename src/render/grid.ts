@@ -199,9 +199,16 @@ export function isPiStep(s: GridStep | PiStep): s is PiStep {
   return (s as PiStep).den !== undefined
 }
 
-/** The label for tick index `k` on whichever ladder `step` came from. */
+/**
+ * The label for tick index `k` on whichever ladder `step` came from.
+ *
+ * Drawn with a true minus (U+2212), the glyph a textbook and a College Board
+ * figure print; the formatters keep the ASCII hyphen so their strings stay
+ * comparable and typeable, and the swap happens here, once, for both ladders.
+ */
 export function tickLabel(step: GridStep | PiStep, k: number): string {
-  return isPiStep(step) ? formatPiTick(k * step.num, step.den) : formatTick(k * step.major)
+  const s = isPiStep(step) ? formatPiTick(k * step.num, step.den) : formatTick(k * step.major)
+  return s.startsWith('-') ? `\u2212${s.slice(1)}` : s
 }
 
 // ---------------------------------------------------------------------------
@@ -373,9 +380,10 @@ export function unitTickStep(
 
 /** The label for MINOR index `m` on whichever ladder `step` came from. */
 export function minorTickLabel(step: GridStep | PiStep, m: number): string {
-  return isPiStep(step)
+  const s = isPiStep(step)
     ? formatPiTick(m * step.num, step.den * step.minorDiv)
     : formatTick(m * (step.major / step.minorDiv))
+  return s.startsWith('-') ? `\u2212${s.slice(1)}` : s
 }
 
 interface Tick {

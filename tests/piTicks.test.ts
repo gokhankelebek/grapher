@@ -65,7 +65,9 @@ const originLabels = (ctx: MockCtx): string[] =>
  * teacher sees is the quantity the tick actually sits at. Returns NaN for any
  * string that is not a well-formed π label — which is itself the assertion.
  */
-function labelValue(s: string): number {
+function labelValue(raw: string): number {
+  // Drawn labels carry a true minus (U+2212); the formatters use ASCII.
+  const s = raw.replace(/^\u2212/, '-')
   if (s === '0') return 0
   const m = /^(-?)(\d+(?:\.\d+)?(?:e-?\d+)?)?π(?:\/(\d+))?$/.exec(s)
   if (!m) return NaN
@@ -411,7 +413,7 @@ describe('renderBoard — the axisUnits scene field', () => {
     expect(xLabels(pi)).toContain('π')
     expect(xLabels(pi)).toContain('π/2')
     expect(xLabels(pi)).toContain('3π/2')
-    expect(xLabels(pi)).toContain('-π/2')
+    expect(xLabels(pi)).toContain('\u2212π/2')
   })
 
   it('an absent field is exactly today’s decimal board', () => {
