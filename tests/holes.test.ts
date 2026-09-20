@@ -8,10 +8,10 @@
 // ============================================================================
 
 import { describe, it, expect } from 'vitest'
-import type { FittedCurve, ModelSpec } from '../src/core/types'
+import type { Asymptote, FittedCurve, ModelSpec } from '../src/core/types'
 import { parseExpression } from '../src/core/parse'
 import { MODELS } from '../src/core/fit/models'
-import { findHoles, findPoles } from '../src/core/holes'
+import { findAsymptotes, findHoles, findPoles } from '../src/core/holes'
 import { analyzeCurve } from '../src/core/analyze'
 
 // ---------------------------------------------------------------------------
@@ -57,6 +57,39 @@ const singOf = (src: string, range: [number, number] = [-10, 10]) => {
   const t = typed(src)
   return t.spec.singularities!(t.curve.params, range)
 }
+
+const asymptotesOf = (src: string, range: [number, number] = [-10, 10]) => {
+  const t = typed(src)
+  return findAsymptotes(t.curve, t.models, range)
+}
+
+type Line = Extract<Asymptote, { kind: 'line' }>
+
+/**
+ * A line as (unit normal, distance from the origin), with the normal oriented
+ * so that the distance is not negative. Two spellings of the same line — the
+ * same set of points, walked either way round — come out identical, which is
+ * what an assertion about "the line x = 1" wants to compare.
+ */
+function lineForm(l: Line): { nx: number; ny: number; d: number } {
+  const len = Math.hypot(l.dir.x, l.dir.y)
+  let nx = -l.dir.y / len
+  let ny = l.dir.x / len
+  let d = nx * l.a.x + ny * l.a.y
+  if (d < 0) { nx = -nx; ny = -ny; d = -d }
+  return { nx, ny, d }
+}
+
+/** Assert that `l` is the line through `d·(nx, ny)` perpendicular to (nx, ny). */
+function expectLine(l: Asymptote | undefined, nx: number, ny: number, d: number, digits = 6) {
+  expect(l?.kind).toBe('line')
+  const f = lineForm(l as Line)
+  expect(f.nx).toBeCloseTo(nx, digits)
+  expect(f.ny).toBeCloseTo(ny, digits)
+  expect(f.d).toBeCloseTo(d, digits)
+}
+
+const linesOf = (src: string) => asymptotesOf(src).filter((a): a is Line => a.kind === 'line')
 
 function libraryCurve(
   modelId: string,
@@ -119,11 +152,117 @@ describe('ModelSpec.singularities', () => {
     expect(singOf('y = { 1/x if x != 0 }')).toEqual([0])
   })
 
-  it('is not carried by a polar or implicit plot', () => {
+  it('is carried by a polar plot too, read in θ — but never by an implicit one', () => {
+    // r = 1/θ stops being a formula at θ = 0, exactly as y = 1/x does at x = 0.
     const polar = parseExpression('r = 1/theta')
-    expect(polar.ok && polar.plot.makeModel('e').singularities).toBeUndefined()
+    expect(polar.ok).toBe(true)
+    if (!polar.ok) return
+    expect(polar.plot.makeModel('e').singularities!([], [0, 2 * Math.PI])).toEqual([0])
+    // An implicit plot has no one variable to scan, so it still answers nothing.
     const implicit = parseExpression('x^2 + y^2 = 4')
     expect(implicit.ok && implicit.plot.makeModel('e').singularities).toBeUndefined()
+  })
+
+  it('reads the argument of a logarithm as a singular sub-expression', () => {
+    expect(singOf('y = ln(x)')).toEqual([0])
+    expect(singOf('y = ln(x^2-4)')).toEqual([-2, 2])
+    expect(singOf('y = ln(abs(x))')).toEqual([0])
+    expect(singOf('y = x ln(x)')).toEqual([0])
+  })
+
+  it('every base of logarithm, since the base only scales it', () => {
+    expect(singOf('y = log(x-1)')).toEqual([1])
+    expect(singOf('y = log2(x+3)')).toEqual([-3])
+    expect(singOf('y = log10(2x)')).toEqual([0])
+  })
+
+  it('a literal negative NON-integer exponent is a denominator too', () => {
+    expect(singOf('y = x^-0.5')).toEqual([0])
+    expect(singOf('y = (x-2)^(-1.5)')).toEqual([2])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// logarithms
+// ---------------------------------------------------------------------------
+
+describe('logarithmic asymptotes', () => {
+  it('ln(x) is a pole at 0 — it dives to −∞ on the only side it has', () => {
+    // The ladder never sees 100× growth here: ln steps down by ln 10 ≈ 2.303
+    // per rung, from −6.9 to −18.4 over the whole ladder. What gives it away
+    // is that the step never shrinks.
+    expect(polesOf('y = ln(x)')).toEqual([0])
+    expect(holesOf('y = ln(x)')).toEqual([])
+    expect(asymptotesOf('y = ln(x)')).toEqual([{ kind: 'vertical', x: 0 }])
+  })
+
+  it('ln(x² − 4) has poles at ±2, where its argument has zeros', () => {
+    expect(polesOf('y = ln(x^2-4)')).toEqual([-2, 2])
+    expect(holesOf('y = ln(x^2-4)')).toEqual([])
+  })
+
+  it('ln|x| is a pole at 0 from BOTH sides', () => {
+    expect(polesOf('y = ln(abs(x))')).toEqual([0])
+    expect(holesOf('y = ln(abs(x))')).toEqual([])
+  })
+
+  it('x·ln(x) is a HOLE at (0, 0), not a pole', () => {
+    // x·ln(x) → 0: the product beats the logarithm. Only the right side of 0
+    // exists at all, and it crawls — −6.9e-3, −9.2e-4, …, −1.8e-7 — so the
+    // "last three values agree" test alone would miss it.
+    const holes = holesOf('y = x ln(x)')
+    expect(holes).toHaveLength(1)
+    expect(holes[0].x).toBe(0)
+    expect(holes[0].y).toBeCloseTo(0, 6)
+    expect(polesOf('y = x ln(x)')).toEqual([])
+    expect(asymptotesOf('y = x ln(x)')).toEqual([])
+  })
+
+  it('x·ln|x| is a hole at (0, 0) with both sides present', () => {
+    const holes = holesOf('y = x ln(abs(x))')
+    expect(holes).toHaveLength(1)
+    expect(holes[0].x).toBe(0)
+    expect(holes[0].y).toBeCloseTo(0, 6)
+    expect(polesOf('y = x ln(abs(x))')).toEqual([])
+  })
+
+  it('log, log2 and log10 behave exactly as ln does', () => {
+    for (const src of ['y = log(x)', 'y = log2(x)', 'y = log10(x)']) {
+      expect(polesOf(src), src).toEqual([0])
+      expect(holesOf(src), src).toEqual([])
+    }
+  })
+
+  it('the two listings never disagree: a hole is never also a pole', () => {
+    for (const src of [
+      'y = ln(x)', 'y = ln(x^2-4)', 'y = ln(abs(x))', 'y = x ln(x)',
+      'y = x ln(abs(x))', 'y = ln(x)/x', 'y = log2(x-1)', 'y = 1/ln(x)',
+      'y = (x^2-1)/(x-1)', 'y = tan(x)', 'y = abs(x)/x', 'y = x^-0.5',
+    ]) {
+      const holes = holesOf(src)
+      const poles = polesOf(src)
+      for (const h of holes) {
+        for (const p of poles) {
+          expect(Math.abs(h.x - p), `${src}: ${h.x} is listed as both`)
+            .toBeGreaterThan(1e-6)
+        }
+      }
+      // and every asymptote of an explicit curve is one of the poles
+      expect(asymptotesOf(src).map(a => (a.kind === 'vertical' ? a.x : NaN)))
+        .toEqual(poles)
+    }
+  })
+
+  it('the library log family names its asymptote from its own parameters', () => {
+    // a·ln(x − b) + c: the asymptote is x = b, read off the fit, not scanned for
+    const c = libraryCurve('log', [2, -1, 3])
+    expect(findPoles(c, MODELS, [-10, 10])).toEqual([-1])
+    expect(findHoles(c, MODELS, [-10, 10])).toEqual([])
+    expect(findAsymptotes(c, MODELS, [-10, 10])).toEqual([{ kind: 'vertical', x: -1 }])
+    // only inside the range asked about
+    expect(findPoles(c, MODELS, [0, 10])).toEqual([])
+    // and a flat a = 0 is the line y = c, which has no asymptote to name
+    expect(findPoles(libraryCurve('log', [0, -1, 3]), MODELS, [-10, 10])).toEqual([])
   })
 
   it('memoises: the same (params, range) is not scanned twice', () => {
@@ -286,6 +425,107 @@ describe('findPoles', () => {
 })
 
 // ---------------------------------------------------------------------------
+// polar
+// ---------------------------------------------------------------------------
+
+describe('polar curves', () => {
+  it('findPoles stays explicit-only — a slant line has no single x', () => {
+    expect(polesOf('r = tan(theta)')).toEqual([])
+    expect(polesOf('r = 1/theta')).toEqual([])
+  })
+
+  it('r = tan θ has the asymptotes x = 1 and x = −1', () => {
+    // d = lim r·sin(θ − θ0) = lim tan θ·(−cos θ) = −sin θ = −1 at θ = π/2,
+    // and −1 again at θ = 3π/2 — the same offset on the opposite ray.
+    const lines = linesOf('r = tan(theta)')
+    expect(lines).toHaveLength(2)
+    expectLine(lines[0], 1, 0, 1)   // x = 1
+    expectLine(lines[1], -1, 0, 1)  // x = −1
+  })
+
+  it('r = sec θ IS the line x = 1, and is still reported as approaching it', () => {
+    // At θ = π/2 the curve runs to infinity ALONG itself. The asymptote and
+    // the graph coincide; that is a true statement about the graph, and the
+    // dashed line simply lands under the curve. The two escapes (θ = π/2 and
+    // θ = 3π/2) name the same line and are listed once.
+    const lines = linesOf('r = 1/cos(theta)')
+    expect(lines).toHaveLength(1)
+    expectLine(lines[0], 1, 0, 1)
+    expect(holesOf('r = 1/cos(theta)')).toEqual([])
+  })
+
+  it('the hyperbolic spiral r = 1/θ approaches y = 1', () => {
+    // θ = 0 is an END of the default turn, and it is still probed from both
+    // sides: a θ window is a sweep, not a declared stop.
+    const lines = linesOf('r = 1/theta')
+    expect(lines).toHaveLength(1)
+    expectLine(lines[0], 0, 1, 1)
+  })
+
+  it('r = 1/(θ − 1) is a line in direction 1 rad at offset 1', () => {
+    const lines = linesOf('r = 1/(theta-1)')
+    expect(lines).toHaveLength(1)
+    expect(lines[0].dir.x).toBeCloseTo(Math.cos(1), 9)
+    expect(lines[0].dir.y).toBeCloseTo(Math.sin(1), 9)
+    expect(lines[0].a.x).toBeCloseTo(-Math.sin(1), 6)
+    expect(lines[0].a.y).toBeCloseTo(Math.cos(1), 6)
+    expectLine(lines[0], -Math.sin(1), Math.cos(1), 1)
+  })
+
+  it('r = sin(θ)/θ has a hole at the CARTESIAN point (1, 0)', () => {
+    const holes = holesOf('r = sin(theta)/theta')
+    expect(holes).toHaveLength(1)
+    expect(holes[0].x).toBeCloseTo(1, 9)
+    expect(holes[0].y).toBeCloseTo(0, 9)
+    expect(holes[0].exact).toBe(true) // θ0 = 0 is a number somebody wrote
+    expect(asymptotesOf('r = sin(theta)/theta')).toEqual([])
+  })
+
+  it('a rose has neither: nothing in r = 2cos(3θ) is ever undefined', () => {
+    expect(holesOf('r = 2cos(3theta)')).toEqual([])
+    expect(asymptotesOf('r = 2cos(3theta)')).toEqual([])
+    expect(findHoles(libraryCurve('polarRose', [2, 3, 0]), MODELS, [-10, 10])).toEqual([])
+    expect(findAsymptotes(libraryCurve('polarRose', [2, 3, 0]), MODELS, [-10, 10])).toEqual([])
+  })
+
+  it('a PARABOLIC escape has no line: r = 2/(1 − cos θ) is a parabola', () => {
+    // r → ∞ at θ = 0, but r·sin θ → ∞ with it: there is no line to draw.
+    expect(asymptotesOf('r = 2/(1-cos(theta))')).toEqual([])
+    expect(holesOf('r = 2/(1-cos(theta))')).toEqual([])
+  })
+
+  it('an explicit θ exclusion is an exact polar hole', () => {
+    // r = 2 {θ != 1} is the circle of radius 2 with one point lifted out of it
+    const holes = holesOf('r = 2 {theta != 1}')
+    expect(holes).toHaveLength(1)
+    expect(holes[0].x).toBeCloseTo(2 * Math.cos(1), 9)
+    expect(holes[0].y).toBeCloseTo(2 * Math.sin(1), 9)
+    expect(holes[0].exact).toBe(true)
+  })
+
+  it('a polar curve is never asked about a vertical asymptote', () => {
+    for (const src of [
+      'r = tan(theta)', 'r = 1/theta', 'r = 1/cos(theta)', 'r = sin(theta)/theta',
+      'r = 2/(1-cos(theta))', 'r = 2cos(3theta)', 'r = ln(theta)',
+    ]) {
+      expect(polesOf(src), src).toEqual([])
+      for (const a of asymptotesOf(src)) expect(a.kind, src).toBe('line')
+      for (const h of holesOf(src)) {
+        expect(Number.isFinite(h.x), `${src} x`).toBe(true)
+        expect(Number.isFinite(h.y), `${src} y`).toBe(true)
+      }
+    }
+  })
+
+  it('honours a restricted θ window', () => {
+    // the pole of r = 1/θ is outside [1, 5], so there is nothing to approach
+    const t = typed('r = 1/theta {1 < theta < 5}')
+    expect(findAsymptotes(t.curve, t.models, [-10, 10])).toEqual([])
+    expect(findHoles(t.curve, t.models, [-10, 10])).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
 // analyzeCurve
 // ---------------------------------------------------------------------------
 
@@ -351,6 +591,26 @@ describe('analyzeCurve — holes', () => {
     expect(analyzeCurve(t.curve, t.models).filter(p => p.kind === 'hole')).toEqual([])
   })
 
+  it('lists a POLAR hole at the Cartesian point', () => {
+    const t = typed('r = sin(theta)/theta')
+    const pts = analyzeCurve(t.curve, t.models)
+    const holes = pts.filter(p => p.kind === 'hole')
+    expect(holes).toHaveLength(1)
+    expect(holes[0].label).toBe('hole')
+    expect(holes[0].pos.x).toBeCloseTo(1, 9)
+    expect(holes[0].pos.y).toBeCloseTo(0, 9)
+    expect(holes[0].exact).toBe(false) // the point is a limit
+  })
+
+  it('a polar curve that has none is listed as it always was', () => {
+    const rose = libraryCurve('polarRose', [2, 3, 0])
+    const pts = analyzeCurve(rose, MODELS)
+    expect(pts.filter(p => p.kind === 'hole')).toEqual([])
+    expect(pts.filter(p => p.kind === 'petal-tip').length).toBeGreaterThan(0)
+    const t = typed('r = 2cos(3theta)')
+    expect(analyzeCurve(t.curve, t.models).filter(p => p.kind === 'hole')).toEqual([])
+  })
+
   it('a curve with no singularities is untouched', () => {
     const pts = analyzeCurve(libraryCurve('poly3', [6, -5, -2, 1], [-4, 5]), MODELS)
     expect(pts.filter(p => p.kind === 'hole')).toEqual([])
@@ -372,6 +632,22 @@ describe('cost', () => {
       t.spec.singularities!(t.curve.params, range)
       findHoles(t.curve, t.models, range)
       findPoles(t.curve, t.models, range)
+    }
+    for (let i = 0; i < 20; i++) once()
+    const n = 200
+    const t0 = performance.now()
+    for (let i = 0; i < n; i++) once()
+    const per = (performance.now() - t0) / n
+    expect(per, `${per.toFixed(3)} ms per call`).toBeLessThan(1)
+  })
+
+  it('a polar round — holes and slant asymptotes — costs under a millisecond', () => {
+    const t = typed('r = tan(theta)')
+    const range: [number, number] = [-10, 10]
+    const once = () => {
+      t.spec.singularities!(t.curve.params, range)
+      findHoles(t.curve, t.models, range)
+      findAsymptotes(t.curve, t.models, range)
     }
     for (let i = 0; i < 20; i++) once()
     const n = 200

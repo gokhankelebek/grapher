@@ -1028,4 +1028,40 @@ describe('analyzeCurve — removable discontinuities', () => {
     expect(of(pts, 'hole')).toHaveLength(1)
     expect(xsOf(pts, 'zero')).toEqual([])
   })
+
+  it('x·ln(x) is listed with a hole at (0, 0)', () => {
+    // undefined at 0 and left of it, but the product goes to 0: an open point
+    const pts = expr('y = x ln(x)', [-10, 10])
+    const holes = of(pts, 'hole')
+    expect(holes).toHaveLength(1)
+    expect(holes[0].pos.x).toBe(0)
+    expect(holes[0].pos.y).toBeCloseTo(0, 6)
+  })
+
+  it('a logarithm’s asymptote is NOT listed as a hole', () => {
+    // y = ln(x) dives to −∞ at 0: a vertical asymptote, and nothing is there
+    expect(of(expr('y = ln(x)', [-10, 10]), 'hole')).toEqual([])
+    expect(of(expr('y = ln(x^2-4)', [-10, 10]), 'hole')).toEqual([])
+    // nor for the library family
+    expect(of(analyzeCurve(curve('log', [1.6, -4.5, 0], [-4.5, 6]), MODELS), 'hole')).toEqual([])
+  })
+
+  it('a POLAR hole is listed at the Cartesian point it is missing', () => {
+    // r = sin(θ)/θ is undefined at θ = 0 and approaches r = 1 from both
+    // sides, so the open ring belongs at (1·cos 0, 1·sin 0) = (1, 0).
+    const pts = expr('r = sin(theta)/theta', [0, 2 * Math.PI])
+    const holes = of(pts, 'hole')
+    expect(holes).toHaveLength(1)
+    expect(holes[0].label).toBe('hole')
+    expect(holes[0].pos.x).toBeCloseTo(1, 9)
+    expect(holes[0].pos.y).toBeCloseTo(0, 9)
+    expect(holes[0].exact).toBe(false)
+  })
+
+  it('a polar curve with nothing undefined is listed as it always was', () => {
+    expect(of(expr('r = 2cos(3theta)', [0, 2 * Math.PI]), 'hole')).toEqual([])
+    const rose = analyzeCurve(curve('polarRose', [2, 3, 0], [0, 2 * Math.PI]), MODELS)
+    expect(of(rose, 'hole')).toEqual([])
+    expect(of(rose, 'petal-tip').length).toBeGreaterThan(0)
+  })
 })

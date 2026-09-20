@@ -824,39 +824,50 @@ describe('closed form vs. brute force', () => {
 // ---------------------------------------------------------------------------
 
 describe('performance', () => {
+  // Best of five: the budget is about the code, not about what else the test
+  // runner is doing on the machine at that instant — a single timing under a
+  // parallel full-suite run flaked 1 in 5 while passing alone every time.
+  const bestOf = (run: () => void, times = 5): number => {
+    let best = Infinity
+    for (let k = 0; k < times; k++) {
+      const t0 = performance.now()
+      run()
+      best = Math.min(best, performance.now() - t0)
+    }
+    return best
+  }
+
   it("a typed expression's derivative closure is built and sampled fast", () => {
     const { curve: c, models } = typed('y = sin(x)*e^(x/3) + x^2')
     // warm the JIT
     for (let i = 0; i < 3; i++) derivativeModel(c, models, 'd')
-
-    const t0 = performance.now()
-    const d = derivativeModel(c, models, 'd')!
-    for (let i = 0; i < 100; i++) d.spec.evalExplicit!(d.params, -5 + i * 0.1)
-    const ms = performance.now() - t0
+    const ms = bestOf(() => {
+      const d = derivativeModel(c, models, 'd')!
+      for (let i = 0; i < 100; i++) d.spec.evalExplicit!(d.params, -5 + i * 0.1)
+    })
     expect(ms).toBeLessThan(2)
   })
 
   it('areaUnder on a typed expression is under 2ms', () => {
     const { curve: c, models } = typed('y = sin(x)*e^(x/3) + x^2')
     for (let i = 0; i < 3; i++) areaUnder(c, models, -3, 3)
-
-    const t0 = performance.now()
-    const r = areaUnder(c, models, -3, 3)
-    const ms = performance.now() - t0
-    expect(r).not.toBeNull()
+    expect(areaUnder(c, models, -3, 3)).not.toBeNull()
+    const ms = bestOf(() => areaUnder(c, models, -3, 3))
     expect(ms).toBeLessThan(2)
   })
 
   it('a closed-form area is essentially free', () => {
-    const t0 = performance.now()
-    for (let i = 0; i < 100; i++) areaUnder(curve('poly3', [1, 2, 3, 4]), MODELS, -2, 2)
-    expect(performance.now() - t0).toBeLessThan(2)
+    const ms = bestOf(() => {
+      for (let i = 0; i < 100; i++) areaUnder(curve('poly3', [1, 2, 3, 4]), MODELS, -2, 2)
+    })
+    expect(ms).toBeLessThan(2)
   })
 
   it('1000 tangent lines on a library family stay under 2ms', () => {
     const c = curve('poly3', [0, -3, 0, 1])
-    const t0 = performance.now()
-    for (let i = 0; i < 1000; i++) tangentAt(c, MODELS, -5 + i * 0.01)
-    expect(performance.now() - t0).toBeLessThan(2)
+    const ms = bestOf(() => {
+      for (let i = 0; i < 1000; i++) tangentAt(c, MODELS, -5 + i * 0.01)
+    })
+    expect(ms).toBeLessThan(2)
   })
 })

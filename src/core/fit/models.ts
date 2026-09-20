@@ -434,6 +434,18 @@ export const MODELS: Record<string, ModelSpec> = {
       const u = x - p[1]
       return u > 0 ? p[0] * Math.log(u) + p[2] : Number.NaN
     },
+    // The asymptote is a parameter, not a discovery: x = b, straight out of
+    // the fit, with nothing scanned or bisected. src/core/holes.ts still asks
+    // what happens THERE — and reads a logarithm diving to ∓∞ on the one side
+    // that exists, which is a pole. `a = 0` is the flat line y = c, and a flat
+    // line has no asymptote to name.
+    singularities: (p, range) => {
+      const b = p[1]
+      if (!(Math.abs(p[0]) > 0) || !Number.isFinite(b)) return []
+      const lo = Math.min(range[0], range[1])
+      const hi = Math.max(range[0], range[1])
+      return b >= lo && b <= hi ? [b] : []
+    },
     latex: p => {
       const [a, b, c] = p
       const body = `\\ln\\left(${shifted('x', b)}\\right)`

@@ -16,6 +16,14 @@
 // with no `figure` field at all and draws the identical command stream it drew
 // before any of this existed.
 //
+// A STYLE IS OUTPUT-ONLY. It is what the PNG and the clipboard copy come out
+// looking like; the board the teacher draws on keeps its own look — the dark
+// theme with the neon sketches, or the light one — and so does presentation
+// mode, where the board is on a wall and an SAT figure would be a white
+// rectangle in a dark room. `screenLook` and `exportLook` are the two answers,
+// and they are separate functions precisely so the board cannot quietly pick
+// up the export's ground the way it used to.
+//
 // Pure: no React, no DOM. The canvas work lives in FigurePicker.tsx.
 // ============================================================================
 
@@ -36,7 +44,7 @@ export const FIGURE_CHOICES: readonly FigureStyleId[] = ['screen', 'textbook', '
  * it is asked.
  */
 export const FIGURE_BLURB: Record<FigureStyleId, string> = {
-  screen: 'Screen — the board as you work on it: your theme, your curve colours',
+  screen: 'Screen — the PNG comes out as the board looks: your theme, your curve colours',
   textbook: 'Textbook — white, unit grid, black axes, curves in print colours',
   sat: 'SAT — unit grid, black axes, a number on every tick, all curves black',
   ap: 'AP Calculus — white, no grid: bare axes with ticks, O at the origin, all curves black',
@@ -69,11 +77,11 @@ export function figureFor(id: FigureStyleId): FigureStyle | undefined {
 }
 
 /**
- * The ground a board in this style is drawn on.
+ * The ground a figure in this style is drawn on.
  *
  * The screen look keeps whatever the theme toggle says; every other style is
- * white, and says so on screen as well as in the PNG — the whole point of
- * choosing the look is that what is on the board is what goes on the paper.
+ * white. Used for the EXPORT, for the picker's thumbnails, and for the board
+ * only while it is being previewed — see `screenLook`.
  */
 export function figureTheme(id: FigureStyleId, screen: Theme): Theme {
   return id === 'screen' ? screen : FIGURE_STYLES[id].theme
@@ -84,7 +92,76 @@ export const fixesBackground = (id: FigureStyleId): boolean => id !== 'screen'
 
 /** Why the Background control is disabled, in the style's own words. */
 export function backgroundLockedNote(id: FigureStyleId): string {
-  return `The ${FIGURE_STYLES[id].name} style is always on white.`
+  return `The ${FIGURE_STYLES[id].name} style always exports on white.`
+}
+
+// --------------------------------------------------- what each scene carries
+//
+// Two destinations, two answers. The board is a place to WORK; the PNG is the
+// thing the work is for. Conflating them meant a teacher who wanted an SAT
+// export had to sketch on white with black curves, which is the one place the
+// neon-on-dark board earns its keep.
+
+/** What a scene drawn on SCREEN carries. */
+export interface ScreenLook {
+  /**
+   * The style the board scene carries — normally undefined, which IS the
+   * screen look and the byte-identical render path.
+   */
+  figure: FigureStyle | undefined
+  /** The line under the figure; '' means the scene carries none. */
+  caption: string
+  /** The ground: the theme toggle's, unless a preview has taken it over. */
+  theme: Theme
+  /** True when the board is showing the export's look instead of the theme. */
+  previewing: boolean
+}
+
+/**
+ * What the board on screen draws, given the document's style and the preview
+ * switch.
+ *
+ * The style alone changes NOTHING here: that is the whole decision. The board
+ * takes the figure only when the teacher has explicitly asked to see it, with
+ * the non-persisted "Preview on board" switch, and even then not in
+ * presentation mode — a presented board is a lit wall, and the point of the
+ * preview is to check what a sheet of paper will look like.
+ *
+ * A number-line board has no figure style at all: the styles are described in
+ * grids, axes and ticks, and the picker is not offered on one.
+ */
+export function screenLook(o: {
+  style: FigureStyleId
+  caption: string
+  screenTheme: Theme
+  preview: boolean
+  present: boolean
+  cartesian: boolean
+}): ScreenLook {
+  const figure = o.cartesian && o.preview && !o.present ? figureFor(o.style) : undefined
+  return {
+    figure,
+    caption: figure ? o.caption : '',
+    theme: figure ? figure.theme : o.screenTheme,
+    previewing: figure !== undefined,
+  }
+}
+
+/** What the exported PNG — and the clipboard copy, which is the same scene —
+ *  carries. The preview switch has no say here: it is a way of LOOKING at this
+ *  answer, never a way of changing it. */
+export interface ExportLook {
+  figure: FigureStyle | undefined
+  caption: string
+}
+
+export function exportLook(o: {
+  style: FigureStyleId
+  caption: string
+  cartesian: boolean
+}): ExportLook {
+  if (!o.cartesian) return { figure: undefined, caption: '' }
+  return { figure: figureFor(o.style), caption: o.caption }
 }
 
 // ------------------------------------------------------------- the sample

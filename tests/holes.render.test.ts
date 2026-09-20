@@ -9,9 +9,11 @@
 //  2. The ring is drawn in EVERY figure style, the SCREEN included. A hole is
 //     not a figure convention: a board that draws (x²−1)/(x−1) as an unbroken
 //     line through (1, 2) has stated something false, whatever paper it is on.
-//  3. A dashed vertical asymptote is the opposite: a convention, drawn only
-//     where the figure MARKS what its curves do (textbook / SAT / AP), only
-//     inside the board, full height, and UNDER the curve.
+//  3. A dashed asymptote is the opposite: a convention, drawn only where the
+//     figure MARKS what its curves do (textbook / SAT / AP), only inside the
+//     board, and UNDER the curve. A VERTICAL one is the full height of the
+//     board; a SLANT one — the line a polar curve leans on — is the same dash
+//     at a different angle, clipped to the board.
 //  4. With both lists empty nothing is issued at all — not a save, not a style
 //     assignment — so the board is byte-for-byte the board it was before.
 //  5. A hole off the board, and a pole off the board, are not drawn.
@@ -30,6 +32,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const core = vi.hoisted(() => ({
   holes: [] as { x: number; y: number; exact: boolean }[],
   poles: [] as number[],
+  /**
+   * Asymptotes that are not plain poles. `poles` stays a list of x because
+   * almost every claim in this file is about a VERTICAL rule, and stating one
+   * as a number keeps those tests reading the way they read before an
+   * asymptote was a line; findAsymptotes below is what turns them into the
+   * shape core actually returns.
+   */
+  slants: [] as Array<{ kind: 'line'; a: { x: number; y: number }; dir: { x: number; y: number } }>,
   holeCalls: [] as [number, number][],
   poleCalls: [] as [number, number][],
 }))
@@ -42,6 +52,13 @@ vi.mock('../src/core/holes', () => ({
   findPoles: (_c: unknown, _m: unknown, range: [number, number]) => {
     core.poleCalls.push(range)
     return core.poles
+  },
+  findAsymptotes: (_c: unknown, _m: unknown, range: [number, number]) => {
+    core.poleCalls.push(range)
+    return [
+      ...core.poles.map((x) => ({ kind: 'vertical' as const, x })),
+      ...core.slants,
+    ]
   },
 }))
 
@@ -60,7 +77,16 @@ import { MockCtx, MockPath2D, withMockPath2D, type Cmd } from './mockCanvas'
 import { MODELS } from '../src/core/fit/models'
 import { parseExpression } from '../src/core/parse'
 import { CURVE_COLORS, DARK_THEME, FIGURE_STYLES, toPrintColor, toScreen } from '../src/core/types'
-import type { FittedCurve, ModelSpec, SpecialPoint, Viewport } from '../src/core/types'
+import type {
+  Asymptote,
+  FittedCurve,
+  ModelSpec,
+  SpecialPoint,
+  Viewport,
+} from '../src/core/types'
+
+/** The vertical asymptote at x, as core states one. */
+const vert = (x: number): Asymptote => ({ kind: 'vertical', x })
 
 // x in [-7.5, 7.5], y in [-5, 5]
 const VP: Viewport = { center: { x: 0, y: 0 }, pxPerUnit: 60, widthPx: 900, heightPx: 600 }
@@ -197,23 +223,24 @@ function rings(ctx: RecCtx, ink: string, bg: string, stroke = 1): Arc[] {
   return out
 }
 
-/** Every full-height dashed vertical rule in a render. */
-function asymptotes(ctx: RecCtx): Op[] {
+/** Every dashed two-point rule in a render — whatever angle it is at. */
+function dashedRules(ctx: RecCtx): Op[] {
   return ctx.ops.filter(
-    (o) =>
-      o.kind === 'stroke' &&
-      !o.path &&
-      o.dash.length === 2 &&
-      o.pts.length === 2 &&
-      o.pts[0].x === o.pts[1].x &&
-      o.pts[0].y === 0 &&
-      o.pts[1].y === VP.heightPx,
+    (o) => o.kind === 'stroke' && !o.path && o.dash.length === 2 && o.pts.length === 2,
+  )
+}
+
+/** Every full-height dashed VERTICAL rule in a render. */
+function asymptotes(ctx: RecCtx): Op[] {
+  return dashedRules(ctx).filter(
+    (o) => o.pts[0].x === o.pts[1].x && o.pts[0].y === 0 && o.pts[1].y === VP.heightPx,
   )
 }
 
 beforeEach(() => {
   core.holes = []
   core.poles = []
+  core.slants = []
   core.holeCalls = []
   core.poleCalls = []
 })
@@ -416,6 +443,233 @@ describe('vertical asymptotes', () => {
 })
 
 // ===========================================================================
+// 3b. The same convention, at an angle
+// ===========================================================================
+
+describe('slant asymptotes', () => {
+  /** The infinite line through `a` in direction `dir`, as core states one. */
+  const line = (a: [number, number], dir: [number, number]): Asymptote => ({
+    kind: 'line',
+    a: { x: a[0], y: a[1] },
+    dir: { x: dir[0], y: dir[1] },
+  })
+
+  const paint = { color: '#abcdef', bg: '#101214', stroke: 1 }
+
+  function draw(lines: Asymptote[], vp = VP): RecCtx {
+    const ctx = new RecCtx()
+    drawAsymptotes(ctx as unknown as CanvasRenderingContext2D, vp, lines, paint)
+    return ctx
+  }
+
+  it('a 45° line through the origin is clipped to the board, not to the curve', () => {
+    // The board is 15 units wide and 10 tall, so y = x leaves through the
+    // BOTTOM at (-5, -5) and the TOP at (5, 5) — it never reaches x = ±7.5.
+    // Clamping each coordinate on its own would have put the ends in the
+    // corners and tilted the line; that is what the clip is here to stop.
+    const ctx = draw([line([0, 0], [1, 1])])
+    const rules = dashedRules(ctx)
+    expect(rules).toHaveLength(1)
+    const [a, b] = rules[0].pts
+    expect(a.x).toBeCloseTo(sx(-5), 9)
+    expect(a.y).toBeCloseTo(sy(-5), 9)
+    expect(b.x).toBeCloseTo(sx(5), 9)
+    expect(b.y).toBeCloseTo(sy(5), 9)
+    // and both ends are ON the board, to the pixel
+    for (const p of [a, b]) {
+      expect(p.x).toBeGreaterThanOrEqual(0)
+      expect(p.x).toBeLessThanOrEqual(VP.widthPx)
+      expect(p.y).toBeGreaterThanOrEqual(0)
+      expect(p.y).toBeLessThanOrEqual(VP.heightPx)
+    }
+  })
+
+  it('wears the asymptote dash, weight and alpha — one convention, two angles', () => {
+    const slant = dashedRules(draw([line([0, 0], [1, 1])]))[0]
+    const rule = dashedRules(draw([vert(0)]))[0]
+    expect(slant.dash).toEqual(rule.dash)
+    expect(slant.lw).toBeCloseTo(rule.lw, 12)
+    expect(slant.alpha).toBeCloseTo(rule.alpha, 12)
+    expect(slant.style).toBe(rule.style)
+    expect(slant.alpha).toBeCloseTo(ASYMPTOTE_ALPHA, 12)
+  })
+
+  it('scales with present.stroke exactly as a vertical rule does', () => {
+    const ctx = new RecCtx()
+    drawAsymptotes(
+      ctx as unknown as CanvasRenderingContext2D,
+      VP,
+      [line([0, 0], [1, 1])],
+      { ...paint, stroke: 2 },
+    )
+    const o = dashedRules(ctx)[0]
+    expect(o.lw).toBeCloseTo(ASYMPTOTE_WIDTH * 2, 12)
+    expect(o.dash).toEqual([ASYMPTOTE_DASH[0] * 2, ASYMPTOTE_DASH[1] * 2])
+  })
+
+  it('a line that happens to be vertical is still the full height of the board', () => {
+    // r = tan θ leans on x = ±1, and core may well state those as lines rather
+    // than as poles. The picture has to be the same either way.
+    const ctx = draw([line([1, 0], [0, 1]), line([-1, 0], [0, 1])])
+    const rules = dashedRules(ctx)
+    expect(rules).toHaveLength(2)
+    for (const [i, x] of [1, -1].entries()) {
+      const pts = rules[i].pts
+      expect(pts[0].x).toBeCloseTo(sx(x), 9)
+      expect(pts[1].x).toBeCloseTo(sx(x), 9)
+      expect(Math.min(pts[0].y, pts[1].y)).toBeCloseTo(0, 9)
+      expect(Math.max(pts[0].y, pts[1].y)).toBeCloseTo(VP.heightPx, 9)
+    }
+  })
+
+  it('a horizontal line inside the board spans its whole width', () => {
+    const pts = dashedRules(draw([line([0, 2], [1, 0])]))[0].pts
+    expect(pts.map((p) => p.x)).toEqual([0, VP.widthPx])
+    expect(pts[0].y).toBeCloseTo(sy(2), 9)
+    expect(pts[1].y).toBeCloseTo(sy(2), 9)
+  })
+
+  it('a line that misses the board draws nothing at all', () => {
+    for (const miss of [
+      line([0, 20], [1, 0]),      // far above it
+      line([40, 0], [0, 1]),      // far to the right
+      line([0, 12], [1, 0.001]),  // above it and barely leaning
+    ]) {
+      const ctx = draw([miss])
+      expect(ctx.ops).toEqual([])
+      expect(ctx.own.cmds).toEqual([])
+      expect([ctx.saveCount, ctx.restoreCount]).toEqual([0, 0])
+    }
+  })
+
+  it('refuses nonsense rather than drawing it', () => {
+    for (const bad of [
+      line([0, 0], [0, 0]),       // no direction at all
+      line([NaN, 0], [1, 1]),
+      line([0, 0], [1, NaN]),
+      line([Infinity, 0], [1, 1]),
+    ]) {
+      expect(draw([bad]).ops).toEqual([])
+    }
+    // and one bad line does not take a good one with it
+    expect(dashedRules(draw([line([0, 0], [0, 0]), vert(0)]))).toHaveLength(1)
+  })
+
+  it('an empty viewport draws nothing', () => {
+    expect(draw([line([0, 0], [1, 1])], { ...VP, widthPx: 0 }).ops).toEqual([])
+  })
+
+  it('a marked figure rules it under the curve; the screen rules none', () => {
+    core.slants = [{ kind: 'line', a: { x: 0, y: 0 }, dir: { x: 1, y: 1 } }]
+    const fig = FIGURE_STYLES.sat
+    const ctx = render(scene({ figure: fig, theme: fig.theme }))
+    const rules = dashedRules(ctx)
+    expect(rules).toHaveLength(1)
+    expect(rules[0].style).toBe(inkOf(fig))
+    // under the curve, like every other asymptote
+    expect(ctx.ops.indexOf(rules[0])).toBeLessThan(ctx.ops.findIndex((o) => o.path))
+
+    core.slants = [{ kind: 'line', a: { x: 0, y: 0 }, dir: { x: 1, y: 1 } }]
+    expect(dashedRules(render(scene()))).toHaveLength(0)
+  })
+
+  it('renderBoard asks core for the same padded range it asks about holes', () => {
+    render(scene({ figure: FIGURE_STYLES.sat, theme: FIGURE_STYLES.sat.theme }))
+    expect(core.poleCalls[0]).toEqual(holeRange(VP))
+  })
+})
+
+// ===========================================================================
+// 3c. A board of vertical poles is the board it always was
+// ===========================================================================
+
+describe('taking a list of LINES did not change what a pole looks like', () => {
+  /**
+   * drawAsymptotes as it stood when it took a list of x — copied here on
+   * purpose. The claim is not "the new code is reasonable", it is "for a scene
+   * whose asymptotes are all vertical, the command stream is the one that was
+   * being drawn before", and only the old code can hold the other side of it.
+   */
+  function drawAsymptotesV1(
+    ctx: CanvasRenderingContext2D,
+    vp: Viewport,
+    xs: readonly number[],
+    paint: { color: string; bg: string; stroke: number },
+  ): void {
+    if (xs.length === 0) return
+    if (!(vp.widthPx > 0) || !(vp.heightPx > 0) || !(vp.pxPerUnit > 0)) return
+    const at: number[] = []
+    for (const x of xs) {
+      if (!Number.isFinite(x)) continue
+      const s = toScreen({ x, y: 0 }, vp).x
+      if (s >= 0 && s <= vp.widthPx) at.push(s)
+    }
+    if (at.length === 0) return
+    const prevAlpha = ctx.globalAlpha
+    const prevDash = typeof ctx.getLineDash === 'function' ? ctx.getLineDash() : []
+    ctx.save()
+    try {
+      ctx.globalAlpha = prevAlpha * ASYMPTOTE_ALPHA
+      ctx.strokeStyle = paint.color
+      ctx.lineWidth = ASYMPTOTE_WIDTH * paint.stroke
+      ctx.setLineDash([ASYMPTOTE_DASH[0] * paint.stroke, ASYMPTOTE_DASH[1] * paint.stroke])
+      for (const s of at) {
+        ctx.beginPath()
+        ctx.moveTo(s, 0)
+        ctx.lineTo(s, vp.heightPx)
+        ctx.stroke()
+      }
+    } finally {
+      ctx.setLineDash(prevDash)
+      ctx.globalAlpha = prevAlpha
+      ctx.restore()
+    }
+  }
+
+  const paint = { color: '#abcdef', bg: '#101214', stroke: 2.5 }
+
+  it('the two command streams are byte-identical', () => {
+    for (const xs of [[0], [-2, 3], [-40, 0, 40], [NaN, 1], []]) {
+      const before = new RecCtx()
+      drawAsymptotesV1(before as unknown as CanvasRenderingContext2D, VP, xs, paint)
+      const after = new RecCtx()
+      drawAsymptotes(
+        after as unknown as CanvasRenderingContext2D,
+        VP,
+        xs.map(vert),
+        paint,
+      )
+      expect(snapshot(after), JSON.stringify(xs)).toBe(snapshot(before))
+    }
+  })
+
+  it('and a pole stated as a LINE rules the very same segment', () => {
+    // Core is free to hand a vertical asymptote over either way. Which end the
+    // stroke starts from follows the direction it was given, so the rules are
+    // compared as unordered pairs of endpoints — it is the SEGMENT that has to
+    // be the same, and it is.
+    const ends = (o: Op): string =>
+      [...o.pts]
+        .sort((p, q) => p.x - q.x || p.y - q.y)
+        .map((p) => `${p.x},${p.y}`)
+        .join(' ')
+
+    const fig = FIGURE_STYLES.sat
+    core.poles = [-2, 3]
+    const asPoles = dashedRules(render(scene({ figure: fig, theme: fig.theme })))
+    core.poles = []
+    core.slants = [
+      { kind: 'line', a: { x: -2, y: 0 }, dir: { x: 0, y: 1 } },
+      { kind: 'line', a: { x: 3, y: 0 }, dir: { x: 0, y: -1 } },
+    ]
+    const asLines = dashedRules(render(scene({ figure: fig, theme: fig.theme })))
+    expect(asPoles).toHaveLength(2)
+    expect(asLines.map(ends)).toEqual(asPoles.map(ends))
+    expect(asPoles.map((o) => o.pts[0].x)).toEqual([sx(-2), sx(3)])
+  })
+})
+
+// ===========================================================================
 // 4. Nothing to say, nothing said
 // ===========================================================================
 
@@ -549,7 +803,7 @@ describe('the drawing functions refuse nonsense rather than drawing it', () => {
 
   it('a NaN pole is skipped', () => {
     const ctx = new RecCtx()
-    drawAsymptotes(ctx as unknown as CanvasRenderingContext2D, VP, [NaN, 0], paint)
+    drawAsymptotes(ctx as unknown as CanvasRenderingContext2D, VP, [vert(NaN), vert(0)], paint)
     expect(ctx.ops).toHaveLength(1)
   })
 
@@ -558,7 +812,7 @@ describe('the drawing functions refuse nonsense rather than drawing it', () => {
     const a = new RecCtx()
     drawHoles(a as unknown as CanvasRenderingContext2D, dead, [{ x: 0, y: 0 }], paint)
     const b = new RecCtx()
-    drawAsymptotes(b as unknown as CanvasRenderingContext2D, dead, [0], paint)
+    drawAsymptotes(b as unknown as CanvasRenderingContext2D, dead, [vert(0)], paint)
     expect([a.ops.length, b.ops.length]).toEqual([0, 0])
   })
 })

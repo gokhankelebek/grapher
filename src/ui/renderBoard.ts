@@ -44,7 +44,7 @@ import { drawPolarGrid } from '../render/polarGrid'
 import { curveLineWidth, drawCurve, drawInk } from '../render/curves'
 import { END_DOT_R, curveEndPoints, drawCurveEnds, resolveEnds } from '../render/endCaps'
 import { drawAsymptotes, drawHoles, holeRange } from '../render/holes'
-import { findHoles, findPoles } from '../core/holes'
+import { findAsymptotes, findHoles } from '../core/holes'
 import type { Overlay } from '../render/overlays'
 import { drawOverlays } from '../render/overlays'
 import type { Polyline, SlopeField } from '../render/fields'
@@ -1252,6 +1252,10 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
       // it asks the same question the end caps ask: does this figure MARK what
       // its curves do at the edges? It goes down BEFORE the curve so the curve
       // sits on top of it.
+      //
+      // findAsymptotes, not findPoles: an asymptote is a LINE, and the slant
+      // line a polar curve leans on is the same convention drawn at a
+      // different angle. The renderer clips whichever it is to the board.
       const breaks = holeRange(vp)
       let holes: readonly { x: number; y: number }[] = []
       if (breaks) {
@@ -1262,7 +1266,7 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
         }
         if (fig !== null && fig.curveEnds === 'marked') {
           try {
-            drawAsymptotes(ctx, vp, findPoles(c, models, breaks), {
+            drawAsymptotes(ctx, vp, findAsymptotes(c, models, breaks), {
               color: c.color,
               bg: theme.bg,
               stroke: scale.stroke,

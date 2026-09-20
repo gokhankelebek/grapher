@@ -71,7 +71,7 @@ import {
 } from './ui/shapeLinks'
 import type { BoardShape, CompiledShape, ShapeCardData } from './ui/shapeLinks'
 import { POLAR_OFFER, suggestPolarRuling } from './ui/boardGrid'
-import { DEFAULT_CAPTION, figureFor, figureTheme } from './ui/figureStyle'
+import { DEFAULT_CAPTION, exportLook, screenLook } from './ui/figureStyle'
 import { snapPlaced } from './ui/snap'
 import { curveBounds, splitNotice, unionBoxes } from './ui/curveState'
 import { answerPieces } from './ui/nlText'
@@ -350,6 +350,22 @@ export default function App() {
   const [figureStyle, setFigureStyle] = useState<FigureStyleId>('screen')
   /** The line printed under the figure. '' means none. */
   const [figureCaption, setFigureCaption] = useState<string>('')
+  /**
+   * SHOW the chosen style on the board for a minute.
+   *
+   * The style itself is OUTPUT-only — it is what the PNG and the clipboard
+   * copy come out looking like, and the board keeps the teacher's own theme
+   * while they sketch on it, because neon on near-black is the one thing a lit
+   * board is better at than paper. This switch is how they check the two
+   * against each other without giving that up.
+   *
+   * Deliberately NOT in the document and NOT in the undo history: it is a way
+   * of LOOKING at the board, like the sidebar being open. It resets on every
+   * document switch (see applyHydrated), so no board is ever opened wearing a
+   * look its own file does not describe, and the chip on the canvas turns it
+   * off in one click so nobody can be stuck inside it.
+   */
+  const [previewFigure, setPreviewFigure] = useState(false)
   const [snapFlash, setSnapFlash] = useState<{ id: string; mask: boolean[]; key: number } | null>(
     null,
   )
@@ -1165,6 +1181,9 @@ export default function App() {
     setBoardGrid(board.grid)
     setFigureStyle(board.figure)
     setFigureCaption(board.caption)
+    // A view of the board, not a property of it: every document opens on the
+    // theme, whatever the last one was being previewed in.
+    setPreviewFigure(false)
     setArmedField(null)
     setEdits({})
     setExtraModels(board.extraModels)
@@ -3861,24 +3880,37 @@ export default function App() {
 
   const copyTimerRef = useRef(0)
 
-  /**
-   * The ground the SCREEN board is drawn on.
-   *
-   * A figure style owns it: an SAT board is white while it is being worked on,
-   * not only in the PNG, because the whole point of choosing the look is that
-   * the board IS the export. The theme toggle keeps its meaning underneath and
-   * takes over again the moment the board goes back to Screen.
-   */
+  /** The ground the theme toggle asks for. */
   const screenTheme = canvasTheme === 'light' ? LIGHT_THEME : DARK_THEME
-  const boardFigure = kind === 'cartesian' ? figureFor(figureStyle) : undefined
-  const boardCaption = kind === 'cartesian' ? figureCaption : ''
-  const boardTheme = kind === 'cartesian' ? figureTheme(figureStyle, screenTheme) : screenTheme
   /**
-   * Whether the toolbar has to read against a LIGHT canvas. A figure style puts
-   * the board on white whatever the theme toggle says, and the chrome around it
-   * has to follow or it is grey-on-grey.
+   * What the board on SCREEN draws — and, since there is one canvas, what the
+   * PRESENTED board draws too.
+   *
+   * The chosen figure style is not in it. A style says what the PNG and the
+   * clipboard copy come out looking like; the working board keeps the theme,
+   * and presentation mode keeps it whatever the preview switch says, because a
+   * presented board is a lit wall and an SAT figure on it is a white rectangle
+   * in a dark room. See screenLook / exportLook in ui/figureStyle.ts — two
+   * destinations, two answers, so the board cannot quietly pick up the
+   * export's ground the way it did before.
    */
-  const lightBoard = canvasTheme === 'light' || boardFigure !== undefined
+  const look = screenLook({
+    style: figureStyle,
+    caption: figureCaption,
+    screenTheme,
+    preview: previewFigure,
+    present: presentMode,
+    cartesian: kind === 'cartesian',
+  })
+  const boardFigure = look.figure
+  const boardCaption = look.caption
+  const boardTheme = look.theme
+  /**
+   * Whether the toolbar has to read against a LIGHT canvas. A PREVIEW puts the
+   * board on white whatever the theme toggle says, and the chrome around it has
+   * to follow or it is grey-on-grey.
+   */
+  const lightBoard = canvasTheme === 'light' || look.previewing
 
   /**
    * The box every visible thing on the board occupies, in math coords — the
@@ -3901,10 +3933,14 @@ export default function App() {
     (settings: FitExportSettings): BoardScene => {
     const vp = vpRef.current
     const sel = curvesRef.current.find((c) => c.id === selectedRef.current) ?? null
-    // A number-line board has no figure style: the styles are described in
-    // grids, axes and ticks, and the picker is not offered on one.
-    const figure = kindRef.current === 'cartesian' ? figureFor(figureStyleRef.current) : undefined
-    const caption = kindRef.current === 'cartesian' ? figureCaptionRef.current : ''
+    // The LOOK the teacher chose, in full — this is the scene it was chosen
+    // FOR. The preview switch has no say here: it is a way of looking at this
+    // answer on the board, never a way of changing it.
+    const { figure, caption } = exportLook({
+      style: figureStyleRef.current,
+      caption: figureCaptionRef.current,
+      cartesian: kindRef.current === 'cartesian',
+    })
     return {
       // Not the window — the FIGURE. A number line exported as the window was
       // a 40px strip in a 2206x1826 image; a graph was whatever happened to be
@@ -3964,9 +4000,9 @@ export default function App() {
       // would be a different picture of the same curve.
       grid: boardGridRef.current,
       // The LOOK, and the line printed under the figure. Both are the
-      // document's, both are what is already on screen, and both go through
-      // the one scene so the PNG cannot be in a different style from the board
-      // the teacher is looking at.
+      // document's, and both live HERE rather than on the board: the style is
+      // what the teacher is exporting, not what they are drawing on. "Preview
+      // on board" shows this same answer on the canvas for as long as it is on.
       ...(figure ? { figure } : {}),
       ...(caption !== '' ? { caption } : {}),
       chrome: null,
@@ -4231,6 +4267,10 @@ export default function App() {
       // control is choosing a LOOK, not overwriting words.
       const caption =
         figureCaptionRef.current === '' ? DEFAULT_CAPTION[next] : figureCaptionRef.current
+      // Back to Screen is back to no style at all, so there is nothing left to
+      // preview: leaving the switch armed would mean the next style chosen
+      // silently repainted the board.
+      if (next === 'screen') setPreviewFigure(false)
       commitState(
         { figure: next, caption },
         `figure style: ${FIGURE_STYLES[next].name}`,
@@ -4667,6 +4707,27 @@ export default function App() {
         />
         )}
 
+        {/* A preview is a temporary state the board is in, and the one thing a
+            temporary state must never be is hard to leave. The switch that
+            turned it on is three clicks away inside a panel; this chip is on
+            the board itself and turns it off with one, so a teacher who comes
+            back to a white board tomorrow morning has the answer in front of
+            them rather than a setting to hunt for. Chrome, not figure: it is a
+            DOM element, so it cannot reach the PNG. */}
+        {look.previewing && (
+          <button
+            className="fig-preview-chip"
+            data-testid="figure-preview-chip"
+            onClick={() => setPreviewFigure(false)}
+            title="Stop previewing — put the board back on your theme"
+          >
+            <span>Previewing {FIGURE_STYLES[figureStyle].name}</span>
+            <span className="fig-preview-x" aria-hidden="true">
+              ×
+            </span>
+          </button>
+        )}
+
         {kind === 'cartesian' && contextAnalysis.length > 0 && (
           <AnalysisOverlay ref={overlayRef} marked={contextAnalysis} theme={boardTheme} vpRef={vpRef} />
         )}
@@ -4755,8 +4816,10 @@ export default function App() {
                 figure={kind === 'cartesian' ? figureStyle : null}
                 screenTheme={screenTheme}
                 caption={figureCaption}
+                preview={previewFigure}
                 onFigure={chooseFigureStyle}
                 onCaption={setCaption}
+                onPreview={setPreviewFigure}
               />
             </>
           }

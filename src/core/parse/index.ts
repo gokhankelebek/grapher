@@ -68,6 +68,7 @@ const FUNCS: Record<string, FuncDef> = {
   ln:    { arity: 1, fn: (a) => Math.log(a),   latex: (x) => `\\ln${wrap(x[0])}` },
   log:   { arity: 1, fn: (a) => Math.log10(a), latex: (x) => `\\log${wrap(x[0])}` },
   log2:  { arity: 1, fn: (a) => Math.log2(a),  latex: (x) => `\\log_{2}${wrap(x[0])}` },
+  log10: { arity: 1, fn: (a) => Math.log10(a), latex: (x) => `\\log_{10}${wrap(x[0])}` },
   exp:   { arity: 1, fn: (a) => Math.exp(a),   latex: (x) => `\\exp${wrap(x[0])}` },
   floor: { arity: 1, fn: (a) => Math.floor(a), latex: (x) => `\\left\\lfloor ${x[0]}\\right\\rfloor` },
   ceil:  { arity: 1, fn: (a) => Math.ceil(a),  latex: (x) => `\\left\\lceil ${x[0]}\\right\\rceil` },
@@ -582,6 +583,13 @@ const TRIG_POLE: Record<string, 'cos' | 'sin'> = {
   cot: 'sin', csc: 'sin',
 }
 
+/**
+ * A logarithm is undefined where its argument is zero, and runs to −∞ there:
+ * the zeros of g are singularities of ln(g) exactly as they are of 1/g. The
+ * base changes nothing — it only scales the logarithm by a constant.
+ */
+const LOG_ARG: ReadonlySet<string> = new Set(['ln', 'log', 'log2', 'log10'])
+
 /** One sub-expression whose zeros are singular, and where they may lie. */
 interface SingSource {
   q: Evaluator
@@ -627,6 +635,10 @@ function collectSingSources(n: Node, within: Piece[] | null, out: SingSource[]):
         const inner = compile(n.args[0])
         const g = trig === 'cos' ? Math.cos : Math.sin
         out.push({ q: (p, a, b) => g(inner(p, a, b)), within })
+      } else if (LOG_ARG.has(n.fn)) {
+        // ln(x² − 4) stops being a formula where x² − 4 does: at ±2, where it
+        // dives to −∞. The argument is a denominator wearing a third hat.
+        out.push({ q: compile(n.args[0]), within })
       }
       for (const arg of n.args) collectSingSources(arg, within, out)
       break
@@ -985,7 +997,11 @@ function classify(lhs: Node, rhs: Node | null): Classified {
       domain: [0, 2 * Math.PI],
       latex: `r = ${toLatex(body)}`,
       ev: compile(body),
-      body: null,
+      // r(θ) has singularities of its own — the zeros of every denominator,
+      // tan/sec/cot/csc, the argument of a logarithm — and they are where the
+      // polar curve has a hole or runs off along a line. They are found by the
+      // same machinery; only the variable they live in is θ rather than x.
+      body,
     }
   }
 
@@ -1083,11 +1099,13 @@ function makePlot(
       }
       if (kind === 'explicit') {
         spec.evalExplicit = (params, x) => ev(params, x, 0)
-        // Explicit expressions are the only ones that answer this today; a
-        // polar or implicit plot simply carries no `singularities`.
         spec.singularities = makeSingularities(sing ?? emptySingPlan())
       } else if (kind === 'polar') {
         spec.evalPolar = (params, theta) => ev(params, theta, 0)
+        // Same slot, read in θ: the candidates src/core/holes.ts sorts into
+        // polar holes and the lines a polar curve runs out along. An implicit
+        // plot still carries none — there is no one variable to scan.
+        spec.singularities = makeSingularities(sing ?? emptySingPlan())
       } else {
         spec.evalImplicit = (params, x, y) => ev(params, x, y)
       }
@@ -1584,9 +1602,10 @@ function buildPiecewise(headRaw: string, headAt: number, raws: RawBranch[]): Par
     const pieces = raw.otherwise
       ? WHOLE_LINE()
       : branchPieces(raw.cond, raw.condAt, want, ctx)
-    if (kind === 'explicit') {
+    {
       // `{ x^2 if x != 2 }` removes a point rather than cutting the branch in
-      // two; the excluded x is an exact singularity of that branch.
+      // two; the excluded x is an exact singularity of that branch. A polar
+      // branch says the same thing about θ — `{ 1/θ if θ != 1 }`.
       const excluded = excludedPoints(pieces)
       const owns = excluded && excluded.length > 0 ? WHOLE_LINE() : pieces
       collectSingSources(bodies[i], isWholeLine(owns) ? null : owns, plan.sources)

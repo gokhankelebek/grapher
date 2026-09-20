@@ -2,7 +2,8 @@
 // src/render/holes.ts — the two marks a graph with a break has to carry.
 //
 //   drawHoles()       an open ring where the formula has a limit but no value
-//   drawAsymptotes()  a dashed vertical rule where it runs away
+//   drawAsymptotes()  a dashed rule where it runs away — vertical at a pole,
+//                     slanted where a polar curve leans on a line
 //
 // WHY THE RING IS NOT A FIGURE CONVENTION
 //
@@ -26,14 +27,17 @@
 // UNDER the curve, so the curve it belongs to sits on top of it.
 //
 // These take the LISTS, not the curve: finding them is src/core/holes.ts's
-// job (findHoles / findPoles), and keeping the arithmetic on one side of the
-// seam and the ink on the other is what lets either be tested alone.
+// job (findHoles / findAsymptotes), and keeping the arithmetic on one side of
+// the seam and the ink on the other is what lets either be tested alone. An
+// `Asymptote` is a LINE, not an x: a vertical one names its x, a slant one
+// names a point and a direction, and the renderer is the only thing that knows
+// which piece of either is on the board.
 //
 // Screen px throughout. FIGURE, not chrome: both run with `chrome: null` and
 // reach the exported PNG, and both scale with `present.stroke`.
 // ============================================================================
 
-import type { Vec2, Viewport } from '../core/types'
+import type { Asymptote, Vec2, Viewport } from '../core/types'
 import { toScreen } from '../core/types'
 import { END_DOT_R, END_OPEN_RING } from './endCaps'
 
@@ -164,11 +168,58 @@ export function drawHoles(
 export type AsymptotePaint = HolePaint
 
 /**
- * Draw a dashed vertical rule at every pole inside the board.
+ * The piece of the INFINITE line through `p` in direction `d` that lies on the
+ * board — Liang–Barsky, the same clip src/render/curves.ts trims its chords
+ * with, run with t unbounded at both ends instead of [0, 1].
  *
- * Full board height — an asymptote is not a segment, and a rule that stopped
- * where the curve happens to leave the board would read as one. Drawn BEFORE
- * the curve, so the curve crosses over it rather than being cut by it.
+ * Both arguments are SCREEN px, and the box is the board itself rather than
+ * curves.ts's generous overdraw: an asymptote is one straight stroke, so there
+ * is no join to protect and nothing to gain by drawing a viewport past the edge.
+ *
+ * Null means the line misses the board, only grazes a corner, or was handed a
+ * direction of zero length — all three are "nothing to draw" and none of them
+ * is an error.
+ */
+function clipToBoard(p: Vec2, d: Vec2, w: number, h: number): [Vec2, Vec2] | null {
+  let t0 = -Infinity
+  let t1 = Infinity
+  for (let e = 0; e < 4; e++) {
+    const pe = e === 0 ? -d.x : e === 1 ? d.x : e === 2 ? -d.y : d.y
+    const qe = e === 0 ? p.x : e === 1 ? w - p.x : e === 2 ? p.y : h - p.y
+    if (pe === 0) {
+      // Parallel to this edge: either wholly inside it, or wholly outside.
+      if (qe < 0) return null
+      continue
+    }
+    const r = qe / pe
+    if (pe < 0) {
+      if (r > t0) t0 = r
+    } else if (r < t1) t1 = r
+  }
+  // A line that leaves the board where it entered it puts no ink on it, and a
+  // zero direction never bounded t at all.
+  if (!Number.isFinite(t0) || !Number.isFinite(t1) || !(t1 > t0)) return null
+  const a = { x: p.x + d.x * t0, y: p.y + d.y * t0 }
+  const b = { x: p.x + d.x * t1, y: p.y + d.y * t1 }
+  if (!Number.isFinite(a.x) || !Number.isFinite(a.y)) return null
+  if (!Number.isFinite(b.x) || !Number.isFinite(b.y)) return null
+  return [a, b]
+}
+
+/**
+ * Draw a dashed rule along every asymptote that crosses the board.
+ *
+ * A VERTICAL one is the full height of the board — an asymptote is not a
+ * segment, and a rule that stopped where the curve happens to leave the board
+ * would read as one. A SLANT one is the same statement on a line that is not
+ * vertical (r = tan θ leans on x = ±1; a polar spiral leans on a slope), so it
+ * is clipped to the board rather than to the curve, and drawn in the same dash,
+ * the same weight and the same alpha. One convention, two orientations.
+ *
+ * Drawn BEFORE the curve, so the curve crosses over it rather than being cut
+ * by it. The order of the list is kept, so the command stream a scene with only
+ * vertical poles produces is exactly the one it produced when this took a list
+ * of x values.
  *
  * The dash and the alpha are restored on the way out by hand as well as by
  * save(): this runs in the middle of the curve loop, and the curve drawn next
@@ -177,19 +228,38 @@ export type AsymptotePaint = HolePaint
 export function drawAsymptotes(
   ctx: CanvasRenderingContext2D,
   vp: Viewport,
-  xs: readonly number[],
+  lines: readonly Asymptote[],
   paint: AsymptotePaint,
 ): void {
-  if (xs.length === 0) return
+  if (lines.length === 0) return
   if (!(vp.widthPx > 0) || !(vp.heightPx > 0) || !(vp.pxPerUnit > 0)) return
-  // Strictly inside the board: a rule ON the edge is indistinguishable from
-  // the board's own border and says nothing a reader can use. Collected first,
-  // so a list of poles that are all off screen touches nothing at all.
-  const at: number[] = []
-  for (const x of xs) {
-    if (!Number.isFinite(x)) continue
-    const sx = toScreen({ x, y: 0 }, vp).x
-    if (sx >= 0 && sx <= vp.widthPx) at.push(sx)
+  // Collected first, so a list whose every line misses the board touches
+  // nothing at all — not a save, not a style assignment.
+  const at: [Vec2, Vec2][] = []
+  for (const line of lines) {
+    if (!line) continue
+    if (line.kind === 'vertical') {
+      // On the board when any of its ink is: a rule ON the edge is still a
+      // rule, and it is the same test this drew with when it took bare x.
+      if (!Number.isFinite(line.x)) continue
+      const sx = toScreen({ x: line.x, y: 0 }, vp).x
+      if (!(sx >= 0) || !(sx <= vp.widthPx)) continue
+      at.push([{ x: sx, y: 0 }, { x: sx, y: vp.heightPx }])
+      continue
+    }
+    if (line.kind !== 'line') continue
+    const p = line.a
+    const dir = line.dir
+    if (!p || !dir) continue
+    if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) continue
+    if (!Number.isFinite(dir.x) || !Number.isFinite(dir.y)) continue
+    const s = toScreen(p, vp)
+    if (!Number.isFinite(s.x) || !Number.isFinite(s.y)) continue
+    // Math y grows UP and screen y grows DOWN, so the direction flips with it.
+    // The scale is uniform, so one ppu does both axes and the angle is kept.
+    const d = { x: dir.x * vp.pxPerUnit, y: -dir.y * vp.pxPerUnit }
+    const seg = clipToBoard(s, d, vp.widthPx, vp.heightPx)
+    if (seg) at.push(seg)
   }
   if (at.length === 0) return
   const prevAlpha = ctx.globalAlpha
@@ -200,10 +270,10 @@ export function drawAsymptotes(
     ctx.strokeStyle = paint.color
     ctx.lineWidth = ASYMPTOTE_WIDTH * paint.stroke
     ctx.setLineDash([ASYMPTOTE_DASH[0] * paint.stroke, ASYMPTOTE_DASH[1] * paint.stroke])
-    for (const sx of at) {
+    for (const [a, b] of at) {
       ctx.beginPath()
-      ctx.moveTo(sx, 0)
-      ctx.lineTo(sx, vp.heightPx)
+      ctx.moveTo(a.x, a.y)
+      ctx.lineTo(b.x, b.y)
       ctx.stroke()
     }
   } finally {

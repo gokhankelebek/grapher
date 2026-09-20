@@ -8,8 +8,15 @@
 // would be found only after a worksheet was printed.
 //
 // Below them, the one line that says what the thumbnail cannot show (every
-// curve goes black), and — for a style that carries one — the caption that
-// will be printed under the figure.
+// curve goes black), the switch that puts the look on the BOARD for a moment,
+// and — for a style that carries one — the caption that will be printed under
+// the figure.
+//
+// The style is what the PNG and the clipboard copy come out looking like; the
+// board keeps the teacher's own theme while they draw on it. "Preview on
+// board" is the way to check the one against the other, and it is deliberately
+// a switch rather than the default: sketching an SAT figure means sketching on
+// the dark board and exporting white, not drawing black on white all lesson.
 // ============================================================================
 
 import { useEffect, useId, useRef } from 'react'
@@ -69,11 +76,28 @@ interface Props {
   /** The live board theme, so the Screen thumbnail follows the theme toggle. */
   screenTheme: Theme
   caption: string
+  /**
+   * Whether the board is currently showing this style instead of the theme.
+   *
+   * NOT part of the document: it is a way of looking at the board for a
+   * minute, and a document that reopened tomorrow in preview would have
+   * silently turned the style back into something the board wears.
+   */
+  preview: boolean
   onPick(id: FigureStyleId): void
   onCaption(next: string): void
+  onPreview(next: boolean): void
 }
 
-export function FigurePicker({ value, screenTheme, caption, onPick, onCaption }: Props) {
+export function FigurePicker({
+  value,
+  screenTheme,
+  caption,
+  preview,
+  onPick,
+  onCaption,
+  onPreview,
+}: Props) {
   const uid = useId()
   return (
     <>
@@ -109,6 +133,27 @@ export function FigurePicker({ value, screenTheme, caption, onPick, onCaption }:
       <div className="exp-note" data-testid="figure-style-note">
         {FIGURE_BLURB[value]}
       </div>
+
+      {value !== 'screen' && (
+        <label className="exp-check" htmlFor={`${uid}-prev`}>
+          <input
+            id={`${uid}-prev`}
+            type="checkbox"
+            className="exp-checkbox"
+            checked={preview}
+            data-testid="figure-preview"
+            onChange={(e) => onPreview(e.target.checked)}
+          />
+          <span className="exp-check-body">
+            <span className="exp-check-label">Preview on board</span>
+            <span className="exp-check-note" data-testid="figure-preview-note">
+              {preview
+                ? `Previewing the ${FIGURE_STYLES[value].name} figure — the board goes back to your theme when you close this`
+                : `The ${FIGURE_STYLES[value].name} style is how the PNG and the copy come out; the board keeps your theme. Tick this to see it.`}
+            </span>
+          </span>
+        </label>
+      )}
 
       {value !== 'screen' && (
         <label className="exp-row fig-caption-row" htmlFor={`${uid}-cap`}>

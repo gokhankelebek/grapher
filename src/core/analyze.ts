@@ -876,7 +876,38 @@ function analyzeEllipse(curve: FittedCurve): SpecialPoint[] {
 // Polar
 // ---------------------------------------------------------------------------
 
-function analyzePolar(curve: FittedCurve, spec: ModelSpec): SpecialPoint[] {
+function analyzePolar(
+  curve: FittedCurve,
+  spec: ModelSpec,
+  models: Record<string, ModelSpec>,
+): SpecialPoint[] {
+  const tips = polarTips(curve, spec)
+
+  // Holes, at the CARTESIAN point the curve is missing: r = sin(θ)/θ has no
+  // value at θ = 0 but approaches 1 from both sides, so the open ring goes at
+  // (1, 0). A tip that lands on a hole is the hole — the curve is not there.
+  const holes = findHoles(curve, models, [lo0(curve), hi0(curve)])
+  const kept = holes.length === 0
+    ? tips
+    : tips.filter(p => !holes.some(
+        h => Math.hypot(p.pos.x - h.x, p.pos.y - h.y)
+          <= HOLE_DEDUPE * Math.max(1, Math.hypot(h.x, h.y)),
+      ))
+  for (const h of holes) {
+    // `exact` stays false: the point is a limit, as it is for an explicit hole.
+    const q = pt('hole', h.x, h.y, 'hole', false)
+    if (q) kept.push(q)
+  }
+  return kept
+}
+
+/** The θ window a polar curve is swept over — its own, or one default turn. */
+const lo0 = (curve: FittedCurve): number =>
+  curve.domain ? Math.min(curve.domain[0], curve.domain[1]) : 0
+const hi0 = (curve: FittedCurve): number =>
+  curve.domain ? Math.max(curve.domain[0], curve.domain[1]) : 2 * Math.PI
+
+function polarTips(curve: FittedCurve, spec: ModelSpec): SpecialPoint[] {
   const evalR = spec.evalPolar
   if (!evalR) return []
   const out: SpecialPoint[] = []
@@ -980,7 +1011,7 @@ export function analyzeCurve(
     if (!spec || !curve.params.every(Number.isFinite)) return []
 
     if (spec.evalExplicit) return analyzeExplicit(curve, spec, models)
-    if (spec.evalPolar) return analyzePolar(curve, spec)
+    if (spec.evalPolar) return analyzePolar(curve, spec, models)
     if (spec.kind === 'implicit') {
       if (curve.modelId === 'circle') return analyzeCircle(curve)
       if (curve.modelId === 'ellipse') return analyzeEllipse(curve)

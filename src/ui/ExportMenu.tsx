@@ -84,8 +84,17 @@ interface Props {
   screenTheme: Theme
   /** The line printed under the figure. Empty means none. */
   caption: string
+  /**
+   * Whether the board is showing the chosen style instead of the theme.
+   *
+   * A view of the document, never part of it: the style itself is output-only,
+   * and this switch is how the teacher checks the PNG without leaving the dark
+   * board they sketch on.
+   */
+  preview: boolean
   onFigure(next: FigureStyleId): void
   onCaption(next: string): void
+  onPreview(next: boolean): void
   onChange(next: FitExportSettings): void
   onExport(): void
   onCopy(): void
@@ -111,8 +120,10 @@ export function ExportMenu({
   figure,
   screenTheme,
   caption,
+  preview,
   onFigure,
   onCaption,
+  onPreview,
   onChange,
   onExport,
   onCopy,
@@ -120,10 +131,10 @@ export function ExportMenu({
   const [open, setOpen] = useState(false)
   const size = sizeOf(settings)
   /**
-   * A figure style OWNS the ground — an SAT figure is on white whatever this
-   * says — so the control is disabled rather than hidden, with the reason
-   * beside it. Hiding it would leave the teacher hunting for a setting they
-   * remember being here, and silently ignoring it would be worse.
+   * A figure style OWNS the ground of the EXPORT — an SAT figure is on white
+   * whatever this says — so the control is disabled rather than hidden, with
+   * the reason beside it. Hiding it would leave the teacher hunting for a
+   * setting they remember being here, and silently ignoring it would be worse.
    */
   const groundLocked = figure !== null && fixesBackground(figure)
   const [widthDraft, setWidthDraft] = useState<string>('')
@@ -221,8 +232,10 @@ export function ExportMenu({
                 value={figure}
                 screenTheme={screenTheme}
                 caption={caption}
+                preview={preview}
                 onPick={onFigure}
                 onCaption={onCaption}
+                onPreview={onPreview}
               />
               <div className="exp-menu-sep" />
             </>
@@ -467,7 +480,7 @@ export function ExportMenu({
           </div>
           {figure && groundLocked && (
             <div className="exp-note" data-testid="export-theme-locked">
-              {backgroundLockedNote(figure)} Put the board back on Screen to choose a ground.
+              {backgroundLockedNote(figure)} Put the figure back on Screen to choose a ground.
             </div>
           )}
 

@@ -3897,6 +3897,59 @@ button.card-eq {
   }
 }
 
+/* The chip that says the board is in a PREVIEW, and gets it out of one.
+
+   It is only ever on screen while a figure style is being previewed, and every
+   style previews on WHITE — so it is styled for paper directly rather than
+   through the canvas-light tokens, which the panels flip for a different
+   reason. Bottom-left: the toast owns the centre, the zoom controls the right,
+   and a teacher looking at a board that went white unexpectedly reads down the
+   side it went white from. */
+.fig-preview-chip {
+  position: absolute;
+  z-index: 18;
+  inset-block-end: 24px;
+  inset-inline-start: 24px;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 5px var(--sp-2) 5px var(--sp-3);
+  border-radius: 999px;
+  border: 1px solid rgba(23, 30, 54, 0.18);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 2px 10px rgba(23, 30, 54, 0.14);
+  color: #3d4560;
+  font: inherit;
+  font-size: var(--fs-sm);
+  line-height: 1.2;
+  cursor: pointer;
+  transition: border-color 0.12s var(--ease), color 0.12s var(--ease);
+}
+
+.fig-preview-chip:hover {
+  border-color: rgba(23, 30, 54, 0.4);
+  color: #1b2133;
+}
+
+.fig-preview-chip:focus-visible {
+  outline: 2px solid #1f6dc8;
+  outline-offset: 2px;
+}
+
+/* The × is the affordance; the whole chip is the target, because one click out
+   is the promise this control makes. */
+.fig-preview-x {
+  font-size: var(--fs-md);
+  line-height: 1;
+  opacity: 0.65;
+}
+
+@media (pointer: coarse) {
+  .fig-preview-chip {
+    min-height: 44px;
+  }
+}
+
 /* --------------------------------------------------------------- axis units */
 /* Per-axis units sit in the export/settings panel, not on the toolbar: the bar
    was cut from 680px to 524px in a 704px canvas and must not grow back, and

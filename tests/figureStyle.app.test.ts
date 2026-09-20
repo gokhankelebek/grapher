@@ -9,6 +9,13 @@
 // silently swapped for another look; and that the thumbnails in the picker are
 // real scenes the renderer accepts, one per style, since a picker whose
 // pictures were icons would be a promise nothing checks.
+//
+// And the decision the App makes with the answer: A FIGURE STYLE IS
+// OUTPUT-ONLY. It says what the PNG and the clipboard copy come out looking
+// like. The board the teacher is drawing on keeps its own theme — dark with
+// neon sketches, or light — and so does presentation mode, where the board is
+// a lit wall. The only way the style reaches the canvas is the "Preview on
+// board" switch, which is not in the document and not in the undo history.
 // ============================================================================
 
 import { describe, expect, it } from 'vitest'
@@ -30,10 +37,12 @@ import {
   FIGURE_BLURB,
   FIGURE_CHOICES,
   backgroundLockedNote,
+  exportLook,
   figureFor,
   figureTheme,
   fixesBackground,
   sampleScene,
+  screenLook,
 } from '../src/ui/figureStyle'
 import { captionHeight, renderBoard } from '../src/ui/renderBoard'
 import { exportViewport } from '../src/ui/exportFit'
@@ -296,5 +305,106 @@ describe('a caption gets room in the exported frame', () => {
     expect(exportViewport(VP, win, BOX, 'cartesian', [], captionHeight())).toEqual(
       exportViewport(VP, win, BOX, 'cartesian', []),
     )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// where the style actually lands
+// ---------------------------------------------------------------------------
+
+describe('a figure style is for the OUTPUT, not for the board', () => {
+  /** Every style that is a style at all — 'screen' is the absence of one. */
+  const STYLED: FigureStyleId[] = ['textbook', 'sat', 'ap']
+
+  const board = (over: Partial<Parameters<typeof screenLook>[0]> = {}) =>
+    screenLook({
+      style: 'sat',
+      caption: 'Figure 3',
+      screenTheme: DARK_THEME,
+      preview: false,
+      present: false,
+      cartesian: true,
+      ...over,
+    })
+
+  it('the board keeps the theme whatever style is chosen', () => {
+    for (const style of STYLED) {
+      const look = board({ style })
+      expect(look.figure, style).toBeUndefined()
+      expect(look.caption).toBe('')
+      expect(look.theme).toBe(DARK_THEME)
+      expect(look.previewing).toBe(false)
+    }
+  })
+
+  it('and the theme toggle still means what it always meant', () => {
+    expect(board({ style: 'ap' }).theme).toBe(DARK_THEME)
+    expect(board({ style: 'ap', screenTheme: LIGHT_THEME }).theme).toBe(LIGHT_THEME)
+    // including with no style at all, which is the untouched board
+    expect(board({ style: 'screen', screenTheme: LIGHT_THEME }).theme).toBe(LIGHT_THEME)
+  })
+
+  it('the EXPORT is where the style lands, with its caption', () => {
+    for (const style of STYLED) {
+      const out = exportLook({ style, caption: 'Figure 3', cartesian: true })
+      expect(out.figure, style).toBe(FIGURE_STYLES[style])
+      expect(out.caption).toBe('Figure 3')
+      expect(out.figure?.theme.bg).toBe('#ffffff')
+    }
+  })
+
+  it('an unstyled export is the absence of a style, exactly as before', () => {
+    const out = exportLook({ style: 'screen', caption: '', cartesian: true })
+    expect(out.figure).toBeUndefined()
+    expect(out.caption).toBe('')
+  })
+
+  it('the preview switch, and only the preview switch, puts it on the board', () => {
+    for (const style of STYLED) {
+      const on = board({ style, preview: true })
+      expect(on.figure, style).toBe(FIGURE_STYLES[style])
+      expect(on.caption).toBe('Figure 3')
+      expect(on.theme).toBe(FIGURE_STYLES[style].theme)
+      expect(on.previewing).toBe(true)
+      // and it is a view of the board, never of the file: the export is the
+      // same answer whether the teacher is looking at it or not
+      expect(exportLook({ style, caption: 'Figure 3', cartesian: true }).figure).toBe(
+        FIGURE_STYLES[style],
+      )
+    }
+  })
+
+  it('previewing the Screen look is previewing nothing', () => {
+    const on = board({ style: 'screen', preview: true })
+    expect(on.figure).toBeUndefined()
+    expect(on.previewing).toBe(false)
+    expect(on.theme).toBe(DARK_THEME)
+  })
+
+  it('PRESENTATION mode never takes the figure — not even mid-preview', () => {
+    for (const style of STYLED) {
+      for (const preview of [false, true]) {
+        const look = board({ style, preview, present: true })
+        expect(look.figure, `${style}/${preview}`).toBeUndefined()
+        expect(look.theme).toBe(DARK_THEME)
+        expect(look.previewing).toBe(false)
+      }
+    }
+  })
+
+  it('a number line has no figure style at all, on screen or in the PNG', () => {
+    const look = board({ style: 'ap', preview: true, cartesian: false })
+    expect(look.figure).toBeUndefined()
+    expect(look.theme).toBe(DARK_THEME)
+    const out = exportLook({ style: 'ap', caption: 'Graph of f', cartesian: false })
+    expect(out.figure).toBeUndefined()
+    expect(out.caption).toBe('')
+  })
+
+  it('the locked-background note says it is the EXPORT that is on white', () => {
+    for (const style of STYLED) {
+      expect(fixesBackground(style)).toBe(true)
+      expect(backgroundLockedNote(style)).toContain('export')
+    }
   })
 })
