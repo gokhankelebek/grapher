@@ -23,10 +23,12 @@ const BASE_SAMPLES = 160  // uniform samples across the span before refinement
 // Shared scratch (module-level, reused across calls — no per-sample allocs).
 // ---------------------------------------------------------------------------
 
-interface Sample { x: number; y: number; ok: boolean }
+/** One evaluation: the screen point, and whether the formula had a value. */
+export interface Sample { x: number; y: number; ok: boolean }
 const SCR: Sample = { x: 0, y: 0, ok: false }
 
-type EvalToScreen = (t: number, out: Sample) => void
+/** A curve's evaluator, parameter in, screen px out. Writes into `out`. */
+export type EvalToScreen = (t: number, out: Sample) => void
 
 /**
  * Where a sampled polyline goes. `Path2D` satisfies it structurally, and so
@@ -65,6 +67,21 @@ interface Emitter {
    * poles the stroke is broken at. Null for every ordinary paint.
    */
   tap: ((t: number, x: number, y: number, newRun: boolean) => void) | null
+  /**
+   * Optional listener on every crossing between the defined and the undefined,
+   * in either direction: `def` is the parameter of the last sample that had a
+   * finite value, `und` the first that did not (or the other way round when
+   * the graph comes BACK, where `def` is the first finite sample again). The
+   * pair brackets the boundary; who the boundary is — a natural endpoint like
+   * sqrt(x) at 0, or a pole like 1/x at 0 — is a question only the evaluator
+   * can answer, and `classifyEdge` asks it. Fires just before the `tap` that
+   * opens the new run, so a run and its edges arrive together. Null for every
+   * ordinary paint.
+   */
+  edge: ((def: number, und: number, entering: boolean) => void) | null
+  /** The most recent NON-finite sample, for the run that comes back after it. */
+  badT: number
+  hasBad: boolean
 }
 
 // path/f are assigned by resetEmitter before any use; kept unset here so merely
@@ -81,6 +98,9 @@ const EM: Emitter = {
   suspectPx: 0,
   cx0: 0, cx1: 0, cy0: 0, cy1: 0,
   tap: null,
+  edge: null,
+  badT: 0,
+  hasBad: false,
 }
 
 function resetEmitter(
@@ -100,6 +120,9 @@ function resetEmitter(
   em.cy0 = -vp.heightPx
   em.cy1 = 2 * vp.heightPx
   em.tap = null
+  em.edge = null
+  em.badT = 0
+  em.hasBad = false
 }
 
 // ---------------------------------------------------------------------------
@@ -195,6 +218,11 @@ function drawSeg(
 
 function emitPoint(em: Emitter, t: number, x: number, y: number, ok: boolean): void {
   if (!ok || !Number.isFinite(x) || !Number.isFinite(y)) {
+    // defined -> undefined. em.lastT still holds the last FINITE parameter,
+    // which is the near side of the boundary this sample is the far side of.
+    if (em.has && em.edge) em.edge(em.lastT, t, false)
+    em.badT = t
+    em.hasBad = true
     em.has = false
     em.penDown = false
     return
@@ -219,6 +247,11 @@ function emitPoint(em: Emitter, t: number, x: number, y: number, ok: boolean): v
     if (broken) em.penDown = false
     else drawSeg(em, px, py, x, y)
   }
+  // undefined -> defined, on the way back in. The break is a pen lift either
+  // way; only the edge tap can tell a boundary that has a point from one that
+  // has an asymptote.
+  if (!had && em.hasBad && em.edge) em.edge(t, em.badT, true)
+  em.hasBad = false
   if (em.tap) em.tap(t, x, y, !had || broken)
   em.has = true
   em.lastT = t
@@ -787,6 +820,137 @@ export interface CurveSample {
   y: number
 }
 
+// ---------------------------------------------------------------------------
+// Natural domain edges.
+//
+// A formula can stop in two completely different ways, and a figure draws them
+// completely differently:
+//
+//   ENDPOINT  the values settle on a finite limit — sqrt(x) at 0, sqrt(4-x^2)
+//             at +-2, arcsin x at +-1. The graph HAS a last point, and a
+//             textbook marks it with a dot.
+//   POLE      the values run away — 1/x at 0, ln x at 0, 1/sqrt(x) at 0. The
+//             graph has no last point, and a textbook marks nothing.
+//
+// The sampler cannot tell them apart, because both look the same from the
+// outside: a run that simply stops. So ask the function. Bisect the parameter
+// on `ok` until the boundary is pinned to ~1e-12 of the bracket, watching the
+// values on the DEFINED side: a converging sequence is a limit and an endpoint;
+// a sequence that keeps moving is a blow-up and a pole. The value, not the
+// slope — sqrt has an infinite derivative at its branch point and is still an
+// endpoint.
+//
+// Then the second question, which decides the dot: is the function defined AT
+// the boundary? sqrt(0) is 0, so the dot is CLOSED. x*ln(x) has the limit 0 at
+// 0 and no value there, so the dot is OPEN. The boundary itself is recovered
+// as the simplest number the final bracket still contains, which is the one
+// the formula was written about.
+// ---------------------------------------------------------------------------
+
+/** Bisection steps on the defined/undefined boundary: 2^-40 of the bracket. */
+const EDGE_STEPS = 40
+/** Refined values this close together (screen px) have settled on a limit. */
+const LIMIT_TOL_PX = 0.5
+/** ...plus this much of their own magnitude, for a limit far off the board. */
+const LIMIT_REL = 1e-6
+/** How many refined values have to agree before the limit is believed. */
+const LIMIT_SAMPLES = 3
+
+/** Where a formula's own domain stops, with a finite value. */
+export interface NaturalEnd {
+  /** The boundary parameter: x for explicit, t for parametric, θ for polar. */
+  t: number
+  /** The endpoint in screen px — f at the boundary, or its limit. */
+  x: number
+  y: number
+  /**
+   * True when f is DEFINED at the boundary (sqrt(x) at 0): a closed dot.
+   * False when only the limit exists (x·ln x at 0): an open one.
+   */
+  closed: boolean
+}
+
+/**
+ * The simplest number the closed interval [lo, hi] contains.
+ *
+ * After 40 halvings the boundary is known to about 1e-12 of the original
+ * bracket, and every boundary a written formula actually has — 0, ±1, ±2, b in
+ * sqrt(x − b) — is then the only round number left inside it. Taking that
+ * number back is what lets f be evaluated AT the boundary rather than a
+ * rounding error to one side of it, which is the whole difference between a
+ * closed dot and an open one.
+ */
+function simplestIn(lo: number, hi: number): number {
+  if (lo <= 0 && hi >= 0) return 0
+  const mid = (lo + hi) / 2
+  for (let p = 1; p <= 15; p++) {
+    const c = Number(mid.toPrecision(p))
+    if (c >= lo && c <= hi) return c
+  }
+  return mid
+}
+
+const EDGE_PROBE: Sample = { x: 0, y: 0, ok: false }
+
+function probeOk(f: EvalToScreen, t: number): boolean {
+  f(t, EDGE_PROBE)
+  return EDGE_PROBE.ok && Number.isFinite(EDGE_PROBE.x) && Number.isFinite(EDGE_PROBE.y)
+}
+
+/**
+ * Decide what the boundary bracketed by [`def`, `und`] is: a natural endpoint
+ * (returned) or a pole (null).
+ *
+ * `def` is a parameter where f has a finite value and `und` one where it does
+ * not; they may be in either order, because a graph can stop going up in the
+ * parameter or start again going up in it. Costs EDGE_STEPS + 1 evaluations
+ * and is asked at most twice per curve, at the two ends a cap could go on.
+ */
+export function classifyEdge(
+  f: EvalToScreen, def: number, und: number,
+): NaturalEnd | null {
+  if (!Number.isFinite(def) || !Number.isFinite(und)) return null
+  if (!probeOk(f, def)) return null
+  let a = def
+  let b = und
+  // the last few values on the defined side, newest last
+  const xs: number[] = [EDGE_PROBE.x]
+  const ys: number[] = [EDGE_PROBE.y]
+  for (let i = 0; i < EDGE_STEPS; i++) {
+    const m = (a + b) / 2
+    if (m === a || m === b) break // the bracket is two adjacent doubles
+    if (probeOk(f, m)) {
+      a = m
+      xs.push(EDGE_PROBE.x)
+      ys.push(EDGE_PROBE.y)
+      if (xs.length > LIMIT_SAMPLES) { xs.shift(); ys.shift() }
+    } else {
+      b = m
+    }
+  }
+  const last = xs.length - 1
+  const lx = xs[last]
+  const ly = ys[last]
+  // Converged? A pole's values double (1/x) or step by a constant (ln x) with
+  // every halving and never settle; a limit stops moving. One value means the
+  // bisection never left `def` — f is undefined on the whole open bracket, so
+  // `def` IS the boundary and it trivially has a limit.
+  const tol = LIMIT_TOL_PX + LIMIT_REL * Math.hypot(lx, ly)
+  for (let i = 0; i < last; i++) {
+    if (!(Math.hypot(xs[i] - lx, ys[i] - ly) <= tol)) return null // a pole
+  }
+  // Defined at the boundary itself, with the limit's value? Then the point
+  // belongs to the graph.
+  const bound = simplestIn(Math.min(a, b), Math.max(a, b))
+  if (probeOk(f, bound) && Math.hypot(EDGE_PROBE.x - lx, EDGE_PROBE.y - ly) <= tol) {
+    return { t: bound, x: EDGE_PROBE.x, y: EDGE_PROBE.y, closed: true }
+  }
+  return { t: a, x: lx, y: ly, closed: false }
+}
+
+/** The two parameters that bracket one defined/undefined boundary. */
+interface EdgeBracket { def: number; und: number }
+
 /** A curve as the sampler saw it: runs of samples, broken at its poles. */
 export interface CurveTrace {
   /**
@@ -801,6 +965,17 @@ export interface CurveTrace {
   /** True when t0 / t1 is the curve's own declared domain end. */
   atDomain0: boolean
   atDomain1: boolean
+  /**
+   * The natural domain edge that run `run` begins at (`naturalStart`) or ends
+   * at (`naturalEnd`) — where the formula stops being defined with a finite
+   * value, like sqrt(x) at 0. Null at a pole, at a jump the probe broke, and
+   * at the sampled span's own ends.
+   *
+   * Computed ON DEMAND and cached: the refinement is ~40 evaluations, and only
+   * the two outermost ends of a curve are ever asked for a cap.
+   */
+  naturalStart(run: number): NaturalEnd | null
+  naturalEnd(run: number): NaturalEnd | null
 }
 
 const NULL_SINK: PolylineSink = { moveTo(): void {}, lineTo(): void {} }
@@ -838,14 +1013,25 @@ export function traceCurve(
   if (!span) return null
 
   const runs: CurveSample[][] = []
+  // per run, the bracket around the boundary it starts / stops at, if any
+  const lo: (EdgeBracket | null)[] = []
+  const hi: (EdgeBracket | null)[] = []
   let cur: CurveSample[] = []
+  let pending: EdgeBracket | null = null
   resetEmitter(EM, NULL_SINK, span.f, vp)
   EM.tap = (t, x, y, newRun): void => {
     if (newRun || cur.length === 0) {
       cur = []
       runs.push(cur)
+      lo.push(pending)
+      hi.push(null)
     }
+    pending = null
     cur.push({ t, x, y })
+  }
+  EM.edge = (def, und, entering): void => {
+    if (entering) pending = { def, und }
+    else if (runs.length > 0) hi[runs.length - 1] = { def, und }
   }
   try {
     sampleAdaptive(EM, span.f, span.t0, span.t1, vp)
@@ -853,13 +1039,39 @@ export function traceCurve(
     /* an evaluator that threw mid-span still leaves the runs it produced */
   } finally {
     EM.tap = null
+    EM.edge = null
+  }
+
+  // Drop the empty runs, and their brackets with them, so a run index means
+  // the same thing in both lists.
+  const keep: number[] = []
+  for (let i = 0; i < runs.length; i++) if (runs[i].length > 0) keep.push(i)
+  const f = span.f
+  const memo = new Map<number, NaturalEnd | null>()
+  const natural = (run: number, lower: boolean): NaturalEnd | null => {
+    const key = run * 2 + (lower ? 0 : 1)
+    const hit = memo.get(key)
+    if (hit !== undefined) return hit
+    const src = run >= 0 && run < keep.length ? (lower ? lo : hi)[keep[run]] : null
+    let out: NaturalEnd | null = null
+    if (src) {
+      try {
+        out = classifyEdge(f, src.def, src.und)
+      } catch {
+        out = null
+      }
+    }
+    memo.set(key, out)
+    return out
   }
   return {
-    runs: runs.filter((r) => r.length > 0),
+    runs: keep.map((i) => runs[i]),
     t0: span.t0,
     t1: span.t1,
     atDomain0: span.atDomain0,
     atDomain1: span.atDomain1,
+    naturalStart: (run) => natural(run, true),
+    naturalEnd: (run) => natural(run, false),
   }
 }
 

@@ -14,6 +14,10 @@
 //  4. A cap marks an END, never a crossing and never a pole. A graph that dips
 //     off the bottom and comes back gets two caps, not six; 1/x gets two, not
 //     four, and nothing at the asymptote; a circle gets none.
+//  4b. An end is an end whether the teacher declared it or the formula did.
+//     sqrt(x) ends at (0, 0), sqrt(4 - x^2) at (±2, 0), arcsin x at (±1, ±π/2)
+//     — natural endpoints, dotted exactly like a declared domain end — while
+//     1/x, ln x, tan x and 1/sqrt(x) end at nothing at all.
 //  5. Caps are FIGURE: they are drawn with chrome:null, so they export, and
 //     they scale with present.stroke.
 // ============================================================================
@@ -27,6 +31,7 @@ import {
   resolveEnds,
 } from '../src/render/endCaps'
 import { traceCurve } from '../src/render/curves'
+import { parseExpression } from '../src/core/parse'
 import { MockCtx, MockPath2D, withMockPath2D, type Cmd } from './mockCanvas'
 import { MODELS } from '../src/core/fit/models'
 import { getHandles } from '../src/core/fit/edit'
@@ -37,7 +42,7 @@ import {
   LIGHT_THEME,
   toPrintColor,
 } from '../src/core/types'
-import type { FittedCurve, Viewport } from '../src/core/types'
+import type { FittedCurve, ModelSpec, Viewport } from '../src/core/types'
 
 // x in [-7.5, 7.5], y in [-5, 5]
 const VP: Viewport = { center: { x: 0, y: 0 }, pxPerUnit: 60, widthPx: 900, heightPx: 600 }
@@ -64,6 +69,40 @@ const RECIP = curve({ modelId: 'recip', params: [1, 0, 0] })
 const CIRCLE = curve({ modelId: 'circle', params: [0, 0, 3], kind: 'implicit' })
 /** y = sin x. */
 const SINE = curve({ modelId: 'sine', params: [2, 1, 0, 0] })
+/** y = sqrt(x): a NATURAL endpoint at (0, 0), and a run-off on the right. */
+const ROOT = curve({ modelId: 'sqrt', params: [1, 0, 0] })
+
+// ---------------------------------------------------------------------------
+// Typed expressions, for the functions no sketch family has: arcsin, a
+// rational with a hole, sqrt(x) + 1/x. `models` carries the compiled one
+// alongside the library so a scene can be rendered with it.
+// ---------------------------------------------------------------------------
+
+interface Typed {
+  curve: FittedCurve
+  models: Record<string, ModelSpec>
+}
+
+function typed(src: string, domain?: [number, number]): Typed {
+  const p = parseExpression(src)
+  if (!p.ok) throw new Error(`${src}: ${p.error}`)
+  return {
+    curve: curve({
+      modelId: 'e',
+      params: p.plot.defaultParams,
+      kind: p.plot.kind,
+      domain: domain ?? p.plot.domain,
+    }),
+    models: { ...MODELS, e: p.plot.makeModel('e') },
+  }
+}
+
+/** Every cap an exam figure draws for a typed expression, in order. */
+function typedCaps(t: Typed): Cap[] {
+  return satCaps(
+    render(scene({ curves: [t.curve], models: t.models, figure: FIGURE_STYLES.sat })),
+  )
+}
 
 // ---------------------------------------------------------------------------
 // A MockCtx that keeps each paint op together with the SUBPATH it consumed —
@@ -203,6 +242,7 @@ describe('end caps — the board without them is the board it always was', () =>
     {},
     { curves: [PARABOLA] },
     { curves: [RECIP] },
+    { curves: [ROOT] },
     { curves: [CIRCLE] },
     { curves: [CUBIC, PARABOLA] },
     { theme: LIGHT_THEME },
@@ -226,7 +266,7 @@ describe('end caps — the board without them is the board it always was', () =>
   })
 
   it("the screen figure says nothing either — 'plain' is the screen's answer", () => {
-    for (const c of [CUBIC, PARABOLA, RECIP]) {
+    for (const c of [CUBIC, PARABOLA, RECIP, ROOT]) {
       const ctx = render(scene({ curves: [c], figure: FIGURE_STYLES.screen }))
       expect(caps(ctx, CURVE_COLORS[0], DARK_THEME.bg), c.modelId).toHaveLength(0)
       expect(caps(ctx, DARK_THEME.axis, DARK_THEME.bg), c.modelId).toHaveLength(0)
@@ -512,21 +552,10 @@ describe('what is not an end', () => {
     }
   })
 
-  it('a NATURAL domain edge is not a declared domain, and is not capped', () => {
-    // y = sqrt(x) stops at (0, 0) and a textbook would close it — but "where
-    // the formula stops being defined" is not in FittedCurve.domain, and from
-    // the samples alone it is indistinguishable from the pole this file exists
-    // to leave alone. It is pinned here so the gap is a decision, not a
-    // surprise: the fix is to give the curve the domain it actually has.
-    const root = curve({ modelId: 'sqrt', params: [1, 0, 0] })
-    const ends = curveEndPoints(root, MODELS, VP)
-    expect(ends.start, 'the branch point is not treated as an end').toBeNull()
-    expect(ends.end!.kind, 'the far end still runs off the board').toBe('exit')
-
+  it('a stated domain still gets its dots', () => {
     const said = curve({ modelId: 'sqrt', params: [1, 0, 0], domain: [0, 7] })
     const drawn = satCaps(render(scene({ curves: [said], figure: FIGURE_STYLES.sat })))
-    expect(drawn.map((c) => c.kind), 'a stated domain does get its dots')
-      .toEqual(['closed', 'closed'])
+    expect(drawn.map((c) => c.kind)).toEqual(['closed', 'closed'])
     expect(drawn[0].at.x).toBeCloseTo(sx(0), 6)
     expect(drawn[0].at.y).toBeCloseTo(sy(0), 6)
   })
@@ -534,6 +563,198 @@ describe('what is not an end', () => {
   it('a curve with nothing on the board is capped nowhere', () => {
     const far = curve({ modelId: 'line', params: [900, 0], kind: 'explicit' })
     expect(curveEndPoints(far, MODELS, VP)).toEqual({ start: null, end: null })
+  })
+})
+
+// ===========================================================================
+// 5b. Natural endpoints: where the FORMULA ends, not where the teacher said
+// ===========================================================================
+
+describe('natural domain endpoints', () => {
+  it('sqrt(x) closes at (0, 0) and arrows the run-off', () => {
+    const ends = curveEndPoints(ROOT, MODELS, VP)
+    expect(ends.start!.kind).toBe('natural')
+    expect(ends.start!.closed, 'sqrt(0) = 0, so the point belongs to the graph').toBe(true)
+    // the branch point to the pixel — not the last SAMPLE before it
+    expect(ends.start!.at.x).toBeCloseTo(sx(0), 6)
+    expect(ends.start!.at.y).toBeCloseTo(sy(0), 6)
+    expect(Math.abs(ends.start!.at.x - sx(0))).toBeLessThan(1e-6)
+    expect(Math.abs(ends.start!.at.y - sy(0))).toBeLessThan(1e-6)
+    expect(ends.end!.kind, 'the far end still runs off the board').toBe('exit')
+
+    const drawn = satCaps(render(scene({ curves: [ROOT], figure: FIGURE_STYLES.sat })))
+    expect(drawn.map((c) => c.kind)).toEqual(['closed', 'arrow'])
+    expect(drawn[0].at.x).toBeCloseTo(sx(0), 6)
+    expect(drawn[0].at.y).toBeCloseTo(sy(0), 6)
+    expect(Math.abs(drawn[1].at.x - VP.widthPx), 'the arrow is on the right edge')
+      .toBeLessThan(1)
+  })
+
+  it("sqrt(4 - x^2) closes BOTH ends at (±2, 0), and arrows neither", () => {
+    const t = typed('y = sqrt(4 - x^2)')
+    const ends = curveEndPoints(t.curve, t.models, VP)
+    for (const e of [ends.start!, ends.end!]) {
+      expect(e.kind).toBe('natural')
+      expect(e.closed).toBe(true)
+      expect(e.at.y).toBeCloseTo(sy(0), 6)
+    }
+    expect(ends.start!.at.x).toBeCloseTo(sx(-2), 6)
+    expect(ends.end!.at.x).toBeCloseTo(sx(2), 6)
+
+    const drawn = typedCaps(t)
+    expect(drawn.map((c) => c.kind)).toEqual(['closed', 'closed'])
+    expect(drawn[0].at.x).toBeCloseTo(sx(-2), 6)
+    expect(drawn[1].at.x).toBeCloseTo(sx(2), 6)
+  })
+
+  it('arcsin x closes at (±1, ±π/2)', () => {
+    const t = typed('y = asin(x)')
+    const drawn = typedCaps(t)
+    expect(drawn.map((c) => c.kind)).toEqual(['closed', 'closed'])
+    expect(drawn[0].at.x).toBeCloseTo(sx(-1), 6)
+    expect(drawn[0].at.y).toBeCloseTo(sy(-Math.PI / 2), 6)
+    expect(drawn[1].at.x).toBeCloseTo(sx(1), 6)
+    expect(drawn[1].at.y).toBeCloseTo(sy(Math.PI / 2), 6)
+  })
+
+  it('a POLE is still not an end: 1/x, ln x, tan x, 1/sqrt(x) get arrows only', () => {
+    for (const src of ['y = 1/x', 'y = ln(x)', 'y = tan(x)', 'y = 1/sqrt(x)']) {
+      const t = typed(src)
+      const ends = curveEndPoints(t.curve, t.models, VP)
+      for (const e of [ends.start, ends.end]) {
+        expect(e, src).toBeTruthy()
+        expect(e!.kind, `${src}: a pole was called an endpoint`).toBe('exit')
+        // every cap sits ON the board edge, which is what a run-off means
+        const p = e!.at
+        const onEdge =
+          Math.min(Math.abs(p.x), Math.abs(p.x - VP.widthPx),
+                   Math.abs(p.y), Math.abs(p.y - VP.heightPx)) < 1
+        expect(onEdge, `${src}: (${p.x}, ${p.y}) is not on the board edge`).toBe(true)
+      }
+      const drawn = typedCaps(t)
+      expect(drawn.map((c) => c.kind), src).toEqual(['arrow', 'arrow'])
+    }
+  })
+
+  it('the rule reads the VALUE, not the slope: sqrt has an infinite derivative', () => {
+    // The two are the same picture from a sampler's point of view — a run that
+    // simply stops, with the last chord standing straight up. Only the values
+    // tell them apart, and they do: sqrt settles on 0, 1/sqrt does not settle.
+    const root = typed('y = sqrt(x)')
+    const pole = typed('y = 1/sqrt(x)')
+    expect(curveEndPoints(root.curve, root.models, VP).start!.kind).toBe('natural')
+    expect(curveEndPoints(pole.curve, pole.models, VP).start!.kind).toBe('exit')
+  })
+
+  it('a declared domain BEYOND the natural one caps at the natural endpoint', () => {
+    // y = sqrt(x) {-3 < x < 5}: there is nothing to draw at x = -3.
+    const t = typed('y = sqrt(x)', [-3, 5])
+    const ends = curveEndPoints(t.curve, t.models, VP)
+    expect(ends.start!.kind).toBe('natural')
+    expect(ends.start!.at.x).toBeCloseTo(sx(0), 6)
+    expect(ends.start!.at.y).toBeCloseTo(sy(0), 6)
+    expect(ends.end!.kind, 'x = 5 is on the board and is a declared end').toBe('domain')
+    expect(ends.end!.at.x).toBeCloseTo(sx(5), 6)
+
+    const drawn = typedCaps(t)
+    expect(drawn.map((c) => c.kind)).toEqual(['closed', 'closed'])
+    expect(drawn[0].at.x).toBeCloseTo(sx(0), 6)
+    expect(Math.abs(drawn[0].at.x - sx(-3))).toBeGreaterThan(VP.pxPerUnit)
+  })
+
+  it('a finite limit with no value there is an OPEN dot', () => {
+    // y = (x^2 - 1)/(x - 1) is 0/0 at x = 1: the expression engine yields NaN
+    // there, and the limit is 2. On the whole board that hole is in the MIDDLE
+    // of the graph — not an end, and no sample lands on it — so the ends are
+    // the two run-offs. Restrict the domain so the hole IS the end, and the
+    // cap is the open dot at (1, 2) that a textbook draws.
+    const p = parseExpression('y = (x^2 - 1)/(x - 1)')
+    expect(p.ok && Number.isNaN(p.plot.makeModel('e').evalExplicit!([], 1))).toBe(true)
+
+    const whole = typed('y = (x^2 - 1)/(x - 1)')
+    expect(curveEndPoints(whole.curve, whole.models, VP).start!.kind).toBe('exit')
+    expect(typedCaps(whole).map((c) => c.kind)).toEqual(['arrow', 'arrow'])
+
+    const upTo = typed('y = (x^2 - 1)/(x - 1)', [-3, 1])
+    const ends = curveEndPoints(upTo.curve, upTo.models, VP)
+    expect(ends.end!.kind).toBe('natural')
+    expect(ends.end!.closed, 'there is no value at x = 1, only a limit').toBe(false)
+    expect(ends.end!.at.x).toBeCloseTo(sx(1), 6)
+    expect(ends.end!.at.y).toBeCloseTo(sy(2), 6)
+    const drawn = typedCaps(upTo)
+    expect(drawn.map((c) => c.kind)).toEqual(['closed', 'open'])
+
+    // the same shape from the other family: x·ln x has the limit 0 at x = 0
+    // and no value there
+    const xlnx = typed('y = x*ln(x)')
+    const s0 = curveEndPoints(xlnx.curve, xlnx.models, VP).start!
+    expect(s0.kind).toBe('natural')
+    expect(s0.closed).toBe(false)
+    expect(s0.at.x).toBeCloseTo(sx(0), 6)
+    expect(s0.at.y).toBeCloseTo(sy(0), 6)
+    expect(typedCaps(xlnx).map((c) => c.kind)).toEqual(['open', 'arrow'])
+  })
+
+  it("the screen style still says nothing at a natural endpoint", () => {
+    for (const src of ['y = sqrt(x)', 'y = sqrt(4 - x^2)', 'y = asin(x)']) {
+      const t = typed(src)
+      for (const fig of [null, FIGURE_STYLES.screen]) {
+        const ctx = render(
+          scene({ curves: [t.curve], models: t.models, figure: fig ?? undefined }),
+        )
+        expect(caps(ctx, CURVE_COLORS[0], DARK_THEME.bg), src).toHaveLength(0)
+      }
+    }
+  })
+
+  it('resolveEnds settles every auto once it is handed the geometry', () => {
+    const t = typed('y = sqrt(4 - x^2)')
+    const pts = curveEndPoints(t.curve, t.models, VP)
+    expect(resolveEnds(undefined, t.curve, FIGURE_STYLES.sat, pts))
+      .toEqual({ start: 'closed', end: 'closed', startAuto: true, endAuto: true })
+    expect(resolveEnds(undefined, t.curve, FIGURE_STYLES.screen, pts))
+      .toMatchObject({ start: 'none', end: 'none' })
+    // a named cap still wins over the formula's own answer
+    expect(resolveEnds({ ends: { start: 'arrow' } }, t.curve, FIGURE_STYLES.sat, pts))
+      .toMatchObject({ start: 'arrow', startAuto: false, end: 'closed' })
+    const hole = typed('y = (x^2 - 1)/(x - 1)', [-3, 1])
+    expect(
+      resolveEnds(undefined, hole.curve, FIGURE_STYLES.sat,
+        curveEndPoints(hole.curve, hole.models, VP)),
+    ).toMatchObject({ start: 'closed', end: 'open' })
+  })
+
+  it('sketched families: sqrt gets its dot, log and recip do not', () => {
+    const dot = curveEndPoints(curve({ modelId: 'sqrt', params: [2, 1, -1] }), MODELS, VP)
+    expect(dot.start!.kind).toBe('natural')
+    expect(dot.start!.at.x).toBeCloseTo(sx(1), 6)
+    expect(dot.start!.at.y).toBeCloseTo(sy(-1), 6)
+    for (const id of ['log', 'recip'] as const) {
+      const c = curve({ modelId: id, params: [1, 0, 0] })
+      const ends = curveEndPoints(c, MODELS, VP)
+      expect(ends.start!.kind, id).toBe('exit')
+      expect(ends.end!.kind, id).toBe('exit')
+    }
+    // power is |x - b|^p: defined on both sides, so it has no edge at all
+    const cusp = curveEndPoints(
+      curve({ modelId: 'power', params: [1, 0, 0, 2 / 3] }), MODELS, VP,
+    )
+    expect(cusp.start!.kind).toBe('exit')
+    expect(cusp.end!.kind).toBe('exit')
+  })
+
+  it('finding the ends of sqrt(x) + 1/x costs under 2 ms', () => {
+    const t = typed('y = sqrt(x) + 1/x')
+    // warm the JIT, then time the work a frame actually does
+    for (let i = 0; i < 20; i++) curveEndPoints(t.curve, t.models, VP)
+    const N = 20
+    const t0 = performance.now()
+    for (let i = 0; i < N; i++) {
+      traceCurve(t.curve, t.models, VP)
+      curveEndPoints(t.curve, t.models, VP)
+    }
+    const per = (performance.now() - t0) / N
+    expect(per, `${per.toFixed(3)} ms per trace`).toBeLessThan(2)
   })
 })
 

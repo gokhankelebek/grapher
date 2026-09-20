@@ -78,6 +78,21 @@ export interface ResolvedEnds {
   endAuto: boolean
 }
 
+/**
+ * What an 'auto' end resolves to once the GEOMETRY is known — which is the
+ * only place the whole answer lives.
+ *
+ * An end that runs off the board is an arrow whatever the domain said; a
+ * declared domain end on the board is a closed dot; a natural endpoint is the
+ * dot its own nature asks for, filled where the formula has a value there and
+ * hollow where it only has a limit.
+ */
+function autoCap(p: CurveEndPoint): ResolvedCap {
+  if (p.kind === 'exit') return 'arrow'
+  if (p.kind === 'natural') return p.closed ? 'closed' : 'open'
+  return 'closed'
+}
+
 /** A finite, ordered domain, or null. */
 function finiteDomain(curve: FittedCurve): [number, number] | null {
   const d = curve.domain
@@ -96,24 +111,36 @@ function finiteDomain(curve: FittedCurve): [number, number] | null {
  * An implicit curve (a circle, an ellipse) is a closed level set: it has no
  * first point and no last one, so there is nothing for a cap to mark, and it
  * gets 'none' whatever anyone asks for.
+ *
+ * `points` is optional and is the difference between a guess and an answer.
+ * Without it the domain is all this function knows, so 'auto' guesses from the
+ * domain alone and `startAuto` / `endAuto` warn the caller that the guess is
+ * still open to the geometry. Hand it `curveEndPoints(...)` — as the renderer
+ * effectively does — and every 'auto' is settled here: an arrow where the
+ * graph runs off, a closed dot at a domain end or at a natural endpoint that
+ * has its own value, an open dot at one that has only a limit.
  */
 export function resolveEnds(
   style: { ends?: CurveEnds } | null | undefined,
   curve: FittedCurve,
   figure: FigureStyle | null | undefined,
+  points?: CurveEndPoints | null,
 ): ResolvedEnds {
   if (curve.kind === 'implicit') {
     return { start: 'none', end: 'none', startAuto: false, endAuto: false }
   }
   const marked = figure != null && figure.curveEnds === 'marked'
   const dom = finiteDomain(curve)
-  const one = (asked: EndCap | undefined, atDomain: boolean): [ResolvedCap, boolean] => {
+  const one = (
+    asked: EndCap | undefined, at: CurveEndPoint | null | undefined,
+  ): [ResolvedCap, boolean] => {
     if (asked && asked !== 'auto') return [asked, false]
     if (!marked) return ['none', true]
-    return [atDomain ? 'closed' : 'arrow', true]
+    if (points) return [at ? autoCap(at) : 'none', true]
+    return [dom !== null ? 'closed' : 'arrow', true]
   }
-  const [start, startAuto] = one(style?.ends?.start, dom !== null)
-  const [end, endAuto] = one(style?.ends?.end, dom !== null)
+  const [start, startAuto] = one(style?.ends?.start, points?.start)
+  const [end, endAuto] = one(style?.ends?.end, points?.end)
   return { start, end, startAuto, endAuto }
 }
 
@@ -127,10 +154,21 @@ export interface CurveEndPoint {
   /** Unit OUTGOING direction in screen px — away from the curve. */
   dir: Vec2
   /**
-   * 'domain' — the curve's own interval stops here, on the board.
-   * 'exit'   — the graph left the visible board here and keeps going.
+   * 'domain'  — the curve's own DECLARED interval stops here, on the board.
+   * 'natural' — the formula itself stops here with a finite value: sqrt(x) at
+   *             (0, 0), sqrt(4 - x^2) at (±2, 0), arcsin x at (±1, ±π/2). An
+   *             end just as real as a declared one, and marked the same way.
+   *             A POLE — 1/x, ln x, tan x, 1/sqrt(x) — is not one of these and
+   *             never appears here: it is not an end, and gets no cap.
+   * 'exit'    — the graph left the visible board here and keeps going.
    */
-  kind: 'domain' | 'exit'
+  kind: 'domain' | 'natural' | 'exit'
+  /**
+   * For 'natural' only: the formula has a VALUE at the boundary (a closed dot)
+   * rather than merely a limit (an open one). sqrt(0) = 0 closes; a removable
+   * hole, where the limit exists and the value does not, opens.
+   */
+  closed?: boolean
 }
 
 export interface CurveEndPoints {
@@ -207,8 +245,14 @@ function edgeCrossing(a: Vec2, b: Vec2, w: number, h: number): Vec2 {
  *    and returns — is marked at its OUTERMOST exits only: the lowest-t
  *    departure and the highest-t one. Every crossing in between is the middle
  *    of the graph, not an end of it.
- *  - A run that simply STOPS on the board is a pole, not an end: 1/x does not
- *    end at x = 0, and nothing is drawn there.
+ *  - A run that simply STOPS on the board is one of two things, and only the
+ *    formula can say which. Where the values settle on a finite limit it is a
+ *    NATURAL endpoint — sqrt(x) at (0, 0), sqrt(4 - x^2) at (±2, 0), arcsin x
+ *    at (±1, ±π/2) — and it is an end exactly like a declared domain end,
+ *    down to the dot. Where the values run away it is a POLE — 1/x, ln x,
+ *    tan x, 1/sqrt(x) — and a pole is not an end: nothing is drawn there.
+ *  - A natural endpoint counts only where it is the OUTERMOST defined point.
+ *    The hole in the middle of a graph is a hole, not an end.
  *  - Implicit curves have no ends at all, and neither does a closed loop whose
  *    two ends are the same point.
  *
@@ -237,7 +281,8 @@ export function curveEndPoints(
     const runs = trace!.runs
     const n = runs.length
     for (let k = 0; k < n; k++) {
-      const run = runs[lower ? k : n - 1 - k]
+      const idx = lower ? k : n - 1 - k
+      const run = runs[idx]
       const m = run.length
       // the outermost sample of this run that is actually on the board
       let i = -1
@@ -254,17 +299,27 @@ export function curveEndPoints(
         return dir ? { at, dir, kind: 'exit' } : null
       }
 
-      // The run begins (or ends) on the board. That is an END only if it is
-      // where the curve's own interval stops; otherwise it is a pole, and a
-      // pole is not an end.
+      // The run begins (or ends) on the board. Three things it can be:
+      // the curve's own declared interval stopping, the formula's own domain
+      // stopping with a finite value, or a pole. Only the last is not an end.
       const first = run[i]
       const isSpanEnd = lower ? first.t === trace!.t0 : first.t === trace!.t1
       const atDomain = lower ? trace!.atDomain0 : trace!.atDomain1
-      if (!isSpanEnd || !atDomain) return null
-      const dir = smoothDir(first, run, i + step, step)
       // A point with no direction is a one-sample run: the dot still belongs
       // there, and only an arrow needs somewhere to point.
-      return { at: { x: first.x, y: first.y }, dir: dir ?? { x: step, y: 0 }, kind: 'domain' }
+      const dir = smoothDir(first, run, i + step, step) ?? { x: step, y: 0 }
+      if (isSpanEnd && atDomain) {
+        return { at: { x: first.x, y: first.y }, dir, kind: 'domain' }
+      }
+      // Refine the boundary rather than settling for the last sample: the last
+      // sample of sqrt(x) sits a sampling step short of (0, 0), and a dot a
+      // step short of the origin is a dot in the wrong place. The refinement
+      // lands on the boundary itself, exactly where the formula is written.
+      const nat = lower ? trace!.naturalStart(idx) : trace!.naturalEnd(idx)
+      if (nat && on(nat)) {
+        return { at: { x: nat.x, y: nat.y }, dir, kind: 'natural', closed: nat.closed }
+      }
+      return null
     }
     return null
   }
@@ -275,7 +330,7 @@ export function curveEndPoints(
   // ends at one point. Two dots stacked on the rim of a circle is a mark no
   // figure has ever carried, and it is not what the domain meant.
   if (
-    start && end && start.kind === 'domain' && end.kind === 'domain' &&
+    start && end && start.kind !== 'exit' && end.kind !== 'exit' &&
     Math.hypot(start.at.x - end.at.x, start.at.y - end.at.y) <= LOOP_TOL
   ) {
     return NO_ENDS
@@ -359,8 +414,8 @@ function drawOne(
   if (!p || cap === 'none') return
   // The automatic guess was made from the domain alone; the geometry knows
   // better. A domain end that fell off the board is a run-off, and a run-off
-  // is an arrow.
-  const c = auto ? (p.kind === 'domain' ? 'closed' : 'arrow') : cap
+  // is an arrow; a natural endpoint the domain never mentioned is a dot.
+  const c = auto ? autoCap(p) : cap
   if (!Number.isFinite(p.at.x) || !Number.isFinite(p.at.y)) return
   if (c === 'arrow') drawArrow(ctx, p, paint)
   else drawDot(ctx, p, c === 'closed', paint)
