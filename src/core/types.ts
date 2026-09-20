@@ -669,3 +669,18 @@ export interface CurveEnds {
   start?: EndCap
   end?: EndCap
 }
+
+// ============================================================================
+// Asymptotes — lines a graph approaches without reaching.
+//
+//   'vertical'  x = c            (a pole of an explicit or log-type curve)
+//   'line'      through `a` in direction `dir` (unit), from a polar curve
+//               whose r runs away as θ → θ0 while r·sin(θ − θ0) → d
+//   src/core/holes.ts: findAsymptotes(curve, models, range): Asymptote[]
+//   — findPoles() keeps returning the vertical ones as plain x values.
+//   The renderer draws every kind dashed under the marked figure styles.
+// ============================================================================
+
+export type Asymptote =
+  | { kind: 'vertical'; x: number }
+  | { kind: 'line'; a: Vec2; dir: Vec2 }

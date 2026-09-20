@@ -42,7 +42,7 @@
 // every figure style; dashed asymptotes under the marked styles).
 // ============================================================================
 
-import type { FittedCurve, ModelSpec } from './types'
+import type { Asymptote, FittedCurve, ModelSpec } from './types'
 
 export interface Hole {
   x: number
@@ -293,4 +293,16 @@ export function findPoles(
   } catch {
     return []
   }
+}
+
+/**
+ * Every asymptote of the curve on `range`: the vertical ones from
+ * findPoles(), plus (core wave) the slant lines a polar curve approaches.
+ */
+export function findAsymptotes(
+  curve: FittedCurve,
+  models: Record<string, ModelSpec>,
+  range: [number, number],
+): Asymptote[] {
+  return findPoles(curve, models, range).map((x) => ({ kind: 'vertical', x }))
 }
