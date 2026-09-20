@@ -52,6 +52,14 @@ export interface ModelSpec {
   evalPolar?(params: number[], theta: number): number
   evalParametric?(params: number[], t: number): Vec2
   evalImplicit?(params: number[], x: number, y: number): number
+  /**
+   * Where the formula is UNDEFINED as written, for a typed explicit
+   * expression: zeros of every denominator, arguments of tan/sec/cot/csc at
+   * their poles, and points the teacher excluded with `{x != c}` — the
+   * candidates src/core/holes.ts sorts into holes and vertical asymptotes.
+   * Sorted, deduplicated, within `range`. Absent for library families.
+   */
+  singularities?(params: number[], range: [number, number]): number[]
   latex(params: number[]): string    // KaTeX-renderable string
   paramMeta(params: number[]): ParamMeta[]  // ranges centered on current values
   /** Optional: return params translated by (dx, dy) in math units (for drag-editing).
@@ -254,6 +262,7 @@ export type SpecialPointKind =
   | 'y-intercept'  // f(0)
   | 'extreme'      // closed/polar curves: leftmost, rightmost, top, bottom
   | 'petal-tip'    // polar: local maximum of |r|
+  | 'hole'         // removable discontinuity: f undefined at x, finite two-sided limit (pos = the limit)
 
 export interface SpecialPoint {
   kind: SpecialPointKind
