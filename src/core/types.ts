@@ -558,6 +558,12 @@ export interface FigureStyle {
   curveWidth: number
   /** Analysis / shape point markers: filled discs or rings. */
   pointStyle: 'filled' | 'ring'
+  /**
+   * What an 'auto' curve end resolves to: 'marked' draws an arrow where the
+   * graph runs off the board and a closed dot at a domain end; 'plain' draws
+   * nothing (the screen look).
+   */
+  curveEnds: 'marked' | 'plain'
 }
 
 export const FIGURE_STYLES: Record<FigureStyleId, FigureStyle> = {
@@ -575,6 +581,7 @@ export const FIGURE_STYLES: Record<FigureStyleId, FigureStyle> = {
     curveInk: 'palette',
     curveWidth: 2.5,
     pointStyle: 'ring',
+    curveEnds: 'plain',
   },
   textbook: {
     id: 'textbook',
@@ -590,6 +597,7 @@ export const FIGURE_STYLES: Record<FigureStyleId, FigureStyle> = {
     curveInk: 'palette',
     curveWidth: 2,
     pointStyle: 'filled',
+    curveEnds: 'marked',
   },
   sat: {
     id: 'sat',
@@ -605,6 +613,7 @@ export const FIGURE_STYLES: Record<FigureStyleId, FigureStyle> = {
     curveInk: 'mono',
     curveWidth: 2,
     pointStyle: 'filled',
+    curveEnds: 'marked',
   },
   ap: {
     id: 'ap',
@@ -620,5 +629,34 @@ export const FIGURE_STYLES: Record<FigureStyleId, FigureStyle> = {
     curveInk: 'mono',
     curveWidth: 2,
     pointStyle: 'filled',
+    curveEnds: 'marked',
   },
+}
+
+// ============================================================================
+// Curve end caps — what a graph's ends say.
+//
+// A textbook or exam figure marks the ends of every drawn curve: an ARROW
+// where the graph continues beyond the board, a CLOSED dot where a restricted
+// graph ends and the endpoint belongs to it, an OPEN dot where it does not,
+// or nothing. Each end is chosen separately (a half-open interval has one of
+// each). 'auto' lets the figure style decide: exam/textbook styles draw an
+// arrow on an end that runs off the board and a closed dot on a domain end;
+// the screen style draws nothing, as today.
+//
+//   per curve:  CurveStyle.ends?: { start?: EndCap; end?: EndCap }  (persist.ts)
+//               "start" is the lower-x end (lower-t for parametric, lower-θ
+//               for polar), "end" the upper
+//   per figure: FigureStyle.curveEnds — the default an 'auto' end resolves to
+//   render:     src/render/curves.ts draws the cap at the last sample before
+//               the graph leaves the board (arrow along the tangent, pointing
+//               outward) or at the domain end (dots), in the curve's ink,
+//               sized in CSS px × present.stroke
+// ============================================================================
+
+export type EndCap = 'auto' | 'none' | 'arrow' | 'open' | 'closed'
+
+export interface CurveEnds {
+  start?: EndCap
+  end?: EndCap
 }

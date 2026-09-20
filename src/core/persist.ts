@@ -19,6 +19,7 @@ import type {
   FittedCurve,
   ModelSpec,
   NLItem,
+  CurveEnds,
   Vec2,
 } from './types'
 import { FIGURE_STYLES } from './types'
@@ -53,6 +54,8 @@ const SILENT_UPGRADE_FROM = 1
 export interface CurveStyle {
   dash?: number[]
   opacity?: number
+  /** End caps (arrow / open dot / closed dot) per end; absent = 'auto'. */
+  ends?: CurveEnds
   /** Number-line items only: bar thickness in px (curves use strokeWidth). */
   width?: number
   /**
