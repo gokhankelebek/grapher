@@ -497,3 +497,128 @@ export type ShapeOutcome =
       makeShape(id: string, params: number[], color: string): Shape
     }
   | { ok: false; error: string; pos?: number }
+
+// ============================================================================
+// Figure styles — the LOOK of the whole board, chosen to match where the
+// figure is going: the screen, a textbook-style worksheet, an SAT item, an
+// AP Calculus free-response figure.
+//
+// A style is a bundle the renderer reads in one place (BoardScene.figure); it
+// overrides the theme and decides how the grid, the axes, the labels and the
+// curve inks are drawn. The board on screen is drawn in the chosen style too,
+// so the export is exactly what the teacher is looking at.
+//
+//   'screen'   — today's board: dark/light theme, colour palette, auto ladder
+//   'textbook' — white, grey gridlines every unit with darker majors, black
+//                axes with arrowheads at all four ends, numbers on the majors,
+//                curves in the print palette (the GraphFree/worksheet look)
+//   'sat'      — white, light-grey gridlines every unit, black axes with
+//                arrowheads at all four ends, a number on EVERY unit tick on
+//                both axes, x and y at the arrow tips, every curve black
+//   'ap'       — white, NO gridlines: bare black axes with arrowheads at all
+//                four ends and short tick marks, numbers on the ticks, "O" at
+//                the origin, x and y at the tips, serif italic labels, every
+//                curve black (derived curves dashed), an optional caption
+//                such as "Graph of f" under the figure
+//
+//   render:  BoardScene.figure?: FigureStyle   (absent === FIGURE_STYLES.screen)
+//            BoardScene.caption?: string       (figure content: it exports)
+//   App:     board.figure persisted as the style id (omitted for 'screen');
+//            picker in Board & export settings with live thumbnails rendered
+//            through renderBoard itself
+// ============================================================================
+
+export type FigureStyleId = 'screen' | 'textbook' | 'sat' | 'ap'
+
+export interface FigureStyle {
+  id: FigureStyleId
+  name: string
+  /** Colours. For 'screen' the App substitutes the active dark/light theme. */
+  theme: Theme
+  /** Full gridlines, tick marks on the axes only, or bare axes. */
+  grid: 'lines' | 'ticks' | 'none'
+  /**
+   * Gridline / tick spacing: the zoom-aware ladder (pickTickStep), or a fixed
+   * one unit (majors every 5) as exam figures use. 'unit' falls back to the
+   * ladder when a unit would be narrower than ~12 px.
+   */
+  spacing: 'auto' | 'unit'
+  /** Which ticks carry a number: the ladder's majors, or every unit. */
+  numbers: 'major' | 'unit'
+  /** Arrowheads on all four axis ends, on the positive ends only, or none. */
+  arrows: 'four' | 'positive' | 'none'
+  /** Italic x and y at the arrow tips. */
+  axisNames: boolean
+  /** "O" beside the origin. */
+  originLabel: boolean
+  font: 'sans' | 'serif'
+  /** Curves in their own colours (print-mapped on a light ground) or all black. */
+  curveInk: 'palette' | 'mono'
+  /** Curve stroke width in CSS px before presentation scaling. */
+  curveWidth: number
+  /** Analysis / shape point markers: filled discs or rings. */
+  pointStyle: 'filled' | 'ring'
+}
+
+export const FIGURE_STYLES: Record<FigureStyleId, FigureStyle> = {
+  screen: {
+    id: 'screen',
+    name: 'Screen',
+    theme: DARK_THEME,
+    grid: 'lines',
+    spacing: 'auto',
+    numbers: 'major',
+    arrows: 'four',
+    axisNames: false,
+    originLabel: false,
+    font: 'sans',
+    curveInk: 'palette',
+    curveWidth: 2.5,
+    pointStyle: 'ring',
+  },
+  textbook: {
+    id: 'textbook',
+    name: 'Textbook',
+    theme: { bg: '#ffffff', gridMinor: '#c9cdd6', gridMajor: '#8d93a1', axis: '#000000', label: '#000000' },
+    grid: 'lines',
+    spacing: 'unit',
+    numbers: 'major',
+    arrows: 'four',
+    axisNames: false,
+    originLabel: false,
+    font: 'sans',
+    curveInk: 'palette',
+    curveWidth: 2,
+    pointStyle: 'filled',
+  },
+  sat: {
+    id: 'sat',
+    name: 'SAT',
+    theme: { bg: '#ffffff', gridMinor: '#d4d7de', gridMajor: '#d4d7de', axis: '#000000', label: '#000000' },
+    grid: 'lines',
+    spacing: 'unit',
+    numbers: 'unit',
+    arrows: 'four',
+    axisNames: true,
+    originLabel: false,
+    font: 'sans',
+    curveInk: 'mono',
+    curveWidth: 2,
+    pointStyle: 'filled',
+  },
+  ap: {
+    id: 'ap',
+    name: 'AP Calculus',
+    theme: { bg: '#ffffff', gridMinor: '#ffffff', gridMajor: '#ffffff', axis: '#000000', label: '#000000' },
+    grid: 'ticks',
+    spacing: 'unit',
+    numbers: 'unit',
+    arrows: 'four',
+    axisNames: true,
+    originLabel: true,
+    font: 'serif',
+    curveInk: 'mono',
+    curveWidth: 2,
+    pointStyle: 'filled',
+  },
+}
