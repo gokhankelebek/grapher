@@ -14,12 +14,14 @@
 import type {
   BoardKind,
   CurveKind,
+  FigureStyleId,
   FitResult,
   FittedCurve,
   ModelSpec,
   NLItem,
   Vec2,
 } from './types'
+import { FIGURE_STYLES } from './types'
 import { parseExpression } from './parse'
 import { parseSlopeField } from './parse/slopeField'
 import { parseShape } from './parse/shapes'
@@ -233,6 +235,47 @@ export type BoardGrid = 'cartesian' | 'polar'
 /** Anything but the word 'polar' is the square ruling, which is the default. */
 export function storedGrid(v: unknown): BoardGrid {
   return v === 'polar' ? 'polar' : 'cartesian'
+}
+
+// --- figure style -----------------------------------------------------------
+//
+// WHICH LOOK the board is drawn in — the screen, a textbook page, an SAT item,
+// an AP Calculus free-response figure (see FIGURE_STYLES in core/types.ts).
+//
+// Per document, beside the ruling and for the same reason: a figure built for
+// an AP handout is an AP figure on any machine, and the teacher who set it must
+// find it set tomorrow. Only the ID is stored — the style itself is code, so a
+// tuned gridline colour reaches every document ever saved rather than being
+// frozen into each of them.
+//
+// 'screen' is the default and what every document ever written meant, so such a
+// board writes no key at all and serialises byte-for-byte as it did before this
+// existed; an older reader drops a key it does not know and lands exactly on
+// the screen look.
+
+/** True for one of the four ids the renderer actually knows. */
+export function isFigureStyleId(v: unknown): v is FigureStyleId {
+  return typeof v === 'string' && Object.prototype.hasOwnProperty.call(FIGURE_STYLES, v)
+}
+
+/**
+ * Read a stored style id. Absent, unreadable, or a name this build does not
+ * have falls back to the screen look — a board drawn in a style nobody can
+ * render is not a board. The LOADER says so for a name it did not recognise
+ * (that is a lost instruction, not a default); absence is not a repair.
+ */
+export function storedFigureStyle(v: unknown): FigureStyleId {
+  return isFigureStyleId(v) ? v : 'screen'
+}
+
+/** A caption is one line under a figure, not a paragraph. */
+export const MAX_CAPTION_CHARS = 120
+
+/** Read a stored caption. Anything that is not text means no caption. */
+export function storedCaption(v: unknown): string {
+  if (typeof v !== 'string') return ''
+  const t = v.slice(0, MAX_CAPTION_CHARS)
+  return t.trim() === '' ? '' : t
 }
 
 /** Rectangle counts a board offers. 200 is also where the slider stops. */
@@ -458,6 +501,21 @@ export interface StoredBoard {
    * reader drops a key it does not know and lands exactly on 'cartesian'.
    */
   grid?: BoardGrid
+  /**
+   * The figure style's ID: 'textbook', 'sat', 'ap'.
+   *
+   * Written ONLY when it is not the screen look, which is the default and what
+   * every document ever written meant — so a board nobody has restyled writes
+   * no key and serialises byte-for-byte as it did before this existed.
+   */
+  figure?: FigureStyleId
+  /**
+   * The line printed under the figure — "Graph of f" on an AP-style figure.
+   *
+   * Content, not chrome: it is part of what the teacher wrote, so it belongs to
+   * the document. Written only when there is one, by the same rule.
+   */
+  caption?: string
 }
 
 /**
@@ -586,6 +644,10 @@ export interface BoardInput {
   shapes?: readonly BoardShape[]
   /** The ruling. Absent means 'cartesian', which writes nothing at all. */
   grid?: BoardGrid
+  /** The figure style. Absent means 'screen', which writes nothing at all. */
+  figure?: FigureStyleId
+  /** The caption under the figure. Absent or blank writes nothing at all. */
+  caption?: string
   viewport: { center: Vec2; pxPerUnit: number }
   selectedId: string | null
   mode: BoardMode
@@ -629,6 +691,10 @@ export interface HydratedBoard {
   shapes: BoardShape[]
   /** The ruling this document states. 'cartesian' when it is silent. */
   grid: BoardGrid
+  /** The figure style this document states. 'screen' when it is silent. */
+  figure: FigureStyleId
+  /** The caption under the figure. '' when there is none. */
+  caption: string
   viewport: { center: Vec2; pxPerUnit: number }
   selectedId: string | null
   mode: BoardMode
@@ -786,6 +852,12 @@ export function boardToStored(input: BoardInput): StoredBoard {
   // The ruling, only when it is not the square one every document has always
   // been drawn on.
   if (input.grid === 'polar') board.grid = 'polar'
+
+  // And the look, only when it is not the screen one every document has always
+  // been drawn in — with its caption, only when there is one to print.
+  if (isFigureStyleId(input.figure) && input.figure !== 'screen') board.figure = input.figure
+  const caption = storedCaption(input.caption)
+  if (caption !== '') board.caption = caption
 
   return board
 }
@@ -1558,6 +1630,21 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
   // ---- the ruling. Unreadable or absent is not a repair: it is the default.
   const grid = storedGrid(rawBoard.grid)
 
+  // ---- the figure style. Absence is the default and says nothing. A NAMED
+  // style this build does not have is different: the document asked for a look
+  // and did not get it, and a figure that silently came back in the wrong one
+  // would be pasted into a worksheet before anybody noticed.
+  const figure = storedFigureStyle(rawBoard.figure)
+  if (rawBoard.figure !== undefined && !isFigureStyleId(rawBoard.figure)) {
+    problems.push(
+      isStr(rawBoard.figure)
+        ? `This board asked for the “${rawBoard.figure}” figure style, which this version doesn’t have; it was drawn in the screen style.`
+        : 'This board’s figure style was unreadable; it was drawn in the screen style.',
+    )
+    degraded = true
+  }
+  const caption = storedCaption(rawBoard.caption)
+
   // ---- axis units. Unreadable or absent is not a repair: it is the default.
   const rawAxis = isObj(rawBoard.axisUnits) ? rawBoard.axisUnits : {}
   const axisUnits: AxisUnitChoices = {
@@ -1594,6 +1681,8 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
       fields,
       shapes,
       grid,
+      figure,
+      caption,
       viewport,
       selectedId,
       mode,
@@ -1621,6 +1710,8 @@ function blankHydrated(): HydratedBoard {
     fields: [],
     shapes: [],
     grid: 'cartesian',
+    figure: 'screen',
+    caption: '',
     viewport: { center: { x: 0, y: 0 }, pxPerUnit: 60 },
     selectedId: null,
     mode: 'draw',

@@ -18,7 +18,7 @@ import type {
   Viewport,
 } from '../core/types'
 import { toMath, toScreen } from '../core/types'
-import type { Theme } from '../core/types'
+import type { FigureStyle, Theme } from '../core/types'
 import { processStroke } from '../core/stroke'
 import { recognize } from '../core/fit/recognize'
 import {
@@ -138,6 +138,18 @@ interface Props {
    * because the export builds the same scene.
    */
   grid?: BoardGrid | null
+  /**
+   * The LOOK the board is drawn in — the screen, a textbook page, an SAT item,
+   * an AP figure. Absent (the screen look) means the scene carries no `figure`
+   * at all and this stage draws exactly the command stream it always drew,
+   * theme toggle included.
+   *
+   * Threaded exactly like `grid` and for the same reason: the export builds the
+   * same scene, so what is on the board IS what goes on the paper.
+   */
+  figure?: FigureStyle | null
+  /** The line printed under the figure. FIGURE, not chrome: it exports. */
+  caption?: string | null
   /**
    * Extra grabbable points for the selected object, owned by the App. Drawn as
    * handles; their drags go to `onDrag` instead of applyHandleDrag.
@@ -438,6 +450,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     polylines,
     shapes,
     grid,
+    figure,
+    caption,
     extraHandles,
     pointPick,
   },
@@ -469,6 +483,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   const polylinesRef = useRef<readonly Polyline[] | null | undefined>(polylines)
   const shapesRef = useRef<readonly Shape[] | null | undefined>(shapes)
   const gridRef = useRef<BoardGrid | null | undefined>(grid)
+  const figureRef = useRef<FigureStyle | null | undefined>(figure)
+  const captionRef = useRef<string | null | undefined>(caption)
   const extraHandlesRef = useRef<readonly ExtraHandle[]>(extraHandles ?? [])
   const pointPickRef = useRef<Props['pointPick']>(pointPick)
 
@@ -623,6 +639,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       polylines: polylinesRef.current ?? undefined,
       shapes: shapesRef.current ?? undefined,
       grid: gridRef.current ?? undefined,
+      figure: figureRef.current ?? undefined,
+      caption: captionRef.current ?? undefined,
       analysis:
         sel && !busy && analysisRef.current.length > 0
           ? { curve: sel, points: analysisRef.current }
@@ -698,6 +716,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     polylinesRef.current = polylines
     shapesRef.current = shapes
     gridRef.current = grid
+    figureRef.current = figure
+    captionRef.current = caption
     extraHandlesRef.current = extraHandles ?? []
     pointPickRef.current = pointPick
     hitRef.current = hitRadii(coarseRef.current, present)
@@ -716,6 +736,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     polylines,
     shapes,
     grid,
+    figure,
+    caption,
     extraHandles,
     pointPick,
     selectedId,

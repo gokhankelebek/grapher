@@ -69,13 +69,15 @@ import {
 } from './ui/shapeLinks'
 import type { BoardShape, CompiledShape, ShapeCardData } from './ui/shapeLinks'
 import { POLAR_OFFER, suggestPolarRuling } from './ui/boardGrid'
+import { DEFAULT_CAPTION, figureFor, figureTheme } from './ui/figureStyle'
 import { snapPlaced } from './ui/snap'
 import { curveBounds, splitNotice, unionBoxes } from './ui/curveState'
 import { answerPieces } from './ui/nlText'
 import { AnswerContext } from './ui/answerContext'
 import { AnalysisOverlay, drawContextMarkers } from './ui/AnalysisOverlay'
 import type { AnalysisOverlayHandle } from './ui/AnalysisOverlay'
-import type { FeatureEditResult, SpecialPoint } from './core/types'
+import type { FeatureEditResult, FigureStyleId, SpecialPoint } from './core/types'
+import { FIGURE_STYLES } from './core/types'
 import { describePoints } from './ui/featureEdit'
 import { readCurveEquation } from './ui/equationText'
 import { CanvasStage } from './ui/CanvasStage'
@@ -91,6 +93,7 @@ import { ExportMenu } from './ui/ExportMenu'
 import type { CopyState } from './ui/ExportMenu'
 import {
   canvasToPngBlob,
+  captionHeight,
   exportGeometry,
   exportTheme,
   renderBoardToCanvas,
@@ -203,6 +206,18 @@ interface Snapshot {
    * curve it was measured against has to come back with it, in one undo.
    */
   shapes: BoardShape[]
+  /**
+   * The LOOK the board is in, and the line printed under the figure.
+   *
+   * Unlike the ruling and the axis units — which are ways of MEASURING a board
+   * and stay out of the history — a style change repaints every pixel of the
+   * figure and a caption is words the teacher wrote. Both are therefore one
+   * undo each, named after what they did ("figure style: SAT"), because the
+   * largest visible change on the board must not be the one thing Cmd+Z will
+   * not take back.
+   */
+  figure: FigureStyleId
+  caption: string
   candidates: Map<string, FitResult[]>
   /**
    * What the action was, in three or four words: "set zero", "edit equation",
@@ -240,12 +255,17 @@ interface StatePatch {
   calc?: CalcLink[]
   fields?: BoardField[]
   shapes?: BoardShape[]
+  figure?: FigureStyleId
+  caption?: string
   candidates?: Map<string, FitResult[]>
 }
 
 const MIN_PPU = 0.001
 const MAX_PPU = 100000
 const HISTORY_LIMIT = 100
+
+/** The undo label a run of caption typing folds into. */
+const CAPTION_LABEL = 'figure caption'
 
 const clampPpu = (v: number): number => Math.min(MAX_PPU, Math.max(MIN_PPU, v))
 
@@ -303,6 +323,22 @@ export default function App() {
    * the board, not a thing on it.
    */
   const [boardGrid, setBoardGrid] = useState<BoardGrid>('cartesian')
+  /**
+   * WHICH LOOK this board is drawn in — the screen, a textbook page, an SAT
+   * item, an AP Calculus figure (FIGURE_STYLES in core/types.ts).
+   *
+   * A property of the DOCUMENT, like the ruling: a figure built for an AP
+   * handout is an AP figure tomorrow. Unlike the ruling it IS in the undo
+   * history — see Snapshot — because it is the largest single change anything
+   * on this board can make to what is drawn.
+   *
+   * 'screen' is the absence of a style: the scene then carries no `figure` at
+   * all and the renderer takes the path it has always taken, theme toggle and
+   * curve colours included.
+   */
+  const [figureStyle, setFigureStyle] = useState<FigureStyleId>('screen')
+  /** The line printed under the figure. '' means none. */
+  const [figureCaption, setFigureCaption] = useState<string>('')
   const [snapFlash, setSnapFlash] = useState<{ id: string; mask: boolean[]; key: number } | null>(
     null,
   )
@@ -434,6 +470,10 @@ export default function App() {
   const shapesRef = useRef<BoardShape[]>([])
   const boardGridRef = useRef<BoardGrid>('cartesian')
   boardGridRef.current = boardGrid
+  const figureStyleRef = useRef<FigureStyleId>('screen')
+  figureStyleRef.current = figureStyle
+  const figureCaptionRef = useRef<string>('')
+  figureCaptionRef.current = figureCaption
   /**
    * True once this document has been offered the polar ruling, so a board with
    * three roses on it asks once rather than three times. Reset by a load: the
@@ -671,6 +711,8 @@ export default function App() {
       calc: calcRef.current,
       fields: fieldsRef.current,
       shapes: shapesRef.current,
+      figure: figureStyleRef.current,
+      caption: figureCaptionRef.current,
       candidates: candidatesRef.current,
       label,
     }),
@@ -721,6 +763,16 @@ export default function App() {
     if (s.shapes) {
       shapesRef.current = s.shapes
       setShapes(s.shapes)
+    }
+    // Compared against undefined, not truthiness: '' is a caption a teacher
+    // deliberately cleared, and an undo has to be able to bring it back.
+    if (s.figure !== undefined) {
+      figureStyleRef.current = s.figure
+      setFigureStyle(s.figure)
+    }
+    if (s.caption !== undefined) {
+      figureCaptionRef.current = s.caption
+      setFigureCaption(s.caption)
     }
     // Replaced wholesale, never mutated in place, so snapshots stay immutable.
     if (s.candidates) candidatesRef.current = s.candidates
@@ -935,6 +987,8 @@ export default function App() {
       fields: [],
       shapes: [],
       grid: 'cartesian',
+      figure: 'screen',
+      caption: '',
       viewport: { center: { x: 0, y: 0 }, pxPerUnit: 60 },
       selectedId: null,
       mode: 'draw',
@@ -959,6 +1013,8 @@ export default function App() {
       fields: fieldsRef.current,
       shapes: shapesRef.current,
       grid: boardGridRef.current,
+      figure: figureStyleRef.current,
+      caption: figureCaptionRef.current,
       viewport: { center: vpRef.current.center, pxPerUnit: vpRef.current.pxPerUnit },
       selectedId: selectedRef.current,
       mode: MODE,
@@ -1067,6 +1123,8 @@ export default function App() {
     // And the shapes: the lines come back, every vertex is evaluated again.
     shapesRef.current = board.shapes
     boardGridRef.current = board.grid
+    figureStyleRef.current = board.figure
+    figureCaptionRef.current = board.caption
     polarOfferedRef.current = false
     calcSigRef.current = new Map()
     calcDomainRef.current = new Map()
@@ -1094,6 +1152,8 @@ export default function App() {
     setFields(board.fields)
     setShapes(board.shapes)
     setBoardGrid(board.grid)
+    setFigureStyle(board.figure)
+    setFigureCaption(board.caption)
     setArmedField(null)
     setEdits({})
     setExtraModels(board.extraModels)
@@ -1203,6 +1263,11 @@ export default function App() {
     shapes,
     // And the ruling, which is a property of the document like the units.
     boardGrid,
+    // And the look the figure is in, with its caption: both are the document's
+    // and neither touches a curve, so without this a board restyled for an AP
+    // handout would come back tomorrow as a screen board.
+    figureStyle,
+    figureCaption,
     selectedId,
     docMeta.name,
     scheduleSave,
@@ -3762,7 +3827,24 @@ export default function App() {
 
   const copyTimerRef = useRef(0)
 
-  const boardTheme = canvasTheme === 'light' ? LIGHT_THEME : DARK_THEME
+  /**
+   * The ground the SCREEN board is drawn on.
+   *
+   * A figure style owns it: an SAT board is white while it is being worked on,
+   * not only in the PNG, because the whole point of choosing the look is that
+   * the board IS the export. The theme toggle keeps its meaning underneath and
+   * takes over again the moment the board goes back to Screen.
+   */
+  const screenTheme = canvasTheme === 'light' ? LIGHT_THEME : DARK_THEME
+  const boardFigure = kind === 'cartesian' ? figureFor(figureStyle) : undefined
+  const boardCaption = kind === 'cartesian' ? figureCaption : ''
+  const boardTheme = kind === 'cartesian' ? figureTheme(figureStyle, screenTheme) : screenTheme
+  /**
+   * Whether the toolbar has to read against a LIGHT canvas. A figure style puts
+   * the board on white whatever the theme toggle says, and the chrome around it
+   * has to follow or it is grey-on-grey.
+   */
+  const lightBoard = canvasTheme === 'light' || boardFigure !== undefined
 
   /**
    * The box every visible thing on the board occupies, in math coords — the
@@ -3785,6 +3867,10 @@ export default function App() {
     (settings: FitExportSettings): BoardScene => {
     const vp = vpRef.current
     const sel = curvesRef.current.find((c) => c.id === selectedRef.current) ?? null
+    // A number-line board has no figure style: the styles are described in
+    // grids, axes and ticks, and the picker is not offered on one.
+    const figure = kindRef.current === 'cartesian' ? figureFor(figureStyleRef.current) : undefined
+    const caption = kindRef.current === 'cartesian' ? figureCaptionRef.current : ''
     return {
       // Not the window — the FIGURE. A number line exported as the window was
       // a 40px strip in a 2206x1826 image; a graph was whatever happened to be
@@ -3795,8 +3881,15 @@ export default function App() {
         settings.fit ? exportContent() : null,
         kindRef.current,
         itemsRef.current,
+        // A caption is drawn inside this rect, so a frame fitted to the curves
+        // has to be told to leave room for it.
+        caption !== '' ? captionHeight() : 0,
       ),
-      theme: exportTheme(settings, DARK_THEME),
+      // A figure style owns the ground; the Background control is disabled and
+      // says so while one is on. Without a style this is exactly what it was.
+      theme: figure
+        ? figure.theme
+        : exportTheme(settings, DARK_THEME),
       kind: kindRef.current,
       items: itemsRef.current,
       curves: curvesRef.current,
@@ -3813,7 +3906,7 @@ export default function App() {
       // The screen palette is tuned against near-black and washes out on white
       // (amber lands near 1.7:1 — a copier renders it as nothing), so a light
       // export swaps every curve for its print counterpart.
-      printColors: settings.theme === 'light',
+      printColors: figure ? true : settings.theme === 'light',
       // The PNG is measured the way the screen is. This is the whole point of
       // there being one scene type: a π axis a teacher set for a trig lesson
       // has to be π in the file they paste into the worksheet.
@@ -3836,6 +3929,12 @@ export default function App() {
       // And on the ruling the screen is on: a polar board exported on squares
       // would be a different picture of the same curve.
       grid: boardGridRef.current,
+      // The LOOK, and the line printed under the figure. Both are the
+      // document's, both are what is already on screen, and both go through
+      // the one scene so the PNG cannot be in a different style from the board
+      // the teacher is looking at.
+      ...(figure ? { figure } : {}),
+      ...(caption !== '' ? { caption } : {}),
       chrome: null,
     }
     },
@@ -4080,6 +4179,56 @@ export default function App() {
   }, [])
 
   /**
+   * Put the board in a figure style.
+   *
+   * ONE undo entry, named after the style — unlike the ruling, which stays out
+   * of the history because it is a way of MEASURING the board. A style repaints
+   * the whole figure, and the change a teacher is most likely to want back is
+   * the one they made by clicking a picture they had not seen full size yet.
+   *
+   * The caption rides in the SAME entry: a style that arrives with "Graph of f"
+   * and an undo that left the caption behind would be two half-changes.
+   */
+  const chooseFigureStyle = useCallback(
+    (next: FigureStyleId): void => {
+      if (figureStyleRef.current === next) return
+      // The default caption is a starting point, offered only to a board that
+      // has none. A teacher who cleared it, or wrote their own, keeps it: this
+      // control is choosing a LOOK, not overwriting words.
+      const caption =
+        figureCaptionRef.current === '' ? DEFAULT_CAPTION[next] : figureCaptionRef.current
+      commitState(
+        { figure: next, caption },
+        `figure style: ${FIGURE_STYLES[next].name}`,
+      )
+    },
+    [commitState],
+  )
+
+  /**
+   * The caption, as it is typed.
+   *
+   * One undo entry per RUN of typing rather than per keystroke: consecutive
+   * caption edits fold into the entry already on top of the stack, and anything
+   * else the teacher does closes the run. Undo then takes back "the caption I
+   * just wrote", which is the unit anybody means.
+   */
+  const setCaption = useCallback(
+    (next: string): void => {
+      if (figureCaptionRef.current === next) return
+      const top = undoRef.current[undoRef.current.length - 1]
+      if (top?.label === CAPTION_LABEL) {
+        redoRef.current = []
+        figureCaptionRef.current = next
+        setFigureCaption(next)
+        return
+      }
+      commitState({ caption: next }, CAPTION_LABEL)
+    },
+    [commitState],
+  )
+
+  /**
    * A polar curve has just landed on a square board. OFFER the polar ruling.
    *
    * Deliberately not the axis-units mechanism, which re-rules the board by
@@ -4319,7 +4468,7 @@ export default function App() {
 
   return (
     <div
-      className={`app${canvasTheme === 'light' ? ' canvas-light' : ''}${
+      className={`app${lightBoard ? ' canvas-light' : ''}${
         presentMode ? ' present-mode' : ''
       }`}
       data-present={presentMode ? 'on' : 'off'}
@@ -4476,6 +4625,8 @@ export default function App() {
           polylines={fieldPolylines}
           shapes={shapeScene}
           grid={boardGrid}
+          figure={boardFigure}
+          caption={boardCaption}
           extraHandles={extraHandles}
           pointPick={pointPick}
         />
@@ -4566,6 +4717,11 @@ export default function App() {
                 onAxisUnit={setAxisUnit}
                 grid={kind === 'cartesian' ? boardGrid : null}
                 onGrid={setRuling}
+                figure={kind === 'cartesian' ? figureStyle : null}
+                screenTheme={screenTheme}
+                caption={figureCaption}
+                onFigure={chooseFigureStyle}
+                onCaption={setCaption}
               />
             </>
           }

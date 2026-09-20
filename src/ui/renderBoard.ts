@@ -25,6 +25,8 @@
 import type {
   BoardKind,
   CurveHandle,
+  FigureStyle,
+  FigureStyleId,
   FittedCurve,
   ModelSpec,
   NLItem,
@@ -33,10 +35,11 @@ import type {
   Vec2,
   Viewport,
 } from '../core/types'
-import { LIGHT_THEME, toPrintColor, toScreen } from '../core/types'
+import { FIGURE_STYLES, LIGHT_THEME, toPrintColor, toScreen } from '../core/types'
 import type { StyleMap } from '../core/persist'
 import type { AxisUnit, AxisUnits, PaintScale } from '../render/grid'
-import { drawGrid, paintScale } from '../render/grid'
+import { SCREEN_GRID, drawGrid, labelFont as figureFont, paintScale } from '../render/grid'
+import type { GridStyle } from '../render/grid'
 import { drawPolarGrid } from '../render/polarGrid'
 import { drawCurve, drawInk } from '../render/curves'
 import type { Overlay } from '../render/overlays'
@@ -82,6 +85,14 @@ const MAX_LABELS = 8
 const MIN_LABEL_GAP = 28
 /** Label text on a dark ground; on a light one the theme's own label colour. */
 const DARK_TEXT = '#e6eaf5'
+/**
+ * Shaded fills under mono ink.
+ *
+ * 0.12 of black is ~#e3e3e3: dark enough to read as shading at a glance, light
+ * enough that a black curve, a black Riemann outline and a tick number all
+ * survive on top of it — and light enough to photocopy without going solid.
+ */
+export const MONO_FILL_ALPHA = 0.12
 
 // ---------------------------------------------------------------------------
 // Scene
@@ -239,12 +250,44 @@ export interface BoardScene {
    * Cartesian only; a number-line board ignores it.
    */
   shapes?: readonly Shape[]
+  /**
+   * The LOOK of the whole board: the screen, a textbook worksheet, an SAT
+   * item, an AP free-response figure. See FigureStyle in core/types.
+   *
+   * Absent is exactly `FIGURE_STYLES.screen` with the scene's own theme, and
+   * it is absent-by-default on purpose: a scene that never mentions this field
+   * draws the identical command stream it drew before the field existed
+   * (tests/figureStyles.test.ts asserts that byte for byte). An explicit
+   * 'screen' means the same thing — the App substitutes the live dark/light
+   * theme there, so the style's own theme is not consulted for it.
+   *
+   * Any other style REPLACES the scene theme everywhere below this line: the
+   * grid, the tick and chip labels, the ground ring on a point, the halos.
+   */
+  figure?: FigureStyle
+  /**
+   * A line of text under the figure — "Graph of f", the caption an AP
+   * free-response figure carries.
+   *
+   * It is FIGURE, not chrome: it is drawn with `chrome: null` too, so it
+   * reaches the exported PNG. It is laid out INSIDE the viewport rect, which
+   * is the rect the export clips to; a caller that crops to content has to
+   * leave room for it (see captionHeight).
+   */
+  caption?: string
   /** Editing chrome. Null = the figure alone. */
   chrome?: BoardChrome | null
 }
 
 /** Re-exported so the App can name the field's type without reaching into render/. */
 export type { AxisUnit, AxisUnits }
+/**
+ * The figure-style contract, re-exported from the one place it is defined, so
+ * the App can name it (picker, persistence, thumbnails) without importing two
+ * modules to describe one scene.
+ */
+export type { FigureStyle, FigureStyleId }
+export { FIGURE_STYLES }
 export type { Overlay, OverlayRect } from '../render/overlays'
 export type { Polyline, SlopeField } from '../render/fields'
 export type { Shape } from '../render/shapes'
@@ -349,7 +392,17 @@ function roundRect(
  * Handles (drawHandles) use a disjoint set of shapes. Sizes scale with the
  * presentation stroke scale so the label layout can reserve the right room.
  */
-function markerRadius(p: SpecialPoint, s: number, grow = 0): number {
+/**
+ * The exam figure's marker: one filled disc, whatever the feature is.
+ *
+ * On paper a hollow ring, a diamond and a faint dot are three glyphs a reader
+ * has to be taught; a printed figure states the point and lets the caption say
+ * what it is. ~3.5 x the stroke is the College Board dot.
+ */
+export const FILLED_POINT_R = 3.5
+
+function markerRadius(p: SpecialPoint, s: number, grow = 0, filled = false): number {
+  if (filled) return (FILLED_POINT_R + grow) * s
   switch (p.kind) {
     case 'zero':
       return (4 + grow) * s
@@ -374,8 +427,18 @@ function drawMarker(
   bg: string,
   grow: number,
   s = 1,
+  filled = false,
 ): void {
-  const r = markerRadius(p, s, grow)
+  const r = markerRadius(p, s, grow, filled)
+  if (filled) {
+    // No ground rim: an exam figure's dot sits ON the curve and is meant to.
+    ctx.globalAlpha = 1
+    ctx.beginPath()
+    ctx.arc(sx, sy, r, 0, TWO_PI)
+    ctx.fillStyle = color
+    ctx.fill()
+    return
+  }
   const ring = (lw: number): void => {
     ctx.beginPath()
     ctx.arc(sx, sy, r, 0, TWO_PI)
@@ -526,6 +589,17 @@ interface AnalysisOpts {
   /** Presentation scale; see BoardScene.present. */
   scale?: PaintScale | null
   /**
+   * Marker vocabulary: the screen's rings/diamonds/dots, or the printed
+   * figure's one filled disc. Absent means 'ring', which is the screen.
+   */
+  pointStyle?: 'filled' | 'ring' | null
+  /**
+   * The figure's label face. Absent keeps the mono face these chips have
+   * always used (digits line up column-wise between labels); 'serif' is the
+   * exam figure, where one face has to carry every label on the board.
+   */
+  font?: 'sans' | 'serif' | null
+  /**
    * df/dx in math units, when the family can supply it. Only used to choose
    * which side of the curve a label sits on.
    */
@@ -576,6 +650,7 @@ export function drawAnalysis(
   if (shown.length === 0) return
 
   const bg = o.theme.bg
+  const filled = o.pointStyle === 'filled'
   const emph = (i: number): boolean => i === o.highlight || i === o.openIdx
 
   for (const m of shown) {
@@ -585,7 +660,7 @@ export function drawAnalysis(
       drawMarkerHalo(ctx, m.sx, m.sy, o.color, m.i === o.openIdx, stroke)
     }
     const grow = emphasised ? 2.5 : o.halos && m.i === o.hoverIdx ? 1.2 : 0
-    drawMarker(ctx, m.p, m.sx, m.sy, o.color, bg, grow, stroke)
+    drawMarker(ctx, m.p, m.sx, m.sy, o.color, bg, grow, stroke, filled)
   }
 
   // --- labels: the same crowding budget, spent on the points a class reads
@@ -594,7 +669,7 @@ export function drawAnalysis(
   const fpx = LABEL_PX * type
   const gap = MIN_LABEL_GAP * type
   const h = 16 * type
-  ctx.font = labelFont(fpx)
+  ctx.font = o.font ? figureFont({ font: o.font }, fpx) : labelFont(fpx)
   ctx.textBaseline = 'middle'
   const placed: LabelBox[] = []
   const anchors: number[] = []
@@ -617,7 +692,7 @@ export function drawAnalysis(
     // marker: step off from the handle's radius so the plate clears it too.
     const mr = m.masked
       ? 7 * stroke
-      : markerRadius(m.p, stroke, emph(m.i) ? 2.5 : 0)
+      : markerRadius(m.p, stroke, emph(m.i) ? 2.5 : 0, filled)
     const n = labelNormal(m.p, o.slopeAt)
     const box = placeLabel(vp, m.sx, m.sy, w, h, mr, n, type, placed, o.screenY ?? null)
     if (!box) continue
@@ -873,6 +948,154 @@ function explicitScreenY(
 }
 
 // ---------------------------------------------------------------------------
+// Figure styles
+// ---------------------------------------------------------------------------
+
+/**
+ * The style this scene is actually drawn in, or null for "the screen".
+ *
+ * Absent and 'screen' are the SAME answer: the contract says an absent figure
+ * is FIGURE_STYLES.screen with the scene's own theme, so an explicit 'screen'
+ * must not start overriding the theme, the curve width or the ink — it has to
+ * leave the command stream exactly where it found it.
+ */
+function figureOf(scene: BoardScene): FigureStyle | null {
+  const f = scene.figure
+  return f && f.id !== 'screen' ? f : null
+}
+
+/** The caption's type size and the paper below it, before `present.type`. */
+export const CAPTION_PX = 14
+export const CAPTION_MARGIN = 10
+
+/**
+ * Room a caption needs at the BOTTOM of the plot rect, in CSS px.
+ *
+ * Exported for whoever frames the figure: the caption is drawn inside the
+ * viewport (that is the rect the export clips to), so a viewport fitted tightly
+ * to the content has to be given this much extra height or the caption lands on
+ * the curve.
+ */
+export function captionHeight(present?: PaintScale | null): number {
+  return (CAPTION_PX + 2 * CAPTION_MARGIN) * paintScale(present).type
+}
+
+/**
+ * The caption: centred under the figure, in the figure's own face, italic for
+ * the AP look. FIGURE, not chrome — it is drawn with `chrome: null` too, which
+ * is the whole point of having it in this routine rather than in the App.
+ */
+function drawCaption(
+  ctx: CanvasRenderingContext2D,
+  scene: BoardScene,
+  theme: Theme,
+  fig: FigureStyle | null,
+  type: number,
+): void {
+  const text = typeof scene.caption === 'string' ? scene.caption.trim() : ''
+  if (!text) return
+  const vp = scene.vp
+  if (vp.widthPx <= 0 || vp.heightPx <= 0) return
+  const px = CAPTION_PX * type
+  ctx.save()
+  ctx.globalAlpha = 1
+  ctx.font = figureFont(fig, px, fig?.font === 'serif')
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'alphabetic'
+  const cx = vp.widthPx / 2
+  const baseline = vp.heightPx - CAPTION_MARGIN * type
+  // A knockout in the ground, no border: the caption is laid out INSIDE the
+  // plot rect (that is the rect the export clips to), and the y-axis runs
+  // straight down the middle of it — measured, the axis and its bottom
+  // arrowhead struck through "Graph of f". On white the plate is invisible;
+  // what it buys is that no rule ever crosses the words.
+  const w = ctx.measureText(text).width + 10 * type
+  const h = px * 1.5
+  ctx.fillStyle = theme.bg
+  ctx.fillRect(cx - w / 2, baseline + 0.25 * px - h, w, h)
+  ctx.fillStyle = textColor(theme)
+  ctx.fillText(text, cx, baseline)
+  ctx.restore()
+  ctx.textAlign = 'start'
+  ctx.textBaseline = 'alphabetic'
+}
+
+/**
+ * Where a curve with a restricted domain STOPS, and whether that end is part
+ * of the graph.
+ *
+ * `closed` is always true today because FittedCurve.domain is a closed
+ * interval — there is nowhere in the contract to say "open at this end" — but
+ * the flag is what the exam convention is about (filled = included, hollow =
+ * excluded), so it is stated rather than assumed, and the day a piecewise
+ * definition carries inclusivity this function is the only thing that changes.
+ */
+export function domainEnds(
+  curve: FittedCurve,
+  models: Record<string, ModelSpec>,
+): { at: Vec2; closed: boolean }[] {
+  const d = curve.domain
+  if (!d || !Number.isFinite(d[0]) || !Number.isFinite(d[1]) || !(d[1] > d[0])) return []
+  const model = models[curve.modelId]
+  if (!model) return []
+  const at = (t: number): Vec2 | null => {
+    try {
+      if (curve.kind === 'explicit' && model.evalExplicit) {
+        const y = model.evalExplicit(curve.params, t)
+        return Number.isFinite(y) ? { x: t, y } : null
+      }
+      if (curve.kind === 'parametric' && model.evalParametric) {
+        const v = model.evalParametric(curve.params, t)
+        return v && Number.isFinite(v.x) && Number.isFinite(v.y) ? { x: v.x, y: v.y } : null
+      }
+      if (curve.kind === 'polar' && model.evalPolar) {
+        const r = model.evalPolar(curve.params, t)
+        return Number.isFinite(r) ? { x: r * Math.cos(t), y: r * Math.sin(t) } : null
+      }
+    } catch {
+      return null
+    }
+    return null
+  }
+  const out: { at: Vec2; closed: boolean }[] = []
+  for (const t of d) {
+    const p = at(t)
+    if (p) out.push({ at: p, closed: true })
+  }
+  return out
+}
+
+/** Filled (included) or hollow (excluded) end dot, in the curve's own ink. */
+function drawEndPoint(
+  ctx: CanvasRenderingContext2D,
+  vp: Viewport,
+  p: { at: Vec2; closed: boolean },
+  color: string,
+  bg: string,
+  stroke: number,
+): void {
+  const sp = toScreen(p.at, vp)
+  if (!Number.isFinite(sp.x) || !Number.isFinite(sp.y)) return
+  if (sp.x < -20 || sp.y < -20 || sp.x > vp.widthPx + 20 || sp.y > vp.heightPx + 20) return
+  const r = FILLED_POINT_R * stroke
+  ctx.save()
+  ctx.globalAlpha = 1
+  ctx.beginPath()
+  ctx.arc(sp.x, sp.y, r, 0, TWO_PI)
+  if (p.closed) {
+    ctx.fillStyle = color
+    ctx.fill()
+  } else {
+    ctx.fillStyle = bg
+    ctx.fill()
+    ctx.lineWidth = 1.6 * stroke
+    ctx.strokeStyle = color
+    ctx.stroke()
+  }
+  ctx.restore()
+}
+
+// ---------------------------------------------------------------------------
 // The one render routine
 // ---------------------------------------------------------------------------
 
@@ -885,9 +1108,15 @@ function explicitScreenY(
  * dominant wherever the two coincide.
  */
 export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): void {
-  const { vp, theme, models } = scene
+  const { vp, models } = scene
   const chrome = scene.chrome ?? null
   const scale = paintScale(scene.present)
+
+  // The style is chosen ONCE, here, and everything below reads it: there is no
+  // second place that decides what a figure looks like, the same way there is
+  // no second place that decides what a figure CONTAINS.
+  const fig = figureOf(scene)
+  const theme = fig ? fig.theme : scene.theme
 
   // The palette follows the GROUND, not the export flag.
   //
@@ -902,6 +1131,27 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
   const print = scene.printColors === true || lightGround
   const paint = (c: string): string => (print ? toPrintColor(c) : c)
 
+  // Mono ink: one black for every curve, polyline, field, shape and overlay
+  // outline. A printed figure is photocopied, faxed and scanned to grey; the
+  // colour that separates two curves on screen separates nothing on paper, so
+  // what distinguishes them there is dash, width and label — which all survive.
+  //
+  // CHROME keeps its colours: handles and in-progress ink are the teacher's
+  // editing vocabulary, they never reach the export, and a black handle on a
+  // black curve would be unusable.
+  // A caption reserves a band at the bottom of the plot, and the grid's labels
+  // keep out of it: the caption is centred, which is where the y axis and its
+  // numbers live. Without a caption there is no band and no style object, so
+  // the grid call is the one it has always been.
+  const captioned = typeof scene.caption === 'string' && scene.caption.trim() !== ''
+  const gridStyle: GridStyle | null = captioned
+    ? { ...(fig ?? SCREEN_GRID), bottomInset: captionHeight(scene.present) }
+    : fig
+  const mono = fig?.curveInk === 'mono'
+  const ink = mono ? (): string => theme.axis : paint
+  /** Shaded fills under mono ink: a grey wash light enough to copy. */
+  const washAlpha = mono ? MONO_FILL_ALPHA : null
+
   ctx.fillStyle = theme.bg
   ctx.fillRect(0, 0, Math.max(0, vp.widthPx), Math.max(0, vp.heightPx))
 
@@ -909,15 +1159,17 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
   // no grid, no y axis, no models. It goes through this same routine — and so
   // through the same export — precisely so it can never grow a second path.
   if (scene.kind === 'number-line') {
-    renderNumberLine(ctx, scene, chrome, paint, scale)
+    renderNumberLine(ctx, scene, theme, chrome, paint, scale)
+    drawCaption(ctx, scene, theme, fig, scale.type)
     return
   }
 
   // The ruling is the board's, not the curve's: one dispatch, one grid, and
   // the export takes whichever one the screen took because it is the same call.
   try {
-    if (scene.grid === 'polar') drawPolarGrid(ctx, vp, theme, scale, scene.axisUnits ?? null)
-    else drawGrid(ctx, vp, theme, scale, scene.axisUnits ?? null)
+    if (scene.grid === 'polar')
+      drawPolarGrid(ctx, vp, theme, scale, scene.axisUnits ?? null, gridStyle)
+    else drawGrid(ctx, vp, theme, scale, scene.axisUnits ?? null, gridStyle)
   } catch {
     /* grid module absent or failed — keep going */
   }
@@ -932,8 +1184,9 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
         vp,
         curves: scene.curves,
         models,
-        paint,
+        paint: ink,
         scale,
+        fillAlpha: washAlpha,
       })
     } catch {
       /* overlay render failed — the figure still stands */
@@ -945,7 +1198,7 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
   const fields = scene.fields
   if (fields && fields.length > 0) {
     try {
-      drawSlopeFields(ctx, fields, { vp, paint, scale })
+      drawSlopeFields(ctx, fields, { vp, paint: ink, scale })
     } catch {
       /* field render failed — the figure still stands */
     }
@@ -956,7 +1209,7 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
   const polylines = scene.polylines
   if (polylines && polylines.length > 0) {
     try {
-      drawPolylines(ctx, polylines, { vp, paint, scale })
+      drawPolylines(ctx, polylines, { vp, paint: ink, scale })
     } catch {
       /* polyline render failed — the figure still stands */
     }
@@ -974,14 +1227,39 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
     try {
       // The selection halo is chrome: it says "this one is selected", not
       // anything about the maths, so it must not reach the exported figure.
-      const selected = chrome !== null && curve.id === chrome.selectedId
-      const c = print ? { ...curve, color: paint(curve.color) } : curve
+      // Under mono ink on white it is dropped outright: the halo is a wash of
+      // the curve's own colour, and a black wash around a black curve is a
+      // glow no exam figure has ever had.
+      const selected = chrome !== null && curve.id === chrome.selectedId && !(mono && lightGround)
+      // The style's curveWidth replaces the family's default weight; a width
+      // the teacher set on THIS curve still wins, as every explicit choice
+      // does over a preset.
+      const w = style?.width
+      const c =
+        fig !== null
+          ? {
+              ...curve,
+              color: ink(curve.color),
+              strokeWidth: typeof w === 'number' && w > 0 ? w : fig.curveWidth,
+            }
+          : print
+          ? { ...curve, color: paint(curve.color) }
+          : curve
       // lightGround: the selection halo is a wash of the curve's own colour,
       // and at 25% on white it was invisible — the same bug as the palette.
       drawCurve(ctx, c, models, vp, selected, {
         strokeScale: scale.stroke,
         lightGround,
       })
+      // Where a restricted graph stops, the printed figure says so with a dot:
+      // filled for an end that belongs to the domain, hollow for one that does
+      // not. On screen the same fact is told by the domain BRACKET handles,
+      // which are chrome — so an exported screen figure never said it at all.
+      if (fig?.pointStyle === 'filled') {
+        for (const end of domainEnds(curve, models)) {
+          drawEndPoint(ctx, vp, end, c.color, theme.bg, scale.stroke)
+        }
+      }
     } catch {
       /* curve render failed — skip */
     }
@@ -995,7 +1273,14 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
   const shapes = scene.shapes
   if (shapes && shapes.length > 0) {
     try {
-      drawShapes(ctx, shapes, { vp, theme, paint, scale })
+      drawShapes(ctx, shapes, {
+        vp,
+        theme,
+        paint: ink,
+        scale,
+        fillAlpha: washAlpha,
+        font: fig?.font ?? null,
+      })
     } catch {
       /* shape render failed — the figure still stands */
     }
@@ -1005,8 +1290,10 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
   if (an && an.points.length > 0 && an.curve.visible) {
     try {
       drawAnalysis(ctx, vp, an.points, {
-        color: paint(an.curve.color),
+        color: ink(an.curve.color),
         theme,
+        pointStyle: fig?.pointStyle ?? null,
+        font: fig?.font ?? null,
         handles: chrome?.handles ?? [],
         highlight: chrome?.highlight ?? null,
         openIdx: chrome?.openIdx ?? null,
@@ -1020,6 +1307,10 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
       /* analysis render failed — the board still stands */
     }
   }
+
+  // The caption is the last thing the FIGURE says, so it goes on top of every
+  // figure layer and under the editing chrome.
+  drawCaption(ctx, scene, theme, fig, scale.type)
 
   if (chrome) {
     const sel = scene.curves.find((c) => c.id === chrome.selectedId && c.visible)
@@ -1056,11 +1347,12 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
 function renderNumberLine(
   ctx: CanvasRenderingContext2D,
   scene: BoardScene,
+  theme: Theme,
   chrome: BoardChrome | null,
   paint: (c: string) => string,
   scale: { type: number; stroke: number },
 ): void {
-  const { vp, theme } = scene
+  const { vp } = scene
   const items = scene.items ?? []
 
   try {

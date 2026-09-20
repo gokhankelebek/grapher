@@ -217,6 +217,17 @@ export function exportViewport(
   kind: BoardKind,
   /** The number line's items, so the strip can be as tall as its stack. */
   items: readonly NLItem[] = [],
+  /**
+   * Room to keep clear at the BOTTOM for a figure caption, in CSS px
+   * (renderBoard's captionHeight()). 0 when there is no caption.
+   *
+   * The caption is drawn INSIDE the viewport — that is the rect the export
+   * clips to — so a frame fitted tightly to the curves would print "Graph of f"
+   * across the bottom of the curve. Reserving it does not change the output
+   * SIZE or the aspect: the band is taken out of the fitted scale, exactly as
+   * FIT_PAD is.
+   */
+  captionPx = 0,
 ): Viewport {
   const live: Viewport = {
     center: { x: vp.center.x, y: vp.center.y },
@@ -236,5 +247,16 @@ export function exportViewport(
       lanes = 1
     }
   }
-  return fitViewport(vp, content, kind, settings.aspect, lanes)
+  const fitted = fitViewport(vp, content, kind, settings.aspect, lanes)
+  if (captionPx <= 0 || kind === 'number-line') return fitted
+  // Two passes: the first says what a unit is worth, which is the only way to
+  // state a band measured in pixels as the math room the frame has to give it.
+  const band = captionPx / fitted.pxPerUnit
+  return fitViewport(
+    vp,
+    { min: { x: content.min.x, y: content.min.y - band }, max: content.max },
+    kind,
+    settings.aspect,
+    lanes,
+  )
 }

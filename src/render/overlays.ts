@@ -93,6 +93,16 @@ export interface OverlayPaintOpts {
   paint?: ((c: string) => string) | null
   /** Presentation scale. Outline weight scales; fill alpha deliberately does not. */
   scale?: PaintScale | null
+  /**
+   * One fill alpha for every overlay on the board, overriding both the default
+   * and any alpha an overlay states for itself.
+   *
+   * This is the mono-ink figure's grey wash: under `curveInk: 'mono'` every
+   * shading is the same black, so the only thing left to separate a shaded
+   * region from the curve above it is how light the wash is. Absent (the
+   * normal case) leaves every overlay's own alpha exactly as it was.
+   */
+  fillAlpha?: number | null
 }
 
 // ---------------------------------------------------------------------------
@@ -382,8 +392,14 @@ export function drawOverlays(
   for (const ov of overlays) {
     if (!ov) continue
     try {
+      const forced =
+        typeof o.fillAlpha === 'number' && Number.isFinite(o.fillAlpha)
+          ? clamp(o.fillAlpha, 0, 1)
+          : null
       const alpha =
-        ov.kind === 'rects'
+        forced !== null
+          ? forced
+          : ov.kind === 'rects'
           ? OVERLAY_FILL_ALPHA
           : clamp(
               typeof ov.alpha === 'number' && Number.isFinite(ov.alpha)

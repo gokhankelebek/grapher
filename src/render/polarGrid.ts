@@ -26,7 +26,7 @@
 // ============================================================================
 
 import type { Viewport, Theme } from '../core/types'
-import type { AxisUnits, GridStep, PaintScale, PiStep } from './grid'
+import type { AxisUnits, GridStep, GridStyle, PaintScale, PiStep } from './grid'
 import {
   ARROW_HALF,
   ARROW_LEN,
@@ -37,7 +37,8 @@ import {
   PI_LABEL_MIN_PX,
   formatPiTick,
   formatTick,
-  gridFont,
+  labelFont,
+  SCREEN_GRID,
   isPiStep,
   paintScale,
   pickPiTickStep,
@@ -239,8 +240,18 @@ export function drawPolarGrid(
   theme: Theme,
   opts?: PaintScale | null,
   units?: AxisUnits | null,
+  style?: GridStyle | null,
 ): void {
   const { type, stroke } = paintScale(opts)
+  const st = style ?? SCREEN_GRID
+  /**
+   * Is the board RULED? A figure style that says "no gridlines" means it here
+   * too — and it takes the angle labels with it. Measured on the AP preset,
+   * whose ruling colour is the ground: the circles and spokes vanished and
+   * left "2π/3", "3π/4", "5π/6" floating on blank paper, naming rays that were
+   * no longer drawn.
+   */
+  const ruled = st.grid === 'lines'
   const fpx = LABEL_PX * type
   const W = vp.widthPx
   const H = vp.heightPx
@@ -294,7 +305,7 @@ export function drawPolarGrid(
   const majorCount = Math.max(0, rings.to - rings.from + 1)
   const drawMinors = rings.mult === 1 && minorCount > 0 && majorCount + minorCount <= MAX_CIRCLES
 
-  if (drawMinors) {
+  if (drawMinors && ruled) {
     ctx.lineWidth = GRID_MINOR_WIDTH * stroke
     ctx.strokeStyle = theme.gridMinor
     ctx.beginPath()
@@ -306,11 +317,13 @@ export function drawPolarGrid(
   }
 
   // ---- major circles -------------------------------------------------------
-  ctx.lineWidth = GRID_MAJOR_WIDTH * stroke
-  ctx.strokeStyle = theme.gridMajor
-  ctx.beginPath()
-  for (let k = rings.from; k <= rings.to; k++) arcAt(k * rings.major * ppu)
-  ctx.stroke()
+  if (ruled) {
+    ctx.lineWidth = GRID_MAJOR_WIDTH * stroke
+    ctx.strokeStyle = theme.gridMajor
+    ctx.beginPath()
+    for (let k = rings.from; k <= rings.to; k++) arcAt(k * rings.major * ppu)
+    ctx.stroke()
+  }
 
   // ---- spokes --------------------------------------------------------------
   // π/12 (15°) is the rung a class already names. π/6 and π/4 multiples carry
@@ -359,8 +372,10 @@ export function drawPolarGrid(
     if (any) ctx.stroke()
   }
 
-  strokeSpokes((k) => !isAxis(k) && !isMajor(k), GRID_MINOR_WIDTH * stroke, theme.gridMinor)
-  strokeSpokes((k) => !isAxis(k) && isMajor(k), GRID_MAJOR_WIDTH * stroke, theme.gridMajor)
+  if (ruled) {
+    strokeSpokes((k) => !isAxis(k) && !isMajor(k), GRID_MINOR_WIDTH * stroke, theme.gridMinor)
+    strokeSpokes((k) => !isAxis(k) && isMajor(k), GRID_MAJOR_WIDTH * stroke, theme.gridMajor)
+  }
 
   // ---- axes ----------------------------------------------------------------
   // θ = 0 and θ = π/2 are the x and y axes before they are spokes: axis weight,
@@ -371,28 +386,32 @@ export function drawPolarGrid(
   const yAxisVisible = ox >= 0 && ox <= W
   const xAxisVisible = oy >= 0 && oy <= H
   ctx.fillStyle = theme.axis
-  if (yAxisVisible) {
+  if (yAxisVisible && st.arrows !== 'none') {
     ctx.beginPath()
     ctx.moveTo(ox, 0)
     ctx.lineTo(ox - ARROW_HALF, ARROW_LEN)
     ctx.lineTo(ox + ARROW_HALF, ARROW_LEN)
     ctx.closePath()
-    ctx.moveTo(ox, H)
-    ctx.lineTo(ox - ARROW_HALF, H - ARROW_LEN)
-    ctx.lineTo(ox + ARROW_HALF, H - ARROW_LEN)
-    ctx.closePath()
+    if (st.arrows === 'four') {
+      ctx.moveTo(ox, H)
+      ctx.lineTo(ox - ARROW_HALF, H - ARROW_LEN)
+      ctx.lineTo(ox + ARROW_HALF, H - ARROW_LEN)
+      ctx.closePath()
+    }
     ctx.fill()
   }
-  if (xAxisVisible) {
+  if (xAxisVisible && st.arrows !== 'none') {
     ctx.beginPath()
     ctx.moveTo(W, oy)
     ctx.lineTo(W - ARROW_LEN, oy - ARROW_HALF)
     ctx.lineTo(W - ARROW_LEN, oy + ARROW_HALF)
     ctx.closePath()
-    ctx.moveTo(0, oy)
-    ctx.lineTo(ARROW_LEN, oy - ARROW_HALF)
-    ctx.lineTo(ARROW_LEN, oy + ARROW_HALF)
-    ctx.closePath()
+    if (st.arrows === 'four') {
+      ctx.moveTo(0, oy)
+      ctx.lineTo(ARROW_LEN, oy - ARROW_HALF)
+      ctx.lineTo(ARROW_LEN, oy + ARROW_HALF)
+      ctx.closePath()
+    }
     ctx.fill()
   }
 
@@ -400,7 +419,7 @@ export function drawPolarGrid(
   // Exactly the cartesian x-tick treatment: theme.label (a step above the axis
   // line), centred under the point, sliding along the edge when the pole's row
   // is off the board.
-  ctx.font = gridFont(fpx)
+  ctx.font = labelFont(st, fpx)
   ctx.fillStyle = theme.label
   {
     const labelY = clamp(oy + 5 * type, 4, H - fpx - 6)
@@ -422,7 +441,7 @@ export function drawPolarGrid(
   // the outer end of each spoke when it is not. θ = 0 is left unlabelled: that
   // ray already carries the radius numbers, and two label runs on one line is
   // the collision the cartesian board spent a rewrite avoiding.
-  const canLabelAngles = !inside || rFitPx >= MIN_ANGLE_LABEL_RADIUS_PX
+  const canLabelAngles = ruled && (!inside || rFitPx >= MIN_ANGLE_LABEL_RADIUS_PX)
   if (canLabelAngles) {
     const inset = 16 * type
     const pad = 6 * type

@@ -34,7 +34,7 @@
 // ============================================================================
 
 import type { Shape, Theme, Vec2, Viewport } from '../core/types'
-import { LABEL_PX, gridFont, paintScale, type PaintScale } from './grid'
+import { LABEL_PX, gridFont, labelFont, paintScale, type PaintScale } from './grid'
 
 /** Re-exported so the board can name this without reaching into core/. */
 export type { Shape }
@@ -249,6 +249,8 @@ interface Style {
   ink: string
   /** The shape's colour, already through `paint`. */
   color: string
+  /** Polygon fill alpha; SHAPE_FILL_ALPHA unless the board forced one. */
+  fillAlpha: number
 }
 
 function dot(ctx: CanvasRenderingContext2D, fr: Frame, p: Pt, st: Style): void {
@@ -551,7 +553,7 @@ function drawPolygon(
   // is the unshaded gutter overlays.ts measured next to a pole), and every
   // clamped vertex is already off the canvas.
   if (s.fill && closed) {
-    ctx.globalAlpha = SHAPE_FILL_ALPHA
+    ctx.globalAlpha = st.fillAlpha
     ctx.fillStyle = st.color
     ctx.beginPath()
     for (let i = 0; i < pts.length; i++) {
@@ -616,6 +618,20 @@ export interface ShapePaintOpts {
   paint?: ((c: string) => string) | null
   /** Presentation scale: every weight and glyph follows it; fill alpha does not. */
   scale?: PaintScale | null
+  /**
+   * One fill alpha for every filled polygon, overriding SHAPE_FILL_ALPHA.
+   *
+   * The mono-ink figure's grey wash: with outline and fill both black, the
+   * lightness of the wash is the only thing left to separate a filled triangle
+   * from its own boundary. Absent leaves SHAPE_FILL_ALPHA exactly as it was.
+   */
+  fillAlpha?: number | null
+  /**
+   * The figure's label face, for shape labels. Absent is the sans stack this
+   * layer has always used; 'serif' is the exam figure, where a label in
+   * system-ui beside Times tick numbers reads as a different document.
+   */
+  font?: 'sans' | 'serif' | null
 }
 
 const identity = (c: string): string => c
@@ -664,11 +680,16 @@ export function drawShapes(
   const theme = o.theme
   const ink = isDarkGround(theme) ? DARK_TEXT : theme.label
 
+  const fillAlpha =
+    typeof o.fillAlpha === 'number' && Number.isFinite(o.fillAlpha)
+      ? Math.min(1, Math.max(0, o.fillAlpha))
+      : SHAPE_FILL_ALPHA
+
   ctx.save()
-  ctx.font = gridFont(LABEL_PX * type)
+  ctx.font = o.font ? labelFont({ font: o.font }, LABEL_PX * type) : gridFont(LABEL_PX * type)
   for (const s of shapes) {
     if (!s || !s.visible) continue
-    const st: Style = { stroke, type, theme, ink, color: paint(s.color) }
+    const st: Style = { stroke, type, theme, ink, color: paint(s.color), fillAlpha }
     try {
       switch (s.kind) {
         case 'point':

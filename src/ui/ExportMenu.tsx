@@ -20,7 +20,10 @@ import type {
   BoardGrid,
   ResolvedAxisUnits,
 } from '../core/persist'
+import type { FigureStyleId, Theme } from '../core/types'
 import { RULINGS } from './boardGrid'
+import { FigurePicker } from './FigurePicker'
+import { backgroundLockedNote, fixesBackground } from './figureStyle'
 
 /** What the Copy button is currently saying. */
 export type CopyState =
@@ -66,6 +69,23 @@ interface Props {
    */
   grid: BoardGrid | null
   onGrid(next: BoardGrid): void
+  /**
+   * WHICH LOOK the board is drawn in, or null on a board that has no figure
+   * style to be drawn in (a number line) — the section is then not drawn.
+   *
+   * First in the panel, above even Copy, because it is the decision every
+   * other one here is made INSIDE: the size, the framing and the ground of an
+   * SAT figure are not the same questions as those of a screen figure, and the
+   * thumbnails answer "what am I about to paste into the worksheet" before the
+   * teacher has to ask it.
+   */
+  figure: FigureStyleId | null
+  /** The live board theme, so the Screen thumbnail follows the theme toggle. */
+  screenTheme: Theme
+  /** The line printed under the figure. Empty means none. */
+  caption: string
+  onFigure(next: FigureStyleId): void
+  onCaption(next: string): void
   onChange(next: FitExportSettings): void
   onExport(): void
   onCopy(): void
@@ -88,12 +108,24 @@ export function ExportMenu({
   onAxisUnit,
   grid,
   onGrid,
+  figure,
+  screenTheme,
+  caption,
+  onFigure,
+  onCaption,
   onChange,
   onExport,
   onCopy,
 }: Props) {
   const [open, setOpen] = useState(false)
   const size = sizeOf(settings)
+  /**
+   * A figure style OWNS the ground — an SAT figure is on white whatever this
+   * says — so the control is disabled rather than hidden, with the reason
+   * beside it. Hiding it would leave the teacher hunting for a setting they
+   * remember being here, and silently ignoring it would be worse.
+   */
+  const groundLocked = figure !== null && fixesBackground(figure)
   const [widthDraft, setWidthDraft] = useState<string>('')
   const wrapRef = useRef<HTMLDivElement>(null)
   const uid = useId()
@@ -172,7 +204,7 @@ export function ExportMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label="Board and export settings"
-        title={`Copy to clipboard, axis units, ruling, export settings — ${size.w}×${size.h} px`}
+        title={`Figure style, copy to clipboard, axis units, ruling, export settings — ${size.w}×${size.h} px`}
         data-testid="export-settings"
         onClick={() => setOpen((o) => !o)}
       >
@@ -183,6 +215,19 @@ export function ExportMenu({
 
       {open && (
         <div className="exp-menu" role="dialog" aria-label="Board and export settings">
+          {figure && (
+            <>
+              <FigurePicker
+                value={figure}
+                screenTheme={screenTheme}
+                caption={caption}
+                onPick={onFigure}
+                onCaption={onCaption}
+              />
+              <div className="exp-menu-sep" />
+            </>
+          )}
+
           <button
             className="exp-item"
             onClick={onCopy}
@@ -395,24 +440,36 @@ export function ExportMenu({
 
           <div className="exp-menu-sep" />
           <div className="exp-title">Background</div>
-          <div className="seg exp-seg" role="group" aria-label="Export background">
+          <div
+            className="seg exp-seg"
+            role="group"
+            aria-label="Export background"
+            data-locked={groundLocked ? 'figure' : undefined}
+          >
             <button
-              className={`seg-btn${settings.theme === 'light' ? ' seg-on' : ''}`}
+              className={`seg-btn${!groundLocked && settings.theme === 'light' ? ' seg-on' : ''}`}
               data-testid="export-theme-light"
+              disabled={groundLocked}
               onClick={() => onChange({ ...settings, theme: 'light' })}
               title="White ground with print-safe curve colours — for worksheets and copiers"
             >
               Light
             </button>
             <button
-              className={`seg-btn${settings.theme === 'dark' ? ' seg-on' : ''}`}
+              className={`seg-btn${!groundLocked && settings.theme === 'dark' ? ' seg-on' : ''}`}
               data-testid="export-theme-dark"
+              disabled={groundLocked}
               onClick={() => onChange({ ...settings, theme: 'dark' })}
               title="Match the screen — for slides on a dark background"
             >
               Dark
             </button>
           </div>
+          {figure && groundLocked && (
+            <div className="exp-note" data-testid="export-theme-locked">
+              {backgroundLockedNote(figure)} Put the board back on Screen to choose a ground.
+            </div>
+          )}
 
           <div className="exp-readout" data-testid="export-readout">
             {size.w} × {size.h} px
