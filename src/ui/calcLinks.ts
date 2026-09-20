@@ -254,6 +254,12 @@ export function areaReadout(
     res = null
   }
   if (!res) {
+    // Name the limit that left the curve before calling anything undefined:
+    // a sketch ends where its ink ends, and "a = -3.50 is outside …" tells
+    // the teacher which chip to nudge. The pole sentence comes next, and the
+    // bare "undefined on" is only for what is left.
+    const outside = limitOutsideDomain(parent, link.from, link.to)
+    if (outside) return miss(outside)
     const pole = poleBetween(parent, models, link.from, link.to)
     return miss(
       pole === null
@@ -269,6 +275,20 @@ export function areaReadout(
     samples: res.exact ? null : (res.samples ?? null),
     value,
   }
+}
+
+/** "a = -3.50 is outside this curve's domain [-3.42, 4.47]", or null. */
+function limitOutsideDomain(curve: FittedCurve, a: number, b: number): string | null {
+  const d = curve.domain
+  if (!d) return null
+  const lo = Math.min(d[0], d[1])
+  const hi = Math.max(d[0], d[1])
+  const tol = 1e-9 * Math.max(1, Math.abs(lo), Math.abs(hi))
+  const out = (v: number): boolean => v < lo - tol || v > hi + tol
+  const which = out(a) ? 'a' : out(b) ? 'b' : null
+  if (!which) return null
+  const v = which === 'a' ? a : b
+  return `${which} = ${fixed(v, 2)} is outside this curve's domain [${fixed(lo, 2)}, ${fixed(hi, 2)}]`
 }
 
 /**
@@ -505,9 +525,15 @@ export function defaultBounds(
   window: [number, number],
 ): [number, number] {
   const [lo, hi] = spanOf(curve, window)
-  const a = nice(lo)
-  const b = nice(hi)
-  if (b - a >= 0.5) return [a, b]
+  // Round INWARD. A sketch whose ink runs over [-3.42, 4.47] has a domain
+  // that ends there, and `nice()` would hand back [-3.5, 4.5] — a window the
+  // curve is not on, which areaUnder rightly refuses ("undefined on …").
+  // The halves are chosen inside the span, with a hair of slack so a domain
+  // that already sits on a half (1.0000000001) is not pushed to the next one.
+  const slack = 1e-9 * Math.max(1, Math.abs(lo), Math.abs(hi))
+  const a = Math.ceil((lo - slack) * 2) / 2
+  const b = Math.floor((hi + slack) * 2) / 2
+  if (b - a >= 0.5) return [Math.max(a, lo), Math.min(b, hi)].map(round6) as [number, number]
   return [round6(lo), round6(hi)]
 }
 

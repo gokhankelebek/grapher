@@ -20,10 +20,11 @@ import {
   docFromBoard,
   serializeDoc,
 } from '../src/core/persist'
-import type { BoardInput, CalcLink, DocMeta } from '../src/core/persist'
+import type { AreaLink, BoardInput, CalcLink, DocMeta } from '../src/core/persist'
 import {
   areaReadout,
   cardCalc,
+  defaultBounds,
   dependentsOf,
   fixed,
   integralSymbol,
@@ -593,5 +594,51 @@ describe('the projected legend says what a derived curve is', () => {
 
   it('is a no-op on a board with no calculus objects', () => {
     expect(labelLegend(entries, [])).toEqual(entries)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// defaultBounds — a fresh area must start on a window the curve is ON
+// ---------------------------------------------------------------------------
+
+describe('defaultBounds', () => {
+  const sketched = (domain: [number, number]): FittedCurve => ({ ...cubic(), domain })
+
+  it('rounds a sketched domain INWARD to halves, never outside it', () => {
+    // A stroke over [-3.42, 4.47] used to default to [-3.5, 4.5], which
+    // areaUnder refused as "undefined on [-3.50, 4.50]".
+    const [a, b] = defaultBounds(sketched([-3.42, 4.47]), [-10, 10])
+    expect([a, b]).toEqual([-3, 4])
+    expect(areaUnder(sketched([-3.42, 4.47]), MODELS, a, b)).not.toBeNull()
+  })
+
+  it('keeps a domain that already sits on halves, float hair included', () => {
+    expect(defaultBounds(sketched([-3.5, 4.5]), [-10, 10])).toEqual([-3.5, 4.5])
+    expect(defaultBounds(sketched([1.0000000001, 2.9999999999]), [-10, 10])).toEqual([1, 3])
+  })
+
+  it('falls back to the raw span when the halves inside it would collapse', () => {
+    const [a, b] = defaultBounds(sketched([1.1, 1.4]), [-10, 10])
+    expect(a).toBeCloseTo(1.1, 6)
+    expect(b).toBeCloseTo(1.4, 6)
+  })
+
+  it('always yields limits the integral exists on', () => {
+    for (const d of [[-3.42, 4.47], [0.26, 0.74], [-0.49, 5.01], [2.5, 2.51]] as [number, number][]) {
+      const [a, b] = defaultBounds(sketched(d), [-10, 10])
+      expect(a).toBeGreaterThanOrEqual(d[0] - 1e-6)
+      expect(b).toBeLessThanOrEqual(d[1] + 1e-6)
+      expect(areaUnder(sketched(d), MODELS, a, b)).not.toBeNull()
+    }
+  })
+})
+
+describe('areaReadout — a limit off the end of a sketch', () => {
+  it('names the limit and the domain instead of a bare "undefined"', () => {
+    const parent: FittedCurve = { ...cubic(), domain: [-3.42, 4.47] }
+    const link = { kind: 'area', id: 'A', parentId: parent.id, from: -3.5, to: 4.5 } as AreaLink
+    const r = areaReadout(link, parent, MODELS)
+    expect(r.value).toBeNull()
+    expect(r.problem).toBe("a = −3.50 is outside this curve's domain [−3.42, 4.47]")
   })
 })
