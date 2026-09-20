@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   BoardKind,
+  CurveEnds,
+  EndCap,
   FitResult,
   FittedCurve,
   ModelSpec,
@@ -266,6 +268,15 @@ const HISTORY_LIMIT = 100
 
 /** The undo label a run of caption typing folds into. */
 const CAPTION_LABEL = 'figure caption'
+
+/** How an end cap names itself in "Undo curve ends: arrow". */
+const END_CAP_WORDS: Record<EndCap, string> = {
+  auto: 'auto',
+  none: 'nothing',
+  arrow: 'arrow',
+  open: 'open dot',
+  closed: 'closed dot',
+}
 
 const clampPpu = (v: number): number => Math.min(MAX_PPU, Math.max(MIN_PPU, v))
 
@@ -2160,6 +2171,29 @@ export default function App() {
       commitState(
         { styles: { ...stylesRef.current, [id]: { ...stylesRef.current[id], dash } } },
         'change line style',
+      )
+    },
+    [commitState],
+  )
+
+  /**
+   * One end of one curve gets a cap. 'auto' is not stored — it is the absence
+   * of a choice, the state in which the figure style answers — so choosing it
+   * REMOVES the end, and a style whose ends are both back to auto loses the
+   * key entirely. That keeps the style map saying only what a teacher said.
+   */
+  const setEnds = useCallback(
+    (id: string, which: 'start' | 'end', cap: EndCap): void => {
+      const prev = stylesRef.current[id]
+      const ends: CurveEnds = { ...prev?.ends }
+      if (cap === 'auto') delete ends[which]
+      else ends[which] = cap
+      const next: CurveStyle = { ...prev }
+      if (ends.start === undefined && ends.end === undefined) delete next.ends
+      else next.ends = ends
+      commitState(
+        { styles: { ...stylesRef.current, [id]: next } },
+        `curve ends: ${END_CAP_WORDS[cap]}`,
       )
     },
     [commitState],
@@ -4515,6 +4549,7 @@ export default function App() {
         onCurveEquation={setCurveEquation}
         onStrokeWidth={setStrokeWidth}
         onDash={setDash}
+        onEnds={setEnds}
         onOpacity={setOpacity}
         onExprToggle={() => setExprOpen((o) => !o)}
         onExprSubmit={kind === 'number-line' ? addInequality : addExpression}

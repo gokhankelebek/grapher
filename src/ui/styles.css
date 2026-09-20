@@ -1106,6 +1106,45 @@ button.card-formula:hover {
   box-shadow: inset 0 0 0 1px var(--border-strong);
 }
 
+/* ------------------------------------------------------- curve end caps */
+
+/* Two segmented pickers, one per end of the graph, side by side and equal —
+   a half-open interval wears one of each, so they have to be read together. */
+.ends-row {
+  gap: var(--sp-2);
+}
+
+.ends-seg {
+  flex: 1 1 0;
+  display: flex;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+/* 24px is the floor: these get pressed in front of a class, on a laptop
+   trackpad, while talking. */
+.ends-btn {
+  flex: 1 1 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1;
+  transition:
+    background 0.15s var(--ease),
+    color 0.15s var(--ease);
+}
+
+.ends-btn:hover {
+  color: var(--text);
+}
+
 /* ------------------------------------------------------------ small screens */
 
 /* Laptops and landscape tablets: the sidebar gives ground first, and the
@@ -2816,6 +2855,16 @@ button.an-value {
     flex: 1 1 auto;
   }
 
+  /* Five caps at a finger's size are wider than the menu, so each end's
+     picker takes a line of its own rather than shrinking below the floor. */
+  .ends-seg {
+    flex: 1 1 100%;
+  }
+
+  .ends-btn {
+    min-height: 36px;
+  }
+
   /* range: 28px thumb, 44px row */
   input[type='range'],
   .param-row input[type='range'],
@@ -3131,6 +3180,12 @@ button.an-value {
 .card-menu-style {
   margin-top: 0;
   padding: 0 var(--sp-2) var(--sp-1);
+}
+
+/* Ten glyph buttons at a pressable size do not fit 196px. The menu widens
+   only on the cards that offer end caps, so every other card keeps its shape. */
+.card-menu-ends {
+  width: 288px;
 }
 
 /* "hidden" states a fact about the curve; it is not a control. */

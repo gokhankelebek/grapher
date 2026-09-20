@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import type {
+  EndCap,
   FitResult,
   FittedCurve,
   ModelSpec,
@@ -75,6 +76,8 @@ interface Props {
   onEquationCommit(src: string): string | null
   onStrokeWidth(width: number): void
   onDash(dash: number[] | undefined): void
+  /** Cap one end of this curve. 'auto' hands the end back to the figure style. */
+  onEnds(which: 'start' | 'end', cap: EndCap): void
   onOpacity(opacity: number): void
   /**
    * The calculus objects this curve is part of, already computed: what it IS
@@ -109,6 +112,32 @@ const DASH_STYLES: { key: string; label: string; title: string; dash: number[] |
   { key: 'dashed', label: '╍ ╍', title: 'Dashed line', dash: [8, 6] },
   { key: 'dotted', label: '· · ·', title: 'Dotted line', dash: [2, 5] },
 ]
+
+/**
+ * The end caps, in the order a figure offers them: no opinion, nothing, the
+ * graph keeps going, the endpoint is excluded, the endpoint is included.
+ * The arrow is the one glyph that has to be mirrored — it points OUT of the
+ * curve, so the left end wears ← and the right end →.
+ */
+const END_CAPS: { cap: EndCap; glyph: string; leftGlyph?: string; title: string }[] = [
+  { cap: 'auto', glyph: 'A', title: 'Let the figure style decide' },
+  { cap: 'none', glyph: '–', title: 'Nothing' },
+  { cap: 'arrow', glyph: '→', leftGlyph: '←', title: 'Arrow' },
+  { cap: 'open', glyph: '○', title: 'Open dot' },
+  { cap: 'closed', glyph: '●', title: 'Closed dot' },
+]
+
+const END_SIDES = ['start', 'end'] as const
+
+/**
+ * What each end is CALLED. On y = f(x) the ends are left and right, which is
+ * how a teacher points at them; on a parametric or polar curve there is no
+ * left, only the start and the finish of the trace.
+ */
+function endSideName(kind: FittedCurve['kind'], which: 'start' | 'end'): string {
+  if (kind === 'explicit') return which === 'start' ? 'Left end' : 'Right end'
+  return which === 'start' ? 'Start of curve' : 'End of curve'
+}
 
 /** Readout order: what a student is asked to find, in the order they find it. */
 const ANALYSIS_ROWS: { kind: SpecialPointKind; label: string; plural?: string }[] = [
@@ -375,6 +404,7 @@ export function CurveCard({
   onEquationCommit,
   onStrokeWidth,
   onDash,
+  onEnds,
   onOpacity,
   calc,
   onAddCalc,
@@ -567,6 +597,12 @@ export function CurveCard({
 
   const activeDashKey =
     DASH_STYLES.find((d) => JSON.stringify(d.dash) === JSON.stringify(style?.dash))?.key ?? 'solid'
+
+  /**
+   * Only a curve with ends is asked about them: a circle or an ellipse closes
+   * on itself, so there is nothing to cap and no question to answer.
+   */
+  const showsEnds = curve.kind !== 'implicit'
 
   /**
    * Where Enter should land next, remembered across the re-analysis a commit
@@ -926,7 +962,11 @@ export function CurveCard({
             ⋯
           </button>
           {menuOpen && (
-            <div className="card-menu" role="menu" onClick={(e) => e.stopPropagation()}>
+            <div
+              className={`card-menu${showsEnds ? ' card-menu-ends' : ''}`}
+              role="menu"
+              onClick={(e) => e.stopPropagation()}
+            >
               {menuItem('Duplicate', onDuplicate)}
               {menuItem(curve.visible ? 'Hide' : 'Show', onToggleVisible)}
               {menuItem(copied ? 'Copied' : 'Copy LaTeX', copyLatex)}
@@ -982,6 +1022,36 @@ export function CurveCard({
                   onChange={(e) => onOpacity(Number(e.target.value))}
                 />
               </div>
+              {/* What the two ends of the graph SAY. A circle or an ellipse
+                  has no ends, so the row is not there to be answered. */}
+              {showsEnds && (
+                <>
+                  <div className="card-menu-title">Ends</div>
+                  <div className="style-row card-menu-style ends-row">
+                    {END_SIDES.map((which) => {
+                      const name = endSideName(curve.kind, which)
+                      const chosen = style?.ends?.[which] ?? 'auto'
+                      return (
+                        <div key={which} className="ends-seg" role="group" aria-label={name}>
+                          {END_CAPS.map((c) => (
+                            <button
+                              key={c.cap}
+                              type="button"
+                              className={`ends-btn${chosen === c.cap ? ' dash-on' : ''}`}
+                              title={`${name}: ${c.title}`}
+                              aria-label={`${name}: ${c.title}`}
+                              aria-pressed={chosen === c.cap}
+                              onClick={() => onEnds(which, c.cap)}
+                            >
+                              {which === 'start' && c.leftGlyph ? c.leftGlyph : c.glyph}
+                            </button>
+                          ))}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </>
+              )}
             </div>
           )}
         </div>

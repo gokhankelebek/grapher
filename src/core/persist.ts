@@ -20,6 +20,7 @@ import type {
   ModelSpec,
   NLItem,
   CurveEnds,
+  EndCap,
   Vec2,
 } from './types'
 import { FIGURE_STYLES } from './types'
@@ -778,6 +779,29 @@ function candidateToStored(c: FitResult): StoredCandidate {
   }
 }
 
+/**
+ * The end caps worth writing down: a fresh record holding only the ends the
+ * teacher actually chose. 'auto' is not a choice — it is the default the
+ * figure style answers — so it is dropped, and a pair of them is nothing at
+ * all. Returning undefined for "nothing to say" is what keeps a document that
+ * predates end caps byte-identical through a load/save round trip.
+ */
+function writableEnds(ends: CurveEnds | undefined): CurveEnds | undefined {
+  if (!ends) return undefined
+  const out: CurveEnds = {}
+  if (ends.start !== undefined && ends.start !== 'auto') out.start = ends.start
+  if (ends.end !== undefined && ends.end !== 'auto') out.end = ends.end
+  return out.start !== undefined || out.end !== undefined ? out : undefined
+}
+
+/** A copy of a style carrying `ends` only when there is something to carry. */
+function withEnds(style: CurveStyle, ends: CurveEnds | undefined): CurveStyle {
+  const out: CurveStyle = { ...style }
+  if (ends) out.ends = ends
+  else delete out.ends
+  return out
+}
+
 export function boardToStored(input: BoardInput): StoredBoard {
   const curves: StoredCurve[] = input.curves.map((c) => {
     const stored: StoredCurve = {
@@ -806,7 +830,13 @@ export function boardToStored(input: BoardInput): StoredBoard {
     const shown = input.displaySources?.[c.id]
     if (typeof shown === 'string' && shown.trim() !== '') stored.displaySource = shown
     const st = input.styles[c.id]
-    if (st && (st.dash !== undefined || st.opacity !== undefined)) stored.style = { ...st }
+    // End caps are written only when a choice was actually made: 'auto' IS the
+    // absence of one, so a curve nobody touched serialises byte-for-byte as it
+    // did before this field existed.
+    const ends = writableEnds(st?.ends)
+    if (st && (st.dash !== undefined || st.opacity !== undefined || ends !== undefined)) {
+      stored.style = withEnds(st, ends)
+    }
     const cands = input.candidates.get(c.id)
     if (cands && cands.length > 0) {
       stored.candidates = cands.slice(0, MAX_CANDIDATES).map(candidateToStored)
@@ -1093,13 +1123,17 @@ export function calcNoun(kind: CalcKind): string {
 
 /** Copy an item into a fresh, own-property-only record (no aliasing, no extras). */
 function itemToStored(it: NLItem, style: CurveStyle | undefined): StoredNLItem {
+  // A number-line item has no ends to cap (the card never offers them), but the
+  // style map is one map: whatever is on it travels with it, sanitised.
+  const ends = writableEnds(style?.ends)
   const styled =
     style &&
     (style.dash !== undefined ||
       style.opacity !== undefined ||
+      ends !== undefined ||
       style.width !== undefined ||
       style.group !== undefined)
-      ? { style: { ...style } }
+      ? { style: withEnds(style, ends) }
       : {}
   if (it.kind === 'point') {
     return {
@@ -1289,16 +1323,37 @@ function storedToItem(raw: unknown): NLItem | null {
   }
 }
 
+const END_CAPS: readonly EndCap[] = ['auto', 'none', 'arrow', 'open', 'closed']
+
+/** One end's cap, or undefined for anything this reader does not recognise. */
+function capOf(raw: unknown): EndCap | undefined {
+  return isStr(raw) && (END_CAPS as readonly string[]).includes(raw)
+    ? (raw as EndCap)
+    : undefined
+}
+
+/**
+ * End caps off disk. An unknown word is dropped rather than guessed at, and
+ * 'auto' is normalised away so the live map says the same thing the file did.
+ */
+function endsOf(raw: unknown): CurveEnds | undefined {
+  if (!isObj(raw)) return undefined
+  return writableEnds({ start: capOf(raw.start), end: capOf(raw.end) })
+}
+
 function styleOf(raw: unknown): CurveStyle | null {
   if (!isObj(raw)) return null
   const style: CurveStyle = {}
   const dash = numArray(raw.dash, 8)
   if (dash && dash.length > 0) style.dash = dash
   if (isNum(raw.opacity)) style.opacity = Math.min(1, Math.max(0, raw.opacity))
+  const ends = endsOf(raw.ends)
+  if (ends) style.ends = ends
   if (isNum(raw.width)) style.width = Math.min(64, Math.max(0.5, raw.width))
   if (isStr(raw.group) && raw.group.trim()) style.group = raw.group.slice(0, 64)
   return style.dash ||
     style.opacity !== undefined ||
+    style.ends !== undefined ||
     style.width !== undefined ||
     style.group !== undefined
     ? style

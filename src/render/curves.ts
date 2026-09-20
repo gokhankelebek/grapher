@@ -54,6 +54,17 @@ interface Emitter {
   cx1: number
   cy0: number
   cy1: number
+  /**
+   * Optional listener on every finite sample, BEFORE the clip.
+   *
+   * The stroke is clipped to the overdraw box and carries no parameter value,
+   * so it cannot answer "where does this graph leave the board, and along what
+   * tangent" — which is the whole question an end cap asks. The tap is the one
+   * place that can: it sees each sample with its t, and `newRun` is true
+   * exactly where the pen was lifted, so a tapped trace is broken at the SAME
+   * poles the stroke is broken at. Null for every ordinary paint.
+   */
+  tap: ((t: number, x: number, y: number, newRun: boolean) => void) | null
 }
 
 // path/f are assigned by resetEmitter before any use; kept unset here so merely
@@ -69,6 +80,7 @@ const EM: Emitter = {
   lastY: 0,
   suspectPx: 0,
   cx0: 0, cx1: 0, cy0: 0, cy1: 0,
+  tap: null,
 }
 
 function resetEmitter(
@@ -87,6 +99,7 @@ function resetEmitter(
   em.cx1 = 2 * vp.widthPx
   em.cy0 = -vp.heightPx
   em.cy1 = 2 * vp.heightPx
+  em.tap = null
 }
 
 // ---------------------------------------------------------------------------
@@ -186,12 +199,13 @@ function emitPoint(em: Emitter, t: number, x: number, y: number, ok: boolean): v
     em.penDown = false
     return
   }
-  if (em.has) {
+  const had = em.has
+  let broken = false
+  if (had) {
     const px = em.lastX
     const py = em.lastY
     const dx = x - px
     const dy = y - py
-    let broken = false
     if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
       broken = true // a gap too wide to even subtract is a pole by construction
     } else if (Math.abs(dy) > em.suspectPx || Math.abs(dx) > em.suspectPx) {
@@ -205,6 +219,7 @@ function emitPoint(em: Emitter, t: number, x: number, y: number, ok: boolean): v
     if (broken) em.penDown = false
     else drawSeg(em, px, py, x, y)
   }
+  if (em.tap) em.tap(t, x, y, !had || broken)
   em.has = true
   em.lastT = t
   em.lastX = x
@@ -305,13 +320,27 @@ function sampleAdaptive(
 // Kind-specific path builders.
 // ---------------------------------------------------------------------------
 
-function buildExplicit(
-  path: Path2D,
-  model: ModelSpec,
-  curve: FittedCurve,
-  vp: Viewport,
-): boolean {
-  if (!model.evalExplicit) return false
+/**
+ * The parameter span a curve is sampled over, and the evaluator that turns a
+ * parameter into a screen point.
+ *
+ * Split out of the three builders because the END of a graph is a question
+ * about this span and nothing else: whether t0 is the curve's own domain end
+ * (a dot belongs there) or merely where the board runs out (an arrow does).
+ * Two answers derived from two copies of this arithmetic would eventually
+ * disagree, and the disagreement would be a cap drawn in the wrong place.
+ */
+interface CurveSpan {
+  f: EvalToScreen
+  t0: number
+  t1: number
+  /** True when t0 / t1 IS the curve's own declared domain end. */
+  atDomain0: boolean
+  atDomain1: boolean
+}
+
+function explicitSpan(model: ModelSpec, curve: FittedCurve, vp: Viewport): CurveSpan | null {
+  if (!model.evalExplicit) return null
   const params = curve.params
   const ppu = vp.pxPerUnit
   const cx = vp.center.x
@@ -322,11 +351,16 @@ function buildExplicit(
   const pad = 8 / ppu // sample slightly past the edges so strokes exit cleanly
   let x0 = cx - hw / ppu - pad
   let x1 = cx + hw / ppu + pad
+  let atDomain0 = false
+  let atDomain1 = false
   if (curve.domain) {
     x0 = Math.max(x0, curve.domain[0])
     x1 = Math.min(x1, curve.domain[1])
+    // a NaN bound compares false and is therefore never "the domain end"
+    atDomain0 = x0 === curve.domain[0]
+    atDomain1 = x1 === curve.domain[1]
   }
-  if (!(x1 > x0)) return false
+  if (!(x1 > x0)) return null
 
   const f: EvalToScreen = (x, out) => {
     const y = model.evalExplicit!(params, x)
@@ -334,9 +368,23 @@ function buildExplicit(
     out.y = hh - (y - cy) * ppu
     out.ok = Number.isFinite(y)
   }
-  resetEmitter(EM, path, f, vp)
-  sampleAdaptive(EM, f, x0, x1, vp)
+  return { f, t0: x0, t1: x1, atDomain0, atDomain1 }
+}
+
+function buildSpan(path: PolylineSink, span: CurveSpan, vp: Viewport): boolean {
+  resetEmitter(EM, path, span.f, vp)
+  sampleAdaptive(EM, span.f, span.t0, span.t1, vp)
   return EM.drawn
+}
+
+function buildExplicit(
+  path: Path2D,
+  model: ModelSpec,
+  curve: FittedCurve,
+  vp: Viewport,
+): boolean {
+  const span = explicitSpan(model, curve, vp)
+  return span !== null && buildSpan(path, span, vp)
 }
 
 /**
@@ -371,13 +419,8 @@ function inferParametricDomain(
   return [0, TWO_PI]
 }
 
-function buildParametric(
-  path: Path2D,
-  model: ModelSpec,
-  curve: FittedCurve,
-  vp: Viewport,
-): boolean {
-  if (!model.evalParametric) return false
+function parametricSpan(model: ModelSpec, curve: FittedCurve, vp: Viewport): CurveSpan | null {
+  if (!model.evalParametric) return null
   const params = curve.params
   const ppu = vp.pxPerUnit
   const cx = vp.center.x
@@ -392,18 +435,25 @@ function buildParametric(
     out.y = hh - (p.y - cy) * ppu
     out.ok = Number.isFinite(p.x) && Number.isFinite(p.y)
   }
-  resetEmitter(EM, path, f, vp)
-  sampleAdaptive(EM, f, dom[0], dom[1], vp)
-  return EM.drawn
+  // An INFERRED span is not a domain: [0, 2π] is where the sampler had to
+  // stop, not somewhere the curve ends, and a closed loop given a dot at
+  // θ = 0 would be marked with an endpoint it does not have.
+  const declared = curve.domain != null
+  return { f, t0: dom[0], t1: dom[1], atDomain0: declared, atDomain1: declared }
 }
 
-function buildPolar(
+function buildParametric(
   path: Path2D,
   model: ModelSpec,
   curve: FittedCurve,
   vp: Viewport,
 ): boolean {
-  if (!model.evalPolar) return false
+  const span = parametricSpan(model, curve, vp)
+  return span !== null && buildSpan(path, span, vp)
+}
+
+function polarSpan(model: ModelSpec, curve: FittedCurve, vp: Viewport): CurveSpan | null {
+  if (!model.evalPolar) return null
   const params = curve.params
   const ppu = vp.pxPerUnit
   const cx = vp.center.x
@@ -422,9 +472,18 @@ function buildPolar(
     out.y = hh - (y - cy) * ppu
     out.ok = Number.isFinite(r)
   }
-  resetEmitter(EM, path, f, vp)
-  sampleAdaptive(EM, f, dom[0], dom[1], vp)
-  return EM.drawn
+  const declared = curve.domain != null
+  return { f, t0: dom[0], t1: dom[1], atDomain0: declared, atDomain1: declared }
+}
+
+function buildPolar(
+  path: Path2D,
+  model: ModelSpec,
+  curve: FittedCurve,
+  vp: Viewport,
+): boolean {
+  const span = polarSpan(model, curve, vp)
+  return span !== null && buildSpan(path, span, vp)
 }
 
 // ---------------------------------------------------------------------------
@@ -713,6 +772,108 @@ export function sampleExplicitPolylines(
   resetEmitter(EM, sink, f, vp)
   sampleAdaptive(EM, f, x0, x1, vp)
   return sink.lines.filter((l) => l.length >= 2)
+}
+
+// ---------------------------------------------------------------------------
+// Tracing: the sampled curve, with its parameter, before the clip.
+// ---------------------------------------------------------------------------
+
+/** One sample of a traced curve: its parameter and its screen position. */
+export interface CurveSample {
+  /** x for an explicit curve, t for a parametric one, θ for a polar one. */
+  t: number
+  /** Screen px. */
+  x: number
+  y: number
+}
+
+/** A curve as the sampler saw it: runs of samples, broken at its poles. */
+export interface CurveTrace {
+  /**
+   * One array per pen-down run, in increasing parameter order, each run in
+   * increasing parameter order. Runs are NOT clipped — a sample may be far
+   * off the board, which is exactly what locating a board exit needs.
+   */
+  runs: CurveSample[][]
+  /** The parameter span actually sampled. */
+  t0: number
+  t1: number
+  /** True when t0 / t1 is the curve's own declared domain end. */
+  atDomain0: boolean
+  atDomain1: boolean
+}
+
+const NULL_SINK: PolylineSink = { moveTo(): void {}, lineTo(): void {} }
+
+/**
+ * Re-sample a curve exactly as `drawCurve` does, and keep the samples.
+ *
+ * The stroke answers "what is on the canvas"; this answers "where does the
+ * graph stop, and which way was it going" — the question an end cap is. It
+ * runs the SAME adaptive pass and the SAME pole probe, so a run boundary here
+ * is a pen lift there: a cap can never be placed across a break the stroke
+ * does not have, and the two can never drift apart.
+ *
+ * Implicit curves have no parameter and no ends; they return null.
+ */
+export function traceCurve(
+  curve: FittedCurve,
+  models: Record<string, ModelSpec>,
+  vp: Viewport,
+): CurveTrace | null {
+  if (curve.kind === 'implicit') return null
+  const model = models[curve.modelId]
+  if (!model) return null
+  if (vp.widthPx <= 0 || vp.heightPx <= 0 || !(vp.pxPerUnit > 0)) return null
+
+  let span: CurveSpan | null = null
+  try {
+    span =
+      curve.kind === 'explicit' ? explicitSpan(model, curve, vp)
+      : curve.kind === 'parametric' ? parametricSpan(model, curve, vp)
+      : polarSpan(model, curve, vp)
+  } catch {
+    return null
+  }
+  if (!span) return null
+
+  const runs: CurveSample[][] = []
+  let cur: CurveSample[] = []
+  resetEmitter(EM, NULL_SINK, span.f, vp)
+  EM.tap = (t, x, y, newRun): void => {
+    if (newRun || cur.length === 0) {
+      cur = []
+      runs.push(cur)
+    }
+    cur.push({ t, x, y })
+  }
+  try {
+    sampleAdaptive(EM, span.f, span.t0, span.t1, vp)
+  } catch {
+    /* an evaluator that threw mid-span still leaves the runs it produced */
+  } finally {
+    EM.tap = null
+  }
+  return {
+    runs: runs.filter((r) => r.length > 0),
+    t0: span.t0,
+    t1: span.t1,
+    atDomain0: span.atDomain0,
+    atDomain1: span.atDomain1,
+  }
+}
+
+/**
+ * The lineWidth `drawCurve` will actually stroke this curve at, in CSS px.
+ * Exported so an end cap — which has to knock that stroke out from under its
+ * own head — asks the renderer rather than guessing.
+ */
+export function curveLineWidth(curve: FittedCurve, strokeScale?: number): number {
+  const sc =
+    typeof strokeScale === 'number' && Number.isFinite(strokeScale) && strokeScale > 0
+      ? Math.min(6, Math.max(0.5, strokeScale))
+      : 1
+  return (curve.strokeWidth > 0 ? curve.strokeWidth : DEFAULT_STROKE) * sc
 }
 
 /** A PolylineSink that keeps the points: one array per pen-down run. */

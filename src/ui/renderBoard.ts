@@ -41,7 +41,8 @@ import type { AxisUnit, AxisUnits, PaintScale } from '../render/grid'
 import { SCREEN_GRID, drawGrid, labelFont as figureFont, paintScale } from '../render/grid'
 import type { GridStyle } from '../render/grid'
 import { drawPolarGrid } from '../render/polarGrid'
-import { drawCurve, drawInk } from '../render/curves'
+import { curveLineWidth, drawCurve, drawInk } from '../render/curves'
+import { drawCurveEnds, resolveEnds } from '../render/endCaps'
 import type { Overlay } from '../render/overlays'
 import { drawOverlays } from '../render/overlays'
 import type { Polyline, SlopeField } from '../render/fields'
@@ -1065,36 +1066,6 @@ export function domainEnds(
   return out
 }
 
-/** Filled (included) or hollow (excluded) end dot, in the curve's own ink. */
-function drawEndPoint(
-  ctx: CanvasRenderingContext2D,
-  vp: Viewport,
-  p: { at: Vec2; closed: boolean },
-  color: string,
-  bg: string,
-  stroke: number,
-): void {
-  const sp = toScreen(p.at, vp)
-  if (!Number.isFinite(sp.x) || !Number.isFinite(sp.y)) return
-  if (sp.x < -20 || sp.y < -20 || sp.x > vp.widthPx + 20 || sp.y > vp.heightPx + 20) return
-  const r = FILLED_POINT_R * stroke
-  ctx.save()
-  ctx.globalAlpha = 1
-  ctx.beginPath()
-  ctx.arc(sp.x, sp.y, r, 0, TWO_PI)
-  if (p.closed) {
-    ctx.fillStyle = color
-    ctx.fill()
-  } else {
-    ctx.fillStyle = bg
-    ctx.fill()
-    ctx.lineWidth = 1.6 * stroke
-    ctx.strokeStyle = color
-    ctx.stroke()
-  }
-  ctx.restore()
-}
-
 // ---------------------------------------------------------------------------
 // The one render routine
 // ---------------------------------------------------------------------------
@@ -1251,15 +1222,20 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
         strokeScale: scale.stroke,
         lightGround,
       })
-      // Where a restricted graph stops, the printed figure says so with a dot:
-      // filled for an end that belongs to the domain, hollow for one that does
-      // not. On screen the same fact is told by the domain BRACKET handles,
-      // which are chrome — so an exported screen figure never said it at all.
-      if (fig?.pointStyle === 'filled') {
-        for (const end of domainEnds(curve, models)) {
-          drawEndPoint(ctx, vp, end, c.color, theme.bg, scale.stroke)
-        }
-      }
+      // What the ends of the graph SAY: an arrow where it runs off the board,
+      // a filled dot where a restricted graph stops and the point belongs to
+      // it, a hollow one where it does not. On screen the domain is told by
+      // the BRACKET handles instead, which are chrome — so an exported screen
+      // figure never said it at all, and an exam figure has to.
+      //
+      // See src/render/endCaps.ts: the teacher's per-end choice wins, 'auto'
+      // asks the figure style, and no style at all says nothing.
+      drawCurveEnds(ctx, vp, c, models, resolveEnds(style, curve, fig), {
+        color: c.color,
+        bg: theme.bg,
+        stroke: scale.stroke,
+        width: curveLineWidth(c, scale.stroke),
+      })
     } catch {
       /* curve render failed — skip */
     }

@@ -1,5 +1,6 @@
 import type {
   BoardKind,
+  EndCap,
   FitResult,
   FittedCurve,
   ModelSpec,
@@ -73,6 +74,7 @@ interface Props {
   onCurveEquation(id: string, src: string): string | null
   onStrokeWidth(id: string, width: number): void
   onDash(id: string, dash: number[] | undefined): void
+  onEnds(id: string, which: 'start' | 'end', cap: EndCap): void
   onOpacity(id: string, opacity: number): void
   onExprToggle(): void
   onExprSubmit(src: string): string | null
@@ -169,6 +171,7 @@ export function Sidebar({
   onCurveEquation,
   onStrokeWidth,
   onDash,
+  onEnds,
   onOpacity,
   onExprToggle,
   onExprSubmit,
@@ -294,6 +297,7 @@ export function Sidebar({
               onEquationCommit={(src) => onCurveEquation(curve.id, src)}
               onStrokeWidth={(w) => onStrokeWidth(curve.id, w)}
               onDash={(d) => onDash(curve.id, d)}
+              onEnds={(which, cap) => onEnds(curve.id, which, cap)}
               onOpacity={(o) => onOpacity(curve.id, o)}
               calc={calcFor(curve.id)}
               onAddCalc={(kind) => onAddCalc(curve.id, kind)}

@@ -169,6 +169,88 @@ describe('persist — round-trip fidelity', () => {
     expect(res.board!.mode).toBe('pan')
   })
 
+  // --- curve end caps ------------------------------------------------------
+  //
+  // 'auto' is not a value the document carries: it IS the absence of a choice,
+  // the state in which the figure style answers for the end. So a style that
+  // says nothing must serialise to exactly the bytes it did before end caps
+  // existed — a teacher's 2024 worksheet cannot start growing new keys.
+
+  it('round-trips a chosen cap on each end', () => {
+    const res = roundTrip(
+      board({
+        curves: [curve({ id: 'c1', modelId: 'line' })],
+        styles: { c1: { ends: { start: 'open', end: 'closed' } } },
+      }),
+    )
+    expect(res.board!.styles.c1).toEqual({ ends: { start: 'open', end: 'closed' } })
+  })
+
+  it('carries an end cap on a curve that has no other style at all', () => {
+    const res = roundTrip(
+      board({
+        curves: [curve({ id: 'c1', modelId: 'line' })],
+        styles: { c1: { ends: { end: 'arrow' } } },
+      }),
+    )
+    expect(res.board!.styles.c1).toEqual({ ends: { end: 'arrow' } })
+  })
+
+  it("writes no `ends` key for a curve whose ends are both 'auto'", () => {
+    const doc = docFromBoard(
+      META,
+      board({
+        curves: [curve({ id: 'c1', modelId: 'line' })],
+        styles: { c1: { dash: [8, 6], ends: { start: 'auto', end: 'auto' } } },
+      }),
+      2000,
+    )
+    expect(serializeDoc(doc)).not.toContain('ends')
+    const back = deserializeDoc(serializeDoc(doc))
+    expect(back.board!.styles.c1).toEqual({ dash: [8, 6] })
+  })
+
+  it('serialises a document without end caps byte-for-byte as it did before', () => {
+    const plain = board({
+      curves: [curve({ id: 'c1', modelId: 'line' })],
+      styles: { c1: { dash: [8, 6], opacity: 0.45 } },
+    })
+    const before = serializeDoc(docFromBoard(META, plain, 2000))
+    // Read it back and write it again: a load/save cycle must not touch a byte.
+    const reloaded = deserializeDoc(before)
+    const after = serializeDoc(
+      docFromBoard(META, { ...plain, styles: reloaded.board!.styles }, 2000),
+    )
+    expect(after).toBe(before)
+    expect(before).not.toContain('ends')
+  })
+
+  it('drops an unknown end cap rather than guessing at it', () => {
+    const doc = docFromBoard(
+      META,
+      board({ curves: [curve({ id: 'c1', modelId: 'line' })], styles: { c1: { opacity: 0.5 } } }),
+      2000,
+    )
+    const raw = JSON.parse(serializeDoc(doc)) as StoredDoc
+    const style = raw.board.curves[0].style as unknown as Record<string, unknown>
+    style.ends = { start: 'squiggle', end: 'closed' }
+    const res = deserializeDoc(JSON.stringify(raw))
+    expect(res.board!.styles.c1).toEqual({ opacity: 0.5, ends: { end: 'closed' } })
+  })
+
+  it('reads an ends record that is not an object as no ends at all', () => {
+    const doc = docFromBoard(
+      META,
+      board({ curves: [curve({ id: 'c1', modelId: 'line' })], styles: { c1: { opacity: 0.5 } } }),
+      2000,
+    )
+    const raw = JSON.parse(serializeDoc(doc)) as StoredDoc
+    const style = raw.board.curves[0].style as unknown as Record<string, unknown>
+    style.ends = 'arrow'
+    const res = deserializeDoc(JSON.stringify(raw))
+    expect(res.board!.styles.c1).toEqual({ opacity: 0.5 })
+  })
+
   it('round-trips the recognize() candidate list', () => {
     const cands: FitResult[] = [
       { modelId: 'sine', params: [1, 2, 0, 0], kind: 'explicit', domain: [-3, 3], error: 0.01, score: -12.5 },
