@@ -11,6 +11,7 @@ import type { FittedCurve, ModelSpec, SpecialPoint, SpecialPointKind } from '../
 import { MODELS } from '../src/core/fit/models'
 import { analyzeCurve } from '../src/core/analyze'
 import { centerFormToConic, conicToCenterForm } from '../src/core/fit/optimize'
+import { parseExpression } from '../src/core/parse'
 
 function curve(
   modelId: string,
@@ -988,5 +989,43 @@ describe('analyzeCurve — reciprocal', () => {
   it('has no y-intercept when the pole is on the y-axis', () => {
     const pts = analyzeCurve(curve('recip', [1, 0, 0], [-5, 5]), MODELS)
     expect(of(pts, 'y-intercept')).toHaveLength(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Holes — the full story lives in tests/holes.test.ts; these are the two facts
+// analyzeCurve itself is responsible for.
+// ---------------------------------------------------------------------------
+
+describe('analyzeCurve — removable discontinuities', () => {
+  /** A typed expression as the board holds it. */
+  function expr(src: string, domain: [number, number]) {
+    const r = parseExpression(src)
+    if (!r.ok) throw new Error(`expected "${src}" to parse, got: ${r.error}`)
+    const models = { expr_1: r.plot.makeModel('expr_1') }
+    const c: FittedCurve = {
+      ...curve('expr_1', r.plot.defaultParams, domain),
+      kind: r.plot.kind,
+    }
+    return analyzeCurve(c, models)
+  }
+
+  it('lists the hole of (x² − 1)/(x − 1) at (1, 2), labelled “hole”', () => {
+    const pts = expr('y = (x^2-1)/(x-1)', [-10, 10])
+    const holes = of(pts, 'hole')
+    expect(holes).toHaveLength(1)
+    expect(holes[0].label).toBe('hole')
+    expect(holes[0].pos.x).toBe(1)
+    expect(holes[0].pos.y).toBeCloseTo(2, 6)
+    // the y is a limit, so nothing about this point is claimed exact
+    expect(holes[0].exact).toBe(false)
+  })
+
+  it('a hole on the x-axis is not also reported as a zero', () => {
+    // (x − 1)²/(x − 1) changes sign across x = 1, which is exactly what the
+    // sign-change scan calls a root. There is no point on the graph there.
+    const pts = expr('y = (x-1)^2/(x-1)', [-10, 10])
+    expect(of(pts, 'hole')).toHaveLength(1)
+    expect(xsOf(pts, 'zero')).toEqual([])
   })
 })

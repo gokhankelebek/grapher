@@ -42,7 +42,9 @@ import { SCREEN_GRID, drawGrid, labelFont as figureFont, paintScale } from '../r
 import type { GridStyle } from '../render/grid'
 import { drawPolarGrid } from '../render/polarGrid'
 import { curveLineWidth, drawCurve, drawInk } from '../render/curves'
-import { drawCurveEnds, resolveEnds } from '../render/endCaps'
+import { END_DOT_R, curveEndPoints, drawCurveEnds, resolveEnds } from '../render/endCaps'
+import { drawAsymptotes, drawHoles, holeRange } from '../render/holes'
+import { findHoles, findPoles } from '../core/holes'
 import type { Overlay } from '../render/overlays'
 import { drawOverlays } from '../render/overlays'
 import type { Polyline, SlopeField } from '../render/fields'
@@ -402,9 +404,31 @@ function roundRect(
  */
 export const FILLED_POINT_R = 3.5
 
+/**
+ * Does this kind of point get a marker GLYPH from the analysis layer?
+ *
+ * A hole does not, and it is the only kind that does not. Its glyph is already
+ * on the board — the open ring drawn with the curve (src/render/holes.ts),
+ * which is there in every figure style whether the analysis layer is switched
+ * on or not. A second disc on top of it would fill the one mark whose whole
+ * meaning is that it is empty. The hole still gets its LABEL: "(1, 2)" is the
+ * number the question is about.
+ *
+ * Exported because the hit test in CanvasStage has to ask the same question a
+ * marker it did not draw must never be clickable — and a hole cannot be moved
+ * in any case, so there is nothing for a click to open.
+ */
+export function hasMarkerGlyph(kind: SpecialPoint['kind']): boolean {
+  return kind !== 'hole'
+}
+
 function markerRadius(p: SpecialPoint, s: number, grow = 0, filled = false): number {
   if (filled) return (FILLED_POINT_R + grow) * s
   switch (p.kind) {
+    // The ring the curve loop already drew: the label steps off THAT, since
+    // it is the glyph a reader sees here.
+    case 'hole':
+      return (END_DOT_R + grow) * s
     case 'zero':
       return (4 + grow) * s
     case 'inflection':
@@ -656,6 +680,9 @@ export function drawAnalysis(
 
   for (const m of shown) {
     if (m.masked) continue
+    // A hole's glyph is the open ring the curve loop drew; nothing goes on top
+    // of it, not even a hover halo — there is no marker here to point at.
+    if (!hasMarkerGlyph(m.p.kind)) continue
     const emphasised = emph(m.i)
     if (o.halos && (m.i === o.openIdx || m.i === o.hoverIdx)) {
       drawMarkerHalo(ctx, m.sx, m.sy, o.color, m.i === o.openIdx, stroke)
@@ -1216,6 +1243,35 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
           : print
           ? { ...curve, color: paint(curve.color) }
           : curve
+      // Where the formula breaks. Both lists come from src/core/holes.ts, and
+      // both are looked for over the VISIBLE x-range padded a little — a hole
+      // three screens away costs a bisection and is never drawn.
+      //
+      // The dashed asymptote is a figure convention (a textbook rules one, the
+      // screen does not, because the break in the stroke already says it), so
+      // it asks the same question the end caps ask: does this figure MARK what
+      // its curves do at the edges? It goes down BEFORE the curve so the curve
+      // sits on top of it.
+      const breaks = holeRange(vp)
+      let holes: readonly { x: number; y: number }[] = []
+      if (breaks) {
+        try {
+          holes = findHoles(c, models, breaks)
+        } catch {
+          /* the curve still draws; only its rings are lost */
+        }
+        if (fig !== null && fig.curveEnds === 'marked') {
+          try {
+            drawAsymptotes(ctx, vp, findPoles(c, models, breaks), {
+              color: c.color,
+              bg: theme.bg,
+              stroke: scale.stroke,
+            })
+          } catch {
+            /* ditto */
+          }
+        }
+      }
       // lightGround: the selection halo is a wash of the curve's own colour,
       // and at 25% on white it was invisible — the same bug as the palette.
       drawCurve(ctx, c, models, vp, selected, {
@@ -1236,6 +1292,39 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
         stroke: scale.stroke,
         width: curveLineWidth(c, scale.stroke),
       })
+      // A hole is not a figure convention: EVERY style rings it, the screen
+      // included. A board that draws (x²-1)/(x-1) as an unbroken line through
+      // (1, 2) has stated something false, and the ring is what stops it. It
+      // is the SAME glyph as an open end cap on purpose — both say "this point
+      // is not on the graph" — and it goes on top of the stroke it interrupts.
+      //
+      // Which is exactly why a hole that IS an end must not be ringed twice:
+      // a graph restricted to [-3, 1] that stops at its own hole gets one
+      // hollow circle, not two in the same place. The geometry is only asked
+      // for when there is a hole to place AND a cap that could already be
+      // marking it — with no holes, or with a figure that caps nothing, this
+      // costs one field read.
+      let capped: Vec2[] = []
+      if (holes.length > 0) {
+        const guess = resolveEnds(style, curve, fig)
+        if (guess.start !== 'none' || guess.end !== 'none') {
+          try {
+            const pts = curveEndPoints(c, models, vp)
+            const settled = resolveEnds(style, curve, fig, pts)
+            if (pts.start && settled.start === 'open') capped.push(pts.start.at)
+            if (pts.end && settled.end === 'open') capped.push(pts.end.at)
+          } catch {
+            capped = []
+          }
+        }
+      }
+      drawHoles(
+        ctx,
+        vp,
+        holes,
+        { color: c.color, bg: theme.bg, stroke: scale.stroke },
+        capped,
+      )
     } catch {
       /* curve render failed — skip */
     }

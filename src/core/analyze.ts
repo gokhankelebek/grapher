@@ -21,6 +21,7 @@ import type {
   FittedCurve, ModelSpec, SpecialPoint, SpecialPointKind, Vec2,
 } from './types'
 import { conicToCenterForm } from './fit/optimize'
+import { findHoles } from './holes'
 
 // ---------------------------------------------------------------------------
 // Tuning
@@ -34,6 +35,8 @@ const PARAM_SAMPLES = 720
 const DEFAULT_DOMAIN: [number, number] = [-10, 10]
 /** Two points closer than this in x are the same point. */
 const DEDUPE_X = 1e-6
+/** A zero/extremum this close (relatively) to a hole IS the hole. */
+const HOLE_DEDUPE = 1e-6
 
 const EPS = Number.EPSILON
 /** Step for a central-difference first derivative: cbrt(eps) ~ 6.1e-6. */
@@ -704,6 +707,7 @@ function closedForm(
 function analyzeExplicit(
   curve: FittedCurve,
   spec: ModelSpec,
+  models: Record<string, ModelSpec>,
 ): SpecialPoint[] {
   const evalF = spec.evalExplicit
   if (!evalF) return []
@@ -735,7 +739,29 @@ function analyzeExplicit(
     }
   }
 
-  return finish(out)
+  // ---- holes ------------------------------------------------------------
+  // Removable discontinuities, over the SAME range everything else was found
+  // on. A hole is not a zero and not an extremum, however the scan read it:
+  // (x−1)²/(x−1) has the limit 0 at x = 1 and a sign change straddling it, so
+  // the sign-change scan reports an x-intercept that the curve does not have.
+  // Whatever the numeric core found AT a hole is dropped in its favour.
+  const holes = findHoles(curve, models, [lo, hi])
+  const kept = holes.length === 0
+    ? finish(out)
+    : finish(out).filter(p => !holes.some(
+        h => Math.abs(p.pos.x - h.x) <= HOLE_DEDUPE * Math.max(1, Math.abs(h.x)),
+      ))
+
+  // Holes come after the zeros, extrema and inflections: they are a different
+  // kind of fact about the curve, and the readout lists them last.
+  // `exact` stays false even for a hole whose x is exact (an explicit
+  // `{x != 2}`): SpecialPoint has ONE exact flag and the y here is a limit,
+  // never an exact value, so claiming exactness would overstate the y.
+  for (const h of holes.slice().sort((a, b) => a.x - b.x)) {
+    const q = pt('hole', h.x, h.y, 'hole', false)
+    if (q) kept.push(q)
+  }
+  return kept
 }
 
 /** Dedupe within each kind, drop non-finite, sort left to right. */
@@ -953,7 +979,7 @@ export function analyzeCurve(
     const spec = models[curve.modelId]
     if (!spec || !curve.params.every(Number.isFinite)) return []
 
-    if (spec.evalExplicit) return analyzeExplicit(curve, spec)
+    if (spec.evalExplicit) return analyzeExplicit(curve, spec, models)
     if (spec.evalPolar) return analyzePolar(curve, spec)
     if (spec.kind === 'implicit') {
       if (curve.modelId === 'circle') return analyzeCircle(curve)

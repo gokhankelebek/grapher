@@ -547,6 +547,288 @@ function compile(n: Node): Evaluator {
 }
 
 // ----------------------------------------------------------------------------
+// Singularities — where the formula is UNDEFINED as written
+//
+// Collected ONCE, at compile time, by walking the AST: every denominator, the
+// cos/sin whose zeros are a tan/sec/cot/csc pole, and the base of a negative
+// power. Each becomes a compiled evaluator q(params, x); the singular x are
+// the zeros of q. Points the teacher excluded with `{x != c}` are carried
+// alongside as exact values — the exclusion is a real singularity of the
+// written formula, not only a note on the equation.
+//
+// At call time each q is scanned over the requested range (SING_SAMPLES + 1
+// samples), sign changes are bisected, and a q that TOUCHES zero without
+// changing sign (x² in 1/x²) is caught by refining the minima of |q|. The
+// result is sorted, deduplicated and memoised on (params, range): the renderer
+// asks per frame.
+//
+// Sorting holes from poles is src/core/holes.ts's job — this only says where
+// the formula stops being a formula.
+// ----------------------------------------------------------------------------
+
+/** Samples used to bracket the zeros of one denominator. */
+const SING_SAMPLES = 512
+
+/** Two singular points closer than this (relative) are the same point. */
+const SING_DEDUPE = 1e-9
+
+/**
+ * tan and sec blow up where cos(arg) = 0; cot and csc where sin(arg) = 0.
+ * (Only `tan` is in FUNCS today; the others are listed so that adding them is
+ * a one-line change here rather than a forgotten case.)
+ */
+const TRIG_POLE: Record<string, 'cos' | 'sin'> = {
+  tan: 'cos', sec: 'cos',
+  cot: 'sin', csc: 'sin',
+}
+
+/** One sub-expression whose zeros are singular, and where they may lie. */
+interface SingSource {
+  q: Evaluator
+  /** null = anywhere; otherwise only zeros this piecewise branch owns count */
+  within: Piece[] | null
+}
+
+/** Everything a compiled expression knows about its own singularities. */
+interface SingPlan {
+  sources: SingSource[]
+  /** x values removed by an explicit `{x != c}` — exact, no scanning needed */
+  exclusions: number[]
+}
+
+const emptySingPlan = (): SingPlan => ({ sources: [], exclusions: [] })
+
+/** True for a literal negative exponent, written `-2` or `(-2)`. */
+function negativeExponent(n: Node): boolean {
+  if (n.t === 'num') return n.v < 0
+  if (n.t === 'neg') return n.a.t === 'num' && n.a.v > 0
+  return false
+}
+
+/** Walk the AST once, compiling every sub-expression whose zeros are singular. */
+function collectSingSources(n: Node, within: Piece[] | null, out: SingSource[]): void {
+  switch (n.t) {
+    case 'neg':
+      collectSingSources(n.a, within, out)
+      break
+    case 'bin':
+      if (n.op === '/') {
+        out.push({ q: compile(n.b), within })
+      } else if (n.op === '^' && negativeExponent(n.b)) {
+        // x^-2 is 1/x²: the base is a denominator wearing a different hat
+        out.push({ q: compile(n.a), within })
+      }
+      collectSingSources(n.a, within, out)
+      collectSingSources(n.b, within, out)
+      break
+    case 'call': {
+      const trig = TRIG_POLE[n.fn]
+      if (trig) {
+        const inner = compile(n.args[0])
+        const g = trig === 'cos' ? Math.cos : Math.sin
+        out.push({ q: (p, a, b) => g(inner(p, a, b)), within })
+      }
+      for (const arg of n.args) collectSingSources(arg, within, out)
+      break
+    }
+    default:
+      break
+  }
+}
+
+/** The singularity plan for one explicit body, unrestricted. */
+function singPlanOf(body: Node | null): SingPlan {
+  const plan = emptySingPlan()
+  if (body) collectSingSources(body, null, plan.sources)
+  return plan
+}
+
+type Scalar = (x: number) => number
+
+/** Bisect q to a zero inside a bracket it changes sign across. */
+function bisectSingular(q: Scalar, a: number, b: number): number | null {
+  let lo = a
+  let hi = b
+  let flo = q(lo)
+  let fhi = q(hi)
+  if (!Number.isFinite(flo) || !Number.isFinite(fhi)) return null
+  if (flo === 0) return lo
+  if (fhi === 0) return hi
+  if (flo > 0 === fhi > 0) return null
+  for (let i = 0; i < 80; i++) {
+    const m = 0.5 * (lo + hi)
+    if (m === lo || m === hi) break
+    const fm = q(m)
+    if (!Number.isFinite(fm)) return null
+    if (fm === 0) return m
+    if (fm > 0 === flo > 0) { lo = m; flo = fm } else { hi = m; fhi = fm }
+  }
+  return snapSingular(q, 0.5 * (lo + hi), lo, hi)
+}
+
+/**
+ * The simplest number in [lo, hi] that q likes at least as much as `m`.
+ *
+ * Bisection lands within an ulp of the root; a teacher typed a number. Taking
+ * the round number back turns 0.9999999999999998 into exactly 1 — which is
+ * what lets the hole be reported at the x that was written, and what lets
+ * src/core/holes.ts call it exact.
+ */
+function snapSingular(q: Scalar, m: number, lo: number, hi: number): number {
+  const a = Math.min(lo, hi)
+  const b = Math.max(lo, hi)
+  const best = Math.abs(q(m))
+  const better = (c: number): boolean => {
+    const v = Math.abs(q(c))
+    return Number.isFinite(v) && (v <= best || !Number.isFinite(best))
+  }
+  if (a <= 0 && b >= 0 && better(0)) return 0
+  for (let p = 1; p <= 15; p++) {
+    const c = Number(m.toPrecision(p))
+    if (c >= a && c <= b && better(c)) return c
+  }
+  return m
+}
+
+/** Golden-section minimum of |q| on [a, b] — derivative free. */
+function goldenMinAbs(q: Scalar, a: number, b: number): number {
+  const phi = 0.6180339887498949
+  let lo = a
+  let hi = b
+  let x1 = hi - (hi - lo) * phi
+  let x2 = lo + (hi - lo) * phi
+  let f1 = Math.abs(q(x1))
+  let f2 = Math.abs(q(x2))
+  for (let i = 0; i < 80; i++) {
+    if (!Number.isFinite(f1) || !Number.isFinite(f2)) break
+    if (f1 < f2) {
+      hi = x2; x2 = x1; f2 = f1
+      x1 = hi - (hi - lo) * phi
+      f1 = Math.abs(q(x1))
+    } else {
+      lo = x1; x1 = x2; f1 = f2
+      x2 = lo + (hi - lo) * phi
+      f2 = Math.abs(q(x2))
+    }
+    if (hi - lo < 1e-15 * Math.max(1, Math.abs(lo))) break
+  }
+  return 0.5 * (lo + hi)
+}
+
+/** Every zero of q in [lo, hi] — sign changes AND the ones that only touch. */
+function scanSingularZeros(q: Scalar, lo: number, hi: number, out: number[]): void {
+  const n = SING_SAMPLES
+  const step = (hi - lo) / n
+  const xs = new Array<number>(n + 1)
+  const ys = new Array<number>(n + 1)
+  const mags: number[] = []
+  for (let i = 0; i <= n; i++) {
+    const x = i === n ? hi : lo + i * step
+    xs[i] = x
+    const v = q(x)
+    ys[i] = v
+    if (Number.isFinite(v)) mags.push(Math.abs(v))
+  }
+  if (mags.length === 0) return
+  mags.sort((p, r) => p - r)
+  // the curve's own magnitude, so "close to zero" means close relative to it
+  const qScale = Math.max(mags[Math.min(mags.length - 1, Math.floor(0.75 * mags.length))], 1e-300)
+  const touchTol = 1e-10 * qScale
+
+  for (let i = 0; i <= n; i++) {
+    if (ys[i] === 0) out.push(xs[i])
+  }
+  for (let i = 0; i < n; i++) {
+    const ya = ys[i]
+    const yb = ys[i + 1]
+    if (!Number.isFinite(ya) || !Number.isFinite(yb)) continue
+    if (ya === 0 || yb === 0) continue // already taken, exactly
+    if (ya > 0 === yb > 0) continue
+    const r = bisectSingular(q, xs[i], xs[i + 1])
+    if (r !== null) out.push(r)
+  }
+  // A denominator that only TOUCHES zero (x² in 1/x²) never changes sign, so
+  // the scan above cannot see it. Look for minima of |q| that are not a
+  // crossing, refine them, and accept only a genuine zero.
+  for (let i = 1; i < n; i++) {
+    const a = ys[i - 1]
+    const b = ys[i]
+    const c = ys[i + 1]
+    if (!Number.isFinite(a) || !Number.isFinite(b) || !Number.isFinite(c)) continue
+    if (a === 0 || b === 0 || c === 0) continue
+    if (a > 0 !== c > 0) continue // a crossing — the sign-change scan has it
+    const pa = Math.abs(a), pb = Math.abs(b), pc = Math.abs(c)
+    if (!(pb <= pa && pb <= pc) || (pb === pa && pb === pc)) continue
+    const xm = goldenMinAbs(q, xs[i - 1], xs[i + 1])
+    const v = q(xm)
+    if (!Number.isFinite(v) || Math.abs(v) > touchTol) continue
+    out.push(snapSingular(q, xm, xs[i - 1], xs[i + 1]))
+  }
+}
+
+/** True when `x` is a number somebody could have written down. */
+const looksWritten = (x: number): boolean => x === Number(x.toPrecision(12))
+
+function computeSingularities(
+  plan: SingPlan,
+  params: readonly number[],
+  range: [number, number],
+): number[] {
+  const lo = Math.min(range[0], range[1])
+  const hi = Math.max(range[0], range[1])
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || !(hi > lo)) return []
+
+  const raw: number[] = []
+  for (const s of plan.sources) {
+    const q: Scalar = (x) => {
+      let v: number
+      try { v = s.q(params, x, 0) } catch { return Number.NaN }
+      return typeof v === 'number' ? v : Number.NaN
+    }
+    const found: number[] = []
+    scanSingularZeros(q, lo, hi, found)
+    for (const r of found) {
+      if (s.within === null || inPieces(s.within, r)) raw.push(r)
+    }
+  }
+  for (const c of plan.exclusions) raw.push(c)
+
+  raw.sort((a, b) => a - b)
+  const kept: number[] = []
+  for (const x of raw) {
+    if (!Number.isFinite(x) || x < lo || x > hi) continue
+    const n = kept.length
+    if (n > 0 && Math.abs(x - kept[n - 1]) <= SING_DEDUPE * Math.max(1, Math.abs(x))) {
+      // same point, two spellings: keep the one that was written down
+      if (looksWritten(x) && !looksWritten(kept[n - 1])) kept[n - 1] = x
+      continue
+    }
+    kept.push(x)
+  }
+  return kept
+}
+
+/**
+ * The memoised `singularities` a typed explicit expression carries.
+ * The renderer asks once per frame with the same (params, range); scanning
+ * every denominator again each time would be the whole budget.
+ */
+function makeSingularities(
+  plan: SingPlan,
+): (params: number[], range: [number, number]) => number[] {
+  let key: string | null = null
+  let cached: number[] = []
+  return (params, range) => {
+    const k = `${params.join(',')}|${range[0]}|${range[1]}`
+    if (k !== key) {
+      key = k
+      cached = computeSingularities(plan, params, range)
+    }
+    return cached.slice()
+  }
+}
+
+// ----------------------------------------------------------------------------
 // LaTeX generation
 // ----------------------------------------------------------------------------
 
@@ -662,6 +944,8 @@ interface Classified {
   latex: string
   /** compiled evaluator; meaning of slots depends on kind */
   ev: Evaluator
+  /** the explicit body, kept so its singularities can be collected; null otherwise */
+  body: Node | null
 }
 
 function classify(lhs: Node, rhs: Node | null): Classified {
@@ -701,6 +985,7 @@ function classify(lhs: Node, rhs: Node | null): Classified {
       domain: [0, 2 * Math.PI],
       latex: `r = ${toLatex(body)}`,
       ev: compile(body),
+      body: null,
     }
   }
 
@@ -708,10 +993,10 @@ function classify(lhs: Node, rhs: Node | null): Classified {
   if (rhs === null) {
     if (usesY) {
       // bare expression containing y -> implicit expr = 0
-      return { kind: 'implicit', domain: null, latex: `${toLatex(lhs)} = 0`, ev: compile(lhs) }
+      return { kind: 'implicit', domain: null, latex: `${toLatex(lhs)} = 0`, ev: compile(lhs), body: null }
     }
     // bare f(x) (or f(t), or a constant) -> y = expr
-    return { kind: 'explicit', domain: null, latex: `y = ${toLatex(lhs)}`, ev: compile(lhs) }
+    return { kind: 'explicit', domain: null, latex: `y = ${toLatex(lhs)}`, ev: compile(lhs), body: lhs }
   }
 
   // y = f(...) / f(...) = y  (rhs must not itself contain y)
@@ -719,7 +1004,7 @@ function classify(lhs: Node, rhs: Node | null): Classified {
     if (isVar(side, 'y')) {
       const ov = new Set<VarName>(); collectVars(other, ov)
       if (!ov.has('y')) {
-        return { kind: 'explicit', domain: null, latex: `y = ${toLatex(other)}`, ev: compile(other) }
+        return { kind: 'explicit', domain: null, latex: `y = ${toLatex(other)}`, ev: compile(other), body: other }
       }
     }
   }
@@ -733,6 +1018,7 @@ function classify(lhs: Node, rhs: Node | null): Classified {
     domain: null,
     latex: `${toLatex(lhs)} = ${toLatex(rhs)}`,
     ev: compile({ t: 'bin', op: '-', a: lhs, b: rhs }),
+    body: null,
   }
 }
 
@@ -777,6 +1063,7 @@ function makePlot(
   paramNames: string[],
   domain: [number, number] | null,
   ev: Evaluator,
+  sing: SingPlan | null = null,
 ): ParsedPlot {
   const defaultParams = paramNames.map(() => 1)
   return {
@@ -796,6 +1083,9 @@ function makePlot(
       }
       if (kind === 'explicit') {
         spec.evalExplicit = (params, x) => ev(params, x, 0)
+        // Explicit expressions are the only ones that answer this today; a
+        // polar or implicit plot simply carries no `singularities`.
+        spec.singularities = makeSingularities(sing ?? emptySingPlan())
       } else if (kind === 'polar') {
         spec.evalPolar = (params, theta) => ev(params, theta, 0)
       } else {
@@ -1114,19 +1404,26 @@ function parseRestricted(src: string, cut: Cut): ParsedPlot {
   // curve is not a piecewise and there is no gap to draw at sampling width —
   // so the restriction becomes a note on the equation, not a fake hole.
   const holes = excludedPoints(pieces)
+  // An exclusion is not only a note on the equation: `{x != 2}` says the
+  // formula is undefined at 2, which is exactly a singularity — an exact one,
+  // with no scanning needed to find it.
+  const plan = singPlanOf(cls.body)
+  if (holes) {
+    for (const h of holes) if (Number.isFinite(h.hi)) plan.exclusions.push(h.hi)
+  }
   const branch: Branch = {
     ev: cls.ev,
     pieces: holes && holes.length > 0 ? WHOLE_LINE() : pieces,
     bodyTex: cls.latex,
     condTex: '',
   }
-  const plan = planBranches(cls.kind, [branch])
+  const layout = planBranches(cls.kind, [branch])
 
   let latex = cls.latex
   if (holes && holes.length > 0) latex += `,\\ ${exclusionLatex(holes, vTex)}`
   else if (!isWholeLine(pieces)) latex += `,\\ ${setLatex(pieces, vTex)}`
 
-  return makePlot(cls.kind, latex, paramNames, plan.domain, plan.ev)
+  return makePlot(cls.kind, latex, paramNames, layout.domain, layout.ev, plan)
 }
 
 /** The `y =` / `f(x) =` / `r =` head of a piecewise definition. */
@@ -1278,12 +1575,25 @@ function buildPiecewise(headRaw: string, headAt: number, raws: RawBranch[]): Par
   // Every branch is checked against the same variable, so each gets its own
   // context and the mismatch is reported branch by branch.
   const ctxs: CondCtx[] = []
+  // Each branch owns its own singularities, and only inside the set it owns:
+  // the 0 of `1/x if x < 0` is the branch's edge, not a pole of the piece.
+  const plan = emptySingPlan()
   const branches: Branch[] = raws.map((raw, i) => {
     const ctx = newCtx(analyzeExpr)
     ctxs.push(ctx)
     const pieces = raw.otherwise
       ? WHOLE_LINE()
       : branchPieces(raw.cond, raw.condAt, want, ctx)
+    if (kind === 'explicit') {
+      // `{ x^2 if x != 2 }` removes a point rather than cutting the branch in
+      // two; the excluded x is an exact singularity of that branch.
+      const excluded = excludedPoints(pieces)
+      const owns = excluded && excluded.length > 0 ? WHOLE_LINE() : pieces
+      collectSingSources(bodies[i], isWholeLine(owns) ? null : owns, plan.sources)
+      if (excluded) {
+        for (const h of excluded) if (Number.isFinite(h.hi)) plan.exclusions.push(h.hi)
+      }
+    }
     return {
       ev: compile(bodies[i]),
       pieces,
@@ -1294,7 +1604,7 @@ function buildPiecewise(headRaw: string, headAt: number, raws: RawBranch[]): Par
   const vTex = ctxs.find((c) => c.tex !== null)?.tex ?? VAR_LATEX[want]
   for (const b of branches) b.condTex = compactLatex(b.pieces, vTex)
 
-  const plan = planBranches(kind, branches)
+  const layout = planBranches(kind, branches)
 
   // One branch IS a restriction — print it as one, so the two spellings of the
   // same curve produce the same card.
@@ -1310,7 +1620,7 @@ function buildPiecewise(headRaw: string, headAt: number, raws: RawBranch[]): Par
     const rows = branches.map((b) => `${b.bodyTex} & ${b.condTex}`)
     latex = `${head.tex} = \\begin{cases} ${rows.join(' \\\\ ')} \\end{cases}`
   }
-  return makePlot(kind, latex, paramNames, plan.domain, plan.ev)
+  return makePlot(kind, latex, paramNames, layout.domain, layout.ev, plan)
 }
 
 /** `piecewise(e1, c1, e2, c2, ...)` with an optional final default value. */
@@ -1420,7 +1730,10 @@ export function parseExpression(src: string): ParseOutcome {
     if (restricted) return { ok: true, plot: restricted }
 
     const { cls, paramNames } = compileEquation(src)
-    return { ok: true, plot: makePlot(cls.kind, cls.latex, paramNames, cls.domain, cls.ev) }
+    return {
+      ok: true,
+      plot: makePlot(cls.kind, cls.latex, paramNames, cls.domain, cls.ev, singPlanOf(cls.body)),
+    }
   } catch (err) {
     if (err instanceof ParseError) {
       return err.pos !== undefined

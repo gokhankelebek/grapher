@@ -22,7 +22,7 @@ import { MODELS } from '../src/core/fit/models'
 import { analyzeCurve } from '../src/core/analyze'
 import { getHandles } from '../src/core/fit/edit'
 import { DARK_THEME, LIGHT_THEME, CURVE_COLORS, PRINT_CURVE_COLORS } from '../src/core/types'
-import type { FittedCurve, Viewport } from '../src/core/types'
+import type { FittedCurve, SpecialPoint, Viewport } from '../src/core/types'
 
 const VP: Viewport = { center: { x: 0, y: 0 }, pxPerUnit: 60, widthPx: 900, heightPx: 700 }
 
@@ -702,5 +702,46 @@ describe('renderBoard — shapes absent change nothing', () => {
     expect(curve, 'the curve was never stroked').toBeGreaterThanOrEqual(0)
     expect(shape, 'the figure was never stroked').toBeGreaterThanOrEqual(0)
     expect(curve, 'the figure went under the curve').toBeLessThan(shape)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Holes: the one analysis kind with no marker of its own.
+//
+// Its glyph — the open ring — is drawn with the CURVE, in every figure style,
+// whether the analysis layer is on or not (src/render/holes.ts). The analysis
+// layer therefore states the coordinates and draws nothing else: a filled disc
+// on top of a ring would fill in the one mark whose whole meaning is that it
+// is empty. Tested here against the REAL src/core/holes.ts, so this also pins
+// that an empty hole list leaves the board exactly as it was.
+// ---------------------------------------------------------------------------
+
+describe('renderBoard — a hole states its coordinates and draws no marker', () => {
+  const HOLE: SpecialPoint = {
+    kind: 'hole', pos: { x: 1, y: -2.1 }, label: 'hole', exact: false,
+  }
+  const at = (points: SpecialPoint[]): MockCtx =>
+    render(scene({ chrome: null, analysis: { curve: CUBIC, points } }))
+
+  it('adds a label chip and not one more arc', () => {
+    const none = at([])
+    const one = at([HOLE])
+    expect(one.textCount).toBeGreaterThan(none.textCount)
+    expect(one.arcCount).toBe(none.arcCount)
+  })
+
+  it('leaves every other kind\u2019s markers exactly as they were', () => {
+    const real = analyzeCurve(CUBIC, MODELS)
+    expect(real.length, 'fixture must have markers to preserve').toBeGreaterThan(0)
+    const plain = at(real.slice())
+    const mixed = at([...real, HOLE])
+    expect(mixed.arcCount).toBe(plain.arcCount)
+    expect(mixed.textCount).toBeGreaterThanOrEqual(plain.textCount)
+  })
+
+  it('the curve loop leaves no dash behind for the next layer', () => {
+    // drawAsymptotes runs inside that loop and sets a dash of its own; the
+    // shapes, the analysis layer and the caption are all drawn after it.
+    expect(render(scene({ chrome: null })).getLineDash()).toEqual([])
   })
 })

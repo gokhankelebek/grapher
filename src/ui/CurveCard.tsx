@@ -140,12 +140,27 @@ function endSideName(kind: FittedCurve['kind'], which: 'start' | 'end'): string 
 }
 
 /** Readout order: what a student is asked to find, in the order they find it. */
-const ANALYSIS_ROWS: { kind: SpecialPointKind; label: string; plural?: string }[] = [
+/**
+ * The analysis table, in reading order.
+ *
+ * `readOnly` marks a row whose values are STATED rather than offered: a hole
+ * is where the formula has no value, so there is nothing to put anywhere else
+ * — "put this hole at x = 3" is not a sentence about a function, it is a
+ * different function. Every other row is click-to-edit, because every other
+ * feature is a consequence of the parameters and the solver can move it.
+ */
+const ANALYSIS_ROWS: {
+  kind: SpecialPointKind
+  label: string
+  plural?: string
+  readOnly?: boolean
+}[] = [
   { kind: 'zero', label: 'Zero', plural: 'Zeros' },
   { kind: 'maximum', label: 'Maximum', plural: 'Maxima' },
   { kind: 'minimum', label: 'Minimum', plural: 'Minima' },
   { kind: 'inflection', label: 'Inflection', plural: 'Inflections' },
   { kind: 'y-intercept', label: 'y-intercept' },
+  { kind: 'hole', label: 'Hole', plural: 'Holes', readOnly: true },
   { kind: 'extreme', label: 'Extreme', plural: 'Extremes' },
   { kind: 'petal-tip', label: 'Petal tip', plural: 'Petal tips' },
 ]
@@ -589,9 +604,17 @@ export function CurveCard({
     })).filter((g) => g.items.length > 0)
   }, [analysis])
 
-  /** Every listed value, in the order the table reads. Drives Enter-advances. */
+  /**
+   * Every EDITABLE value, in the order the table reads. Drives Enter-advances.
+   *
+   * A read-only row is skipped rather than landed on: Enter through the zeros
+   * must not stop on a hole and open an editor that cannot commit.
+   */
   const readingOrder = useMemo(
-    () => analysisGroups.flatMap((g) => g.items.map(({ index }) => index)),
+    () =>
+      analysisGroups
+        .filter((g) => !g.readOnly)
+        .flatMap((g) => g.items.map(({ index }) => index)),
     [analysisGroups],
   )
 
@@ -1203,6 +1226,26 @@ export function CurveCard({
                         const keys = axisKeys(featureAxes(point.kind))
                         const pair = keys.length > 1
                         const last = n === g.items.length - 1
+                        // The separator is part of the value's own text: a
+                        // comma that can wrap on its own ends a line with a
+                        // dangling punctuation mark.
+                        const text =
+                          point.kind === 'zero'
+                            ? formatCoord(point.pos.x, { scale, exact: point.exact })
+                            : `(${formatCoord(point.pos.x, { scale, exact: point.exact })}, ${formatCoord(
+                                point.pos.y,
+                                { scale, exact: point.exact },
+                              )})`
+                        // A hole is stated, never offered: it is the one place
+                        // the formula has no value, so there is nothing for an
+                        // editor to move. No button, no hover, no hint.
+                        if (g.readOnly) {
+                          return (
+                            <span className="an-value an-value-static" key={index}>
+                              {last ? text : `${text},`}
+                            </span>
+                          )
+                        }
                         if (featureEdit?.index === index) {
                           return (
                             <span
@@ -1261,16 +1304,6 @@ export function CurveCard({
                             </span>
                           )
                         }
-                        // The separator is part of the value's own text: a
-                        // comma that can wrap on its own ends a line with a
-                        // dangling punctuation mark.
-                        const text =
-                          point.kind === 'zero'
-                            ? formatCoord(point.pos.x, { scale, exact: point.exact })
-                            : `(${formatCoord(point.pos.x, { scale, exact: point.exact })}, ${formatCoord(
-                                point.pos.y,
-                                { scale, exact: point.exact },
-                              )})`
                         return (
                           <button
                             key={index}

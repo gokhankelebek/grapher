@@ -2198,6 +2198,17 @@ button.an-value {
   color: #fff;
 }
 
+/* A hole cannot be moved — it is where the formula has no value at all — so
+   its readout is stated, not offered. No hover wash, because a wash that
+   lights up under the pointer promises a click that does nothing. */
+.an-value-static,
+.an-value-static:hover,
+.an-value-static:focus-visible {
+  background: none;
+  color: var(--text);
+  cursor: default;
+}
+
 /* inline "state this feature exactly" editor, in place of the value */
 .an-edit {
   display: inline-flex;

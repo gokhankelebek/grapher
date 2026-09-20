@@ -28,7 +28,7 @@ import {
   oversketch,
   nearestOnCurve,
 } from '../core/fit/edit'
-import { handleHitRadius, renderBoard } from './renderBoard'
+import { handleHitRadius, hasMarkerGlyph, renderBoard } from './renderBoard'
 import type { AxisUnits, Overlay, Polyline, Shape, SlopeField } from './renderBoard'
 import type { BoardGrid } from '../core/persist'
 import {
@@ -1027,6 +1027,9 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       for (let i = 0; i < points.length; i++) {
         const p = points[i]
         if (!p || !p.pos || !Number.isFinite(p.pos.x) || !Number.isFinite(p.pos.y)) continue
+        // A hole has no marker of its own (the curve layer draws the ring) and
+        // no value to move: it is never a click target.
+        if (!hasMarkerGlyph(p.kind)) continue
         const sp = toScreen(p.pos, vp)
         const d = Math.hypot(sp.x - pos.x, sp.y - pos.y)
         if (d > bestD) continue

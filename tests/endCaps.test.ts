@@ -673,7 +673,10 @@ describe('natural domain endpoints', () => {
 
     const whole = typed('y = (x^2 - 1)/(x - 1)')
     expect(curveEndPoints(whole.curve, whole.models, VP).start!.kind).toBe('exit')
-    expect(typedCaps(whole).map((c) => c.kind)).toEqual(['arrow', 'arrow'])
+    // Two run-offs, and the open ring the hole itself now gets: the removable
+    // discontinuity is drawn wherever it falls, end or middle. `caps` cannot
+    // tell that ring from an end cap — it is the same glyph — so it counts.
+    expect(typedCaps(whole).map((c) => c.kind)).toEqual(['arrow', 'arrow', 'open'])
 
     const upTo = typed('y = (x^2 - 1)/(x - 1)', [-3, 1])
     const ends = curveEndPoints(upTo.curve, upTo.models, VP)

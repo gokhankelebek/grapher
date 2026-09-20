@@ -22,6 +22,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef } from 
 import type { MutableRefObject } from 'react'
 import type { FittedCurve, SpecialPoint, Theme, Viewport } from '../core/types'
 import { toScreen } from '../core/types'
+import { hasMarkerGlyph } from './renderBoard'
 
 const TWO_PI = Math.PI * 2
 
@@ -79,6 +80,9 @@ export function drawContextMarkers(
   ctx.globalAlpha = alpha
   for (const p of points) {
     if (!p || !p.pos || !Number.isFinite(p.pos.x) || !Number.isFinite(p.pos.y)) continue
+    // A hole is drawn by the curve layer as an open ring; a filled context dot
+    // here would say the opposite of what the ring says.
+    if (!hasMarkerGlyph(p.kind)) continue
     const s = toScreen(p.pos, vp)
     if (s.x < -30 || s.y < -30 || s.x > vp.widthPx + 30 || s.y > vp.heightPx + 30) continue
     const r = radiusOf(p.kind)
