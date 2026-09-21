@@ -29,7 +29,14 @@ import {
   nearestOnCurve,
 } from '../core/fit/edit'
 import { handleHitRadius, hasMarkerGlyph, renderBoard } from './renderBoard'
-import type { AxisUnits, Overlay, Polyline, Shape, SlopeField } from './renderBoard'
+import type {
+  AxisUnits,
+  BoardIntersection,
+  Overlay,
+  Polyline,
+  Shape,
+  SlopeField,
+} from './renderBoard'
 import type { BoardGrid } from '../core/persist'
 import {
   NEIGHBOURHOOD_PX,
@@ -215,6 +222,16 @@ interface Props {
   onViewportChange?(): void
   /** Special points of the selected curve. Empty when markers are hidden. */
   analysis: SpecialPoint[]
+  /**
+   * Where the visible curves cross EACH OTHER — every pair, once, whether or
+   * not either curve is selected.
+   *
+   * `analysis` above is one curve's story and a crossing is not part of it:
+   * the point has two parents and goes on being true while neither of them is
+   * selected. Straight into the scene, so the screen and the exported PNG say
+   * the same thing about where the graphs meet.
+   */
+  intersections?: readonly BoardIntersection[] | null
   /** Index into `analysis` to emphasise (hovered in the card readout). */
   analysisHighlight: number | null
   /**
@@ -456,6 +473,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     onViewportChange,
     analysis,
     analysisHighlight,
+    intersections,
     onFeatureEdit,
     overlays,
     fields,
@@ -511,6 +529,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   const viewportChangeRef = useRef(onViewportChange)
   viewportChangeRef.current = onViewportChange
   const analysisRef = useRef<SpecialPoint[]>(analysis)
+  const intersectionsRef = useRef<Props['intersections']>(intersections)
   const highlightRef = useRef<number | null>(analysisHighlight)
   const oversketchForRef = useRef<string | null>(null)
   /** Pointer kind that owns the gesture in progress (palm rejection). */
@@ -660,6 +679,11 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
         sel && !busy && analysisRef.current.length > 0
           ? { curve: sel, points: analysisRef.current }
           : null,
+      // Not gated on the selection, and not gated on `busy`: a crossing
+      // belongs to two curves, so it is on the board whenever the App says
+      // there are any. It IS gated on the pen — the marker vocabulary gets out
+      // of the way while a stroke is being drawn, the same as the rest.
+      intersections: busy ? undefined : (intersectionsRef.current ?? undefined),
       chrome: {
         selectedId: selectedRef.current,
         handles,
@@ -738,6 +762,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     pointPickRef.current = pointPick
     hitRef.current = hitRadii(coarseRef.current, present)
     analysisRef.current = analysis
+    intersectionsRef.current = intersections
     highlightRef.current = analysisHighlight
     scheduleRender()
   }, [
@@ -762,6 +787,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     inkColor,
     analysis,
     analysisHighlight,
+    intersections,
     scheduleRender,
   ])
 
@@ -1047,7 +1073,11 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
         const p = points[i]
         if (!p || !p.pos || !Number.isFinite(p.pos.x) || !Number.isFinite(p.pos.y)) continue
         // A hole has no marker of its own (the curve layer draws the ring) and
-        // no value to move: it is never a click target.
+        // no value to move: it is never a click target. Nor is a crossing —
+        // its diamond is drawn by the intersection layer, and "put this
+        // intersection at x = 3" is not a sentence about either curve, so
+        // there is nothing for the feature editor to open. Both questions are
+        // the same question, and hasMarkerGlyph is where it is answered.
         if (!hasMarkerGlyph(p.kind)) continue
         const sp = toScreen(p.pos, vp)
         const d = Math.hypot(sp.x - pos.x, sp.y - pos.y)

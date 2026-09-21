@@ -74,6 +74,13 @@ import type { BoardShape, CompiledShape, ShapeCardData } from './ui/shapeLinks'
 import { POLAR_OFFER, suggestPolarRuling } from './ui/boardGrid'
 import { defaultCaption, exportLook, screenLook } from './ui/figureStyle'
 import { curveNames, namesInOrder } from './render/curveNames'
+import {
+  boardIntersections,
+  cardIntersections,
+  intersectionKey,
+  intersectionSpan,
+} from './ui/intersections'
+import type { BoardIntersection, CurveIntersections } from './ui/intersections'
 import { snapPlaced } from './ui/snap'
 import { curveBounds, splitNotice, unionBoxes } from './ui/curveState'
 import { answerPieces } from './ui/nlText'
@@ -170,6 +177,8 @@ const AUTOSAVE_MS = 400
 
 /** Stable identity — avoids re-rendering the canvas when markers are hidden. */
 const EMPTY_ANALYSIS: SpecialPoint[] = []
+/** One array, so a board with nothing crossing re-renders no more than before. */
+const EMPTY_CROSSINGS: BoardIntersection[] = []
 
 // ---------------------------------------------------------------- between two
 //
@@ -2418,6 +2427,29 @@ export default function App() {
     return [vp.center.x - half, vp.center.x + half]
   }, [])
 
+  /**
+   * The x-range the board hunts intersections over — the window, padded, and
+   * SNAPPED to a coarse grid (see intersectionSpan).
+   *
+   * It is state rather than a ref because it feeds a memo; it changes only
+   * when the board has genuinely moved somewhere new, which is what keeps a
+   * pan from re-solving every pair on the board on every frame.
+   */
+  const [crossSpan, setCrossSpan] = useState<[number, number]>(() =>
+    intersectionSpan(viewWindow()),
+  )
+  const crossSpanRef = useRef(crossSpan)
+  crossSpanRef.current = crossSpan
+
+  /** Called on every frame of a pan; does nothing at all until the grid moves. */
+  const refreshCrossSpan = useCallback((): void => {
+    const next = intersectionSpan(viewWindow())
+    const now = crossSpanRef.current
+    if (next[0] === now[0] && next[1] === now[1]) return
+    crossSpanRef.current = next
+    setCrossSpan(next)
+  }, [viewWindow])
+
   /** Rename the edit bracket a gesture already opened, so undo says the truth. */
   const relabelEdit = useCallback((label: string): void => {
     const pre = preEditRef.current
@@ -3905,7 +3937,7 @@ export default function App() {
     overlayRef.current?.redraw()
     refreshSolveSpan()
     scheduleSave()
-  }, [refreshSolveSpan, scheduleSave])
+  }, [refreshCrossSpan, refreshSolveSpan, scheduleSave])
 
   /** Fraction of the frame left as breathing room around the figure. */
   const FIT_MARGIN = 0.12
@@ -3987,6 +4019,10 @@ export default function App() {
   /** Pan/zoom happened: the marker layer rides the same viewport. */
   const viewportChanged = useCallback((): void => {
     overlayRef.current?.redraw()
+    // Where the curves cross is hunted over the window, so panning can bring a
+    // crossing into view that was never solved for. Hot path: this is a pair
+    // of comparisons unless the board has left the coarse span entirely.
+    refreshCrossSpan()
     // A solution curve is integrated across a fixed x-range, so a board panned
     // or zoomed past that range would show it stopping in mid-air. This is the
     // hot path — it fires on every frame of a pan — and refreshSolveSpan does
@@ -4256,6 +4292,69 @@ export default function App() {
    */
   const lightBoard = canvasTheme === 'light' || look.previewing
 
+  // ------------------------------------------------- where the curves meet
+  //
+  // The one analysis point that does not belong to a curve. It is computed for
+  // the BOARD rather than for the selection, once per pair, because a crossing
+  // has two parents: it is drawn once (a neutral diamond, neither curve's
+  // colour) and listed on both cards, from this single list, so the two can
+  // never print different answers to "where do f and g cross?".
+  //
+  // They are computed whether or not the markers are switched on, for the same
+  // reason analyzeCurve is: the CARDS state them, and a card's analysis table
+  // does not come and go with the board's toggle. What the toggle governs is
+  // the BOARD — see the scene below, where the screen look is handed the list
+  // only while Analysis is on, exactly as every other marker is.
+  //
+  // A MARKED figure is the exception, and deliberately: a textbook figure of
+  // two graphs is a figure about where they meet, and a PNG that dropped the
+  // crossings would be the bug the analysis layer once had, in a new place.
+  const markedBoard = boardFigure != null && boardFigure.curveEnds === 'marked'
+  const crossingsOn = kind === 'cartesian'
+
+  /**
+   * The key the pair solve is memoised on: the curves that can be crossed,
+   * their params and domains, and the coarse range — never the identity of the
+   * curve array, which a slider drag rebuilds on every frame with the same
+   * numbers in it.
+   */
+  const crossKey = crossingsOn ? intersectionKey(curves, crossSpan) : ''
+  const curvesForCross = useRef(curves)
+  curvesForCross.current = curves
+
+  const crossings = useMemo<BoardIntersection[]>(() => {
+    if (!crossingsOn) return EMPTY_CROSSINGS
+    const found = boardIntersections(curvesForCross.current, models, crossSpan)
+    return found.length > 0 ? found : EMPTY_CROSSINGS
+    // The curve list is tracked through crossKey, not through its identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [crossingsOn, crossKey, models, crossSpan])
+  const crossingsRef = useRef(crossings)
+  crossingsRef.current = crossings
+
+  /**
+   * What each card lists, named the way the caption names the curves: the
+   * board's derived letters (f, g, f′) when it has them, and otherwise the
+   * card's own label, which is what a curve is called in every other sentence
+   * this app writes about it.
+   */
+  const crossingsFor = useCallback(
+    (id: string): readonly CurveIntersections[] | undefined => {
+      if (crossings.length === 0) return undefined
+      const got = cardIntersections(
+        id,
+        crossings,
+        (other) => {
+          const c = curvesRef.current.find((k) => k.id === other)
+          return boardCurveNames[other] ?? (c ? curveLabel(c) : other)
+        },
+        curvesRef.current.map((c) => c.id),
+      )
+      return got.length > 0 ? got : undefined
+    },
+    [crossings, boardCurveNames, curveLabel],
+  )
+
   /**
    * The box every visible thing on the board occupies, in math coords — the
    * same measurement "Fit to curves" makes, so the exported frame and the
@@ -4317,6 +4416,14 @@ export default function App() {
         analysisRef.current.length > 0
           ? { curve: sel, points: analysisRef.current }
           : null,
+      // Where the curves cross is a fact about the FIGURE, not a note the
+      // editor is keeping, so the PNG gets the same list the screen drew, by
+      // the same field — there is no second place that could forget it.
+      intersections:
+        kindRef.current === 'cartesian' &&
+        (showAnalysisRef.current || (figure != null && figure.curveEnds === 'marked'))
+          ? crossingsRef.current
+          : undefined,
       // The screen palette is tuned against near-black and washes out on white
       // (amber lands near 1.7:1 — a copier renders it as nothing), so a light
       // export swaps every curve for its print counterpart.
@@ -4940,6 +5047,7 @@ export default function App() {
         displaySources={displaySources}
         editedIds={editedIds}
         analysis={analysis}
+        intersectionsFor={crossingsFor}
         onAnalysisHover={setHighlight}
         onFeatureEdit={applyFeatureByIndex}
         candidatesFor={candidatesFor}
@@ -5061,6 +5169,7 @@ export default function App() {
           onNotice={showNotice}
           analysis={showAnalysis ? analysis : EMPTY_ANALYSIS}
           analysisHighlight={highlight}
+          intersections={showAnalysis || markedBoard ? crossings : EMPTY_CROSSINGS}
           onFeatureEdit={applyFeature}
           theme={boardTheme}
           present={present}

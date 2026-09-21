@@ -20,6 +20,7 @@ import { axisKeys, featureAxes } from './featureEdit'
 import { curveEquationText, displayEquationLatex } from './equationText'
 import { N_MAX, N_MIN, RIEMANN_METHODS } from './calcLinks'
 import type { CalcChange, CalcKind, CardCalc } from './calcLinks'
+import type { CurveIntersections } from './intersections'
 
 interface Props {
   curve: FittedCurve
@@ -50,6 +51,16 @@ interface Props {
   edited: boolean
   /** Special points for this curve (only the selected card receives them). */
   analysis: SpecialPoint[]
+  /**
+   * Where this curve meets the OTHER curves on the board, one entry per other
+   * curve, already named.
+   *
+   * Not part of `analysis` because an intersection is not a feature of one
+   * curve: the same point is listed on both cards, from one computation, so
+   * the two can never disagree about where f and g cross. Absent on a board
+   * where nothing crosses, which is most of them.
+   */
+  intersections?: readonly CurveIntersections[]
   /** Hovering a value emphasises the matching marker on canvas. */
   onAnalysisHover(index: number | null): void
   /**
@@ -546,6 +557,7 @@ export function CurveCard({
   brokenReason,
   edited,
   analysis,
+  intersections,
   onAnalysisHover,
   onFeatureEdit,
   onSelect,
@@ -776,6 +788,21 @@ export function CurveCard({
   const asymptotes = useMemo(
     () => (selected ? asymptoteTexts(curve, models, scale) : []),
     [selected, curve, models, scale],
+  )
+
+  /**
+   * Where this curve meets the others, one line per other curve.
+   *
+   * These are NOT this curve's special points: an intersection belongs to a
+   * PAIR, it is solved once for the board (src/ui/intersections.ts), and the
+   * very same points are listed on the other curve's card with this curve's
+   * name on them. That is the whole reason they arrive as a prop rather than
+   * being computed here — two cards computing the same crossing separately is
+   * two chances to print different answers to one question.
+   */
+  const crossings = useMemo(
+    () => (intersections ?? []).filter((g) => g.points.length > 0),
+    [intersections],
   )
 
   /**
@@ -1388,7 +1415,9 @@ export function CurveCard({
             </div>
           )}
 
-          {(analysisGroups.length > 0 || asymptotes.length > 0) && (
+          {(analysisGroups.length > 0 ||
+            asymptotes.length > 0 ||
+            crossings.length > 0) && (
             <div className="an-section">
               <div className="an-title">Analysis</div>
               <div className="an-table">
@@ -1540,6 +1569,53 @@ export function CurveCard({
                       {asymptotes.map((text, n) => (
                         <span className="an-value an-value-static" key={`${text}-${n}`}>
                           {n === asymptotes.length - 1 ? text : `${text},`}
+                        </span>
+                      ))}
+                    </span>
+                  </div>
+                )}
+                {/* And last, the one row that is not about this curve
+                    alone: where it MEETS the others. Stated, never offered —
+                    a crossing is a consequence of two functions, and there is
+                    no single value an editor could move to put it somewhere
+                    else. Each other curve gets its own line, named the way the
+                    figure's caption names it. */}
+                {crossings.length > 0 && (
+                  <div className="an-row" key="intersections">
+                    <span className="an-label">
+                      {crossings.length > 1 || crossings[0].points.length > 1
+                        ? 'Intersections'
+                        : 'Intersection'}
+                    </span>
+                    <span className="an-values">
+                      {crossings.map((g) => (
+                        <span className="an-with" key={g.id}>
+                          <span className="an-with-name">{`with ${g.name}:`}</span>{' '}
+                          {g.points.map((point, n) => {
+                            const parts = pointParts(point, { scale })
+                            const comma = n === g.points.length - 1 ? '' : ','
+                            return (
+                              <span
+                                className="an-value an-value-static"
+                                key={`${g.id}-${n}`}
+                                data-value={parts.exact === null ? undefined : parts.text}
+                              >
+                                {parts.exact === null ? (
+                                  parts.decimal + comma
+                                ) : (
+                                  <>
+                                    <span
+                                      className="an-exact"
+                                      title={exactTitle(point, parts.exact)}
+                                    >
+                                      {parts.exact}
+                                    </span>
+                                    <span className="an-approx">{` ${APPROX} ${parts.decimal}${comma}`}</span>
+                                  </>
+                                )}
+                              </span>
+                            )
+                          })}
                         </span>
                       ))}
                     </span>

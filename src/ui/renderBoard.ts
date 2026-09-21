@@ -133,6 +133,21 @@ export interface BoardChrome {
   pending?: NLItem | null
 }
 
+/**
+ * One meeting point, and the two curves it belongs to.
+ *
+ * `point.kind` is 'intersection' and `point.withId` is the OTHER curve, which
+ * is the contract src/core/analyze.ts intersectionPoints() produces;
+ * `curveId` is the curve it was solved on. Both sides are named because the
+ * point is computed once for a pair and drawn once for the board — a scene
+ * that carried only the point could not tell whether it still has two visible
+ * curves under it.
+ */
+export interface BoardIntersection {
+  curveId: string
+  point: SpecialPoint
+}
+
 export interface BoardScene {
   vp: Viewport
   theme: Theme
@@ -165,6 +180,25 @@ export interface BoardScene {
   items?: readonly NLItem[]
   /** Markers + labels for one curve. Null/absent when the toggle is off. */
   analysis?: { curve: FittedCurve; points: readonly SpecialPoint[] } | null
+  /**
+   * Where the curves MEET each other — the one analysis point that does not
+   * belong to a curve.
+   *
+   * `analysis` above describes ONE curve, which is the right shape for a zero
+   * or an inflection and the wrong shape for a crossing: an intersection has
+   * two parents, it is drawn ONCE for both of them, and it goes on drawing
+   * while neither of them is selected. So it is its own field, and each entry
+   * names both sides (`curveId` is the curve it was solved on, `point.withId`
+   * the other) so the renderer can drop a point whose partner has been hidden.
+   *
+   * FIGURE, not chrome: where two graphs cross is a fact about the picture,
+   * not a note the editor is keeping, so it reaches the export. Absent or
+   * empty means the board draws exactly what it drew before the field existed.
+   *
+   * The CALLER decides when there are any: on screen that is "while the
+   * Analysis toggle is on", the same rule every other marker follows.
+   */
+  intersections?: readonly BoardIntersection[]
   /**
    * Force the print palette on.
    *
@@ -433,19 +467,27 @@ export const FILLED_POINT_R = 3.5
 /**
  * Does this kind of point get a marker GLYPH from the analysis layer?
  *
- * A hole does not, and it is the only kind that does not. Its glyph is already
- * on the board — the open ring drawn with the curve (src/render/holes.ts),
- * which is there in every figure style whether the analysis layer is switched
- * on or not. A second disc on top of it would fill the one mark whose whole
- * meaning is that it is empty. The hole still gets its LABEL: "(1, 2)" is the
- * number the question is about.
+ * Two kinds do not, and both for the same reason: their glyph is already on
+ * the board, drawn by a layer that owns it.
  *
- * Exported because the hit test in CanvasStage has to ask the same question a
- * marker it did not draw must never be clickable — and a hole cannot be moved
- * in any case, so there is nothing for a click to open.
+ *   hole          the open ring drawn with the curve (src/render/holes.ts),
+ *                 which is there in every figure style whether the analysis
+ *                 layer is switched on or not. A second disc on top of it
+ *                 would fill the one mark whose whole meaning is that it is
+ *                 empty. The hole still gets its LABEL: "(1, 2)" is the
+ *                 number the question is about.
+ *   intersection  the neutral diamond drawn by drawIntersections, once, for
+ *                 the pair. A marker in one curve's colour on top of it would
+ *                 claim the point for that curve, and it belongs to both.
+ *
+ * Exported because the hit test in CanvasStage has to ask the same question —
+ * a marker it did not draw must never be clickable — and neither of these can
+ * be moved in any case, so there is nothing for a click to open. A crossing is
+ * a consequence of two curves; "put this intersection at x = 3" is not a
+ * sentence about either of them.
  */
 export function hasMarkerGlyph(kind: SpecialPoint['kind']): boolean {
-  return kind !== 'hole'
+  return kind !== 'hole' && kind !== 'intersection'
 }
 
 function markerRadius(p: SpecialPoint, s: number, grow = 0, filled = false): number {
@@ -662,6 +704,15 @@ interface AnalysisOpts {
    * back to. Absent for families that are not a function of screen x.
    */
   screenY?: ((px: number) => number | null) | null
+  /**
+   * Plates already standing on this board, which new ones step around, and
+   * which this layer appends its own to.
+   *
+   * Absent means "this layer is the only one placing labels", which is what
+   * every caller meant before the intersection layer existed — so a call that
+   * omits it lays out exactly the boxes it always did.
+   */
+  reserve?: LabelBox[]
 }
 
 export function drawAnalysis(
@@ -725,7 +776,7 @@ export function drawAnalysis(
   const h = 16 * type
   ctx.font = o.font ? figureFont({ font: o.font }, fpx) : labelFont(fpx)
   ctx.textBaseline = 'middle'
-  const placed: LabelBox[] = []
+  const placed: LabelBox[] = o.reserve ?? []
   const anchors: number[] = []
   const text0 = textColor(o.theme)
 
@@ -751,34 +802,224 @@ export function drawAnalysis(
     const box = placeLabel(vp, m.sx, m.sy, w, h, mr, n, type, placed, o.screenY ?? null)
     if (!box) continue
 
-    // A 1px leader from the marker to the plate: the label is off the curve,
-    // so something has to say which point it belongs to. Drawn first, so the
-    // opaque plate covers the half that would otherwise run under the text.
-    ctx.save()
-    ctx.globalAlpha = 0.55
-    ctx.strokeStyle = o.color
-    ctx.lineWidth = 1 * stroke
-    ctx.beginPath()
-    ctx.moveTo(m.sx, m.sy)
-    ctx.lineTo(box.x + box.w / 2, box.y + box.h / 2)
-    ctx.stroke()
-    ctx.restore()
-
-    // FULL opacity: a 0.86 plate let the curve through the text mottled.
-    ctx.globalAlpha = 1
-    roundRect(ctx, box.x, box.y, box.w, box.h, 4 * type)
-    ctx.fillStyle = bg
-    ctx.fill()
-    ctx.lineWidth = 1 * stroke
-    ctx.strokeStyle = emph(m.i) ? o.color : o.theme.gridMajor
-    ctx.stroke()
-    ctx.fillStyle = emph(m.i) ? o.color : text0
-    ctx.fillText(text, box.x + 5 * type, box.y + h / 2)
+    drawLabelPlate(
+      ctx,
+      m.sx,
+      m.sy,
+      box,
+      text,
+      {
+        bg,
+        leader: o.color,
+        border: emph(m.i) ? o.color : o.theme.gridMajor,
+        text: emph(m.i) ? o.color : text0,
+      },
+      type,
+      stroke,
+    )
 
     placed.push(box)
     anchors.push(m.sx)
   }
   ctx.textBaseline = 'alphabetic'
+}
+
+// ---------------------------------------------------------------------------
+// Intersections — the one marker that belongs to two curves
+// ---------------------------------------------------------------------------
+
+/**
+ * The half-diagonal of the intersection diamond, before `present.stroke`.
+ *
+ * A little larger than a turning point's dot (3.5) because it is the only
+ * glyph on the board sitting where two strokes already cross, which is the
+ * busiest pixel a marker ever has to be read against.
+ */
+export const INTERSECTION_R = 4
+
+/**
+ * The ink a crossing is drawn in: NEUTRAL, always.
+ *
+ * Every other marker on this board takes the colour of the curve it belongs
+ * to, and that is exactly what an intersection must not do — it belongs to
+ * two of them, and drawing it in f's blue says the point is f's, which is the
+ * one thing that is untrue about it. So it is drawn in the ink the board uses
+ * for saying things: the label colour, or under mono (a figure whose curves
+ * are all one black) the axis ink, since there the label colour would be the
+ * only grey on an otherwise black-and-white figure.
+ */
+export function intersectionInk(theme: Theme, mono = false): string {
+  return mono ? theme.axis : textColor(theme)
+}
+
+export interface IntersectionOpts {
+  theme: Theme
+  /** The neutral ink — intersectionInk(theme, mono). */
+  color: string
+  /** Presentation scale; see BoardScene.present. */
+  scale?: PaintScale | null
+  /** The figure's label face, as drawAnalysis takes it. */
+  font?: 'sans' | 'serif' | null
+  /** Plates already on the board; this layer steps around them and adds its own. */
+  reserve?: LabelBox[]
+}
+
+/**
+ * Where the curves meet: a filled diamond on a ground ring, and a chip saying
+ * which point it is.
+ *
+ * A diamond, not a disc, because a disc is already spoken for (a maximum), and
+ * a filled one because the crossing is a point the graph actually passes
+ * through — unlike the hollow ring of a zero, which marks a value. The ground
+ * ring is what makes it readable at all: it sits precisely where two strokes
+ * overlap, and without a rim of paper around it the glyph is two curves and a
+ * smudge.
+ *
+ * The chip is `pointText(p, { decimal: false })` — the same rule as every
+ * other plate on this board, so a crossing at (√2, 2) is labelled "(√2, 2)"
+ * and the decimal beside it lives on the card, where there is room for both.
+ *
+ * Each point is drawn ONCE. The caller pairs the curves (a, b) and never
+ * (b, a); this only guards the case of three curves through one point, where
+ * two different pairs answer with the same place.
+ */
+export function drawIntersections(
+  ctx: CanvasRenderingContext2D,
+  vp: Viewport,
+  points: readonly SpecialPoint[],
+  o: IntersectionOpts,
+): void {
+  if (points.length === 0) return
+  const { type, stroke } = paintScale(o.scale)
+  const bg = o.theme.bg
+  const r = INTERSECTION_R * stroke
+  const ring = r + 1.6 * stroke
+
+  const seen = new Set<string>()
+  const shown: { p: SpecialPoint; sx: number; sy: number }[] = []
+  for (const p of points) {
+    if (!p || !p.pos || !Number.isFinite(p.pos.x) || !Number.isFinite(p.pos.y)) continue
+    const s = toScreen(p.pos, vp)
+    if (s.x < -30 || s.y < -30 || s.x > vp.widthPx + 30 || s.y > vp.heightPx + 30) continue
+    const key = `${Math.round(s.x)},${Math.round(s.y)}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    shown.push({ p, sx: s.x, sy: s.y })
+  }
+  if (shown.length === 0) return
+
+  const diamond = (sx: number, sy: number, rad: number): void => {
+    ctx.beginPath()
+    ctx.moveTo(sx, sy - rad)
+    ctx.lineTo(sx + rad, sy)
+    ctx.lineTo(sx, sy + rad)
+    ctx.lineTo(sx - rad, sy)
+    ctx.closePath()
+  }
+
+  ctx.globalAlpha = 1
+  for (const m of shown) {
+    diamond(m.sx, m.sy, ring)
+    ctx.fillStyle = bg
+    ctx.fill()
+    diamond(m.sx, m.sy, r)
+    ctx.fillStyle = o.color
+    ctx.fill()
+  }
+
+  // --- the chips, through the same clearance the analysis plates use, and
+  // around the ones the analysis layer has already put down.
+  const fpx = LABEL_PX * type
+  const h = 16 * type
+  ctx.font = o.font ? figureFont({ font: o.font }, fpx) : labelFont(fpx)
+  ctx.textBaseline = 'middle'
+  const placed: LabelBox[] = o.reserve ?? []
+  const text0 = textColor(o.theme)
+
+  // The crowding budget is counted PER LAYER, not shared. The selected curve
+  // can easily have eight labels of its own, and if the cap were the length of
+  // the shared list the crossings would be the first thing dropped from a busy
+  // board — on a board that is busy precisely because it has several graphs on
+  // it, which is the only kind of board that HAS a crossing. The shared list
+  // still decides where a plate may sit; it just does not decide how many.
+  let mine = 0
+  for (const m of shown) {
+    if (mine >= MAX_LABELS) break
+    // The string that is actually drawn, exact form and all: a plate measured
+    // on "(1.414, 2.000)" and printed with "(√2, 2)" is a box of the wrong
+    // width, and the crowding test it feeds is then wrong too.
+    const text = pointText(m.p, { decimal: false })
+    const w = ctx.measureText(text).width + 10 * type
+    // Straight up off the crossing. There are two tangents here and no reason
+    // to prefer either, so the plate takes the direction that reads as a
+    // callout — and placeLabel tries straight down when that spot is taken.
+    const box = placeLabel(vp, m.sx, m.sy, w, h, ring, { x: 0, y: -1 }, type, placed, null)
+    if (!box) continue
+    drawLabelPlate(
+      ctx,
+      m.sx,
+      m.sy,
+      box,
+      text,
+      { bg, leader: o.color, border: o.theme.gridMajor, text: text0 },
+      type,
+      stroke,
+    )
+    placed.push(box)
+    mine++
+  }
+  ctx.textBaseline = 'alphabetic'
+}
+
+/** The four inks one plate is drawn in. */
+interface PlateInk {
+  bg: string
+  /** The 1px line back to the marker. */
+  leader: string
+  border: string
+  text: string
+}
+
+/**
+ * One label plate, with the leader back to the point it names.
+ *
+ * Shared by the per-curve analysis layer and the intersection layer so the two
+ * cannot drift into looking like different kinds of label: a chip on this
+ * board is a chip, whichever layer put it there.
+ */
+function drawLabelPlate(
+  ctx: CanvasRenderingContext2D,
+  sx: number,
+  sy: number,
+  box: LabelBox,
+  text: string,
+  ink: PlateInk,
+  type: number,
+  stroke: number,
+): void {
+  // A 1px leader from the marker to the plate: the label is off the curve,
+  // so something has to say which point it belongs to. Drawn first, so the
+  // opaque plate covers the half that would otherwise run under the text.
+  ctx.save()
+  ctx.globalAlpha = 0.55
+  ctx.strokeStyle = ink.leader
+  ctx.lineWidth = 1 * stroke
+  ctx.beginPath()
+  ctx.moveTo(sx, sy)
+  ctx.lineTo(box.x + box.w / 2, box.y + box.h / 2)
+  ctx.stroke()
+  ctx.restore()
+
+  // FULL opacity: a 0.86 plate let the curve through the text mottled.
+  ctx.globalAlpha = 1
+  roundRect(ctx, box.x, box.y, box.w, box.h, 4 * type)
+  ctx.fillStyle = ink.bg
+  ctx.fill()
+  ctx.lineWidth = 1 * stroke
+  ctx.strokeStyle = ink.border
+  ctx.stroke()
+  ctx.fillStyle = ink.text
+  ctx.fillText(text, box.x + 5 * type, box.y + box.h / 2)
 }
 
 /**
@@ -1109,15 +1350,17 @@ const overlaps = (a: NameBox, b: NameBox): boolean =>
  */
 function chipZones(scene: BoardScene, type: number): NameBox[] {
   const an = scene.analysis ?? null
-  if (!an || !an.curve.visible) return []
   const out: NameBox[] = []
   const w = 44 * type
   const h = 34 * type
-  for (const p of an.points) {
-    if (!p || !p.pos || !Number.isFinite(p.pos.x) || !Number.isFinite(p.pos.y)) continue
+  const band = (p: SpecialPoint): void => {
+    if (!p || !p.pos || !Number.isFinite(p.pos.x) || !Number.isFinite(p.pos.y)) return
     const s = toScreen(p.pos, scene.vp)
     out.push({ x: s.x - w / 2, y: s.y - h / 2, w, h })
   }
+  if (an && an.curve.visible) for (const p of an.points) band(p)
+  // A crossing's chip is placed by the same layout and is no less in the way.
+  for (const m of scene.intersections ?? []) band(m.point)
   return out
 }
 
@@ -1531,10 +1774,15 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
     }
   }
 
+  // One budget of plates for the whole board: the crossings' chips step around
+  // the selected curve's, because they are labels on the same picture.
+  const plates: LabelBox[] = []
+
   const an = scene.analysis ?? null
   if (an && an.points.length > 0 && an.curve.visible) {
     try {
       drawAnalysis(ctx, vp, an.points, {
+        reserve: plates,
         color: ink(an.curve.color),
         theme,
         pointStyle: fig?.pointStyle ?? null,
@@ -1550,6 +1798,34 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
       })
     } catch {
       /* analysis render failed — the board still stands */
+    }
+  }
+
+  // Where the curves MEET, on top of the per-curve markers: a crossing is the
+  // point a class is looking for on a board with two graphs on it, and it is
+  // the one marker that has to be legible over another curve's own stroke.
+  //
+  // A point whose partner has been hidden is dropped here rather than upstream:
+  // the scene is the thing that knows what is visible.
+  const crossings = scene.intersections
+  if (crossings && crossings.length > 0) {
+    try {
+      const shown = new Set<string>()
+      for (const c of scene.curves) if (c.visible) shown.add(c.id)
+      const pts = crossings
+        .filter((m) => shown.has(m.curveId) && shown.has(m.point.withId ?? ''))
+        .map((m) => m.point)
+      if (pts.length > 0) {
+        drawIntersections(ctx, vp, pts, {
+          theme,
+          color: intersectionInk(theme, mono),
+          font: fig?.font ?? null,
+          scale,
+          reserve: plates,
+        })
+      }
+    } catch {
+      /* a crossing that could not be drawn must not take the board with it */
     }
   }
 

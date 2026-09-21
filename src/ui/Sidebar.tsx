@@ -11,6 +11,7 @@ import type { StyleMap } from '../App'
 import type { NLPart } from '../render/numberline'
 import { CurveCard } from './CurveCard'
 import type { BetweenInfo } from './CurveCard'
+import type { CurveIntersections } from './intersections'
 import type { CalcChange, CalcKind, CardCalc } from './calcLinks'
 import { FieldCard } from './FieldCard'
 import type { BoardField, FieldCardData } from './fieldLinks'
@@ -80,6 +81,12 @@ interface Props {
   onExprToggle(): void
   onExprSubmit(src: string): string | null
   /** What this curve's card says about calculus. Undefined = nothing to say. */
+  /**
+   * Where each curve meets the OTHERS, already named — the row is the same
+   * points on both cards, which is what makes them agree. Absent on a board
+   * where nothing crosses.
+   */
+  intersectionsFor?(id: string): readonly CurveIntersections[] | undefined
   calcFor(id: string): CardCalc | undefined
   onAddCalc(id: string, kind: CalcKind): void
   /** Whether this curve may host an area between curves, and whose it is in. */
@@ -180,6 +187,7 @@ export function Sidebar({
   onOpacity,
   onExprToggle,
   onExprSubmit,
+  intersectionsFor,
   calcFor,
   onAddCalc,
   betweenFor,
@@ -288,6 +296,7 @@ export function Sidebar({
               brokenReason={brokenExpr[curve.id]}
               edited={editedIds[curve.id] === true}
               analysis={curve.id === selectedId ? analysis : EMPTY_ANALYSIS}
+              intersections={intersectionsFor?.(curve.id)}
               onAnalysisHover={onAnalysisHover}
               onFeatureEdit={(i, to) => onFeatureEdit(curve.id, i, to)}
               onSelect={() => onSelect(curve.id)}

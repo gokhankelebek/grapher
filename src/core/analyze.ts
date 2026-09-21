@@ -22,6 +22,11 @@ import type {
 } from './types'
 import { conicToCenterForm } from './fit/optimize'
 import { findHoles } from './holes'
+// The x's of an intersection are the zeros of f − g, and calculus.ts already
+// hands that difference back to analyzeCurve as a curve of its own. The import
+// is circular by construction — calculus.ts imports analyzeCurve — and safe:
+// both sides are hoisted function declarations, used only from inside bodies.
+import { curveIntersections } from './calculus'
 import { exactForm, verifiedExact } from './exact'
 import type { ExactForm } from './exact'
 
@@ -909,6 +914,35 @@ function attachY(p: SpecialPoint, y: number): void {
 }
 
 /**
+ * Attach exactX to ONE point and polish the point onto the form: pos.x
+ * becomes the form's value and pos.y is f re-evaluated there, so the decimal
+ * beside "√2" is the decimal OF √2. `check` is the curve's own test that a
+ * candidate x really is this kind of point — the thing that keeps a form that
+ * merely fits the digits from ever being printed.
+ *
+ * A point flagged `exact` was solved for, so its x is matched tight and
+ * directly; everything else goes through verifiedExact.
+ */
+function attachExactAt(p: SpecialPoint, f: Fn, check: (c: number) => boolean): void {
+  let form: ExactForm | null = p.exact
+    ? exactForm(p.pos.x, { tol: EXACT_TIGHT })
+    : null
+  if (!form) form = verifiedExact(p.pos.x, check)
+  if (!form) return
+
+  p.exactX = form.text
+  if (p.kind === 'zero') {
+    // a zero's y is 0 by definition, not by evaluation
+    p.pos = { x: form.value, y: 0 }
+    return
+  }
+  let y: number
+  try { y = f(form.value) } catch { y = Number.NaN }
+  p.pos = { x: form.value, y: Number.isFinite(y) ? y : p.pos.y }
+  attachY(p, p.pos.y)
+}
+
+/**
  * Attach exactX / exactY to the points of an explicit curve, and polish each
  * point onto the form that was accepted for it.
  */
@@ -943,24 +977,8 @@ function attachExactForms(
     }
     const check = checkFor(p.kind, f, der, scales)
     if (!check) continue
-
-    let form: ExactForm | null = p.exact
-      ? exactForm(p.pos.x, { tol: EXACT_TIGHT })
-      : null
-    if (!form) form = verifiedExact(p.pos.x, check)
-    if (!form) continue
-
-    p.exactX = form.text
     // Polish: the printed decimal becomes the decimal of the printed form.
-    if (p.kind === 'zero') {
-      // a zero's y is 0 by definition, not by evaluation
-      p.pos = { x: form.value, y: 0 }
-    } else {
-      let y: number
-      try { y = f(form.value) } catch { y = Number.NaN }
-      p.pos = { x: form.value, y: Number.isFinite(y) ? y : p.pos.y }
-      attachY(p, p.pos.y)
-    }
+    attachExactAt(p, f, check)
   }
   return points
 }
@@ -1296,6 +1314,233 @@ export function analyzeCurve(
       return analyzeParametric(curve, spec)
     }
     return []
+  } catch {
+    return []
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Intersections — where one curve meets another.
+//
+//   export function intersectionPoints(parent, other, models, range): SpecialPoint[]
+//
+// An intersection is an analysis point like any other, and it is reported on
+// the PARENT: pos.y is the parent's f at the crossing (the two agree there, by
+// definition, and the assertion below refuses the point if they do not), and
+// withId names the curve it was met.
+//
+// Nothing here searches for the x's. A crossing IS a zero of f − g, and
+// calculus.ts already hands that difference to the analyzer as a curve of its
+// own — sign-change scan, pole guard, tangency pass, dedupe — so this function
+// is about what the crossings MEAN: is the location known in closed form, does
+// the difference touch without crossing, and what is the exact form.
+//
+// EXACTNESS IS NOT INHERITED FROM THE FAMILIES, only from the arithmetic. Two
+// polynomials differ by a polynomial, and a polynomial of degree ≤ 2 has roots
+// from a formula — those are exact. A cubic difference's roots were bisected
+// to, whatever its coefficients were typed as, and are not.
+//
+// The exact FORM, on the other hand, is verified the way every other point's
+// is: a candidate is believed only when the two curves actually agree at it,
+// |f(c) − g(c)| ≤ 1e-9 · scale, evaluated AT the candidate. sin x and cos x
+// meet at π/4 because sin(π/4) − cos(π/4) is zero, not because 0.7853981 is
+// near π/4.
+// ---------------------------------------------------------------------------
+
+/** |f(c) − g(c)| this small, relative to their magnitude, and they MEET. */
+const MEET_CHECK = 1e-9
+/** A crossing reported this far from an actual meeting point is dropped. */
+const MEET_ACCEPT = 1e-7
+/**
+ * First probe distance for the tangency test, as a fraction of the span — the
+ * quarter-step the numeric core's own tangency pass uses, so a touch is read
+ * here the same way it is read there.
+ */
+const TOUCH_PROBE = 0.25 / SAMPLES
+
+/** The curve as f(x), or null when the family has no f(x) to evaluate. */
+function explicitFnOf(
+  curve: FittedCurve,
+  models: Record<string, ModelSpec>,
+): Fn | null {
+  const spec = models[curve.modelId]
+  if (!spec || spec.kind !== 'explicit' || !spec.evalExplicit) return null
+  if (!Array.isArray(curve.params) || !curve.params.every(Number.isFinite)) return null
+  const ev = spec.evalExplicit
+  const params = curve.params
+  return (x: number) => {
+    let v: unknown
+    try { v = ev.call(spec, params, x) } catch { return Number.NaN }
+    return typeof v === 'number' ? v : Number.NaN
+  }
+}
+
+/** `range`, clipped to whichever of the two curves restricts itself. */
+function sharedSpan(
+  a: [number, number] | null,
+  b: [number, number] | null,
+  range: readonly [number, number],
+): [number, number] | null {
+  let lo = Math.min(range[0], range[1])
+  let hi = Math.max(range[0], range[1])
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null
+  for (const d of [a, b]) {
+    if (!d) continue
+    const [dl, dh] = d
+    if (!Number.isFinite(dl) || !Number.isFinite(dh) || !(dh > dl)) continue
+    lo = Math.max(lo, dl)
+    hi = Math.min(hi, dh)
+  }
+  return hi > lo ? [lo, hi] : null
+}
+
+/** Drop the zero leading coefficients a subtraction left behind. */
+function trimCoeffs(c: readonly number[]): number[] {
+  const out = c.slice()
+  while (out.length > 1 && out[out.length - 1] === 0) out.pop()
+  return out
+}
+
+/**
+ * The roots of f − g when that difference has roots from a FORMULA: both
+ * curves polynomial families and their difference linear or quadratic. Null
+ * means "no closed form here" — a cubic or quartic difference, or a leading
+ * coefficient too small for the formula to be the one the analyzer used.
+ *
+ * The thresholds mirror closedForm() exactly, because the question being
+ * asked is precisely "did the analyzer take that branch?".
+ */
+function closedRootsOfDifference(
+  parent: FittedCurve,
+  other: FittedCurve,
+): number[] | null {
+  if (!POLY_FAMILIES.has(parent.modelId) || !POLY_FAMILIES.has(other.modelId)) return null
+  const n = Math.max(parent.params.length, other.params.length)
+  const d = new Array<number>(n)
+  for (let i = 0; i < n; i++) d[i] = (parent.params[i] ?? 0) - (other.params[i] ?? 0)
+  if (!d.every(Number.isFinite)) return null
+  const t = trimCoeffs(d)
+
+  if (t.length <= 2) {
+    const b = t[0] ?? 0
+    const m = t[1] ?? 0
+    if (!(Math.abs(m) > 1e-15)) return []   // constant: no crossing to be exact about
+    return [-b / m]
+  }
+  if (t.length === 3) {
+    const [c0, c1, c2] = t
+    if (Math.abs(c2) < 1e-15) return null   // closedForm() declines this too
+    const disc = c1 * c1 - 4 * c2 * c0
+    if (Math.abs(disc) <= 1e-14 * Math.max(1, c1 * c1)) return [-c1 / (2 * c2)]
+    if (disc < 0) return []
+    const s = Math.sqrt(disc)
+    return [(-c1 - s) / (2 * c2), (-c1 + s) / (2 * c2)]
+  }
+  return null   // degree ≥ 3: the analyzer bisected for these
+}
+
+/**
+ * Does f − g touch at x without crossing?
+ *
+ * Probing, not differentiating: a tangency of two sketched curves is a double
+ * root of their difference, where f′ − g′ is zero too and a derivative test
+ * reads noise. The probes step OUT from the crossing — past the neighbouring
+ * crossings' half-distance, never — and widen until the difference is clear of
+ * the curves' own numerical dust. Same sign on both sides is a touch.
+ */
+function touchesWithoutCrossing(
+  f: Fn,
+  g: Fn,
+  x: number,
+  span: number,
+  gap: number,
+  scale: number,
+): boolean {
+  const noise = MEET_CHECK * scale
+  const base = Math.min(TOUCH_PROBE * span, 0.4 * gap)
+  if (!(base > 0)) return false
+  for (const k of [1, 10, 100]) {
+    const d = base * k
+    if (d > 0.45 * gap) break
+    const before = f(x - d) - g(x - d)
+    const after = f(x + d) - g(x + d)
+    if (!Number.isFinite(before) || !Number.isFinite(after)) return false
+    // too close to the crossing to tell the two apart: step further out
+    if (Math.abs(before) <= noise || Math.abs(after) <= noise) continue
+    return before > 0 === after > 0
+  }
+  return false
+}
+
+/**
+ * Where `parent` meets `other` inside `range`, as analysis points on the
+ * parent: kind 'intersection', withId = other.id, one per meeting point
+ * (a tangency once), never a pole, sorted left to right.
+ *
+ * `exact` is true only for a crossing solved by formula (see
+ * closedRootsOfDifference); `tangent` marks a touch that does not cross.
+ * exactX is attached the way every other point's is — proposed loosely,
+ * accepted only when both curves agree at the candidate — and the point is
+ * polished onto the accepted form, so its decimal is the form's decimal.
+ *
+ * Returns [] unless both curves are explicit functions of x. Cheap enough to
+ * run per visible pair on every analysis refresh; it memoises nothing.
+ */
+export function intersectionPoints(
+  parent: FittedCurve,
+  other: FittedCurve,
+  models: Record<string, ModelSpec>,
+  range: readonly [number, number],
+): SpecialPoint[] {
+  try {
+    const f = explicitFnOf(parent, models)
+    const g = explicitFnOf(other, models)
+    if (!f || !g) return []
+    const span = sharedSpan(parent.domain ?? null, other.domain ?? null, range)
+    if (!span) return []
+    const [lo, hi] = span
+
+    const xs = curveIntersections(parent, other, models, [lo, hi])
+    if (xs.length === 0) return []
+
+    // What "they agree here" means for THESE two curves: their own magnitude.
+    const scale = Math.max(sampleScales(f, lo, hi).value, sampleScales(g, lo, hi).value)
+    const meets = (c: number): boolean => {
+      let a: number
+      let b: number
+      try { a = f(c); b = g(c) } catch { return false }
+      if (!Number.isFinite(a) || !Number.isFinite(b)) return false
+      return Math.abs(a - b) <= MEET_CHECK * scale
+    }
+
+    const closed = closedRootsOfDifference(parent, other)
+    const out: SpecialPoint[] = []
+
+    for (let i = 0; i < xs.length; i++) {
+      const x = xs[i]
+      const y = f(x)
+      const gy = g(x)
+      if (!Number.isFinite(y) || !Number.isFinite(gy)) continue
+      // the assertion: a crossing the curves do not actually share is not one
+      if (Math.abs(y - gy) > MEET_ACCEPT * scale) continue
+
+      const tol = 1e-9 * Math.max(1, Math.abs(x))
+      const exact =
+        closed !== null && closed.some(r => Math.abs(r - x) <= tol)
+      const p = pt('intersection', x, y, 'intersection', exact)
+      if (!p) continue
+      p.withId = other.id
+
+      const gapL = i > 0 ? x - xs[i - 1] : hi - lo
+      const gapR = i + 1 < xs.length ? xs[i + 1] - x : hi - lo
+      if (touchesWithoutCrossing(f, g, x, hi - lo, Math.min(gapL, gapR), scale)) {
+        p.tangent = true
+      }
+
+      attachExactAt(p, f, meets)
+      out.push(p)
+    }
+    return finish(out)
   } catch {
     return []
   }

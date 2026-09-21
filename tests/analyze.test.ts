@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest'
 import type { FittedCurve, ModelSpec, SpecialPoint, SpecialPointKind } from '../src/core/types'
 import { MODELS } from '../src/core/fit/models'
-import { analyzeCurve } from '../src/core/analyze'
+import { analyzeCurve, intersectionPoints } from '../src/core/analyze'
 import { centerFormToConic, conicToCenterForm } from '../src/core/fit/optimize'
 import { parseExpression } from '../src/core/parse'
 
@@ -1265,5 +1265,240 @@ describe('analyzeCurve — exact forms', () => {
     for (let i = 0; i < REPS; i++) analyzeCurve(c, models)
     const ms = (performance.now() - t0) / REPS
     expect(ms, `x^3 - 3x took ${ms.toFixed(3)}ms`).toBeLessThan(3)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Intersections (intersectionPoints) — where one curve meets another.
+//
+// The point is reported on the PARENT, so pos.y is the parent's f; withId
+// names the other curve. `exact` says the location came from a formula — two
+// polynomials whose difference is linear or quadratic — and NOT merely that
+// the numbers came out round: x³ and x meet at −1, 0 and 1, and those three
+// were bisected to. The exact FORM is a separate claim, verified against
+// f − g at the candidate exactly as every other point's is.
+// ---------------------------------------------------------------------------
+
+describe('analyzeCurve — intersections', () => {
+  /** A library-family curve with an id of its own. */
+  const named = (
+    id: string,
+    modelId: string,
+    params: number[],
+    domain: [number, number] | null = null,
+  ): FittedCurve => ({ ...curve(modelId, params, domain), id })
+
+  /** A typed expression as the board holds it, with its own model id. */
+  function typedCurve(
+    id: string,
+    src: string,
+    domain: [number, number] | null = null,
+  ): { c: FittedCurve; models: Record<string, ModelSpec> } {
+    const r = parseExpression(src)
+    if (!r.ok) throw new Error(`expected "${src}" to parse, got: ${r.error}`)
+    const modelId = `expr_${id}`
+    const spec = r.plot.makeModel(modelId)
+    return {
+      c: {
+        ...curve(modelId, r.plot.defaultParams, domain),
+        id,
+        kind: r.plot.kind,
+      },
+      models: { [modelId]: spec },
+    }
+  }
+
+  const MINUS = '−'
+  const RT = '√'
+  const PI = 'π'
+  const xy = (p: SpecialPoint) => [p.pos.x, p.pos.y]
+  const forms = (ps: SpecialPoint[]) => ps.map(p => [p.exactX, p.exactY])
+
+  it('x² and 2 − x² meet at (−1, 1) and (1, 1), by formula', () => {
+    const f = named('f', 'poly2', [0, 0, 1])
+    const g = named('g', 'poly2', [2, 0, -1])
+    const pts = intersectionPoints(f, g, MODELS, [-5, 5])
+    expect(pts).toHaveLength(2)
+    expect(pts.map(xy)).toEqual([[-1, 1], [1, 1]])
+    for (const p of pts) {
+      expect(p.kind).toBe('intersection')
+      expect(p.label).toBe('intersection')
+      expect(p.withId).toBe('g')
+      // the roots of a quadratic difference come from the quadratic formula
+      expect(p.exact).toBe(true)
+      expect(p.tangent).toBeUndefined()
+    }
+    // a plain integer IS a closed form here, as it is everywhere else
+    expect(forms(pts)).toEqual([[MINUS + '1', '1'], ['1', '1']])
+  })
+
+  it('x² and the line y = 2 meet at ±√2, and the point IS ±√2', () => {
+    const pts = intersectionPoints(
+      named('f', 'poly2', [0, 0, 1]),
+      named('two', 'line', [2, 0]),
+      MODELS,
+      [-5, 5],
+    )
+    expect(forms(pts)).toEqual([[MINUS + RT + '2', '2'], [RT + '2', '2']])
+    expect(pts[0].pos.x).toBe(-Math.SQRT2)
+    expect(pts[1].pos.x).toBe(Math.SQRT2)
+    expect(pts.map(p => p.pos.y)).toEqual([2, 2])
+  })
+
+  it('sin x and cos x meet at π/4 and 5π/4 on [0, 2π]', () => {
+    const s = typedCurve('s', 'y = sin(x)')
+    const c = typedCurve('c', 'y = cos(x)')
+    const models = { ...s.models, ...c.models }
+    const pts = intersectionPoints(s.c, c.c, models, [0, 2 * Math.PI])
+    expect(pts).toHaveLength(2)
+    expect(forms(pts)).toEqual([
+      [PI + '/4', RT + '2/2'],
+      ['5' + PI + '/4', MINUS + RT + '2/2'],
+    ])
+    expect(pts[0].pos.x).toBe(Math.PI / 4)
+    expect(pts[1].pos.x).toBe((5 * Math.PI) / 4)
+    expect(pts[0].pos.y).toBeCloseTo(Math.SQRT1_2, 15)
+    // nothing here was solved: sin − cos was scanned
+    expect(pts.every(p => p.exact === false)).toBe(true)
+    // the library sinusoids reach the same two points
+    const fam = intersectionPoints(
+      named('a', 'sine', [1, 1, 0, 0]),
+      named('b', 'sine', [1, 1, Math.PI / 2, 0]),
+      MODELS,
+      [0, 2 * Math.PI],
+    )
+    expect(forms(fam)).toEqual(forms(pts))
+  })
+
+  it('x² and x meet at (0, 0) and (1, 1)', () => {
+    const pts = intersectionPoints(
+      named('f', 'poly2', [0, 0, 1]),
+      named('g', 'line', [0, 1]),
+      MODELS,
+      [-5, 5],
+    )
+    expect(pts.map(xy)).toEqual([[0, 0], [1, 1]])
+    expect(forms(pts)).toEqual([['0', '0'], ['1', '1']])
+    expect(pts.every(p => p.exact)).toBe(true)
+  })
+
+  it('x² and x² − 1 never meet', () => {
+    expect(
+      intersectionPoints(
+        named('f', 'poly2', [0, 0, 1]),
+        named('g', 'poly2', [-1, 0, 1]),
+        MODELS,
+        [-5, 5],
+      ),
+    ).toEqual([])
+    // and neither does a curve with itself: "everywhere" is not a list of points
+    const f = named('f', 'poly2', [0, 0, 1])
+    expect(intersectionPoints(f, { ...f, id: 'copy' }, MODELS, [-5, 5])).toEqual([])
+  })
+
+  it('x³ and x meet three times, crossing every time', () => {
+    const pts = intersectionPoints(
+      named('f', 'poly3', [0, 0, 0, 1]),
+      named('g', 'line', [0, 1]),
+      MODELS,
+      [-5, 5],
+    )
+    expect(pts.map(xy)).toEqual([[-1, -1], [0, 0], [1, 1]])
+    expect(forms(pts)).toEqual([
+      [MINUS + '1', MINUS + '1'], ['0', '0'], ['1', '1'],
+    ])
+    expect(pts.some(p => p.tangent)).toBe(false)
+    // a cubic difference has no formula behind it, whatever its roots look like
+    expect(pts.every(p => p.exact === false)).toBe(true)
+  })
+
+  it('(x − 1)² meets the x-axis once, and is flagged a tangency', () => {
+    const p = typedCurve('p', 'y = (x-1)^2')
+    const z = typedCurve('z', 'y = 0')
+    const pts = intersectionPoints(p.c, z.c, { ...p.models, ...z.models }, [-5, 5])
+    expect(pts).toHaveLength(1)
+    expect(xy(pts[0])).toEqual([1, 0])
+    expect(pts[0].tangent).toBe(true)
+    expect(pts[0].exactX).toBe('1')
+    expect(pts[0].withId).toBe('z')
+    // the same pair as library families: touched, and solved for
+    const fam = intersectionPoints(
+      named('f', 'poly2', [1, -2, 1]),
+      named('axis', 'line', [0, 0]),
+      MODELS,
+      [-5, 5],
+    )
+    expect(fam).toHaveLength(1)
+    expect(fam[0].tangent).toBe(true)
+    expect(fam[0].exact).toBe(true)
+  })
+
+  it('1/x and x meet at ∓1 and never at the pole', () => {
+    const pts = intersectionPoints(
+      named('f', 'recip', [1, 0, 0]),
+      named('g', 'line', [0, 1]),
+      MODELS,
+      [-3, 3],
+    )
+    expect(pts.map(xy)).toEqual([[-1, -1], [1, 1]])
+    expect(pts.some(p => Math.abs(p.pos.x) < 0.5)).toBe(false)
+    expect(forms(pts)).toEqual([[MINUS + '1', MINUS + '1'], ['1', '1']])
+  })
+
+  it('a meeting off the end of a restricted curve is not a meeting', () => {
+    const f = named('f', 'poly2', [0, 0, 1])
+    // x and x² meet at 0 and 1; the line only exists from x = 0.5
+    expect(
+      intersectionPoints(f, named('g', 'line', [0, 1], [0.5, 4]), MODELS, [-5, 5])
+        .map(xy),
+    ).toEqual([[1, 1]])
+    // a typed curve carrying its own domain clips the same way
+    const half = typedCurve('h', 'y = x', [-4, 0.5])
+    expect(
+      intersectionPoints(f, half.c, { ...MODELS, ...half.models }, [-5, 5]).map(xy),
+    ).toEqual([[0, 0]])
+    // and so does the range itself
+    expect(
+      intersectionPoints(f, named('g', 'line', [0, 1]), MODELS, [-5, 0.5]).map(xy),
+    ).toEqual([[0, 0]])
+  })
+
+  it('a curve that is not a function of x has no intersections to report', () => {
+    const f = named('f', 'poly2', [0, 0, 1])
+    expect(intersectionPoints(f, named('c', 'circle', [0, 0, 2]), MODELS, [-4, 4])).toEqual([])
+    expect(intersectionPoints(named('c', 'circle', [0, 0, 2]), f, MODELS, [-4, 4])).toEqual([])
+    expect(intersectionPoints(f, named('r', 'polarRose', [2, 3, 0]), MODELS, [-4, 4])).toEqual([])
+    // a NaN parameter says nothing either
+    expect(intersectionPoints(f, named('g', 'line', [Number.NaN, 1]), MODELS, [-4, 4])).toEqual([])
+  })
+
+  it('every reported point really is shared by both curves', () => {
+    const f = typedCurve('f', 'y = sin(x)*e^(x/3) + x^2')
+    const g = typedCurve('g', 'y = 0.5x^2 + 2')
+    const models = { ...f.models, ...g.models }
+    const F = models.expr_f.evalExplicit!
+    const G = models.expr_g.evalExplicit!
+    const pts = intersectionPoints(f.c, g.c, models, [-10, 10])
+    expect(pts.length).toBeGreaterThan(0)
+    for (const p of pts) {
+      expect(p.pos.y).toBeCloseTo(F(f.c.params, p.pos.x), 9)
+      expect(p.pos.y).toBeCloseTo(G(g.c.params, p.pos.x), 9)
+      // sketched curves crossing at nothing in particular: no invented forms
+      expect(p.exactX).toBeUndefined()
+    }
+  })
+
+  it('a pair of typed expressions is intersected in under 2ms', () => {
+    const f = typedCurve('f', 'y = sin(x)*e^(x/3) + x^2')
+    const g = typedCurve('g', 'y = 0.5x^2 + 2')
+    const models = { ...f.models, ...g.models }
+    for (let i = 0; i < 5; i++) intersectionPoints(f.c, g.c, models, [-10, 10])
+    let best = Infinity
+    for (let k = 0; k < 5; k++) {
+      const t0 = performance.now()
+      intersectionPoints(f.c, g.c, models, [-10, 10])
+      best = Math.min(best, performance.now() - t0)
+    }
+    expect(best, `took ${best.toFixed(3)}ms`).toBeLessThan(2)
   })
 })

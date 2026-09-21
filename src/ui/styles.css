@@ -2298,6 +2298,27 @@ button.an-value {
   color: var(--muted);
 }
 
+/* Where this curve meets another. One line per other curve, because "with g"
+   and "with h" are two answers to two questions and a single wrapped run of
+   coordinates makes them look like one. The name is prose, not a value, so it
+   is set in the reading face and steps back a tone — the coordinates beside it
+   stay in the mono column the rest of the table lines up in. */
+.an-with {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px;
+  width: 100%;
+  min-width: 0;
+}
+
+.an-with-name {
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
 .an-note {
   color: var(--muted);
   font-family: var(--font);

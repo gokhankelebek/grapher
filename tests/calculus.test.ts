@@ -17,6 +17,7 @@ import {
   riemann, hasExactDerivative,
   type RiemannMethod,
 } from '../src/core/calculus'
+import { intersectionPoints } from '../src/core/analyze'
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -992,6 +993,23 @@ describe('curveIntersections', () => {
 
   it('is empty for a curve that is not a function of x', () => {
     expect(curveIntersections(sq, curve('circle', [0, 0, 2]), MODELS, [-4, 4])).toEqual([])
+  })
+})
+
+describe('curveIntersections — the cycle with analyze.ts', () => {
+  // analyze.ts's intersectionPoints() calls curveIntersections(), and
+  // calculus.ts calls analyzeCurve(): the two modules import each other. The
+  // cycle is safe only because nothing is used before its module body has
+  // run, and a module graph entered from THIS side is the half that a test
+  // file entered from analyze.ts cannot prove.
+  it('intersectionPoints works when calculus.ts is loaded first', () => {
+    const f = { ...curve('poly2', [0, 0, 1]), id: 'f' }
+    const g = { ...curve('line', [2, 0]), id: 'g' }
+    const xs = curveIntersections(f, g, MODELS, [-5, 5])
+    const pts = intersectionPoints(f, g, MODELS, [-5, 5])
+    expect(pts.map((p) => p.pos.x)).toEqual(xs)
+    expect(pts.map((p) => p.exactX)).toEqual(['\u2212\u221a2', '\u221a2'])
+    expect(pts.every((p) => p.withId === 'g')).toBe(true)
   })
 })
 

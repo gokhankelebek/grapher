@@ -81,7 +81,11 @@ export function drawContextMarkers(
   for (const p of points) {
     if (!p || !p.pos || !Number.isFinite(p.pos.x) || !Number.isFinite(p.pos.y)) continue
     // A hole is drawn by the curve layer as an open ring; a filled context dot
-    // here would say the opposite of what the ring says.
+    // here would say the opposite of what the ring says. A crossing is drawn
+    // by the intersection layer as a neutral diamond, ONCE for the pair; a dot
+    // in this curve's colour on top of it would claim a point that belongs to
+    // two curves for one of them, and would do it twice — once from each side.
+    // hasMarkerGlyph is the single place that question is answered.
     if (!hasMarkerGlyph(p.kind)) continue
     const s = toScreen(p.pos, vp)
     if (s.x < -30 || s.y < -30 || s.x > vp.widthPx + 30 || s.y > vp.heightPx + 30) continue
