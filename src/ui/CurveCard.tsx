@@ -14,7 +14,7 @@ import type { CurveStyle } from '../App'
 import { fitQuality } from '../core/fit/recognize'
 import { findAsymptotes } from '../core/holes'
 import { Latex } from './Latex'
-import { formatCoord, parseNumeric } from './numeric'
+import { APPROX, exactDetail, formatCoord, parseNumeric, pointParts } from './numeric'
 import { alignedValues, curveScale, derivesFromInk } from './curveState'
 import { axisKeys, featureAxes } from './featureEdit'
 import { curveEquationText, displayEquationLatex } from './equationText'
@@ -223,6 +223,22 @@ function coefText(v: number, scale?: number): string {
   const abs = Math.abs(r)
   const s = abs >= 1e5 || abs < 1e-3 ? r.toExponential(2) : String(r)
   return s.startsWith('-') ? '−' + s.slice(1) : s
+}
+
+/**
+ * The tooltip on a closed form: what it actually equals, to six places.
+ *
+ * The row prints four significant digits because it is a COLUMN and a column
+ * has to line up. A teacher who stops on "\u221a3" is usually checking it against
+ * whatever is on the calculator in front of them, and the hover is the one
+ * place in this card where extra digits cost nobody anything.
+ */
+function exactTitle(p: SpecialPoint, exact: string): string {
+  const rhs =
+    p.kind === 'zero'
+      ? exactDetail(p.pos.x)
+      : `(${exactDetail(p.pos.x)}, ${exactDetail(p.pos.y)})`
+  return `${exact} = ${rhs}`
 }
 
 /**
@@ -1389,20 +1405,44 @@ export function CurveCard({
                         // The separator is part of the value's own text: a
                         // comma that can wrap on its own ends a line with a
                         // dangling punctuation mark.
-                        const text =
-                          point.kind === 'zero'
-                            ? formatCoord(point.pos.x, { scale, exact: point.exact })
-                            : `(${formatCoord(point.pos.x, { scale, exact: point.exact })}, ${formatCoord(
-                                point.pos.y,
-                                { scale, exact: point.exact },
-                              )})`
+                        const parts = pointParts(point, { scale })
+                        // Both readings in one attribute, for a copy or a test
+                        // that wants the value as a value. Only emitted where
+                        // there IS a closed form, so a row of plain decimals
+                        // is the markup it has always been.
+                        const text = parts.text
+                        const comma = last ? '' : ','
+                        // A point the analyzer knows in closed form says so
+                        // FIRST and keeps the decimal beside it, quietly: the
+                        // exact value is the answer the question was asking
+                        // for, and the decimal is what you check it against.
+                        // With no closed form this is the single text node the
+                        // row has always been, character for character.
+                        const valueNode =
+                          parts.exact === null ? (
+                            parts.decimal + comma
+                          ) : (
+                            <>
+                              <span
+                                className="an-exact"
+                                title={exactTitle(point, parts.exact)}
+                              >
+                                {parts.exact}
+                              </span>
+                              <span className="an-approx">{` ${APPROX} ${parts.decimal}${comma}`}</span>
+                            </>
+                          )
                         // A hole is stated, never offered: it is the one place
                         // the formula has no value, so there is nothing for an
                         // editor to move. No button, no hover, no hint.
                         if (g.readOnly) {
                           return (
-                            <span className="an-value an-value-static" key={index}>
-                              {last ? text : `${text},`}
+                            <span
+                              className="an-value an-value-static"
+                              key={index}
+                              data-value={parts.exact === null ? undefined : text}
+                            >
+                              {valueNode}
                             </span>
                           )
                         }
@@ -1468,6 +1508,7 @@ export function CurveCard({
                           <button
                             key={index}
                             className="an-value"
+                            data-value={parts.exact === null ? undefined : text}
                             title={
                               pair
                                 ? `Click to set this ${point.label} to exact coordinates`
@@ -1479,7 +1520,7 @@ export function CurveCard({
                             onBlur={() => onAnalysisHover(null)}
                             onClick={() => openFeatureEdit(index)}
                           >
-                            {last ? text : `${text},`}
+                            {valueNode}
                             {point.tangent && <span className="an-note">touches</span>}
                           </button>
                         )

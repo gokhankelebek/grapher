@@ -1,4 +1,5 @@
 // Numeric entry helpers shared by the on-canvas handle editor.
+import type { SpecialPoint } from '../core/types'
 import { parseExpression } from '../core/parse'
 
 const PLAIN_NUMBER = /^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$/
@@ -122,4 +123,161 @@ export function formatSig(v: number, opts?: { scale?: number }): string {
   const abs = Math.abs(v)
   if (abs >= 1e6 || abs < 1e-4) return v.toExponential(3)
   return String(Number(v.toPrecision(4)))
+}
+
+// ---------------------------------------------------------------------------
+// Exact forms
+//
+// A zero at √3 is not "1.732". The decimal is the answer a calculator gives;
+// the closed form is the answer the question was asking for, and on an AP free
+// response it is the one that earns the point. analyzeCurve fills in
+// SpecialPoint.exactX / exactY whenever it can VERIFY one (src/core/exact.ts),
+// and leaves them absent otherwise — so this file's job is only to decide how
+// the two readings sit next to each other, once, for every surface that prints
+// a special point: the card row, the on-board chip, the overlay.
+//
+// THE RULE, stated once:
+//
+//   1. Each coordinate prints its exact form when it has one, and its decimal
+//      when it does not. That is what makes a mixed pair read "(π/2, 1.000)"
+//      rather than forcing a closed form onto a coordinate that has none.
+//   2. When ANY coordinate of the point has an exact form, the whole value is
+//      printed twice — the exact reading, then "≈", then the ordinary decimal
+//      reading. Both sides stay well-formed values, so the decimal column still
+//      lines up and either side can be read on its own.
+//   3. When NO coordinate has one, the value is the decimal alone — byte for
+//      byte what this app printed before exact forms existed. A form that is
+//      no more than a plain numeral for the number already on the row ("2"
+//      beside 2.000) counts as no form at all, by rule 3 and not as an
+//      exception to it: it is one value written twice.
+//
+// A chip asks for rule 2 to be dropped (`decimal: false`): a label on the board
+// is a name for the point, not a table of it, and "(√3, 0) ≈ (1.732, 0)" on a
+// plate beside the curve is two answers where a reader wanted one.
+// ---------------------------------------------------------------------------
+
+
+/** The sign this app uses between a closed form and its decimal. */
+export const APPROX = '≈'
+
+export interface PointTextOpts {
+  /** Magnitude the point lives at — formatCoord's zero floor. */
+  scale?: number
+  /**
+   * Print the decimal beside the exact form (rule 2). Default true, which is
+   * the card. False is the chip: the exact form alone, decimal only as the
+   * fallback for a coordinate that has no closed form.
+   */
+  decimal?: boolean
+  /**
+   * Which coordinates are printed. Default follows the readout: a zero is a
+   * single x (its y is 0 by definition), everything else is a pair.
+   */
+  axes?: 'x' | 'y' | 'pair'
+}
+
+export interface PointParts {
+  /** The exact reading, or null when no coordinate of this point has one. */
+  exact: string | null
+  /** The decimal reading — always well formed, always the pre-exact string. */
+  decimal: string
+  /** The two of them, per the rule above. */
+  text: string
+}
+
+/** A closed form that is a plain numeral: "2", "−1", "1.5". */
+const PLAIN_FORM = /^[-−+]?(\d+\.?\d*|\.\d+)$/
+
+/**
+ * A stored exact form, or null — where "no form" also covers a form with
+ * nothing to say.
+ *
+ * Defensive about the shape rather than trusting it: these strings survive a
+ * round trip through a saved document, and a blank one must read as "no closed
+ * form" rather than printing "  ≈ 1.732" with a hole where the answer was.
+ *
+ * And a cubic's maximum at exactly (−1, 2) is the case that would otherwise
+ * make this feature LOUD for no gain: "(−1, 2) ≈ (−1.000, 2.000)" is the same
+ * two numbers twice, on every polynomial row, in a sidebar a teacher reads at
+ * a glance. A form that is a plain numeral for the value already being printed
+ * is dropped, and the row stays the aligned decimal column it has always been.
+ * √3, π/4 and 3/2 are not plain numerals, and are kept.
+ */
+function exactForm(s: string | undefined, v: number): string | null {
+  if (typeof s !== 'string') return null
+  const t = s.trim()
+  if (t.length === 0) return null
+  if (PLAIN_FORM.test(t)) {
+    const n = Number(t.replace(/−/g, '-'))
+    if (Number.isFinite(n) && Math.abs(n - v) <= 1e-9 * Math.max(1, Math.abs(v))) return null
+  }
+  return t
+}
+
+/** Which coordinates a point's readout shows, when the caller doesn't say. */
+function defaultAxes(kind: SpecialPoint['kind']): 'x' | 'pair' {
+  return kind === 'zero' ? 'x' : 'pair'
+}
+
+/**
+ * The two readings of a special point, kept apart so the card can set the
+ * decimal in a lighter tone than the closed form it approximates.
+ */
+export function pointParts(p: SpecialPoint, opts: PointTextOpts = {}): PointParts {
+  const o = { scale: opts.scale, exact: p.exact }
+  const axes = opts.axes ?? defaultAxes(p.kind)
+  const dx = formatCoord(p.pos.x, o)
+  const dy = formatCoord(p.pos.y, o)
+  const ex = exactForm(p.exactX, p.pos.x)
+  const ey = exactForm(p.exactY, p.pos.y)
+
+  let decimal: string
+  let exact: string | null
+  if (axes === 'x') {
+    decimal = dx
+    exact = ex
+  } else if (axes === 'y') {
+    decimal = dy
+    exact = ey
+  } else {
+    decimal = `(${dx}, ${dy})`
+    exact = ex || ey ? `(${ex ?? dx}, ${ey ?? dy})` : null
+  }
+
+  // "0 ≈ 0" is not a closed form beside its decimal, it is the same character
+  // twice with a hedge between them. A form that already reads as the decimal
+  // has nothing to add.
+  if (exact === decimal) exact = null
+
+  const wantDecimal = opts.decimal !== false
+  const text =
+    exact === null ? decimal : wantDecimal ? `${exact} ${APPROX} ${decimal}` : exact
+  return { exact, decimal, text }
+}
+
+/**
+ * One special point, as every surface in the app prints it.
+ *
+ * `pointText(p)` is the card: "√3 ≈ 1.732", "(√3/3, −2√3/9) ≈ (0.577, −0.385)",
+ * and plain "(1.200, −3.400)" for a point with no closed form.
+ * `pointText(p, { decimal: false })` is the board chip: "√3", "(√3, 0)".
+ */
+export function pointText(p: SpecialPoint, opts: PointTextOpts = {}): string {
+  return pointParts(p, opts).text
+}
+
+/** Digits the hover tooltip spends on a value the row prints in closed form. */
+const DETAIL_PLACES = 6
+
+/**
+ * The decimal a closed form stands for, at tooltip precision.
+ *
+ * The row prints four significant digits because it is a column; a teacher who
+ * stops on "√3" and wants to check it against a calculator wants more than
+ * that, and the tooltip is the one place that costs nothing to read.
+ */
+export function exactDetail(v: number): string {
+  if (!Number.isFinite(v)) return '—'
+  const s = v.toFixed(DETAIL_PLACES)
+  return s.startsWith('-') ? '−' + s.slice(1) : s
 }

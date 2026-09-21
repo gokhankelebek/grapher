@@ -2174,6 +2174,13 @@ button.param-value:hover {
 .an-value {
   display: inline-flex;
   align-items: baseline;
+  /* A closed form and its decimal are two readings of one value, so they are
+     one chip — but "(\u221a3/3, \u22122\u221a3/9) \u2248 (0.5774, \u22120.3849)" is wider than the
+     sidebar and an unwrapped chip hangs off the edge of the card. Wrapping
+     INSIDE the value puts the approximation on its own line under the exact
+     form, which is where a reader looks for it anyway. */
+  flex-wrap: wrap;
+  max-width: 100%;
   gap: var(--sp-1);
   padding: 2px var(--sp-1);
   border-radius: 4px;
@@ -2263,6 +2270,32 @@ button.an-value {
   border-color: var(--danger);
   box-shadow: 0 0 0 2px rgba(249, 95, 98, 0.16);
   animation: bad-flash 0.3s var(--ease);
+}
+
+/* A closed form and the decimal it stands for, on one line.
+   The exact value is the answer the question asked for, so it keeps the row's
+   own weight and colour; the decimal is the check on it, so it steps back a
+   tone rather than competing. Both stay in the mono face — they are the same
+   number twice and have to line up with the rows above and below. */
+.an-exact {
+  color: inherit;
+}
+
+.an-approx {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* Under the hover wash the whole value goes white; a "lighter tone" that is
+   still grey there would read as disabled rather than as secondary. */
+.an-value:hover .an-approx,
+.an-value:focus-visible .an-approx {
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.an-value-static:hover .an-approx,
+.an-value-static:focus-visible .an-approx {
+  color: var(--muted);
 }
 
 .an-note {

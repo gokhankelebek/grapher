@@ -22,6 +22,8 @@ import type {
 } from './types'
 import { conicToCenterForm } from './fit/optimize'
 import { findHoles } from './holes'
+import { exactForm, verifiedExact } from './exact'
+import type { ExactForm } from './exact'
 
 // ---------------------------------------------------------------------------
 // Tuning
@@ -37,6 +39,14 @@ const DEFAULT_DOMAIN: [number, number] = [-10, 10]
 const DEDUPE_X = 1e-6
 /** A zero/extremum this close (relatively) to a hole IS the hole. */
 const HOLE_DEDUPE = 1e-6
+/**
+ * Tolerance for recognising a hole's y. Looser than every other match here,
+ * and it has to be: that y is a LIMIT, and holes.ts declares one converged
+ * when three rungs of its h ladder agree to 1e-6. Matching it at 1e-11 would
+ * not be stricter, only blind — it would refuse to call the limit of
+ * (x²−1)/(x−1) two. The x of a hole is a snapped root and is matched tight.
+ */
+const HOLE_Y_TOL = 1e-8
 
 const EPS = Number.EPSILON
 /** Step for a central-difference first derivative: cbrt(eps) ~ 6.1e-6. */
@@ -701,6 +711,261 @@ function closedForm(
 }
 
 // ---------------------------------------------------------------------------
+// Exact forms
+//
+// Every SpecialPoint the explicit path produces gets asked whether its
+// coordinates are a number a teacher would write down — √3, π/4, (1+√5)/2 —
+// and the answer is attached as exactX / exactY (src/core/exact.ts).
+//
+// The rule is the one the module's contract states, applied per point:
+//
+//   * a point LOCATED IN CLOSED FORM (`exact: true` — a parabola's vertex, a
+//     sine crest, a cubic's inflection) carries full double precision, so its
+//     x is matched directly at 1e-11. Nothing has to witness it: it was
+//     solved, not searched. This is also the only path that can speak for the
+//     kink of a|x − b|, where there is no derivative to test with.
+//   * a point LOCATED NUMERICALLY (`exact: false` — a bisected root, a
+//     golden-section extremum, a bisected f″ crossing) is good to ~1e-8, so
+//     `verifiedExact` proposes at 1e-6 and THE CURVE decides: the candidate
+//     is accepted only if f, f′ or f″ is actually ~0 AT the candidate. That
+//     is what stops 1.9999998 from being printed as 2 when the extremum is
+//     genuinely somewhere else.
+//
+// y is never verified, because y is not searched for: it is f evaluated at the
+// exact x, so recognising it is an ordinary tight match. And when an x form is
+// accepted the point is POLISHED onto it — pos.x = form.value, pos.y = f of
+// that — so the decimal beside "√2" on the card is the decimal OF √2, not the
+// bisection's last iterate.
+//
+// The definitional coordinate is left alone: a zero's y is 0 and a
+// y-intercept's x is 0 by construction, and printing "0" beside them as a
+// discovery would be noise.
+// ---------------------------------------------------------------------------
+
+/** Tolerance for a value that was solved for rather than searched for. */
+const EXACT_TIGHT = 1e-11
+/** Tolerance for a y, which is one evaluation of f away from an exact x. */
+const EXACT_Y = 1e-10
+/** |f(c)| this small, relative to the curve's magnitude, IS a zero. */
+const ZERO_CHECK = 1e-9
+/** |f′(c)| this small, relative to the curve's typical slope, IS an extremum. */
+const SLOPE_CHECK = 1e-8
+/** |f″(c)| relative to the curve's typical curvature — differentiated twice. */
+const CURV_CHECK_SYMBOLIC = 1e-9
+const CURV_CHECK_NUMERIC = 1e-7
+/**
+ * Step for the f″ a CANDIDATE is checked with, as a fraction of |x|. Much
+ * larger than H2, which is tuned for a bisection scan that only needs a sign.
+ * Here f″ has to be small enough to separate a real inflection from a form
+ * that missed by 1e-6, and at H2 the answer is buried in roundoff: three
+ * nearly equal values over (1.2e-4)² carries ~1e-8 of dust, which is the size
+ * of the thing being measured. At 1e-3 the dust is ~1e-9 and Richardson
+ * cancels the h² truncation term that paying for the wider stencil would
+ * otherwise cost. The margin this buys is not theoretical: a sketched
+ * sinusoid's inflection sat 6e-7 from (31−√307)/4 and was ACCEPTED before it.
+ */
+const H_CHECK2 = 1e-3
+/** Samples used to size "small" for the three checks above. */
+const SCALE_SAMPLES = 64
+
+/** Ascending coefficients of p′ from ascending coefficients of p. */
+function polyDeriv(c: number[]): number[] {
+  if (c.length <= 1) return [0]
+  const out = new Array<number>(c.length - 1)
+  for (let k = 1; k < c.length; k++) out[k - 1] = c[k] * k
+  return out
+}
+
+function horner(c: number[], x: number): number {
+  let v = 0
+  for (let i = c.length - 1; i >= 0; i--) v = v * x + c[i]
+  return v
+}
+
+/** Families whose params ARE ascending polynomial coefficients. */
+const POLY_FAMILIES = new Set(['line', 'poly2', 'poly3', 'poly4'])
+
+interface Derivs {
+  d1: (x: number) => number | null
+  d2: (x: number) => number | null
+  /** true when both came from differentiated coefficients */
+  symbolic: boolean
+}
+
+/**
+ * f′ and f″ for the checks. Polynomials are differentiated exactly; everything
+ * else gets Richardson extrapolation of the central difference — the same
+ * scheme calculus.ts uses for a typed expression's tangent, written here so
+ * that analyze does not have to import the module that imports IT.
+ *
+ * No corner detector, deliberately: at the kink of a typed |x − 1| the
+ * symmetric difference reads 0, and 0 is the right answer to "is x = 1 where
+ * this curve turns?" — which is the only question being asked here.
+ */
+function derivsFor(curve: FittedCurve, f: Fn): Derivs {
+  if (POLY_FAMILIES.has(curve.modelId) && curve.params.every(Number.isFinite)) {
+    const c1 = polyDeriv(curve.params)
+    const c2 = polyDeriv(c1)
+    return {
+      d1: (x: number) => horner(c1, x),
+      d2: (x: number) => horner(c2, x),
+      symbolic: true,
+    }
+  }
+  return {
+    d1: (x: number) => {
+      const h = H1 * Math.max(1, Math.abs(x))
+      const a = (f(x + h) - f(x - h)) / (2 * h)
+      const b = (f(x + h / 2) - f(x - h / 2)) / h
+      const m = (4 * b - a) / 3
+      return Number.isFinite(m) ? m : null
+    },
+    d2: (x: number) => {
+      const h = H_CHECK2 * Math.max(1, Math.abs(x))
+      const f0 = f(x)
+      const a = (f(x + h) - 2 * f0 + f(x - h)) / (h * h)
+      const hh = h / 2
+      const b = (f(x + hh) - 2 * f0 + f(x - hh)) / (hh * hh)
+      const m = (4 * b - a) / 3
+      return Number.isFinite(m) ? m : null
+    },
+    symbolic: false,
+  }
+}
+
+interface Scales {
+  value: number
+  slope: number
+  curv: number
+}
+
+/** What "small" means for this curve: its own magnitude, slope and curvature. */
+function sampleScales(f: Fn, lo: number, hi: number): Scales {
+  const n = SCALE_SAMPLES
+  const step = (hi - lo) / n
+  const ys = new Array<number>(n + 1)
+  for (let i = 0; i <= n; i++) {
+    let y: number
+    try { y = f(lo + i * step) } catch { y = Number.NaN }
+    ys[i] = y
+  }
+  const slopes: number[] = []
+  const curvs: number[] = []
+  for (let i = 1; i < n; i++) {
+    const a = ys[i - 1]
+    const b = ys[i]
+    const c = ys[i + 1]
+    if (!Number.isFinite(a) || !Number.isFinite(b) || !Number.isFinite(c)) continue
+    slopes.push((c - a) / (2 * step))
+    curvs.push((c - 2 * b + a) / (step * step))
+  }
+  return {
+    value: Math.max(1, robustScale(ys)),
+    slope: Math.max(1, robustScale(slopes)),
+    curv: Math.max(1, robustScale(curvs)),
+  }
+}
+
+/** The curve's own test that a candidate x really is this kind of point. */
+function checkFor(
+  kind: SpecialPointKind,
+  f: Fn,
+  der: Derivs,
+  scales: () => Scales,
+): ((c: number) => boolean) | null {
+  switch (kind) {
+    case 'zero':
+      return (c: number) => {
+        let y: number
+        try { y = f(c) } catch { return false }
+        return Number.isFinite(y) && Math.abs(y) <= ZERO_CHECK * scales().value
+      }
+    case 'maximum':
+    case 'minimum':
+      return (c: number) => {
+        let m: number | null
+        try { m = der.d1(c) } catch { return false }
+        return m !== null && Math.abs(m) <= SLOPE_CHECK * scales().slope
+      }
+    case 'inflection':
+      return (c: number) => {
+        let s: number | null
+        try { s = der.d2(c) } catch { return false }
+        const tol = der.symbolic ? CURV_CHECK_SYMBOLIC : CURV_CHECK_NUMERIC
+        return s !== null && Math.abs(s) <= tol * scales().curv
+      }
+    default:
+      return null
+  }
+}
+
+/** The exact form of a y that has already been computed, if it has one. */
+function attachY(p: SpecialPoint, y: number): void {
+  if (!Number.isFinite(y)) return
+  const form = exactForm(y, { tol: EXACT_Y })
+  if (!form) return
+  p.exactY = form.text
+  p.pos = { x: p.pos.x, y: form.value }
+}
+
+/**
+ * Attach exactX / exactY to the points of an explicit curve, and polish each
+ * point onto the form that was accepted for it.
+ */
+function attachExactForms(
+  points: SpecialPoint[],
+  curve: FittedCurve,
+  f: Fn,
+  lo: number,
+  hi: number,
+): SpecialPoint[] {
+  if (points.length === 0) return points
+  const der = derivsFor(curve, f)
+  let cached: Scales | null = null
+  const scales = () => (cached ??= sampleScales(f, lo, hi))
+
+  for (const p of points) {
+    // A hole is not on the curve: f has no value at its x and its y is a
+    // two-sided limit, so there is nothing to verify against. Both
+    // coordinates are matched directly — the x is a snapped root or a written
+    // exclusion, the y the limit that converged.
+    if (p.kind === 'hole') {
+      const xf = exactForm(p.pos.x, { tol: EXACT_TIGHT })
+      const yf = exactForm(p.pos.y, { tol: HOLE_Y_TOL })
+      if (xf) { p.exactX = xf.text; p.pos = { x: xf.value, y: p.pos.y } }
+      if (yf) { p.exactY = yf.text; p.pos = { x: p.pos.x, y: yf.value } }
+      continue
+    }
+    // x = 0 by construction; only the y says anything.
+    if (p.kind === 'y-intercept') {
+      attachY(p, p.pos.y)
+      continue
+    }
+    const check = checkFor(p.kind, f, der, scales)
+    if (!check) continue
+
+    let form: ExactForm | null = p.exact
+      ? exactForm(p.pos.x, { tol: EXACT_TIGHT })
+      : null
+    if (!form) form = verifiedExact(p.pos.x, check)
+    if (!form) continue
+
+    p.exactX = form.text
+    // Polish: the printed decimal becomes the decimal of the printed form.
+    if (p.kind === 'zero') {
+      // a zero's y is 0 by definition, not by evaluation
+      p.pos = { x: form.value, y: 0 }
+    } else {
+      let y: number
+      try { y = f(form.value) } catch { y = Number.NaN }
+      p.pos = { x: form.value, y: Number.isFinite(y) ? y : p.pos.y }
+      attachY(p, p.pos.y)
+    }
+  }
+  return points
+}
+
+// ---------------------------------------------------------------------------
 // Explicit driver
 // ---------------------------------------------------------------------------
 
@@ -761,7 +1026,7 @@ function analyzeExplicit(
     const q = pt('hole', h.x, h.y, 'hole', false)
     if (q) kept.push(q)
   }
-  return kept
+  return attachExactForms(kept, curve, f, lo, hi)
 }
 
 /** Dedupe within each kind, drop non-finite, sort left to right. */
@@ -896,7 +1161,15 @@ function analyzePolar(
   for (const h of holes) {
     // `exact` stays false: the point is a limit, as it is for an explicit hole.
     const q = pt('hole', h.x, h.y, 'hole', false)
-    if (q) kept.push(q)
+    if (q) {
+      // Both coordinates of a polar hole are limits — r0·cos θ0 and r0·sin θ0
+      // — so neither is verified against anything, exactly as above.
+      const xf = exactForm(q.pos.x, { tol: HOLE_Y_TOL })
+      const yf = exactForm(q.pos.y, { tol: HOLE_Y_TOL })
+      if (xf) { q.exactX = xf.text; q.pos = { x: xf.value, y: q.pos.y } }
+      if (yf) { q.exactY = yf.text; q.pos = { x: q.pos.x, y: yf.value } }
+      kept.push(q)
+    }
   }
   return kept
 }

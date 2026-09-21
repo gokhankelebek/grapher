@@ -53,7 +53,7 @@ import type { Shape } from '../render/shapes'
 import { drawShapes } from '../render/shapes'
 import { drawNLItem, drawNumberLineAxis, nlLanes } from '../render/numberline'
 import type { NLPart } from '../render/numberline'
-import { formatCoord } from './numeric'
+import { pointText } from './numeric'
 
 const TWO_PI = Math.PI * 2
 
@@ -355,15 +355,23 @@ function textColor(theme: Theme): string {
 // Analysis markers and labels
 // ---------------------------------------------------------------------------
 
+/**
+ * The text on a point's plate.
+ *
+ * A chip is a NAME for the point, not a table of it: where the analyzer knows
+ * the closed form the plate says "(\u221a3, 0)" and stops there, because
+ * "(\u221a3, 0) \u2248 (1.732, 0)" is two answers on a label a reader glances at,
+ * and the card two feet away is where both readings belong. Coordinates with
+ * no closed form print exactly as they always did \u2014 p.exact still decides how
+ * many digits a numerically located point is entitled to.
+ *
+ * Every surface goes through pointText, so the chip and the card can never
+ * disagree about what this point is called.
+ */
 function labelFor(p: SpecialPoint): string {
-  // p.exact says whether this location was solved in closed form or located
-  // numerically; the formatter uses it so a numeric result is not printed to
-  // more digits than the method can actually support.
-  const o = { exact: p.exact }
-  if (p.kind === 'zero') {
-    return `${formatCoord(p.pos.x, o)}${p.tangent ? ' (touches)' : ''}`
-  }
-  return `(${formatCoord(p.pos.x, o)}, ${formatCoord(p.pos.y, o)})`
+  const text = pointText(p, { decimal: false })
+  if (p.kind === 'zero') return `${text}${p.tangent ? ' (touches)' : ''}`
+  return text
 }
 
 function roundRect(

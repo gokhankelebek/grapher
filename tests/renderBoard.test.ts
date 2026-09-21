@@ -154,7 +154,11 @@ const PARABOLA: FittedCurve = {
   color: CURVE_COLORS[0], strokeWidth: 2.5, visible: true, error: 0,
 }
 const VERTEX_LABEL = '(3.000, \u22122.000)'
-const Y_INTERCEPT_LABEL = '(0, 0.7000)'
+// The analyzer knows this intercept in closed form (0.3x² − 1.8x + 7/10), so
+// the plate says the closed form and not the decimal: a chip is a NAME for the
+// point. What these tests are about — which points get a label at all, and
+// where the plate lands — is unchanged either way.
+const Y_INTERCEPT_LABEL = '(0, 7/10)'
 
 /** Chrome for the parabola fixture — chromeOn() selects the cubic. */
 const parabolaChrome = (over: Partial<BoardChrome> = {}): BoardChrome => ({

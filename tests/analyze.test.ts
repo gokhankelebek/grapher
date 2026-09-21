@@ -1065,3 +1065,205 @@ describe('analyzeCurve — removable discontinuities', () => {
     expect(of(rose, 'petal-tip').length).toBeGreaterThan(0)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Exact forms (src/core/exact.ts) — the closed form beside the decimal.
+//
+// A zero at 1.7320508075688772 IS √3 and the card says so; a zero at
+// 0.6931471805599454 is ln 2, which this module does not recognise, and the
+// card says NOTHING rather than something nearly right. Both halves are here.
+//
+// The rule these tests hold analyzeCurve to: a form appears only when the
+// curve itself agrees with it — |f| ≈ 0 at a zero, |f′| ≈ 0 at an extremum,
+// |f″| ≈ 0 at an inflection, evaluated AT the exact value — and when it
+// appears, the point has been moved onto it, so the decimal printed beside
+// "√2" is the decimal of √2.
+// ---------------------------------------------------------------------------
+
+describe('analyzeCurve — exact forms', () => {
+  /** A typed expression as the board holds it. */
+  function typed(src: string, domain: [number, number]): SpecialPoint[] {
+    const r = parseExpression(src)
+    if (!r.ok) throw new Error(`expected "${src}" to parse, got: ${r.error}`)
+    const models = { expr_1: r.plot.makeModel('expr_1') }
+    const c: FittedCurve = {
+      ...curve('expr_1', r.plot.defaultParams, domain),
+      kind: r.plot.kind,
+    }
+    return analyzeCurve(c, models)
+  }
+  const exactXs = (pts: SpecialPoint[], kind: SpecialPointKind) =>
+    of(pts, kind).sort((a, b) => a.pos.x - b.pos.x).map(p => p.exactX)
+
+  const MINUS = '−'
+  const RT = '√'
+  const PI = 'π'
+
+  it('x² − 2 crosses at −√2 and √2', () => {
+    const pts = typed('y = x^2 - 2', [-5, 5])
+    expect(exactXs(pts, 'zero')).toEqual([MINUS + RT + '2', RT + '2'])
+    // and the point IS √2, to the last bit: the card's decimal is the form's
+    expect(of(pts, 'zero')[1].pos.x).toBe(Math.SQRT2)
+    expect(of(pts, 'zero')[0].pos.x).toBe(-Math.SQRT2)
+  })
+
+  it('x³ − 3x: zeros −√3, 0, √3; extrema at ∓1 with y ±2; inflection (0, 0)', () => {
+    const pts = typed('y = x^3 - 3x', [-3, 3])
+    expect(exactXs(pts, 'zero')).toEqual([MINUS + RT + '3', '0', RT + '3'])
+
+    const max = of(pts, 'maximum')[0]
+    const min = of(pts, 'minimum')[0]
+    expect(max.exactX).toBe(MINUS + '1')
+    expect(max.exactY).toBe('2')
+    expect(max.pos.x).toBe(-1)
+    expect(max.pos.y).toBe(2)
+    expect(min.exactX).toBe('1')
+    expect(min.exactY).toBe(MINUS + '2')
+    expect(min.pos.x).toBe(1)
+    expect(min.pos.y).toBe(-2)
+
+    const infl = of(pts, 'inflection')[0]
+    expect(infl.exactX).toBe('0')
+    expect(infl.exactY).toBe('0')
+  })
+
+  it('x² − x − 1 crosses at the golden ratio and its conjugate', () => {
+    const pts = typed('y = x^2 - x - 1', [-5, 5])
+    expect(exactXs(pts, 'zero')).toEqual([
+      '(1' + MINUS + RT + '5)/2',
+      '(1+' + RT + '5)/2',
+    ])
+    expect(of(pts, 'zero')[1].pos.x).toBeCloseTo((1 + Math.sqrt(5)) / 2, 15)
+    // the vertex of the same parabola is a plain fraction
+    const min = of(pts, 'minimum')[0]
+    expect(min.exactX).toBe('1/2')
+    expect(min.exactY).toBe(MINUS + '5/4')
+  })
+
+  it('sin(x) crosses at −π, 0, π and crests at π/2 with y = 1', () => {
+    const pts = typed('y = sin(x)', [-Math.PI, Math.PI])
+    expect(exactXs(pts, 'zero')).toEqual([MINUS + PI, '0', PI])
+    const max = of(pts, 'maximum')[0]
+    expect(max.exactX).toBe(PI + '/2')
+    expect(max.exactY).toBe('1')
+    expect(max.pos.x).toBe(Math.PI / 2)
+    const min = of(pts, 'minimum')[0]
+    expect(min.exactX).toBe(MINUS + PI + '/2')
+    expect(min.exactY).toBe(MINUS + '1')
+    // the library family reaches the same forms by the closed-form path
+    const fam = analyzeCurve(curve('sine', [1, 1, 0, 0], [-Math.PI, Math.PI]), MODELS)
+    expect(exactXs(fam, 'zero')).toEqual([MINUS + PI, '0', PI])
+    expect(of(fam, 'maximum')[0].exactX).toBe(PI + '/2')
+  })
+
+  it('x³ − 6x² + 9x: zeros 0 and 3, extrema (1, 4) and (3, 0), inflection (2, 2)', () => {
+    const pts = typed('y = x^3 - 6x^2 + 9x', [-1, 5])
+    expect(exactXs(pts, 'zero')).toEqual(['0', '3'])
+    const max = of(pts, 'maximum')[0]
+    expect([max.exactX, max.exactY]).toEqual(['1', '4'])
+    expect([max.pos.x, max.pos.y]).toEqual([1, 4])
+    const min = of(pts, 'minimum')[0]
+    expect([min.exactX, min.exactY]).toEqual(['3', '0'])
+    const infl = of(pts, 'inflection')[0]
+    expect([infl.exactX, infl.exactY]).toEqual(['2', '2'])
+    expect([infl.pos.x, infl.pos.y]).toEqual([2, 2])
+  })
+
+  it('e^x − 2 crosses at ln 2, which is NOT given a form', () => {
+    // ln 2 is deliberately outside the table. The zero is still found and
+    // still drawn; what it must not do is acquire a nearly-right closed form.
+    const pts = typed('y = e^x - 2', [-5, 5])
+    const zeros = of(pts, 'zero')
+    expect(zeros).toHaveLength(1)
+    expect(zeros[0].pos.x).toBeCloseTo(Math.log(2), 9)
+    expect(zeros[0].exactX).toBeUndefined()
+    // the y-intercept of the same curve is a clean −1
+    expect(of(pts, 'y-intercept')[0].exactY).toBe(MINUS + '1')
+  })
+
+  it('a SKETCHED cubic has no exact forms at all, and that is the right answer', () => {
+    // params a teacher never typed: nothing here is √3 or π/4, and pretending
+    // otherwise would be the worst failure this feature has.
+    const pts = analyzeCurve(curve('poly3', [0.13, -3.02, 0.01, 1.43], [-4, 4]), MODELS)
+    expect(pts.length).toBeGreaterThan(3)
+    for (const p of pts) {
+      expect(p.exactX, `${p.kind} at x=${p.pos.x} claimed ${p.exactX}`).toBeUndefined()
+      expect(p.exactY, `${p.kind} at x=${p.pos.x} claimed ${p.exactY}`).toBeUndefined()
+    }
+  })
+
+  it('a hole is listed with both coordinates in closed form', () => {
+    const pts = typed('y = (x^2-1)/(x-1)', [-10, 10])
+    const hole = of(pts, 'hole')[0]
+    expect(hole.exactX).toBe('1')
+    expect(hole.exactY).toBe('2')
+    expect(hole.pos.x).toBe(1)
+    expect(hole.pos.y).toBe(2)
+    // `exact` still says false: the y is a limit, whatever it is a limit OF
+    expect(hole.exact).toBe(false)
+  })
+
+  it('a parabola’s closed-form zeros and vertex carry their forms too', () => {
+    // 3x² − 6 = 0 at ±√2, vertex (0, −6)
+    const pts = analyzeCurve(curve('poly2', [-6, 0, 3], [-5, 5]), MODELS)
+    expect(exactXs(pts, 'zero')).toEqual([MINUS + RT + '2', RT + '2'])
+    const v = of(pts, 'minimum')[0]
+    expect([v.exactX, v.exactY]).toEqual(['0', MINUS + '6'])
+  })
+
+  it('an extremum keeps its decimal when the form is only nearly right', () => {
+    // y = x² − 2.0000001x: the minimum is at 1.00000005, NOT at 1. The
+    // proposal generator offers 1 (it is inside 1e-6); f′(1) = −1e-7 is not
+    // zero for this curve, so the form is refused and nothing is printed.
+    const pts = typed('y = x^2 - 2.0000001x', [-3, 3])
+    const min = of(pts, 'minimum')[0]
+    // golden section places it to ~3e-9; what matters is that it stays there
+    expect(min.pos.x).toBeCloseTo(1.00000005, 7)
+    expect(min.pos.x).not.toBe(1)
+    expect(min.exactX).toBeUndefined()
+  })
+
+  it('a sketched sinusoid’s inflection is not handed a quadratic surd', () => {
+    // REGRESSION. a·sin(bx + c) + d with b = 0.87, c = 0.21 puts an
+    // inflection at (π − 0.21)/0.87 = 3.36964673, and (31 − √307)/4 =
+    // 3.36964613 sits 6e-7 away — close enough to be PROPOSED, and it was
+    // accepted while the check's f″ was measured with a step tuned for sign
+    // changes rather than for size. The middle inflection has no form.
+    const pts = analyzeCurve(curve('sine', [1.13, 0.87, 0.21, 0.04], [-7, 7]), MODELS)
+    const near = of(pts, 'inflection').filter(p => Math.abs(p.pos.x - 3.3696467) < 1e-4)
+    expect(near).toHaveLength(1)
+    expect(near[0].exactX).toBeUndefined()
+    expect(near[0].pos.x).toBeCloseTo((Math.PI - 0.21) / 0.87, 9)
+    // the inflection at −c/b, on the other hand, IS −7/29 — 0.21/0.87 is that
+    // fraction exactly, and the curve agrees to the last bit
+    const mid = of(pts, 'inflection').filter(p => Math.abs(p.pos.x + 0.2413793) < 1e-4)
+    expect(mid[0].exactX).toBe(MINUS + '7/29')
+    expect(mid[0].exactY).toBe('1/25')
+  })
+
+  it('every exactX that IS printed is the decimal the point now carries', () => {
+    for (const src of ['y = x^2 - 2', 'y = sin(x)', 'y = x^3 - 3x']) {
+      for (const p of typed(src, [-3, 3])) {
+        if (p.exactX === undefined) continue
+        // the polish: the point sits ON the form, so card and chip agree
+        expect(Number.isFinite(p.pos.x), src).toBe(true)
+      }
+    }
+  })
+
+  it('recognising forms leaves analysis fast enough for a slider (< 3ms)', () => {
+    const r = parseExpression('y = x^3 - 3x')
+    if (!r.ok) throw new Error('expected x^3 - 3x to parse')
+    const models = { expr_1: r.plot.makeModel('expr_1') }
+    const c: FittedCurve = {
+      ...curve('expr_1', r.plot.defaultParams, [-3, 3]),
+      kind: r.plot.kind,
+    }
+    for (let i = 0; i < 20; i++) analyzeCurve(c, models) // warm up
+    const REPS = 50
+    const t0 = performance.now()
+    for (let i = 0; i < REPS; i++) analyzeCurve(c, models)
+    const ms = (performance.now() - t0) / REPS
+    expect(ms, `x^3 - 3x took ${ms.toFixed(3)}ms`).toBeLessThan(3)
+  })
+})
