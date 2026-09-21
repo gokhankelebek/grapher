@@ -4,6 +4,7 @@
 //   export function findHoles(curve, models, range): Hole[]
 //   export function findPoles(curve, models, range): number[]
 //   export function findAsymptotes(curve, models, range): Asymptote[]
+//   export function findEndAsymptotes(curve, models): Asymptote[]
 //
 // A HOLE is a removable discontinuity: the formula is undefined at x0 but the
 // two one-sided limits exist, are finite and agree — (x²−1)/(x−1) at (1, 2),
@@ -105,6 +106,7 @@
 // ============================================================================
 
 import type { Asymptote, FittedCurve, ModelSpec, Vec2 } from './types'
+import { endBehaviour } from './fit/models'
 
 export interface Hole {
   /** CARTESIAN x of the point — for a polar hole, r0·cos θ0 */
@@ -460,6 +462,236 @@ function lineKey(l: Extract<Asymptote, { kind: 'line' }>): string {
 }
 
 // ---------------------------------------------------------------------------
+// End behaviour — the line a graph leans on as x → ±∞
+//
+// A HORIZONTAL or SLANT asymptote is the pole's mirror image: the pole asks
+// what f does as x walks INTO a point, this asks what it does as x walks out
+// of the board and never comes back. So it is read the same way — on a ladder,
+// by VALUE, with the same convergence rules — but the ladder GROWS by 10 at
+// every rung instead of shrinking by it:
+//
+//     x_k = s · X₀ · 10^k,  k = 0…6,  s = ±1
+//     X₀  = 100 · max(1, |a finite domain edge|, |a parameter|), capped
+//
+// X₀ is 100 for an ordinary curve, so the last three rungs are 10^6, 10^7 and
+// 10^8 — far enough that 3/(x − 1) is 3e-8 and near enough that f itself is
+// still carrying ~8 honest digits past its leading one (an f of size 10^8 is
+// known to ~1e-8 absolute, and the intercept b is read out of exactly that
+// difference). The domain edge is in the max because a curve declared on
+// [1000, ∞) has not even started behaving at x = 100; a parameter is in it for
+// the same reason, and the cap keeps a wild one from pushing the ladder past
+// the precision that makes b readable at all.
+//
+//   * m_k = f(x_k)/x_k, and m has SETTLED when the last three agree within
+//     1e-6·max(1, |m|) — or when the steps between them are collapsing
+//     geometrically and the last is already inside it, the same two ways the
+//     pole machinery lets a side converge. x² and e^x fail both (m grows);
+//     so does sin x + oscillation, whose steps never shrink.
+//   * the VALUE of m is not m_6. m_k = m + b/x_k + O(x_k^−2), so m_6 carries
+//     an error of b/x_6 — and b is then read as f(x_6) − m·x_6, in which that
+//     error is multiplied by x_6 and comes back out as a whole b. The one
+//     estimate that kills it is Richardson on the last two rungs, which the
+//     ladder's fixed ratio of 10 makes exact:  m = (10·m_6 − m_5)/9. On
+//     y = 2x + 2 + 3/(x−1) that returns 2.000000000, and b then converges to
+//     2 instead of to the 0 that f(x_6)/x_6 · x_6 would have manufactured.
+//   * |m| ≤ 1e-9 is HORIZONTAL, and is reported as m = 0 exactly (dir = (1,0)).
+//     Richardson already sends 1/x, atan x and e^{−x} + 2 to ~1e-15 there. So
+//     is any |m| no bigger than |m_6 − m_5|, the last rung's own change in the
+//     estimate: a bounded oscillation (tan x) leaves a residue of ~|f|/x_6
+//     there, and a residue kept as a slope comes back multiplied by x_6 as a
+//     fabricated intercept. The cost is that a true slope below ~1e-7 is read
+//     as level — and then its b does not settle, so nothing is reported.
+//   * b_k = f(x_k) − m·x_k, and the side HAS an asymptote when b settles by
+//     the same rule — by AGREEMENT only when the slope is not level, since the
+//     Richardson m is the secant through the last two rungs and pins b_5 = b_6
+//     on any f at all — within tol = max(1e-6·|b|, 1e-6·mag, 1e-9), where mag is
+//     the median |f| over the visible-ish range [−10, 10] ∩ domain — the same
+//     `mag` the hole machinery measures, and for the same reason: a b of 0 has
+//     no magnitude of its own to be relative to. A |b| inside that tolerance
+//     IS zero, so 1/x reports y = 0 rather than y = 1e-8.
+//   * a NON-FINITE f at any rung ends that side with no asymptote: √x has
+//     nothing to say to the left of its branch point, ln x nothing to the left
+//     of 0, and e^x at 10^8 is Infinity, which is not a line.
+//   * SLOW DRIFT is caught by b, not by m: ln x and √x send m to 0 honestly,
+//     and then b = f keeps growing and never settles. Oscillation is caught
+//     the same way — x + sin x has m = 1 exactly and a b that is sin x.
+//   * a graph that IS the line is not approaching it. y = 2x + 3 converges to
+//     y = 2x + 3, and a dashed rule under a straight graph says nothing; the
+//     same verdict the `line` family gets in its own table (src/core/fit/
+//     models.ts). One sampled check decides it, over the HALF of the visible
+//     range this end looks out from — |x| is the line y = x to the right and
+//     y = −x to the left, and each end has to be allowed to say so.
+//   * a side whose DOMAIN is finite has no end at all: `{-3 < x < 5}` stops,
+//     and what the formula would have done past the stop is not on the graph.
+//   * two sides that name the SAME line are reported once (1/x leans on y = 0
+//     from both), two that differ are both reported (arctan's ±π/2).
+//
+// A library family is never sampled: `endBehaviour` in src/core/fit/models.ts
+// answers from the parameters, exactly, and its comment carries the table.
+// Parametric, implicit and polar curves have no end behaviour in x — a polar
+// curve's slant line comes from d = lim r·sin(θ − θ0) above.
+// ---------------------------------------------------------------------------
+
+/** Rungs of the outward ladder, k = 0…END_RUNGS. */
+const END_RUNGS = 6
+
+/** What the ladder multiplies by at every rung. Richardson reads this too. */
+const END_RATIO = 10
+
+/** X₀ = END_BASE · max(1, |domain edge|, |parameter|). */
+const END_BASE = 100
+
+/**
+ * The ceiling on X₀. Past x ≈ 1e10 an f of any size has fewer honest digits
+ * left than the intercept needs, and "no asymptote" beats a fabricated one.
+ */
+const END_BASE_MAX = 1e4
+
+/** A slope this close to level IS level: the asymptote is horizontal. */
+const M_ZERO = 1e-9
+
+/** The visible-ish range `mag` is measured over, before the domain clips it. */
+const END_MAG_RANGE: readonly [number, number] = [-10, 10]
+
+/** Samples in the "is the graph already this line?" check. */
+const COINCIDE_SAMPLES = 32
+
+/** One end line, y = m·x + b. */
+interface EndLine {
+  m: number
+  b: number
+}
+
+/**
+ * The limit of a sequence walking OUT to infinity, or null when it never
+ * settles — the pole machinery's two convergence rules, read on a growing
+ * ladder instead of a shrinking one.
+ */
+function tailLimit(vals: number[], tol: number, collapsing = true): number | null {
+  const n = vals.length
+  if (n < 3) return null
+  const last = vals.slice(-3)
+  if (Math.abs(last[0] - last[2]) <= tol && Math.abs(last[1] - last[2]) <= tol) {
+    return last[2]
+  }
+  if (!collapsing) return null
+  // The values did not stop moving. They may still be arriving: steps dying
+  // by a factor at every rung, the last already inside tol. c/x reaches its 0
+  // this way — 1e-6, 1e-7, 1e-8 never "agree", and there is nowhere else for
+  // them to go.
+  const steps: number[] = []
+  for (let i = 1; i < n; i++) steps.push(Math.abs(vals[i] - vals[i - 1]))
+  const s = steps.length
+  if (
+    s >= 3 &&
+    steps[s - 1] <= tol &&
+    steps[s - 1] <= TAIL_SHRINK * steps[s - 2] &&
+    steps[s - 2] <= TAIL_SHRINK * steps[s - 3]
+  ) {
+    return vals[n - 1]
+  }
+  return null
+}
+
+/** Walk one side out to infinity and say what line it leans on, if any. */
+function endSide(f: Fn, side: 1 | -1, x0: number, mag: number): EndLine | null {
+  const xs: number[] = []
+  const fs: number[] = []
+  let x = side * x0
+  for (let k = 0; k <= END_RUNGS; k++) {
+    const v = f(x)
+    // Infinity is not a line, and NaN is a domain edge reached (√x to the
+    // left, ln of a negative). Either way this side has no asymptote.
+    if (typeof v !== 'number' || !Number.isFinite(v)) return null
+    xs.push(x)
+    fs.push(v)
+    x *= END_RATIO
+  }
+
+  const n = fs.length
+  const ms = fs.map((v, i) => v / xs[i])
+  const mTol = CONVERGE_REL * Math.max(1, Math.abs(ms[n - 1]))
+  if (tailLimit(ms, mTol) === null) return null
+
+  // Richardson on the last two rungs: m_k = m + b/x_k + O(x_k^−2), and the
+  // ladder's ratio is exactly 10, so (10·m_6 − m_5)/9 cancels the b/x term
+  // that the intercept would otherwise inherit multiplied by x.
+  let m = (END_RATIO * ms[n - 1] - ms[n - 2]) / (END_RATIO - 1)
+  if (!Number.isFinite(m)) return null
+  // A slope smaller than the last rung's own change in it is not a slope, it
+  // is what is left of the estimate. tan x hands back m_k = tan(x_k)/x_k,
+  // which is ~1e-8 of nothing in particular at x = 1e8; kept, that residue
+  // becomes an m·x term of size 2 at the far end and can be mistaken for an
+  // intercept. Level is the honest reading, and then b = tan x is asked to
+  // settle and does not.
+  if (Math.abs(m) <= Math.max(M_ZERO, Math.abs(ms[n - 1] - ms[n - 2]))) m = 0
+
+  const bs = fs.map((v, i) => v - m * xs[i])
+  const bTol = Math.max(
+    CONVERGE_REL * Math.abs(bs[n - 1]),
+    CONVERGE_REL * mag,
+    CONVERGE_ABS,
+  )
+  // The b sequence is only honest when m is level. For a slant, m is the
+  // SECANT SLOPE through the last two rungs — (10·m_6 − m_5)/9 is exactly
+  // (f_6 − f_5)/(x_6 − x_5) — so both of those points lie on the candidate
+  // line and b_5 = b_6 identically, whatever f is. The last step is then 0 by
+  // construction and says nothing, which is enough to let a collapsing-steps
+  // reading pass anything (tan x arrives at a "limit" of −0.2302 that way).
+  // What DOES test the line is an earlier rung: b_4 is f(10^6) measured
+  // against it, and "the last three agree" is exactly that question.
+  let b = tailLimit(bs, bTol, m === 0)
+  if (b === null || !Number.isFinite(b)) return null
+  if (Math.abs(b) <= bTol) b = 0
+  return { m, b }
+}
+
+/**
+ * The graph IS this line, over the part of the visible range that this END
+ * looks out from.
+ *
+ * y = 2x + 3 leans on y = 2x + 3, and a dashed rule drawn under a straight
+ * graph states nothing about it. This is the one test that tells "approaches"
+ * from "equals", and it is not a shaky one: it asks whether every sample of f
+ * already sits on the line, to the same tolerance the intercept was read at.
+ *
+ * The window is ONE SIDE, not the whole board, because the functions this is
+ * for are the ones that are a line on one side and something else on the
+ * other: |x| is x to the right and −x to the left, |x|/x is +1 and −1. Judged
+ * over both halves at once neither end would ever look like its own line, and
+ * a board would rule a dashed y = x under the right arm of a V.
+ */
+function isTheLine(f: Fn, m: number, b: number, lo: number, hi: number, mag: number): boolean {
+  let seen = 0
+  for (let i = 0; i <= COINCIDE_SAMPLES; i++) {
+    const x = lo + ((hi - lo) * i) / COINCIDE_SAMPLES
+    const v = f(x)
+    if (!Number.isFinite(v)) continue
+    seen++
+    const want = m * x + b
+    const tol = Math.max(CONVERGE_REL * Math.abs(want), CONVERGE_REL * mag, CONVERGE_ABS)
+    if (Math.abs(v - want) > tol) return false
+  }
+  return seen > 0
+}
+
+/** Two end lines that name the same line — 1/x leans on y = 0 from both sides. */
+function sameEndLine(a: EndLine, b: EndLine): boolean {
+  const mTol = CONVERGE_REL * Math.max(1, Math.abs(a.m), Math.abs(b.m))
+  const bTol = CONVERGE_REL * Math.max(1, Math.abs(a.b), Math.abs(b.b))
+  return Math.abs(a.m - b.m) <= mTol && Math.abs(a.b - b.b) <= bTol
+}
+
+/** X₀: far enough out that the curve's own shifts are behind it. */
+function endBase(curve: FittedCurve, domLo: number, domHi: number): number {
+  let s = 1
+  if (Number.isFinite(domLo)) s = Math.max(s, Math.abs(domLo))
+  if (Number.isFinite(domHi)) s = Math.max(s, Math.abs(domHi))
+  for (const p of curve.params) if (Number.isFinite(p)) s = Math.max(s, Math.abs(p))
+  return Math.min(END_BASE_MAX, END_BASE * s)
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -535,8 +767,98 @@ export function findPoles(
 }
 
 /**
- * Every asymptote of the curve: the vertical ones from findPoles(), plus the
- * slant lines a polar curve runs out along.
+ * The HORIZONTAL and SLANT asymptotes of an explicit curve — the lines its two
+ * ends lean on as x → ±∞. Parametric, implicit and polar curves have none: a
+ * polar curve's slant line is a different fact, read off d = lim r·sin(θ − θ0)
+ * in findAsymptotes below.
+ *
+ * No `range`: an end asymptote is a statement about infinity, not about the
+ * board, and the same line is true wherever the viewport happens to be. The
+ * ranges that DO appear — the ladder's X₀ and the visible-ish [−10, 10] that
+ * `mag` is measured over — come from the curve and from the rule, not from a
+ * caller, so a curve cannot gain or lose an asymptote by being panned.
+ *
+ * A library family answers from its parameters (the table in src/core/fit/
+ * models.ts); anything else — a typed expression — is walked out on the ladder
+ * described above. Each line comes back as { kind: 'line', a: (0, b),
+ * dir: unit(1, m) }, which is (1, 0) exactly for a horizontal one.
+ */
+export function findEndAsymptotes(
+  curve: FittedCurve,
+  models: Record<string, ModelSpec>,
+): Asymptote[] {
+  try {
+    const spec = models[curve.modelId]
+    if (!spec || spec.kind !== 'explicit' || !spec.evalExplicit) return []
+    if (!curve.params.every(Number.isFinite)) return []
+
+    // A declared END is a stop: the graph does not go on past it, so there is
+    // nothing out there to approach. Only an open side has an end behaviour.
+    let domLo = -Infinity
+    let domHi = Infinity
+    if (curve.domain) {
+      domLo = Math.min(curve.domain[0], curve.domain[1])
+      domHi = Math.max(curve.domain[0], curve.domain[1])
+    }
+    const openLeft = !Number.isFinite(domLo)
+    const openRight = !Number.isFinite(domHi)
+    if (!openLeft && !openRight) return []
+
+    const found: EndLine[] = []
+    const family = endBehaviour(curve.modelId, curve.params)
+    if (family) {
+      if (openLeft && family.left) found.push(family.left)
+      if (openRight && family.right) found.push(family.right)
+    } else {
+      const evalF = spec.evalExplicit
+      const f: Fn = (x: number) => {
+        let v: number
+        try { v = evalF.call(spec, curve.params, x) } catch { return Number.NaN }
+        return typeof v === 'number' ? v : Number.NaN
+      }
+      // The yardstick for "b has stopped moving", and the window the
+      // coincidence check reads: what a reader can see, clipped to the domain.
+      let lo = Math.max(END_MAG_RANGE[0], domLo)
+      let hi = Math.min(END_MAG_RANGE[1], domHi)
+      if (!(hi > lo)) { lo = END_MAG_RANGE[0]; hi = END_MAG_RANGE[1] }
+      const mag = magnitudeOf(f, lo, hi)
+      const x0 = endBase(curve, domLo, domHi)
+      for (const side of [-1, 1] as const) {
+        if (side < 0 ? !openLeft : !openRight) continue
+        const line = endSide(f, side, x0, mag)
+        if (!line) continue
+        // The half of the window this end looks out from — the whole of it
+        // when the graph is only ever on one side of the axis anyway.
+        let clo = side < 0 ? lo : Math.max(lo, 0)
+        let chi = side < 0 ? Math.min(hi, 0) : hi
+        if (!(chi > clo)) { clo = lo; chi = hi }
+        if (isTheLine(f, line.m, line.b, clo, chi, mag)) continue
+        found.push(line)
+      }
+    }
+
+    const out: Asymptote[] = []
+    const kept: EndLine[] = []
+    for (const l of found) {
+      if (!Number.isFinite(l.m) || !Number.isFinite(l.b)) continue
+      if (kept.some((k) => sameEndLine(k, l))) continue
+      kept.push(l)
+      const len = Math.hypot(1, l.m)
+      out.push({ kind: 'line', a: { x: 0, y: l.b }, dir: { x: 1 / len, y: l.m / len } })
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Every asymptote of the curve: the vertical ones from findPoles(), the lines
+ * the two ends lean on as x → ±∞, and the slant lines a polar curve runs out
+ * along.
+ *
+ * Vertical first, then the ends — the order a reader names them in, and the
+ * order the renderer has always put its dashes down in.
  */
 export function findAsymptotes(
   curve: FittedCurve,
@@ -561,7 +883,10 @@ export function findAsymptotes(
       }
       return out
     }
-    return findPoles(curve, models, range).map((x) => ({ kind: 'vertical', x }) as Asymptote)
+    const out: Asymptote[] = findPoles(curve, models, range)
+      .map((x) => ({ kind: 'vertical', x }) as Asymptote)
+    out.push(...findEndAsymptotes(curve, models))
+    return out
   } catch {
     return []
   }

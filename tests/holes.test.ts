@@ -11,8 +11,9 @@ import { describe, it, expect } from 'vitest'
 import type { Asymptote, FittedCurve, ModelSpec } from '../src/core/types'
 import { parseExpression } from '../src/core/parse'
 import { MODELS } from '../src/core/fit/models'
-import { findAsymptotes, findHoles, findPoles } from '../src/core/holes'
+import { findAsymptotes, findEndAsymptotes, findHoles, findPoles } from '../src/core/holes'
 import { analyzeCurve } from '../src/core/analyze'
+import { asymptoteTexts } from '../src/ui/CurveCard'
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -90,6 +91,23 @@ function expectLine(l: Asymptote | undefined, nx: number, ny: number, d: number,
 }
 
 const linesOf = (src: string) => asymptotesOf(src).filter((a): a is Line => a.kind === 'line')
+
+/** The end lines of a typed curve, as the slope/intercept pairs they name. */
+const endsOf = (src: string, domain: [number, number] | null = null) => {
+  const t = typed(src, domain)
+  return findEndAsymptotes(t.curve, t.models).map(asLine)
+}
+
+/** The end lines of a library curve, same reading. */
+const libEnds = (modelId: string, params: number[], domain: [number, number] | null = null) =>
+  findEndAsymptotes(libraryCurve(modelId, params, domain), MODELS).map(asLine)
+
+/** y = m·x + b, read back out of the { a, dir } an Asymptote carries. */
+function asLine(a: Asymptote): { m: number; b: number } {
+  if (a.kind !== 'line') throw new Error(`expected a line, got ${a.kind}`)
+  const m = a.dir.y / a.dir.x
+  return { m, b: a.a.y - m * a.a.x }
+}
 
 function libraryCurve(
   modelId: string,
@@ -247,9 +265,11 @@ describe('logarithmic asymptotes', () => {
             .toBeGreaterThan(1e-6)
         }
       }
-      // and every asymptote of an explicit curve is one of the poles
-      expect(asymptotesOf(src).map(a => (a.kind === 'vertical' ? a.x : NaN)))
-        .toEqual(poles)
+      // and every VERTICAL asymptote of an explicit curve is one of the poles
+      // (the list also carries whatever the two ends lean on: |x|/x really
+      // does approach y = 1 to the right and y = −1 to the left)
+      expect(asymptotesOf(src).filter(a => a.kind === 'vertical')
+        .map(a => (a as { x: number }).x)).toEqual(poles)
     }
   })
 
@@ -620,6 +640,213 @@ describe('analyzeCurve — holes', () => {
   })
 })
 
+
+// ---------------------------------------------------------------------------
+// end behaviour — the lines a graph leans on as x → ±∞
+//
+// Every number here is worked out by hand. (2x² + 1)/(x − 1) IS 2x + 2 plus
+// 3/(x − 1) by division, so the slant asymptote is y = 2x + 2 and nothing
+// else; e^{−x} + 2 flattens onto y = 2 going right and runs away going left,
+// so it has ONE asymptote, not two.
+// ---------------------------------------------------------------------------
+
+describe('findEndAsymptotes — typed expressions', () => {
+  it('(2x² + 1)/(x − 1) leans on y = 2x + 2, and has the pole x = 1', () => {
+    const ends = endsOf('y = (2x^2+1)/(x-1)')
+    // Both sides name the same line, so it is listed once.
+    expect(ends).toHaveLength(1)
+    expect(ends[0].m).toBeCloseTo(2, 7)
+    expect(ends[0].b).toBeCloseTo(2, 6)
+    expect(polesOf('y = (2x^2+1)/(x-1)')).toEqual([1])
+    const all = asymptotesOf('y = (2x^2+1)/(x-1)')
+    expect(all).toHaveLength(2)
+    expect(all[0]).toEqual({ kind: 'vertical', x: 1 })
+  })
+
+  it('(3x + 1)/(x − 2) is horizontal at y = 3', () => {
+    const ends = endsOf('y = (3x+1)/(x-2)')
+    expect(ends).toHaveLength(1)
+    expect(ends[0].m).toBe(0)
+    expect(ends[0].b).toBeCloseTo(3, 6)
+    // A horizontal asymptote points straight along x, exactly.
+    const line = findEndAsymptotes(typed('y = (3x+1)/(x-2)').curve, typed('y = (3x+1)/(x-2)').models)[0]
+    expect(line).toEqual({ kind: 'line', a: { x: 0, y: (line as Line).a.y }, dir: { x: 1, y: 0 } })
+  })
+
+  it('arctan has two of them, y = π/2 and y = −π/2', () => {
+    const ends = endsOf('y = atan(x)')
+    expect(ends).toHaveLength(2)
+    const bs = ends.map((e) => e.b).sort((p, q) => p - q)
+    expect(ends.every((e) => e.m === 0)).toBe(true)
+    expect(bs[0]).toBeCloseTo(-Math.PI / 2, 6)
+    expect(bs[1]).toBeCloseTo(Math.PI / 2, 6)
+  })
+
+  it('e^{−x} + 2 leans on y = 2 going RIGHT and on nothing going left', () => {
+    const ends = endsOf('y = e^(-x) + 2')
+    expect(ends).toHaveLength(1)
+    expect(ends[0].m).toBe(0)
+    expect(ends[0].b).toBeCloseTo(2, 9)
+  })
+
+  it('1/x leans on y = 0 from both sides, which is one line', () => {
+    const ends = endsOf('y = 1/x')
+    expect(ends).toEqual([{ m: 0, b: 0 }])
+    expect(polesOf('y = 1/x')).toEqual([0])
+  })
+
+  it('growth, oscillation and slow drift have no end asymptote', () => {
+    // x², x³ − 3x: m itself runs away.
+    expect(endsOf('y = x^2')).toEqual([])
+    expect(endsOf('y = x^3 - 3x')).toEqual([])
+    // sin x, x + sin x: m settles (at 0 and at 1) and b never does.
+    expect(endsOf('y = sin(x)')).toEqual([])
+    expect(endsOf('y = x + sin(x)')).toEqual([])
+    // ln x, √x: m → 0 honestly, and then b keeps growing.
+    expect(endsOf('y = ln(x)')).toEqual([])
+    expect(endsOf('y = sqrt(x)')).toEqual([])
+  })
+
+  it('a graph that IS a line is not reported as approaching it', () => {
+    expect(endsOf('y = 2x + 3')).toEqual([])
+    expect(endsOf('y = 4')).toEqual([])
+  })
+
+  it('a curve stopped on both sides has no end to behave at', () => {
+    expect(endsOf('y = (2x^2+1)/(x-1)', [-8, 8])).toEqual([])
+    expect(endsOf('y = 1/x', [2, 9])).toEqual([])
+    // one side still open is still one end
+    expect(findEndAsymptotes(
+      { ...typed('y = 1/x').curve, domain: [-Infinity, 9] },
+      typed('y = 1/x').models,
+    ).map(asLine)).toEqual([{ m: 0, b: 0 }])
+  })
+})
+
+describe('findEndAsymptotes — library families, straight from the params', () => {
+  it('recip a/(x − b) + c is horizontal at exactly c', () => {
+    expect(libEnds('recip', [2, 3, 1.5])).toEqual([{ m: 0, b: 1.5 }])
+    // and the vertical is still the family's own
+    expect(findAsymptotes(libraryCurve('recip', [2, 3, 1.5]), MODELS, [-10, 10])).toEqual([
+      { kind: 'vertical', x: 3 },
+      { kind: 'line', a: { x: 0, y: 1.5 }, dir: { x: 1, y: 0 } },
+    ])
+  })
+
+  it('logistic names both of its levels', () => {
+    // a/(1 + e^{−b(x−c)}) + d: d going left, d + a going right, for b > 0
+    const ends = libEnds('logistic', [4, 1.8, 0.5, -2])
+    expect(ends).toEqual([{ m: 0, b: -2 }, { m: 0, b: 2 }])
+    // a negative b swaps which end is which, and names the same two lines
+    const flipped = libEnds('logistic', [4, -1.8, 0.5, -2])
+    expect(flipped).toEqual([{ m: 0, b: 2 }, { m: 0, b: -2 }])
+  })
+
+  it('exp only flattens on the side where it decays', () => {
+    expect(libEnds('exp', [1, -0.5, 3])).toEqual([{ m: 0, b: 3 }])
+    expect(libEnds('exp', [1, 0.5, 3])).toEqual([{ m: 0, b: 3 }])
+    // b = 0 is the constant a + c — a line, not something approaching one
+    expect(libEnds('exp', [1, 0, 3])).toEqual([])
+  })
+
+  it('a Gaussian settles onto its baseline at both ends', () => {
+    expect(libEnds('gauss', [3, 1, 2, -0.5])).toEqual([{ m: 0, b: -0.5 }])
+  })
+
+  it('the families that grow, drift or swing have none', () => {
+    for (const [modelId, params] of [
+      ['line', [3, 2]],
+      ['poly2', [-6, -4, 2]],
+      ['poly3', [6, -5, -2, 1]],
+      ['poly4', [1, 0, 0, 0, 1]],
+      ['sine', [2, 1, 0, 0]],
+      ['log', [1, -1, 3]],
+      ['sqrt', [1, 0, 0]],
+      ['cbrt', [1, 0, 0]],
+      ['abs', [1, 0, 0]],
+      ['power', [1, 0, 0, 2]],
+      ['vline', [2]],
+      ['circle', [0, 0, 3]],
+      ['polarRose', [2, 3, 0]],
+      ['spiral', [0, 1]],
+    ] as const) {
+      expect(libEnds(modelId, [...params]), modelId).toEqual([])
+    }
+  })
+
+  it('a family curve stopped on both sides has none either', () => {
+    expect(libEnds('recip', [2, 3, 1.5], [-8, 8])).toEqual([])
+  })
+})
+
+
+// ---------------------------------------------------------------------------
+// the card row — the same lines, in the words a teacher writes them in
+//
+// src/ui/CurveCard.tsx prints one string per asymptote. The strings are the
+// contract: `y = 2x + 2`, not `y = 2.000x + 2.000`, and a true minus sign
+// rather than a hyphen.
+// ---------------------------------------------------------------------------
+
+describe('the Asymptotes row', () => {
+  const rowOf = (src: string, domain: [number, number] | null = null) => {
+    const t = typed(src, domain)
+    return asymptoteTexts(t.curve, t.models)
+  }
+
+  it('reads the slant case as y = 2x + 2, after the vertical one', () => {
+    expect(rowOf('y = (2x^2+1)/(x-1)')).toEqual(['x = 1', 'y = 2x + 2'])
+  })
+
+  it('writes a negative slope and a negative intercept with a true minus', () => {
+    // (−0.5x² − x + 1)/x = −0.5x − 1 + 1/x
+    const row = rowOf('y = (-0.5x^2 - x + 1)/x')
+    expect(row).toEqual(['x = 0', 'y = −0.5x − 1'])
+    expect(row[1].includes('-')).toBe(false)
+  })
+
+  it('writes a horizontal one as a level', () => {
+    expect(rowOf('y = (3x+1)/(x-2)')).toEqual(['x = 2', 'y = 3'])
+    expect(rowOf('y = 1/x')).toEqual(['x = 0', 'y = 0'])
+  })
+
+  it('rounds to four significant digits — arctan is ±1.571', () => {
+    expect(rowOf('y = atan(x)')).toEqual(['y = −1.571', 'y = 1.571'])
+    expect(rowOf('y = 3atan(x)')).toEqual(['y = −4.712', 'y = 4.712'])
+  })
+
+  it('drops a unit slope and a zero intercept, as an equation is written', () => {
+    expect(rowOf('y = (x^2+1)/x')).toEqual(['x = 0', 'y = x'])
+  })
+
+  it('lists a library family from its own parameters', () => {
+    expect(asymptoteTexts(libraryCurve('recip', [2, 3, 1.5]), MODELS))
+      .toEqual(['x = 3', 'y = 1.5'])
+    expect(asymptoteTexts(libraryCurve('logistic', [4, 1.8, 0.5, -2]), MODELS))
+      .toEqual(['y = −2', 'y = 2'])
+  })
+
+  it('writes a polar curve’s slant lines in the same language', () => {
+    // r = tan θ leans on x = 1 and x = −1 — vertical lines, so they name an x
+    expect(rowOf('r = tan(theta)')).toEqual(['x = 1', 'x = −1'])
+    // r = 1/θ leans on y = 1
+    expect(rowOf('r = 1/theta')).toEqual(['y = 1'])
+  })
+
+  it('is empty when the curve has none — the row is then not drawn at all', () => {
+    expect(rowOf('y = x^2')).toEqual([])
+    expect(rowOf('y = sin(x)')).toEqual([])
+    expect(rowOf('y = 2x + 3')).toEqual([])
+    expect(asymptoteTexts(libraryCurve('poly3', [6, -5, -2, 1]), MODELS)).toEqual([])
+  })
+
+  it('reads the vertical ones over the curve’s own domain, or [−10, 10]', () => {
+    // tan x has six poles on [−10, 10] and one on [0, 2]
+    expect(rowOf('y = tan(x)')).toHaveLength(6)
+    expect(rowOf('y = tan(x)', [0, 2])).toEqual(['x = 1.571'])
+  })
+})
+
 // ---------------------------------------------------------------------------
 // cost — the renderer asks for this every frame
 // ---------------------------------------------------------------------------
@@ -639,6 +866,20 @@ describe('cost', () => {
     for (let i = 0; i < n; i++) once()
     const per = (performance.now() - t0) / n
     expect(per, `${per.toFixed(3)} ms per call`).toBeLessThan(1)
+  })
+
+  it('findEndAsymptotes costs well under half a millisecond', () => {
+    // The renderer asks for this on every frame of every curve: seven
+    // evaluations a side, plus the 129 that measure the curve's own
+    // magnitude. It has to be free.
+    const t = typed('y = (2x^2+1)/(x-1)')
+    const once = () => findEndAsymptotes(t.curve, t.models)
+    for (let i = 0; i < 20; i++) once()
+    const n = 500
+    const t0 = performance.now()
+    for (let i = 0; i < n; i++) once()
+    const per = (performance.now() - t0) / n
+    expect(per, `${per.toFixed(4)} ms per call`).toBeLessThan(0.5)
   })
 
   it('a polar round — holes and slant asymptotes — costs under a millisecond', () => {

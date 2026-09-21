@@ -783,3 +783,129 @@ export const MODELS: Record<string, ModelSpec> = {
     },
   },
 }
+
+// ============================================================================
+// End behaviour — the line each family leans on as x → ±∞, from its params
+//
+// A library family does not have to be MEASURED at infinity: its parameters
+// say what it does there. `a/(x − b) + c` is c plus something that dies; the
+// answer is c, exactly, with no sampling, no ladder and no tolerance. Only a
+// TYPED expression has to be walked out to x = 10^8 and asked (src/core/
+// holes.ts, findEndAsymptotes).
+//
+// The table, family by family — `y = m x + b` per side, or none:
+//
+//   line      m x + b               NONE. The graph IS the line: it does not
+//                                   approach, it arrives, and a dashed rule
+//                                   under a straight graph is noise. The same
+//                                   verdict is reached for a typed line by
+//                                   the coincidence test in holes.ts, so a
+//                                   sketched line and a typed one agree.
+//   poly2..4  Σ a_k x^k             NONE — a parabola grows without bound.
+//                                   (A degenerate one is a line: still none.)
+//   sine      a·sin(bx+c) + d       NONE — it never stops swinging. a = 0 or
+//                                   b = 0 is the horizontal line y = d: none.
+//   gauss     a·e^{−((x−b)/c)²} + d y = d on BOTH sides — the bell flattens
+//                                   onto its own baseline either way.
+//   exp       a·e^{bx} + c          y = c on the DECAYING side only: the
+//                                   right when b < 0, the left when b > 0.
+//                                   The other side runs away. b = 0 makes the
+//                                   constant a + c — a line, so none.
+//   log       a·ln(x − b) + c       NONE. ln drifts off to ∞ as slowly as it
+//                                   likes; the VERTICAL x = b is already
+//                                   findPoles()'s, out of `singularities`.
+//   sqrt      a·√(x − b) + c        NONE — drift right, nothing left.
+//   cbrt      a·∛(x − b) + c        NONE — grows both ways.
+//   power     a·|x − b|^p + c       y = c on both sides when p < 0 (the
+//                                   family fits p ∈ [0.1, 4], so this is the
+//                                   branch a typed exponent can reach);
+//                                   p ≥ 0 grows or is constant: none.
+//   abs       a·|x − b| + c         NONE — two rays, each its own line.
+//   logistic  a/(1+e^{−b(x−c)}) + d TWO levels: y = d and y = d + a. Which
+//                                   side is which follows the sign of b.
+//   recip     a/(x − b) + c         y = c on both sides — one line, listed
+//                                   once. (The pole x = b is findPoles()'s.)
+//
+//   vline, circle, ellipse, polarRose, limacon, spiral, fourier are not
+//   explicit curves at all. A polar curve's slant asymptote comes out of the
+//   d = lim r·sin(θ − θ0) machinery in holes.ts and has nothing to do with
+//   x → ±∞; parametric and implicit curves have no end behaviour in x.
+//
+// Every degenerate branch (a = 0, b = 0, p = 0) collapses the family to a
+// horizontal line, and a line is not its own asymptote — so those all answer
+// "none" rather than naming the line the graph already is.
+// ============================================================================
+
+/** One end line, y = m·x + b. */
+export interface EndLine {
+  m: number
+  b: number
+}
+
+/** What a curve leans on at each end — null on a side with no line. */
+export interface EndBehaviour {
+  left: EndLine | null
+  right: EndLine | null
+}
+
+const NO_ENDS: EndBehaviour = { left: null, right: null }
+
+/** The same horizontal line at both ends. */
+const level = (b: number): EndBehaviour => ({ left: { m: 0, b }, right: { m: 0, b } })
+
+/** True when a parameter is large enough to change the shape at all. */
+const alive = (v: number): boolean => Number.isFinite(v) && Math.abs(v) > NEGLIGIBLE
+
+const END_BEHAVIOUR: Record<string, (p: number[]) => EndBehaviour> = {
+  line: () => NO_ENDS,
+  poly2: () => NO_ENDS,
+  poly3: () => NO_ENDS,
+  poly4: () => NO_ENDS,
+  sine: () => NO_ENDS,
+  log: () => NO_ENDS,
+  sqrt: () => NO_ENDS,
+  cbrt: () => NO_ENDS,
+  abs: () => NO_ENDS,
+
+  // a·e^{−((x−b)/c)²} + d → d at both ends (c = 0 is not a curve)
+  gauss: p => (alive(p[0]) && alive(p[2]) ? level(p[3]) : NO_ENDS),
+
+  // a·e^{bx} + c → c on the side where the exponential dies
+  exp: p => {
+    if (!alive(p[0]) || !alive(p[1])) return NO_ENDS
+    const line = { m: 0, b: p[2] }
+    return p[1] < 0 ? { left: null, right: line } : { left: line, right: null }
+  },
+
+  // a·|x − b|^p + c → c at both ends, but only for a decaying exponent
+  power: p => (alive(p[0]) && p[3] < 0 ? level(p[2]) : NO_ENDS),
+
+  // a/(1 + e^{−b(x−c)}) + d → the two plateaux, low end first by sign of b
+  logistic: p => {
+    if (!alive(p[0]) || !alive(p[1])) return NO_ENDS
+    const lo = { m: 0, b: p[3] }
+    const hi = { m: 0, b: p[3] + p[0] }
+    return p[1] > 0 ? { left: lo, right: hi } : { left: hi, right: lo }
+  },
+
+  // a/(x − b) + c → c at both ends
+  recip: p => (alive(p[0]) ? level(p[2]) : NO_ENDS),
+}
+
+/**
+ * What `modelId` does as x → ±∞, in closed form — or null when this is not a
+ * library family and the answer has to be measured.
+ *
+ * Null and NO_ENDS are different answers: null means "ask the function", the
+ * other means "the family has none". A typed expression (`expr_7`) is null.
+ */
+export function endBehaviour(modelId: string, params: number[]): EndBehaviour | null {
+  const fn = END_BEHAVIOUR[modelId]
+  if (!fn) return null
+  if (!params.every(Number.isFinite)) return NO_ENDS
+  try {
+    return fn(params)
+  } catch {
+    return NO_ENDS
+  }
+}

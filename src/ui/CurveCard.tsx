@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import type {
+  Asymptote,
   EndCap,
   FitResult,
   FittedCurve,
@@ -11,6 +12,7 @@ import type {
 } from '../core/types'
 import type { CurveStyle } from '../App'
 import { fitQuality } from '../core/fit/recognize'
+import { findAsymptotes } from '../core/holes'
 import { Latex } from './Latex'
 import { formatCoord, parseNumeric } from './numeric'
 import { alignedValues, curveScale, derivesFromInk } from './curveState'
@@ -164,6 +166,104 @@ const ANALYSIS_ROWS: {
   { kind: 'extreme', label: 'Extreme', plural: 'Extremes' },
   { kind: 'petal-tip', label: 'Petal tip', plural: 'Petal tips' },
 ]
+
+/**
+ * The x-range the card reads asymptotes over when the curve declares no domain
+ * of its own — the analyzer's own default, so the vertical asymptotes listed
+ * here are the ones the rest of the table is talking about.
+ */
+const CARD_RANGE: [number, number] = [-10, 10]
+
+/** A direction this close to vertical has no slope to print. */
+const VERTICAL_DIR = 1e-12
+
+/**
+ * One coefficient of a printed line: the analysis table's own rounding, minus
+ * the padding.
+ *
+ * formatCoord keeps trailing zeros so that a COLUMN of coordinates lines up on
+ * the decimal point. An equation is not a column — it is read left to right,
+ * and "y = 2.000x + 2.000" is not how anybody writes a line. So the value is
+ * put through formatCoord first (which is what decides, at this curve's scale,
+ * whether it is zero at all) and then re-rendered at up to four significant
+ * digits with the trailing zeros dropped and the true minus kept.
+ */
+function coefText(v: number, scale?: number): string {
+  const snapped = formatCoord(v, { scale })
+  if (snapped === '0' || snapped === '—') return snapped
+  const r = Number(v.toPrecision(4))
+  if (!Number.isFinite(r)) return '—'
+  const abs = Math.abs(r)
+  const s = abs >= 1e5 || abs < 1e-3 ? r.toExponential(2) : String(r)
+  return s.startsWith('-') ? '−' + s.slice(1) : s
+}
+
+/**
+ * One asymptote, as a teacher writes it: `x = 1`, `y = 2`, `y = 2x + 2`,
+ * `y = −0.5x − 1`.
+ *
+ * Every kind of `Asymptote` has to come out in the same language, because the
+ * card lists them together: a vertical one names its x, a horizontal one its
+ * y, and a slant one — whether it came from the end behaviour of y = f(x) or
+ * from a polar curve leaning on a line — is written as the line it is. A
+ * polar line that happens to be vertical is written `x = c` for the same
+ * reason: "y = 4.5e15·x" is not a sentence about a graph.
+ */
+export function asymptoteText(a: Asymptote, scale?: number): string {
+  if (!a) return ''
+  if (a.kind === 'vertical') {
+    return Number.isFinite(a.x) ? `x = ${coefText(a.x, scale)}` : ''
+  }
+  if (a.kind !== 'line') return ''
+  const { a: p, dir } = a
+  if (!p || !dir) return ''
+  if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return ''
+  if (!Number.isFinite(dir.x) || !Number.isFinite(dir.y)) return ''
+  const len = Math.hypot(dir.x, dir.y)
+  if (!(len > 0)) return ''
+  if (Math.abs(dir.x / len) <= VERTICAL_DIR) {
+    // Straight up: the line is x = (wherever it crosses), and its own point
+    // already names that x.
+    return `x = ${coefText(p.x, scale)}`
+  }
+  const m = dir.y / dir.x
+  const b = p.y - m * p.x
+  if (!Number.isFinite(m) || !Number.isFinite(b)) return ''
+  const mText = coefText(m)
+  if (mText === '0') return `y = ${coefText(b, scale)}`
+  const slope = mText === '1' ? 'x' : mText === '−1' ? '−x' : `${mText}x`
+  const bText = coefText(b, scale)
+  if (bText === '0') return `y = ${slope}`
+  const negative = bText.startsWith('−')
+  return `y = ${slope} ${negative ? '−' : '+'} ${negative ? bText.slice(1) : bText}`
+}
+
+/**
+ * Every asymptote of a curve, in the words the card prints — vertical ones
+ * first, then whatever its two ends lean on, which is the order they are
+ * named in and the order src/core/holes.ts returns them.
+ *
+ * Exported for the same reason `cardCalc` is: the row is one string per
+ * asymptote, and a string is testable without a browser.
+ */
+export function asymptoteTexts(
+  curve: FittedCurve,
+  models: Record<string, ModelSpec>,
+  scale?: number,
+): string[] {
+  const dom = curve.domain
+  const range: [number, number] =
+    dom && Number.isFinite(dom[0]) && Number.isFinite(dom[1])
+      ? [Math.min(dom[0], dom[1]), Math.max(dom[0], dom[1])]
+      : CARD_RANGE
+  try {
+    return findAsymptotes(curve, models, range)
+      .map((a) => asymptoteText(a, scale))
+      .filter((t) => t !== '')
+  } catch {
+    return []
+  }
+}
 
 /** How many next-best readings sit beside the select as one-click chips. */
 const ALSO_FITS = 2
@@ -603,6 +703,21 @@ export function CurveCard({
         .filter(({ point }) => point.kind === row.kind),
     })).filter((g) => g.items.length > 0)
   }, [analysis])
+
+  /**
+   * The asymptotes of this curve, already in words.
+   *
+   * These are NOT special points: an asymptote is a line the graph never
+   * reaches, so it has no x and no y to put in the table's two columns and
+   * nothing for an editor to move — the same reason the Hole row is read-only,
+   * one step further. It is read over the analyzer's own range, so the
+   * vertical ones listed here are the ones the features above were found
+   * between.
+   */
+  const asymptotes = useMemo(
+    () => (selected ? asymptoteTexts(curve, models, scale) : []),
+    [selected, curve, models, scale],
+  )
 
   /**
    * Every EDITABLE value, in the order the table reads. Drives Enter-advances.
@@ -1212,7 +1327,7 @@ export function CurveCard({
             </div>
           )}
 
-          {analysisGroups.length > 0 && (
+          {(analysisGroups.length > 0 || asymptotes.length > 0) && (
             <div className="an-section">
               <div className="an-title">Analysis</div>
               <div className="an-table">
@@ -1327,6 +1442,23 @@ export function CurveCard({
                     </span>
                   </div>
                 ))}
+                {/* After the holes: what the graph never reaches. Stated, not
+                    offered — moving an asymptote is not a sentence about this
+                    function, it is a different function. */}
+                {asymptotes.length > 0 && (
+                  <div className="an-row" key="asymptote">
+                    <span className="an-label">
+                      {asymptotes.length > 1 ? 'Asymptotes' : 'Asymptote'}
+                    </span>
+                    <span className="an-values">
+                      {asymptotes.map((text, n) => (
+                        <span className="an-value an-value-static" key={`${text}-${n}`}>
+                          {n === asymptotes.length - 1 ? text : `${text},`}
+                        </span>
+                      ))}
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
           )}
