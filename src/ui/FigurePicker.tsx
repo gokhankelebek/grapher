@@ -77,6 +77,14 @@ interface Props {
   screenTheme: Theme
   caption: string
   /**
+   * True while the caption is the one the BOARD wrote, from the curves on it.
+   *
+   * The field shows the same words either way — what changes is what happens
+   * NEXT: an auto caption keeps following the curves (add a curve and it says
+   * "Graphs of f and g"), and an overridden one never moves again.
+   */
+  captionAuto: boolean
+  /**
    * Whether the board is currently showing this style instead of the theme.
    *
    * NOT part of the document: it is a way of looking at the board for a
@@ -86,6 +94,8 @@ interface Props {
   preview: boolean
   onPick(id: FigureStyleId): void
   onCaption(next: string): void
+  /** Hand the caption back to the board. */
+  onCaptionAuto(): void
   onPreview(next: boolean): void
 }
 
@@ -93,9 +103,11 @@ export function FigurePicker({
   value,
   screenTheme,
   caption,
+  captionAuto,
   preview,
   onPick,
   onCaption,
+  onCaptionAuto,
   onPreview,
 }: Props) {
   const uid = useId()
@@ -155,6 +167,13 @@ export function FigurePicker({
         </label>
       )}
 
+      {/* The caption FOLLOWS the board until the teacher writes their own:
+          "Graph of f" on a one-curve board, "Graphs of f, g, and f′" on the
+          board this figure is actually of. So the field says which of the two
+          it is showing — a quiet "auto" while the board owns the words, and
+          the one button that gives them back once the teacher has taken
+          them. Without that, an overridden caption is indistinguishable from
+          a following one until a curve is added and it fails to move. */}
       {value !== 'screen' && (
         <label className="exp-row fig-caption-row" htmlFor={`${uid}-cap`}>
           <span className="exp-label">Caption</span>
@@ -166,8 +185,27 @@ export function FigurePicker({
             placeholder="none"
             value={caption}
             data-testid="figure-caption"
+            data-caption-auto={captionAuto ? 'yes' : 'no'}
             onChange={(e) => onCaption(e.target.value)}
           />
+          {captionAuto ? (
+            <span className="fig-caption-auto" data-testid="figure-caption-hint">
+              auto
+            </span>
+          ) : (
+            <button
+              type="button"
+              className="fig-caption-reset"
+              data-testid="figure-caption-reset"
+              title="Let the caption follow the board again"
+              onClick={(e) => {
+                e.preventDefault()
+                onCaptionAuto()
+              }}
+            >
+              ↺ auto
+            </button>
+          )}
         </label>
       )}
     </>

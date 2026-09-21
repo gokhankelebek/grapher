@@ -95,6 +95,13 @@ interface Props {
   /** The line printed under the figure. Empty means none. */
   caption: string
   /**
+   * True while that line is the one the BOARD wrote — derived from the curves
+   * on it and re-derived whenever they change — rather than the teacher's own
+   * words. It is the default, and it is what the field's hint and its "↺ auto"
+   * button are about.
+   */
+  captionAuto: boolean
+  /**
    * Whether the board is showing the chosen style instead of the theme.
    *
    * A view of the document, never part of it: the style itself is output-only,
@@ -104,6 +111,8 @@ interface Props {
   preview: boolean
   onFigure(next: FigureStyleId): void
   onCaption(next: string): void
+  /** Give the caption back to the board, after the teacher wrote their own. */
+  onCaptionAuto(): void
   onPreview(next: boolean): void
   onChange(next: FitExportSettings): void
   onExport(): void
@@ -132,9 +141,11 @@ export function ExportMenu({
   figure,
   screenTheme,
   caption,
+  captionAuto,
   preview,
   onFigure,
   onCaption,
+  onCaptionAuto,
   onPreview,
   onChange,
   onExport,
@@ -244,9 +255,11 @@ export function ExportMenu({
                 value={figure}
                 screenTheme={screenTheme}
                 caption={caption}
+                captionAuto={captionAuto}
                 preview={preview}
                 onPick={onFigure}
                 onCaption={onCaption}
+                onCaptionAuto={onCaptionAuto}
                 onPreview={onPreview}
               />
               <div className="exp-menu-sep" />

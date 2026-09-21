@@ -72,7 +72,8 @@ import {
 } from './ui/shapeLinks'
 import type { BoardShape, CompiledShape, ShapeCardData } from './ui/shapeLinks'
 import { POLAR_OFFER, suggestPolarRuling } from './ui/boardGrid'
-import { DEFAULT_CAPTION, exportLook, screenLook } from './ui/figureStyle'
+import { defaultCaption, exportLook, screenLook } from './ui/figureStyle'
+import { curveNames, namesInOrder } from './render/curveNames'
 import { snapPlaced } from './ui/snap'
 import { curveBounds, splitNotice, unionBoxes } from './ui/curveState'
 import { answerPieces } from './ui/nlText'
@@ -338,7 +339,8 @@ interface Snapshot {
    * not take back.
    */
   figure: FigureStyleId
-  caption: string
+  /** The teacher's own caption, or null while the board derives one. */
+  caption: string | null
   candidates: Map<string, FitResult[]>
   /**
    * What the action was, in three or four words: "set zero", "edit equation",
@@ -377,7 +379,7 @@ interface StatePatch {
   fields?: BoardField[]
   shapes?: BoardShape[]
   figure?: FigureStyleId
-  caption?: string
+  caption?: string | null
   candidates?: Map<string, FitResult[]>
 }
 
@@ -480,8 +482,16 @@ export default function App() {
    * curve colours included.
    */
   const [figureStyle, setFigureStyle] = useState<FigureStyleId>('screen')
-  /** The line printed under the figure. '' means none. */
-  const [figureCaption, setFigureCaption] = useState<string>('')
+  /**
+   * The caption the teacher WROTE, or null while the board is writing it.
+   *
+   * Null is the default and the interesting case: the caption then follows the
+   * board ("Graph of f", "Graphs of f and g", re-derived on every change to
+   * the curves), is never stored, and stops the moment the teacher types over
+   * it — at which point this holds their words, '' included, because a caption
+   * deliberately cleared is a decision and not an absence.
+   */
+  const [figureCaption, setFigureCaption] = useState<string | null>(null)
   /**
    * SHOW the chosen style on the board for a minute.
    *
@@ -636,7 +646,7 @@ export default function App() {
   boardGridRef.current = boardGrid
   const figureStyleRef = useRef<FigureStyleId>('screen')
   figureStyleRef.current = figureStyle
-  const figureCaptionRef = useRef<string>('')
+  const figureCaptionRef = useRef<string | null>(null)
   figureCaptionRef.current = figureCaption
   /**
    * True once this document has been offered the polar ruling, so a board with
@@ -1153,6 +1163,7 @@ export default function App() {
       grid: 'cartesian',
       figure: 'screen',
       caption: '',
+      captionAuto: true,
       viewport: { center: { x: 0, y: 0 }, pxPerUnit: 60 },
       selectedId: null,
       mode: 'draw',
@@ -1178,7 +1189,12 @@ export default function App() {
       shapes: shapesRef.current,
       grid: boardGridRef.current,
       figure: figureStyleRef.current,
-      caption: figureCaptionRef.current,
+      // The DERIVED caption is not the document's: it is re-derived from the
+      // curves on every load, so storing it would freeze a sentence that is
+      // supposed to follow the board — and would change the bytes of every
+      // board that never had a caption.
+      caption: figureCaptionRef.current ?? '',
+      captionAuto: figureCaptionRef.current === null,
       viewport: { center: vpRef.current.center, pxPerUnit: vpRef.current.pxPerUnit },
       selectedId: selectedRef.current,
       mode: MODE,
@@ -1288,7 +1304,7 @@ export default function App() {
     shapesRef.current = board.shapes
     boardGridRef.current = board.grid
     figureStyleRef.current = board.figure
-    figureCaptionRef.current = board.caption
+    figureCaptionRef.current = board.captionAuto ? null : board.caption
     polarOfferedRef.current = false
     calcSigRef.current = new Map()
     calcDomainRef.current = new Map()
@@ -1317,7 +1333,7 @@ export default function App() {
     setShapes(board.shapes)
     setBoardGrid(board.grid)
     setFigureStyle(board.figure)
-    setFigureCaption(board.caption)
+    setFigureCaption(board.captionAuto ? null : board.caption)
     // A view of the board, not a property of it: every document opens on the
     // theme, whatever the last one was being previewed in.
     setPreviewFigure(false)
@@ -4175,6 +4191,39 @@ export default function App() {
 
   const copyTimerRef = useRef(0)
 
+  // ------------------------------------------------------- who is who on the board
+  //
+  // "Graph of f" is true of a board with one curve and a lie about a board
+  // with three: it names a function nothing on the figure points at, and the
+  // printed sheet gives a student no way to tell which stroke is f. So the
+  // board names its curves — f, g, h …, a typed `g(x) = …` keeping the letter
+  // it was given, a derivative keeping its parent's letter and a prime — and
+  // the caption and the labels on the figure both read from that ONE map.
+  //
+  // Derived, never stored: a document that remembered "this one is g" would
+  // disagree with the board the moment a curve above it was deleted.
+  const boardCurveNames = useMemo(
+    () =>
+      kind === 'cartesian'
+        ? curveNames(curves, { ...displaySources, ...exprSources }, calcLinks)
+        : {},
+    [kind, curves, displaySources, exprSources, calcLinks],
+  )
+  const boardCurveNamesRef = useRef(boardCurveNames)
+  boardCurveNamesRef.current = boardCurveNames
+
+  /** The caption the board would write for itself, right now. */
+  const autoCaption = defaultCaption(figureStyle, namesInOrder(curves, boardCurveNames))
+  /**
+   * The caption that actually gets printed: the teacher's own words when they
+   * have written any, and otherwise the one the board keeps re-deriving.
+   */
+  const captionText = figureCaption ?? autoCaption
+  const captionTextRef = useRef(captionText)
+  captionTextRef.current = captionText
+  const autoCaptionRef = useRef(autoCaption)
+  autoCaptionRef.current = autoCaption
+
   /** The ground the theme toggle asks for. */
   const screenTheme = canvasTheme === 'light' ? LIGHT_THEME : DARK_THEME
   /**
@@ -4191,7 +4240,7 @@ export default function App() {
    */
   const look = screenLook({
     style: figureStyle,
-    caption: figureCaption,
+    caption: captionText,
     screenTheme,
     preview: previewFigure,
     present: presentMode,
@@ -4233,7 +4282,7 @@ export default function App() {
     // answer on the board, never a way of changing it.
     const { figure, caption } = exportLook({
       style: figureStyleRef.current,
-      caption: figureCaptionRef.current,
+      caption: captionTextRef.current,
       cartesian: kindRef.current === 'cartesian',
     })
     return {
@@ -4300,6 +4349,10 @@ export default function App() {
       // on board" shows this same answer on the canvas for as long as it is on.
       ...(figure ? { figure } : {}),
       ...(caption !== '' ? { caption } : {}),
+      // And who is who: under a marked style with two or more named curves,
+      // each one's letter is drawn beside it. Absent under the screen look, so
+      // an unstyled PNG is the command stream it always was.
+      ...(figure ? { curveNames: boardCurveNamesRef.current } : {}),
       chrome: null,
     }
     },
@@ -4551,25 +4604,21 @@ export default function App() {
    * the whole figure, and the change a teacher is most likely to want back is
    * the one they made by clicking a picture they had not seen full size yet.
    *
-   * The caption rides in the SAME entry: a style that arrives with "Graph of f"
-   * and an undo that left the caption behind would be two half-changes.
+   * The caption is no longer copied into this entry, because it is no longer
+   * a constant handed over at the moment a style is picked: while it is AUTO
+   * it is derived from the style and the curves together, so choosing AP makes
+   * the board write "Graphs of f and g" by itself and choosing Screen makes it
+   * write nothing — with one undo, of the style, which is the change that was
+   * made. A caption the teacher wrote is theirs and is not touched either way.
    */
   const chooseFigureStyle = useCallback(
     (next: FigureStyleId): void => {
       if (figureStyleRef.current === next) return
-      // The default caption is a starting point, offered only to a board that
-      // has none. A teacher who cleared it, or wrote their own, keeps it: this
-      // control is choosing a LOOK, not overwriting words.
-      const caption =
-        figureCaptionRef.current === '' ? DEFAULT_CAPTION[next] : figureCaptionRef.current
       // Back to Screen is back to no style at all, so there is nothing left to
       // preview: leaving the switch armed would mean the next style chosen
       // silently repainted the board.
       if (next === 'screen') setPreviewFigure(false)
-      commitState(
-        { figure: next, caption },
-        `figure style: ${FIGURE_STYLES[next].name}`,
-      )
+      commitState({ figure: next }, `figure style: ${FIGURE_STYLES[next].name}`)
     },
     [commitState],
   )
@@ -4584,18 +4633,33 @@ export default function App() {
    */
   const setCaption = useCallback(
     (next: string): void => {
-      if (figureCaptionRef.current === next) return
+      // Typing the board's own sentence back is not an override: it leaves the
+      // caption following the curves, which is what it was already doing and
+      // what "↺ auto" would put it back to.
+      const value: string | null = next === autoCaptionRef.current ? null : next
+      if (figureCaptionRef.current === value) return
       const top = undoRef.current[undoRef.current.length - 1]
       if (top?.label === CAPTION_LABEL) {
         redoRef.current = []
-        figureCaptionRef.current = next
-        setFigureCaption(next)
+        figureCaptionRef.current = value
+        setFigureCaption(value)
         return
       }
-      commitState({ caption: next }, CAPTION_LABEL)
+      commitState({ caption: value }, CAPTION_LABEL)
     },
     [commitState],
   )
+
+  /**
+   * Hand the caption back to the board.
+   *
+   * One undo entry of its own, not folded into a run of typing: it undoes a
+   * click, and the words it takes back are the ones the teacher wrote.
+   */
+  const resetCaption = useCallback((): void => {
+    if (figureCaptionRef.current === null) return
+    commitState({ caption: null }, 'caption follows the board')
+  }, [commitState])
 
   /**
    * A polar curve has just landed on a square board. OFFER the polar ruling.
@@ -5009,6 +5073,7 @@ export default function App() {
           grid={boardGrid}
           figure={boardFigure}
           caption={boardCaption}
+          curveNames={boardCurveNames}
           extraHandles={extraHandles}
           pointPick={pointPick}
         />
@@ -5124,10 +5189,12 @@ export default function App() {
                 onWheel={setWheelPref}
                 figure={kind === 'cartesian' ? figureStyle : null}
                 screenTheme={screenTheme}
-                caption={figureCaption}
+                caption={captionText}
+                captionAuto={figureCaption === null}
                 preview={previewFigure}
                 onFigure={chooseFigureStyle}
                 onCaption={setCaption}
+                onCaptionAuto={resetCaption}
                 onPreview={setPreviewFigure}
               />
             </>

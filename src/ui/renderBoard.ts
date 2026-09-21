@@ -41,7 +41,7 @@ import type { AxisUnit, AxisUnits, PaintScale } from '../render/grid'
 import { SCREEN_GRID, drawGrid, labelFont as figureFont, paintScale } from '../render/grid'
 import type { GridStyle } from '../render/grid'
 import { drawPolarGrid } from '../render/polarGrid'
-import { curveLineWidth, drawCurve, drawInk } from '../render/curves'
+import { curveLineWidth, drawCurve, drawInk, traceCurve } from '../render/curves'
 import { END_DOT_R, curveEndPoints, drawCurveEnds, resolveEnds } from '../render/endCaps'
 import { drawAsymptotes, drawHoles, holeRange } from '../render/holes'
 import { findAsymptotes, findHoles } from '../core/holes'
@@ -278,6 +278,24 @@ export interface BoardScene {
    * leave room for it (see captionHeight).
    */
   caption?: string
+  /**
+   * What each curve is CALLED, keyed by curve id — "f", "g", "f′".
+   *
+   * Drawn only under a MARKED figure style (Textbook / SAT / AP: the looks
+   * whose curves already carry end caps and asymptotes), and only when two or
+   * more of the curves on the board have a name. One curve needs no label —
+   * the caption already says which function it is — and the screen look needs
+   * none at all, because the sidebar cards are right there beside the board
+   * saying it in colour.
+   *
+   * Absent means no names are drawn, so a scene that never mentions this field
+   * produces exactly the command stream it produced before it existed.
+   *
+   * FIGURE, not chrome: a printed figure with three unlabelled curves and a
+   * caption about f is the bug this exists to close, so the labels reach the
+   * PNG (chrome: null) exactly as the caption does.
+   */
+  curveNames?: Readonly<Record<string, string>>
   /** Editing chrome. Null = the figure alone. */
   chrome?: BoardChrome | null
 }
@@ -1056,6 +1074,145 @@ function drawCaption(
   ctx.textBaseline = 'alphabetic'
 }
 
+// ---------------------------------------------------------------------------
+// Curve names on the figure
+// ---------------------------------------------------------------------------
+
+/** A curve's name on the figure: smaller than the caption, larger than a chip. */
+export const CURVE_NAME_PX = 13
+/** How far off the curve the name sits, before `present.stroke`. */
+const CURVE_NAME_GAP = 8
+/** Fractions along the visible run to try, in order, before giving up. */
+const NAME_SPOTS: readonly number[] = [0.8, 0.6, 0.4, 0.2]
+
+interface NameBox {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+const overlaps = (a: NameBox, b: NameBox): boolean =>
+  a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+
+/**
+ * Roughly where the analysis layer's chips will land, so a curve name does not
+ * sit on top of one.
+ *
+ * An APPROXIMATION on purpose: the chips are placed by drawAnalysis, which
+ * runs AFTER this (names belong to the curves, chips belong on top of
+ * everything), so their exact boxes are not knowable here without laying the
+ * whole layer out twice. What is knowable is the marker each chip is tethered
+ * to, and a chip is always within about a chip's height of its marker — so a
+ * band around each marker is reserved instead. It errs towards moving the
+ * name, which is the cheap direction: there are three more spots to try.
+ */
+function chipZones(scene: BoardScene, type: number): NameBox[] {
+  const an = scene.analysis ?? null
+  if (!an || !an.curve.visible) return []
+  const out: NameBox[] = []
+  const w = 44 * type
+  const h = 34 * type
+  for (const p of an.points) {
+    if (!p || !p.pos || !Number.isFinite(p.pos.x) || !Number.isFinite(p.pos.y)) continue
+    const s = toScreen(p.pos, scene.vp)
+    out.push({ x: s.x - w / 2, y: s.y - h / 2, w, h })
+  }
+  return out
+}
+
+/**
+ * The name of each curve, beside the curve it names.
+ *
+ * The placement rule is the one a textbook uses: go along the graph to where
+ * it is still well inside the frame — 80% of the way across its visible run —
+ * and put the letter on the side AWAY from the x axis, so it lands in the open
+ * paper above a curve that is above the axis and below one that is below it,
+ * rather than in the crowd of tick numbers along the axis itself. If the spot
+ * is taken (by another name, or by where an analysis chip is about to go), the
+ * same question is asked at 60%, 40% and 20%. If all four are taken the name
+ * is dropped: a letter printed on top of another letter names nothing.
+ */
+function drawCurveNames(
+  ctx: CanvasRenderingContext2D,
+  scene: BoardScene,
+  theme: Theme,
+  fig: FigureStyle,
+  ink: (c: string) => string,
+  scale: { type: number; stroke: number },
+): void {
+  const names = scene.curveNames
+  if (!names) return
+  const vp = scene.vp
+  if (vp.widthPx <= 0 || vp.heightPx <= 0) return
+  const labelled = scene.curves.filter(
+    (c) => c.visible && typeof names[c.id] === 'string' && names[c.id] !== '',
+  )
+  // One curve is told by the caption; the labels are for telling curves APART.
+  if (labelled.length < 2) return
+
+  const { type, stroke } = scale
+  const px = CURVE_NAME_PX * type
+  const gap = CURVE_NAME_GAP * stroke
+  const h = px * 1.3
+  const axisY = toScreen({ x: 0, y: 0 }, vp).y
+  const placed: NameBox[] = chipZones(scene, type)
+
+  ctx.save()
+  ctx.font = figureFont(fig, px, true)
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  for (const curve of labelled) {
+    const text = names[curve.id]
+    let trace: ReturnType<typeof traceCurve> = null
+    try {
+      trace = traceCurve(curve, scene.models, vp)
+    } catch {
+      trace = null
+    }
+    if (!trace) continue
+    // Every sample the board actually shows, left to right. A polar or
+    // parametric curve doubles back, so "along the visible run from the left"
+    // has to be asked of the screen x, not of the parameter.
+    const on: { x: number; y: number }[] = []
+    for (const run of trace.runs) {
+      for (const s of run) {
+        if (!Number.isFinite(s.x) || !Number.isFinite(s.y)) continue
+        if (s.x < 0 || s.x > vp.widthPx || s.y < 0 || s.y > vp.heightPx) continue
+        on.push({ x: s.x, y: s.y })
+      }
+    }
+    if (on.length === 0) continue
+    on.sort((a, b) => a.x - b.x)
+
+    const w = ctx.measureText(text).width + 6 * type
+    let box: NameBox | null = null
+    for (const f of NAME_SPOTS) {
+      const s = on[Math.min(on.length - 1, Math.max(0, Math.round(f * (on.length - 1))))]
+      // Away from the axis: above a curve drawn above it, below one below it.
+      // Screen y grows downward, so "above" is the smaller number.
+      const cy = s.y <= axisY ? s.y - gap - h / 2 : s.y + gap + h / 2
+      const cand: NameBox = { x: s.x - w / 2, y: cy - h / 2, w, h }
+      if (cand.y < 0 || cand.y + cand.h > vp.heightPx) continue
+      if (placed.some((p) => overlaps(p, cand))) continue
+      box = cand
+      break
+    }
+    if (!box) continue
+    // A knockout, no border, exactly as the caption does it: the label is off
+    // the curve, but a gridline or a tick number running through a single
+    // italic letter makes it unreadable, and on white the plate is invisible.
+    ctx.fillStyle = theme.bg
+    ctx.fillRect(box.x, box.y, box.w, box.h)
+    ctx.fillStyle = ink(curve.color)
+    ctx.fillText(text, box.x + box.w / 2, box.y + box.h / 2)
+    placed.push(box)
+  }
+  ctx.restore()
+  ctx.textAlign = 'start'
+  ctx.textBaseline = 'alphabetic'
+}
+
 /**
  * Where a curve with a restricted domain STOPS, and whether that end is part
  * of the graph.
@@ -1360,6 +1517,17 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
       })
     } catch {
       /* shape render failed — the figure still stands */
+    }
+  }
+
+  // The names, after every curve and before the analysis layer: a letter
+  // belongs to the stroke it labels, and the chips that state coordinates go
+  // on top of everything. Marked figures only — see BoardScene.curveNames.
+  if (fig !== null && fig.curveEnds === 'marked') {
+    try {
+      drawCurveNames(ctx, scene, theme, fig, ink, scale)
+    } catch {
+      /* a name that could not be placed must not take the figure with it */
     }
   }
 

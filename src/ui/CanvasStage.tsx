@@ -154,6 +154,14 @@ interface Props {
   /** The line printed under the figure. FIGURE, not chrome: it exports. */
   caption?: string | null
   /**
+   * What each curve is CALLED — "f", "g", "f′" — keyed by curve id.
+   *
+   * Threaded exactly like `caption`, and drawn only under a marked figure
+   * style (see BoardScene.curveNames), so a previewed board shows the labels
+   * the PNG will carry and an unstyled board carries none.
+   */
+  curveNames?: Readonly<Record<string, string>> | null
+  /**
    * Extra grabbable points for the selected object, owned by the App. Drawn as
    * handles; their drags go to `onDrag` instead of applyHandleDrag.
    *
@@ -456,6 +464,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     grid,
     figure,
     caption,
+    curveNames,
     extraHandles,
     pointPick,
   },
@@ -489,6 +498,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   const gridRef = useRef<BoardGrid | null | undefined>(grid)
   const figureRef = useRef<FigureStyle | null | undefined>(figure)
   const captionRef = useRef<string | null | undefined>(caption)
+  const curveNamesRef = useRef<Props['curveNames']>(curveNames)
   const extraHandlesRef = useRef<readonly ExtraHandle[]>(extraHandles ?? [])
   const pointPickRef = useRef<Props['pointPick']>(pointPick)
 
@@ -645,6 +655,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       grid: gridRef.current ?? undefined,
       figure: figureRef.current ?? undefined,
       caption: captionRef.current ?? undefined,
+      curveNames: curveNamesRef.current ?? undefined,
       analysis:
         sel && !busy && analysisRef.current.length > 0
           ? { curve: sel, points: analysisRef.current }
@@ -722,6 +733,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     gridRef.current = grid
     figureRef.current = figure
     captionRef.current = caption
+    curveNamesRef.current = curveNames
     extraHandlesRef.current = extraHandles ?? []
     pointPickRef.current = pointPick
     hitRef.current = hitRadii(coarseRef.current, present)
@@ -742,6 +754,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     grid,
     figure,
     caption,
+    curveNames,
     extraHandles,
     pointPick,
     selectedId,

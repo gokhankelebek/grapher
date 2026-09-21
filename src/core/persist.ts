@@ -669,6 +669,24 @@ export interface BoardInput {
   figure?: FigureStyleId
   /** The caption under the figure. Absent or blank writes nothing at all. */
   caption?: string
+  /**
+   * False when the caption is the teacher's OWN words rather than the one the
+   * board derived for itself.
+   *
+   * A derived caption ("Graphs of f and g", re-derived whenever the curves
+   * change) is not part of the document: storing it would freeze a sentence
+   * that is supposed to follow the board, and would change the bytes of every
+   * document that never had a caption. So the auto caption writes nothing,
+   * exactly as before this existed.
+   *
+   * The one thing that cannot be said by silence is a caption the teacher
+   * deliberately CLEARED: absent would read back as "derive one". That is what
+   * this flag buys — `captionAuto: false` with a blank caption writes
+   * `"caption": ""`, and the loader reads the key's PRESENCE as "these words
+   * are the teacher's". Absent (every existing caller) behaves as it always
+   * did: blank writes nothing.
+   */
+  captionAuto?: boolean
   viewport: { center: Vec2; pxPerUnit: number }
   selectedId: string | null
   mode: BoardMode
@@ -716,6 +734,13 @@ export interface HydratedBoard {
   figure: FigureStyleId
   /** The caption under the figure. '' when there is none. */
   caption: string
+  /**
+   * True when this document says nothing about its caption, so the board is
+   * free to derive one from the curves on it (see BoardInput.captionAuto).
+   * False when the caption above is the teacher's own words — including the
+   * blank they deliberately left.
+   */
+  captionAuto: boolean
   viewport: { center: Vec2; pxPerUnit: number }
   selectedId: string | null
   mode: BoardMode
@@ -906,8 +931,16 @@ export function boardToStored(input: BoardInput): StoredBoard {
   // And the look, only when it is not the screen one every document has always
   // been drawn in — with its caption, only when there is one to print.
   if (isFigureStyleId(input.figure) && input.figure !== 'screen') board.figure = input.figure
+  //
+  // A DERIVED caption is not the document's: it is re-derived from the curves
+  // on every load, so writing it would freeze a sentence that is supposed to
+  // follow the board. The teacher's own words are written — including the
+  // blank they deliberately left, which is the one thing silence cannot say.
   const caption = storedCaption(input.caption)
-  if (caption !== '') board.caption = caption
+  if (input.captionAuto === true) {
+    /* the board writes this one; the document stays silent */
+  } else if (caption !== '') board.caption = caption
+  else if (input.captionAuto === false) board.caption = ''
 
   return board
 }
@@ -1745,6 +1778,10 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
     degraded = true
   }
   const caption = storedCaption(rawBoard.caption)
+  // PRESENCE, not content: a stored "" is a caption the teacher cleared, and a
+  // missing key is a document that never had an opinion — which is every
+  // document written before captions followed the board.
+  const captionAuto = !isStr(rawBoard.caption)
 
   // ---- axis units. Unreadable or absent is not a repair: it is the default.
   const rawAxis = isObj(rawBoard.axisUnits) ? rawBoard.axisUnits : {}
@@ -1784,6 +1821,7 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
       grid,
       figure,
       caption,
+      captionAuto,
       viewport,
       selectedId,
       mode,
@@ -1813,6 +1851,7 @@ function blankHydrated(): HydratedBoard {
     grid: 'cartesian',
     figure: 'screen',
     caption: '',
+    captionAuto: true,
     viewport: { center: { x: 0, y: 0 }, pxPerUnit: 60 },
     selectedId: null,
     mode: 'draw',

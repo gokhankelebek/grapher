@@ -66,6 +66,31 @@ export const DEFAULT_CAPTION: Record<FigureStyleId, string> = {
 }
 
 /**
+ * The caption this board would write for ITSELF, given what is on it.
+ *
+ * "Graph of f" was a constant, and a constant is wrong the moment a second
+ * curve arrives: the figure then names a function nothing on it points at.
+ * The caption is therefore DERIVED from the names the board hands out (see
+ * render/curveNames.ts) and re-derived on every change to the curves, until
+ * the teacher writes their own — at which point it is theirs and stops
+ * following.
+ *
+ * Oxford comma on purpose: "Graphs of f, g, and h" is how an AP item lists
+ * them, and the one place a missing comma would read as two functions.
+ *
+ * Only the AP look is a figure that gets REFERRED to in an item's sentence, so
+ * only the AP look proposes words; every other style starts blank and stays
+ * blank unless the teacher types something.
+ */
+export function defaultCaption(style: FigureStyleId, names: readonly string[]): string {
+  if (style !== 'ap') return ''
+  if (names.length === 0) return ''
+  if (names.length === 1) return `Graph of ${names[0]}`
+  if (names.length === 2) return `Graphs of ${names[0]} and ${names[1]}`
+  return `Graphs of ${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`
+}
+
+/**
  * The style to hand the renderer, or undefined for the screen look.
  *
  * Undefined rather than FIGURE_STYLES.screen on purpose: absent IS the screen

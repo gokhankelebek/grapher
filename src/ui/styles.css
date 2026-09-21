@@ -3909,6 +3909,33 @@ button.card-eq {
   min-width: 0;
 }
 
+/* Who owns the words in the caption field. "auto" is a state, not an action,
+   so it is a quiet label; "↺ auto" is the one click that hands the caption
+   back to the board, so it is a button and looks like one. */
+.fig-caption-auto {
+  flex: none;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  opacity: 0.75;
+  letter-spacing: 0.02em;
+}
+
+.fig-caption-reset {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.fig-caption-reset:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
 .exp-text {
   width: 100%;
   padding: var(--sp-1) 6px;

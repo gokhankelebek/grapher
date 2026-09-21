@@ -56,6 +56,8 @@ export interface TextDraw {
   y: number
   align: string
   baseline: string
+  /** The font in force when it was drawn — the only place italics show up. */
+  font: string
 }
 
 export interface FillRect { x: number; y: number; w: number; h: number; style: string }
@@ -143,7 +145,14 @@ export class MockCtx {
   fillText(text: string, x: number, y: number): void {
     this.textCount++
     this._note()
-    this.texts.push({ text, x, y, align: this.textAlign, baseline: this.textBaseline })
+    this.texts.push({
+      text,
+      x,
+      y,
+      align: this.textAlign,
+      baseline: this.textBaseline,
+      font: this.font,
+    })
   }
   measureText(text: string): { width: number } {
     return { width: text.length * 6 } // 11px system font, close enough for layout
