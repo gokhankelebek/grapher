@@ -270,6 +270,15 @@ export interface SpecialPoint {
   /** short human label for the readout, e.g. "zero", "max", "inflection" */
   label: string
   /**
+   * The coordinate in closed form when one is KNOWN, as plain Unicode the
+   * card and the on-board chip print next to the decimal: "√3", "−√3",
+   * "2√3/9", "π/4", "−3π/2", "(1+√5)/2", "3/2". Absent when the value is a
+   * decimal and nothing more. Never a guess that was not verified against
+   * the curve — see src/core/exact.ts.
+   */
+  exactX?: string
+  exactY?: string
+  /**
    * True when the location is known in closed form (a line's root, a
    * parabola's vertex) rather than located numerically. Lets the UI avoid
    * implying more precision than was actually computed.
