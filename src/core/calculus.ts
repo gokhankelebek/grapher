@@ -6,6 +6,8 @@
 //   export function tangentAt(curve, models, x): TangentLine | null
 //   export function derivativeModel(curve, models, id): DerivativeCurve | null
 //   export function areaUnder(curve, models, a, b): AreaResult | null
+//   export function areaBetween(parent, other, models, a, b, abs): AreaResult | null
+//   export function curveIntersections(parent, other, models, range): number[]
 //   export function riemann(curve, models, a, b, n, method): RiemannResult | null
 //
 // Two layers, exactly as in analyze.ts:
@@ -25,6 +27,7 @@
 
 import type { FittedCurve, ModelSpec, ParamMeta, Vec2 } from './types'
 import { MODELS, fmt } from './fit/models'
+import { analyzeCurve } from './analyze'
 
 // ---------------------------------------------------------------------------
 // Tuning
@@ -1023,6 +1026,284 @@ export function areaUnder(
     if (!q) return null
     total += q.value
     evals += q.evals
+  }
+  if (!Number.isFinite(total)) return null
+  return { value: sign * total, exact: false, samples: evals }
+}
+
+// ---------------------------------------------------------------------------
+// 3b. Area between two curves
+//
+// ∫(f − g) is not a new kind of integral: it is the same definite integral of
+// one new integrand. What IS new is the pair of guards — the region has to
+// stay inside BOTH domains and clear of BOTH curves' poles — and the split at
+// the crossings, which |f − g| needs and the signed integral does not.
+//
+// The split is the whole difficulty. |f − g| has a KINK at every intersection,
+// and Simpson's rule fits a parabola through three points: a parabola through
+// a corner is wrong by O(h²) no matter how small h gets, so an adaptive rule
+// straddling one refines forever and still misses. Integrating each crossing-
+// free piece on its own and summing the magnitudes gives the same number with
+// a smooth integrand on every piece, which is exactly "top minus bottom" done
+// once per region.
+// ---------------------------------------------------------------------------
+
+/** The polynomial families, whose params ARE ascending coefficients. */
+const POLY_IDS = new Set(['line', 'poly2', 'poly3', 'poly4'])
+
+/** Drop the zero leading coefficients a subtraction left behind. */
+function trimPoly(c: readonly number[]): number[] {
+  const out = c.slice()
+  while (out.length > 1 && out[out.length - 1] === 0) out.pop()
+  return out
+}
+
+/** The smallest library family that can hold this polynomial, or null. */
+function polyFamily(c: readonly number[]): { modelId: string; params: number[] } | null {
+  const t = trimPoly(c)
+  if (t.length <= 2) return { modelId: 'line', params: [t[0] ?? 0, t[1] ?? 0] }
+  if (t.length === 3) return { modelId: 'poly2', params: t }
+  if (t.length === 4) return { modelId: 'poly3', params: t }
+  if (t.length === 5) return { modelId: 'poly4', params: t }
+  return null
+}
+
+/**
+ * Ascending coefficients of f − g, when BOTH curves are polynomials.
+ *
+ * Null for every other pair — including a pair whose difference happens to be
+ * a polynomial (e·x and e·x + sin x are not), because that is a fact about the
+ * formulas rather than about the families, and this layer only knows families.
+ */
+function diffPoly(
+  parent: FittedCurve,
+  pParams: readonly number[],
+  other: FittedCurve,
+  oParams: readonly number[],
+): number[] | null {
+  if (!POLY_IDS.has(parent.modelId) || !POLY_IDS.has(other.modelId)) return null
+  const n = Math.max(pParams.length, oParams.length)
+  const out = new Array<number>(n).fill(0)
+  for (let i = 0; i < n; i++) out[i] = (pParams[i] ?? 0) - (oParams[i] ?? 0)
+  return out
+}
+
+/** The x-range both curves are actually on, inside `range`. Null when empty. */
+function sharedRange(
+  f: Explicit,
+  g: Explicit,
+  range: readonly [number, number],
+): [number, number] | null {
+  let lo = Math.min(range[0], range[1])
+  let hi = Math.max(range[0], range[1])
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null
+  for (const d of [f.domain, g.domain]) {
+    if (!d) continue
+    lo = Math.max(lo, d[0])
+    hi = Math.min(hi, d[1])
+  }
+  return hi > lo ? [lo, hi] : null
+}
+
+/** A spec for h = f − g, so the analyzer can hunt its zeros like any curve. */
+const DIFF_MODEL_ID = 'calc:difference'
+
+function differenceSpec(f: Fn, g: Fn): ModelSpec {
+  return {
+    id: DIFF_MODEL_ID,
+    kind: 'explicit',
+    name: 'Difference',
+    evalExplicit: (_p: number[], x: number) => f(x) - g(x),
+    latex: () => 'f(x) - g(x)',
+    paramMeta: () => [],
+  }
+}
+
+/**
+ * Where `parent` and `other` meet on `range`: the zeros of f − g, sorted,
+ * deduped, a tangency counted once, and never a pole.
+ *
+ * None of that logic is written here. A crossing of two curves IS a zero of
+ * their difference, so the difference is handed to analyzeCurve() as a curve
+ * in its own right and the analyzer's own machinery answers: the sign-change
+ * scan with the |f| value check that keeps 1/x from reporting a zero at its
+ * asymptote, the golden-section pass that finds a tangency no sign change can
+ * bracket, and finish()'s dedupe. When both curves are polynomials the
+ * difference is a polynomial too, and it is handed over AS one — so two
+ * parabolas meet at the closed-form roots of a quadratic rather than at two
+ * numbers a bisection walked to.
+ *
+ * The range is clipped to both domains first: a crossing off the end of one
+ * sketch is a crossing of a curve that is not there.
+ */
+export function curveIntersections(
+  parent: FittedCurve,
+  other: FittedCurve,
+  models: Record<string, ModelSpec>,
+  range: readonly [number, number],
+): number[] {
+  const F = explicitOf(parent, models)
+  const G = explicitOf(other, models)
+  if (!F || !G) return []
+  const span = sharedRange(F, G, range)
+  if (!span) return []
+  const [lo, hi] = span
+
+  const cp = diffPoly(parent, F.params, other, G.params)
+  const fam = cp ? polyFamily(cp) : null
+
+  const diffCurve: FittedCurve = {
+    id: 'calc:diff',
+    modelId: fam ? fam.modelId : DIFF_MODEL_ID,
+    params: fam ? fam.params : [],
+    kind: 'explicit',
+    domain: [lo, hi],
+    color: '#000000',
+    strokeWidth: 1,
+    visible: false,
+    error: 0,
+  }
+  const specs: Record<string, ModelSpec> = fam
+    ? MODELS
+    : { [DIFF_MODEL_ID]: differenceSpec(F.f, G.f) }
+
+  let found: ReturnType<typeof analyzeCurve>
+  try {
+    found = analyzeCurve(diffCurve, specs)
+  } catch {
+    return []
+  }
+
+  const tol = 1e-9 * Math.max(1, Math.abs(lo), Math.abs(hi))
+  const xs = found
+    .filter((p) => p.kind === 'zero' && Number.isFinite(p.pos.x))
+    .map((p) => p.pos.x)
+    .filter((x) => x >= lo - tol && x <= hi + tol)
+    .sort((a, b) => a - b)
+
+  const dedupe = 1e-7 * Math.max(1, Math.abs(lo), Math.abs(hi))
+  const out: number[] = []
+  for (const x of xs) {
+    if (out.length > 0 && Math.abs(x - out[out.length - 1]) <= dedupe) continue
+    out.push(x)
+  }
+  return out
+}
+
+/** Cut [lo, hi] at every interior x in `cuts`; the pieces come out in order. */
+function pieces(lo: number, hi: number, cuts: readonly number[]): Run[] {
+  const edge = 1e-12 * Math.max(1, Math.abs(lo), Math.abs(hi))
+  const inner = cuts.filter((x) => x > lo + edge && x < hi - edge).sort((a, b) => a - b)
+  const out: Run[] = []
+  let left = lo
+  for (const x of inner) {
+    if (x > left) out.push({ lo: left, hi: x })
+    left = x
+  }
+  if (hi > left) out.push({ lo: left, hi })
+  return out.length > 0 ? out : [{ lo, hi }]
+}
+
+/** The runs on which BOTH curves are defined. Both lists are sorted. */
+function overlapRuns(a: readonly Run[], b: readonly Run[]): Run[] {
+  const out: Run[] = []
+  let i = 0
+  let j = 0
+  while (i < a.length && j < b.length) {
+    const lo = Math.max(a[i].lo, b[j].lo)
+    const hi = Math.min(a[i].hi, b[j].hi)
+    if (hi > lo) out.push({ lo, hi })
+    if (a[i].hi < b[j].hi) i++
+    else j++
+  }
+  return out
+}
+
+/**
+ * ∫_a^b (f − g) dx, with f the parent and g the other curve — and with `abs`,
+ * ∫_a^b |f − g| dx: top minus bottom across every crossing, which is what an
+ * AP question means by "the area between the curves".
+ *
+ * Signed both ways round, exactly as areaUnder is: b < a flips the sign, |·|
+ * or not, because the orientation of the interval belongs to the integral and
+ * not to the integrand.
+ *
+ * Closed form when both curves are polynomial families — a difference of
+ * polynomials is a polynomial, and its antiderivative is one line — reported
+ * `exact: true`. Everything else is adaptive Simpson on f − g, under the same
+ * guards areaUnder uses and one guard more: the region has to stay inside BOTH
+ * domains, and a pole of EITHER curve refuses the whole interval. ∫(1/x − x)
+ * over [−1, 2] does not exist, and the fact that g is a perfectly nice line
+ * does not make it exist.
+ *
+ * With `abs`, the interval is cut at every intersection first (see the note on
+ * the kink above) and the magnitudes are summed piece by piece.
+ */
+export function areaBetween(
+  parent: FittedCurve,
+  other: FittedCurve,
+  models: Record<string, ModelSpec>,
+  a: number,
+  b: number,
+  abs = false,
+): AreaResult | null {
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null
+  const F = explicitOf(parent, models)
+  const G = explicitOf(other, models)
+  if (!F || !G) return null
+  if (!inDomain(F.domain, a) || !inDomain(F.domain, b)) return null
+  if (!inDomain(G.domain, a) || !inDomain(G.domain, b)) return null
+  if (a === b) return { value: 0, exact: true }
+
+  const sign = b > a ? 1 : -1
+  const lo = Math.min(a, b)
+  const hi = Math.max(a, b)
+
+  // ---- closed form: a difference of polynomials is a polynomial ----------
+  const cp = diffPoly(parent, F.params, other, G.params)
+  if (cp) {
+    const anti = polyAnti(cp)
+    const at = (x: number): number => horner(anti, x)
+    if (!abs) {
+      const v = at(hi) - at(lo)
+      if (!Number.isFinite(v)) return null
+      return { value: sign * v, exact: true }
+    }
+    // The cuts are roots of that same polynomial, and the integrand VANISHES
+    // at each of them: a root located to 1e-15 moves the answer by 1e-30, so
+    // the pieces are as exact as the antiderivative they are evaluated from.
+    let total = 0
+    for (const p of pieces(lo, hi, curveIntersections(parent, other, models, [lo, hi]))) {
+      total += Math.abs(at(p.hi) - at(p.lo))
+    }
+    if (!Number.isFinite(total)) return null
+    return { value: sign * total, exact: true }
+  }
+
+  // ---- numeric ------------------------------------------------------------
+  const sf = scanRuns(F.f, lo, hi)
+  if (sf.pole) return null
+  const sg = scanRuns(G.f, lo, hi)
+  if (sg.pole) return null
+  const runs = overlapRuns(sf.runs, sg.runs)
+  if (runs.length === 0) return null
+
+  const h: Fn = (x: number) => F.f(x) - G.f(x)
+  const scale = Math.max(sf.scale, sg.scale)
+  const tol = QUAD_REL * Math.max(1, (hi - lo) * scale)
+  const cuts = abs ? curveIntersections(parent, other, models, [lo, hi]) : []
+
+  let total = 0
+  let evals = sf.evals + sg.evals
+  for (const run of runs) {
+    for (const part of abs ? pieces(run.lo, run.hi, cuts) : [run]) {
+      if (!(part.hi > part.lo)) continue
+      const share = tol * Math.max((part.hi - part.lo) / (hi - lo), 1e-6)
+      const q = adaptiveSimpson(h, part.lo, part.hi, share)
+      if (!q) return null
+      total += abs ? Math.abs(q.value) : q.value
+      evals += q.evals
+    }
   }
   if (!Number.isFinite(total)) return null
   return { value: sign * total, exact: false, samples: evals }

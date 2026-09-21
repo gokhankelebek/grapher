@@ -18,10 +18,11 @@ import { parseExpression } from './core/parse'
 import { parseInequality } from './core/parse/inequality'
 import { applyFeatureEdit, snapParams } from './core/fit/edit'
 import { analyzeCurve } from './core/analyze'
-import { derivativeModel, tangentAt } from './core/calculus'
+import { curveIntersections, derivativeModel, tangentAt } from './core/calculus'
 import {
   N_DEFAULT,
   clampN,
+  defaultBetweenBounds,
   defaultBounds,
   defaultTangentX,
   dependentsOf,
@@ -89,6 +90,7 @@ import type { NumberLineStageHandle } from './ui/NumberLineStage'
 import type { NLPart } from './render/numberline'
 import { Toolbar } from './ui/Toolbar'
 import { Sidebar } from './ui/Sidebar'
+import type { BetweenInfo } from './ui/CurveCard'
 import { DocMenu } from './ui/DocMenu'
 import type { SaveState } from './ui/DocMenu'
 import { ExportMenu } from './ui/ExportMenu'
@@ -167,6 +169,122 @@ const AUTOSAVE_MS = 400
 
 /** Stable identity — avoids re-rendering the canvas when markers are hidden. */
 const EMPTY_ANALYSIS: SpecialPoint[] = []
+
+// ---------------------------------------------------------------- between two
+//
+// "Area between curves" is one AreaLink with a second curve named in it. The
+// mathematics is core's; what the App decides is only how a teacher SAYS which
+// second curve they mean, and those decisions are pure — so they live here,
+// out of the component, where they can be stated and tested on their own.
+
+/**
+ * A fresh area between curves reads |f − g|, not the signed integral.
+ *
+ * The axis case defaults the other way on purpose: ∫f dx is the thing an AP
+ * class is learning to read, sign and all. But "the area between two curves"
+ * IS ∫|f − g| — top minus bottom wherever they cross — and a region a teacher
+ * can see must never open reading 0.000 because its halves cancelled. The
+ * signed integral is still one chip away.
+ */
+export const BETWEEN_ABS = true
+
+/** What the board says when nobody picked a second curve after all. */
+export const BETWEEN_CANCELLED = 'No second curve picked.'
+
+/** Which curves a region on `parentId` could run to: another, on screen, of x. */
+export function betweenTargets(
+  curves: readonly FittedCurve[],
+  models: Record<string, ModelSpec>,
+  parentId: string,
+): FittedCurve[] {
+  return curves.filter(
+    (c) => c.id !== parentId && c.visible && models[c.modelId]?.kind === 'explicit',
+  )
+}
+
+/**
+ * What "Area between curves…" does next.
+ *
+ * With exactly one other curve on the board there is no question to ask — the
+ * teacher meant that one, and asking would be a click spent confirming what
+ * everyone can see. With two or more, the next tap answers it. With none there
+ * is no answer at all, so the offer turns into the reason.
+ */
+export type BetweenIntent =
+  | { act: 'refuse'; say: string }
+  | { act: 'create'; otherId: string }
+  | { act: 'arm'; say: string }
+
+export function betweenIntent(
+  curves: readonly FittedCurve[],
+  models: Record<string, ModelSpec>,
+  parentId: string,
+): BetweenIntent {
+  const parent = curves.find((c) => c.id === parentId)
+  if (!parent || models[parent.modelId]?.kind !== 'explicit') {
+    return { act: 'refuse', say: 'Only a curve that is a function of x can carry calculus objects.' }
+  }
+  const targets = betweenTargets(curves, models, parentId)
+  if (targets.length === 0) return { act: 'refuse', say: 'Draw or type a second curve first.' }
+  if (targets.length === 1) return { act: 'create', otherId: targets[0].id }
+  return { act: 'arm', say: 'Tap the second curve.' }
+}
+
+/** "−1.5", not "−1.50" — the number a teacher would have said out loud. */
+function sayX(v: number): string {
+  const s = fixedNum(v, 2)
+  return s.includes('.') ? s.replace(/\.?0+$/, '') : s
+}
+
+/**
+ * How a new region introduces itself.
+ *
+ * Two sentences, because they ask for two different next moves. Bounds that
+ * came from where the curves MEET are almost always the region the question
+ * is about, and saying so is what stops a teacher hunting for the handles they
+ * do not need. Bounds that came from nothing of the sort say exactly that, and
+ * name the two chips that fix it.
+ */
+export function betweenNotice(hits: number, from: number, to: number): string {
+  return hits >= 2
+    ? `Shaded between the curves from x = ${sayX(from)} to x = ${sayX(to)} (where they meet)`
+    : 'No intersection in view — drag a and b to set the region'
+}
+
+/**
+ * The between-curves facts every card needs, in one pass.
+ *
+ * Neither is about a curve's own links, which is why they are not in CardCalc:
+ * `canAdd` is a question about the BOARD (is there a second curve to point
+ * at?), and `notes` is what a curve is owed when it is the far side of a
+ * region some OTHER card owns.
+ */
+export function betweenCardInfo(
+  curves: readonly FittedCurve[],
+  models: Record<string, ModelSpec>,
+  links: readonly CalcLink[],
+  nameOf: (curve: FittedCurve) => string,
+): Record<string, BetweenInfo> {
+  const out: Record<string, BetweenInfo> = {}
+  const usable = (c: FittedCurve): boolean =>
+    c.visible && models[c.modelId]?.kind === 'explicit'
+  const pool = curves.filter(usable).length
+  for (const c of curves) {
+    // There has to be at least one OTHER curve the region could run to.
+    const others = pool - (usable(c) ? 1 : 0)
+    out[c.id] = { canAdd: models[c.modelId]?.kind === 'explicit' && others > 0, notes: [] }
+  }
+  const byId = new Map(curves.map((c) => [c.id, c]))
+  for (const l of links) {
+    if (l.kind !== 'area' || !l.otherId) continue
+    const parent = byId.get(l.parentId)
+    const here = out[l.otherId]
+    if (!parent || !here) continue
+    const name = nameOf(parent)
+    here.notes.push(`area between this and ${name} \u2014 see ${name}\u2019s card`)
+  }
+  return out
+}
 
 /**
  * One undo/redo history entry.
@@ -318,6 +436,19 @@ export default function App() {
    * being selected already makes a click on empty board an initial condition.
    */
   const [armedField, setArmedField] = useState<string | null>(null)
+  /**
+   * The curve whose next TAP ON ANOTHER CURVE completes an "area between
+   * curves". Null the rest of the time.
+   *
+   * One shot, exactly like "+ solution through a point": the teacher has just
+   * said what they want, so the very next selection is the answer to the
+   * question rather than an ordinary selection. A tap on empty board, a tap
+   * back on the same curve, or Escape all cancel — and cancelling costs a
+   * sentence, not a state the board is stuck in.
+   */
+  const [armedBetween, setArmedBetween] = useState<string | null>(null)
+  const armedBetweenRef = useRef<string | null>(null)
+  armedBetweenRef.current = armedBetween
   /**
    * Points, segments, vectors and polygons. Same declarative rule as the
    * fields: what is held is the LINE THE TEACHER TYPED plus its constants, and
@@ -2396,6 +2527,133 @@ export default function App() {
     [commitState, showToast, viewWindow],
   )
 
+  // ------------------------------------------------- area between two curves
+  //
+  // The same AreaLink, with a second curve named in it. Everything that makes
+  // it different — the shading running to g instead of to the axis, the
+  // readout saying ∫|f − g|, the link dying with EITHER curve — follows from
+  // that one field; what the App owns is only how a teacher says which second
+  // curve they mean. The decisions themselves are pure, above.
+
+  /**
+   * Shade between `parentId` and `otherId`.
+   *
+   * `abs` starts TRUE, unlike the axis case. "The area between two curves" in
+   * an AP class means ∫|f − g| — top minus bottom, wherever they cross — and a
+   * region that visibly has area must not open reading 0 because the halves
+   * cancelled. The signed integral is one chip away for the lesson that wants
+   * it. Returns false when the pair cannot carry one, having said why.
+   */
+  const createAreaBetween = useCallback(
+    (parentId: string, otherId: string): boolean => {
+      const parent = curvesRef.current.find((c) => c.id === parentId)
+      const other = curvesRef.current.find((c) => c.id === otherId)
+      const models = modelsRef.current
+      if (!parent || !other || parent.id === other.id) return false
+      if (
+        models[parent.modelId]?.kind !== 'explicit' ||
+        models[other.modelId]?.kind !== 'explicit'
+      ) {
+        showToast('An area between curves needs two curves that are functions of x.')
+        return false
+      }
+      const win = viewWindow()
+      let bounds: [number, number]
+      try {
+        bounds = defaultBetweenBounds(parent, other, models, win)
+      } catch {
+        bounds = defaultBounds(parent, win)
+      }
+      const [from, to] = bounds
+      const linkId = nextId()
+      // abs TRUE, unlike the axis case — see BETWEEN_ABS.
+      const abs = BETWEEN_ABS
+      commitState(
+        {
+          calc: [
+            ...calcRef.current,
+            { kind: 'area', id: linkId, parentId, otherId, from, to, abs },
+          ],
+        },
+        'area between curves',
+      )
+      setSelectedId(parentId)
+      // Where they MEET is the region the question is almost always about, so
+      // say whether the opening bounds are that or merely a guess the teacher
+      // now has to fix. Two different sentences, because they ask for two
+      // different next moves.
+      let hits: number[] = []
+      try {
+        hits = curveIntersections(parent, other, models, win) ?? []
+      } catch {
+        hits = []
+      }
+      showToast(betweenNotice(hits.length, from, to), {
+        ms: 5000,
+        action: { label: 'Undo', run: undo },
+      })
+      return true
+    },
+    [commitState, showToast, undo, viewWindow],
+  )
+
+  /**
+   * The menu item. With exactly one other curve on the board there is nothing
+   * to ask — the teacher meant that one — so it is shaded immediately. With
+   * two or more, the next tap says which, and the notice says so.
+   */
+  const addAreaBetween = useCallback(
+    (parentId: string): void => {
+      const intent = betweenIntent(curvesRef.current, modelsRef.current, parentId)
+      if (intent.act === 'refuse') {
+        showToast(intent.say)
+        return
+      }
+      setSelectedId(parentId)
+      if (intent.act === 'create') {
+        createAreaBetween(parentId, intent.otherId)
+        return
+      }
+      setArmedBetween(parentId)
+      showToast(intent.say, { ms: 6000 })
+    },
+    [createAreaBetween, showToast],
+  )
+
+  /** Give up on the pick, in words — an armed board must never be silent. */
+  const cancelBetween = useCallback((): void => {
+    if (!armedBetweenRef.current) return
+    setArmedBetween(null)
+    showToast(BETWEEN_CANCELLED, { ms: 2200 })
+  }, [showToast])
+
+  /**
+   * Selection, as the BOARD and the SIDEBAR state it.
+   *
+   * Ordinarily this is just setSelectedId. While a second curve is being
+   * picked it is the answer to a question instead: the tap that would have
+   * selected g shades between f and g, and a tap on empty board (or back on f)
+   * is the teacher changing their mind.
+   */
+  const selectObject = useCallback(
+    (id: string | null): void => {
+      const armed = armedBetweenRef.current
+      if (!armed) {
+        setSelectedId(id)
+        return
+      }
+      setArmedBetween(null)
+      if (!id || id === armed) {
+        showToast(BETWEEN_CANCELLED, { ms: 2200 })
+        setSelectedId(armed)
+        return
+      }
+      if (createAreaBetween(armed, id)) return
+      setSelectedId(id)
+    },
+    [createAreaBetween, showToast],
+  )
+
   /**
    * One stated change to one link.
    *
@@ -3762,6 +4020,27 @@ export default function App() {
   )
 
   /**
+   * What each card knows about areas BETWEEN curves.
+   *
+   * Two separate facts, neither of which is about the curve's own links, which
+   * is why they are not in CardCalc: whether the board currently holds a
+   * second curve to point at (the menu item's whole condition), and whether
+   * this curve is the far side of a region some other card owns.
+   */
+  const betweenCards = useMemo<Record<string, BetweenInfo>>(
+    () =>
+      kind === 'cartesian'
+        ? betweenCardInfo(curves, models, calcLinks, curveLabel)
+        : {},
+    [kind, curves, models, calcLinks, curveLabel],
+  )
+
+  const betweenFor = useCallback(
+    (id: string): BetweenInfo | undefined => betweenCards[id],
+    [betweenCards],
+  )
+
+  /**
    * The points a teacher can grab that belong to a calculus object rather than
    * to a curve family: a tangent's point (which slides ALONG the parent) and
    * an interval's two ends (which slide along the x-axis).
@@ -3806,7 +4085,17 @@ export default function App() {
         continue
       }
       if (link.kind !== 'area' && link.kind !== 'riemann') continue
-      if (link.parentId !== selectedId) continue
+      // Between two curves the interval belongs to BOTH of them, so it is
+      // grabbable from either card — a teacher looking at g and wondering why
+      // it is shaded can move the region without hunting for f's card.
+      const other =
+        link.kind === 'area' && link.otherId ? byId.get(link.otherId) : undefined
+      if (link.parentId !== selectedId && !(other && other.id === selectedId)) continue
+      // A limit that left one curve has left the region: between-curves clamps
+      // to the OVERLAP of the two domains, where "the area between them" is a
+      // thing that exists at all.
+      const clamp = (x: number): number =>
+        other ? onCurve(other, onCurve(parent, x)) : onCurve(parent, x)
       // The limits live ON the axis, which is where a teacher points at them.
       out.push({
         id: `calc:${link.id}:from`,
@@ -3814,7 +4103,7 @@ export default function App() {
         label: 'a',
         onDrag: (pos) =>
           changeCalc(
-            { kind: 'bound', linkId: link.id, which: 'from', value: onCurve(parent, pos.x) },
+            { kind: 'bound', linkId: link.id, which: 'from', value: clamp(pos.x) },
             true,
           ),
       })
@@ -3824,7 +4113,7 @@ export default function App() {
         label: 'b',
         onDrag: (pos) =>
           changeCalc(
-            { kind: 'bound', linkId: link.id, which: 'to', value: onCurve(parent, pos.x) },
+            { kind: 'bound', linkId: link.id, which: 'to', value: clamp(pos.x) },
             true,
           ),
       })
@@ -4458,6 +4747,14 @@ export default function App() {
         e.preventDefault()
         setPresentMode((v) => !v)
       } else if (e.key === 'Escape') {
+        // An armed pick is the innermost thing Escape can be about: the
+        // teacher asked "which second curve?" and is now saying "never mind".
+        // It takes the key, so present mode survives the same press.
+        if (armedBetweenRef.current) {
+          e.preventDefault()
+          cancelBetween()
+          return
+        }
         // Unconditional: leaving a mode you are not in costs nothing, and the
         // alternative is a stale closure deciding whether you are in it.
         setPresentMode(false)
@@ -4475,6 +4772,7 @@ export default function App() {
   }, [
     undo,
     redo,
+    cancelBetween,
     deleteCurve,
     deleteField,
     deleteShape,
@@ -4581,7 +4879,7 @@ export default function App() {
         onAnalysisHover={setHighlight}
         onFeatureEdit={applyFeatureByIndex}
         candidatesFor={candidatesFor}
-        onSelect={setSelectedId}
+        onSelect={selectObject}
         onDelete={deleteCurve}
         onDuplicate={duplicateCurve}
         onToggleVisible={toggleVisible}
@@ -4601,6 +4899,8 @@ export default function App() {
         onExprSubmit={kind === 'number-line' ? addInequality : addExpression}
         calcFor={calcFor}
         onAddCalc={addCalcObject}
+        betweenFor={betweenFor}
+        onAddAreaBetween={addAreaBetween}
         onCalcChange={changeCalc}
         onCalcRemove={removeCalcObject}
         fields={fields}
@@ -4662,7 +4962,7 @@ export default function App() {
             mode={MODE}
             inkColor={pickColor()}
             vpRef={vpRef}
-            onSelect={setSelectedId}
+            onSelect={selectObject}
             onPlacePoint={placePoint}
             onCreateInterval={createInterval}
             onMoveEndpoint={moveEndpoint}
@@ -4684,7 +4984,7 @@ export default function App() {
           inkColor={pickColor()}
           vpRef={vpRef}
           onStrokeRecognized={handleStrokeRecognized}
-          onSelect={setSelectedId}
+          onSelect={selectObject}
           onDrawingChange={setDrawingActive}
           onDragCurve={dragCurveLive}
           onHandleDrag={handleDragLive}

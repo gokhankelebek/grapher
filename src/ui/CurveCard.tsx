@@ -88,11 +88,38 @@ interface Props {
    * card gains nothing at all until a teacher asks for something.
    */
   calc?: CardCalc
+  /**
+   * Areas between THIS curve and another: whether one can be offered at all,
+   * and the shadings some other card owns that happen to run to this curve.
+   * Not part of CardCalc because it is a fact about the BOARD (is there a
+   * second curve to point at?) rather than about this curve's own links.
+   */
+  between?: BetweenInfo
   onAddCalc(kind: CalcKind): void
+  /** Start "Area between curves…": shade immediately, or arm the next tap. */
+  onAddAreaBetween(): void
   /** State one change to one object. `live` = a drag or slider in flight. */
   onCalcChange(change: CalcChange, live?: boolean): void
   onCalcRemove(linkId: string): void
 }
+
+/**
+ * What a card knows about areas between curves.
+ *
+ * `canAdd` is the menu item's whole condition: there has to BE another curve
+ * that is a function of x and on screen, or "Area between curves…" is an
+ * offer with no possible answer. `notes` is the read-only line a curve wears
+ * when it is the OTHER half of somebody else's region — a teacher looking at
+ * g and wondering why it is shaded gets told, and gets told whose card to
+ * open, rather than being handed a second set of controls for one object.
+ */
+export interface BetweenInfo {
+  canAdd: boolean
+  notes: string[]
+}
+
+/** One array, so a card with nothing to say re-renders no more than before. */
+const EMPTY_NOTES: string[] = []
 
 /** The order the ⋯ menu offers them: the order an AP class meets them. */
 const CALC_ITEMS: { kind: CalcKind; label: string }[] = [
@@ -522,7 +549,9 @@ export function CurveCard({
   onEnds,
   onOpacity,
   calc,
+  between,
   onAddCalc,
+  onAddAreaBetween,
   onCalcChange,
   onCalcRemove,
 }: Props) {
@@ -681,6 +710,20 @@ export function CurveCard({
       return curve.modelId
     }
   })()
+
+  /**
+   * What this curve is CALLED in a sentence — "Between y = x^2 and y = 2 - x^2".
+   * Deliberately the same rule the App names curves by when it builds the
+   * other half of that sentence, so the two halves can never disagree.
+   */
+  const selfLabel = useMemo(() => {
+    if (spec && !curve.modelId.startsWith('expr_') && spec.name) return spec.name
+    const typed = (exprSource ?? displaySource ?? '').trim()
+    if (typed) return typed.length > 24 ? `${typed.slice(0, 23)}…` : typed
+    return spec?.name ?? curve.modelId
+  }, [spec, curve.modelId, exprSource, displaySource])
+
+  const betweenNotes = between?.notes ?? EMPTY_NOTES
 
   /**
    * The size this curve's numbers live at. Passed to every readout, so a
@@ -1116,6 +1159,8 @@ export function CurveCard({
                   {CALC_ITEMS.map((item) =>
                     menuItem(item.label, () => onAddCalc(item.kind)),
                   )}
+                  {between?.canAdd &&
+                    menuItem('Area between curves…', onAddAreaBetween)}
                 </>
               )}
               <div className="card-menu-sep" />
@@ -1463,16 +1508,41 @@ export function CurveCard({
             </div>
           )}
 
-          {calc && (calc.areas.length > 0 || calc.riemanns.length > 0) && (
+          {calc &&
+            (calc.areas.length > 0 ||
+              calc.riemanns.length > 0 ||
+              betweenNotes.length > 0) && (
             <div className="calc-section">
               <div className="calc-title">Calculus</div>
               <div className="calc-list">
-                {calc.areas.map((a) => (
+                {/* This curve is somebody else's other half. One line, no
+                    controls: the region is ONE object, and two cards offering
+                    to edit it would be two sets of a and b for one interval.
+                    What this card owes the teacher is the reason the shading
+                    is here and the name of the card that owns it. */}
+                {betweenNotes.map((note, i) => (
+                  <div className="calc-row calc-row-quiet" key={`between-note-${i}`}>
+                    <div className="calc-line">
+                      <span className="calc-tag">Between</span>
+                      <span className="calc-read calc-read-quiet">{note}</span>
+                    </div>
+                  </div>
+                ))}
+
+                {calc.areas.map((a) => {
+                  const other = a.otherLabel ?? null
+                  return (
                   <div className="calc-row" key={a.linkId}>
                     <div className="calc-line">
-                      <span className="calc-tag">Area</span>
-                      <span className="calc-read">{a.text}</span>
-                      {a.samples !== null && (
+                      <span className="calc-tag">{other ? 'Between' : 'Area'}</span>
+                      {other ? (
+                        <span className="calc-read calc-between" title="The region between these two curves">
+                          {`${selfLabel} and ${other}`}
+                        </span>
+                      ) : (
+                        <span className="calc-read">{a.text}</span>
+                      )}
+                      {!other && a.samples !== null && (
                         <span
                           className="calc-note"
                           title="This integral has no closed form, so it was measured — at this many evaluations of the function."
@@ -1482,6 +1552,22 @@ export function CurveCard({
                       )}
                       {dropBtn(a.linkId, 'shaded area')}
                     </div>
+                    {/* Between curves the first line says WHICH two, so the
+                        number gets a line of its own rather than being
+                        squeezed in beside a pair of equations. */}
+                    {other && (
+                      <div className="calc-line calc-line-read">
+                        <span className="calc-read">{a.text}</span>
+                        {a.samples !== null && (
+                          <span
+                            className="calc-note"
+                            title="This integral has no closed form, so it was measured — at this many evaluations of the function."
+                          >
+                            {`${a.samples} samples`}
+                          </span>
+                        )}
+                      </div>
+                    )}
                     <div className="calc-controls">
                       {boundFields(a.linkId, a.from, a.to)}
                       <button
@@ -1489,20 +1575,25 @@ export function CurveCard({
                         className={`calc-chip${a.abs ? ' calc-chip-on' : ''}`}
                         aria-pressed={a.abs}
                         title={
-                          a.abs
-                            ? 'Showing total area. Click for the signed integral (the AP convention).'
-                            : 'Showing the signed integral (the AP convention). Click for total area.'
+                          other
+                            ? a.abs
+                              ? 'Showing the area between the curves, ∫|f − g| — top minus bottom wherever they cross. Click for the signed integral ∫(f − g).'
+                              : 'Showing the signed integral ∫(f − g), which cancels where the curves swap over. Click for the area between them.'
+                            : a.abs
+                              ? 'Showing total area. Click for the signed integral (the AP convention).'
+                              : 'Showing the signed integral (the AP convention). Click for total area.'
                         }
                         onClick={() =>
                           onCalcChange({ kind: 'abs', linkId: a.linkId, abs: !a.abs })
                         }
                       >
-                        |area|
+                        {other ? (a.abs ? '|f − g|' : 'signed') : '|area|'}
                       </button>
                     </div>
                     {a.problem && <div className="calc-why">{a.problem}</div>}
                   </div>
-                ))}
+                  )
+                })}
 
                 {calc.riemanns.map((r) => (
                   <div className="calc-row" key={r.linkId}>

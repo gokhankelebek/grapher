@@ -10,6 +10,7 @@ import type {
 import type { StyleMap } from '../App'
 import type { NLPart } from '../render/numberline'
 import { CurveCard } from './CurveCard'
+import type { BetweenInfo } from './CurveCard'
 import type { CalcChange, CalcKind, CardCalc } from './calcLinks'
 import { FieldCard } from './FieldCard'
 import type { BoardField, FieldCardData } from './fieldLinks'
@@ -81,6 +82,10 @@ interface Props {
   /** What this curve's card says about calculus. Undefined = nothing to say. */
   calcFor(id: string): CardCalc | undefined
   onAddCalc(id: string, kind: CalcKind): void
+  /** Whether this curve may host an area between curves, and whose it is in. */
+  betweenFor(id: string): BetweenInfo | undefined
+  /** "Area between curves…" on this curve's menu. */
+  onAddAreaBetween(id: string): void
   onCalcChange(change: CalcChange, live?: boolean): void
   onCalcRemove(linkId: string): void
   /**
@@ -177,6 +182,8 @@ export function Sidebar({
   onExprSubmit,
   calcFor,
   onAddCalc,
+  betweenFor,
+  onAddAreaBetween,
   onCalcChange,
   onCalcRemove,
   fields,
@@ -301,6 +308,8 @@ export function Sidebar({
               onOpacity={(o) => onOpacity(curve.id, o)}
               calc={calcFor(curve.id)}
               onAddCalc={(kind) => onAddCalc(curve.id, kind)}
+              between={betweenFor(curve.id)}
+              onAddAreaBetween={() => onAddAreaBetween(curve.id)}
               onCalcChange={onCalcChange}
               onCalcRemove={onCalcRemove}
             />

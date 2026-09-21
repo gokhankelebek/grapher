@@ -24,7 +24,7 @@
 import type { FittedCurve, ModelSpec } from '../core/types'
 import type { Overlay, OverlayRect } from '../render/overlays'
 import type { RiemannMethod } from '../core/calculus'
-import { areaUnder, riemann, tangentAt } from '../core/calculus'
+import { areaBetween, areaUnder, curveIntersections, riemann, tangentAt } from '../core/calculus'
 import type {
   AreaLink,
   CalcKind,
@@ -83,6 +83,10 @@ export const clampN = clampRiemannN
  * from its own card must not leave a link driving a curve that is not there.
  * Transitive on purpose — the derivative of a curve can itself have a tangent,
  * and deleting the original has to take both.
+ *
+ * An area BETWEEN two curves has a second parent, and it dies with that one
+ * too: the region between f and a curve that is gone is not the region under
+ * f, it is nothing at all. So the shading goes, and the toast counts it.
  */
 export function dependentsOf(
   links: readonly CalcLink[],
@@ -96,7 +100,9 @@ export function dependentsOf(
     for (const l of links) {
       if (deadLinks.has(l.id)) continue
       const doomed =
-        deadCurves.has(l.parentId) || (isCurveLink(l) && deadCurves.has(l.curveId))
+        deadCurves.has(l.parentId) ||
+        (isCurveLink(l) && deadCurves.has(l.curveId)) ||
+        (l.kind === 'area' && l.otherId !== undefined && deadCurves.has(l.otherId))
       if (!doomed) continue
       deadLinks.add(l.id)
       if (isCurveLink(l)) deadCurves.add(l.curveId)
@@ -156,7 +162,17 @@ export function overlaysFor(
     const parent = curveById(curves, l.parentId)
     if (!parent || !parent.visible) continue
     if (!(l.to > l.from)) continue
-    out.push({ kind: 'area', curveId: parent.id, from: l.from, to: l.to })
+    if (l.otherId === undefined) {
+      out.push({ kind: 'area', curveId: parent.id, from: l.from, to: l.to })
+      continue
+    }
+    // Between two curves, the second curve is a boundary of the region and not
+    // a decoration on it: gone or hidden, there is no region to draw, and
+    // falling back to the axis would shade a DIFFERENT region under the same
+    // two numbers. Same rule as the parent, for the same reason.
+    const other = curveById(curves, l.otherId)
+    if (!other || !other.visible) continue
+    out.push({ kind: 'area', curveId: parent.id, from: l.from, to: l.to, against: other.id })
   }
   for (const l of links) {
     if (l.kind !== 'riemann') continue
@@ -234,22 +250,44 @@ export interface AreaReadout {
  * "≈" and the sample count when the quadrature was numeric, "=" when a closed
  * form was used, and a refusal in words when the integral does not exist — a
  * finite number across a pole is the one answer that must never be printed.
+ *
+ * `other` is the second curve of an area BETWEEN curves, and the link's own
+ * `otherId` is what decides whether one is wanted: a link that names a second
+ * curve and is handed nothing says so ("the second curve is gone") rather than
+ * quietly reading out the area under f, which is a different region.
+ *
+ * The sentence names the integrand rather than the curves — "∫₀² (f − g)" —
+ * because the card already says which two curves those are, above it.
  */
 export function areaReadout(
   link: AreaLink,
   parent: FittedCurve | undefined,
   models: Record<string, ModelSpec>,
+  other?: FittedCurve,
 ): AreaReadout {
+  const sym = integralSymbol(link.from, link.to)
+  const between = link.otherId !== undefined
+  const body = between ? (link.abs ? ' |f − g|' : ' (f − g)') : ''
+  const lhs = between
+    ? `${sym}${body}`
+    : link.abs
+      ? `|${sym}|`
+      : sym
   const miss = (problem: string): AreaReadout => ({
-    text: `${integralSymbol(link.from, link.to)} = —`,
+    text: `${lhs} = —`,
     problem,
     samples: null,
     value: null,
   })
   if (!parent) return miss('the curve it was measuring is gone')
+  if (between && !other) return miss('the second curve is gone')
+
   let res: ReturnType<typeof areaUnder>
   try {
-    res = areaUnder(parent, models, link.from, link.to)
+    res =
+      between && other
+        ? areaBetween(parent, other, models, link.from, link.to, link.abs)
+        : areaUnder(parent, models, link.from, link.to)
   } catch {
     res = null
   }
@@ -258,17 +296,23 @@ export function areaReadout(
     // a sketch ends where its ink ends, and "a = -3.50 is outside …" tells
     // the teacher which chip to nudge. The pole sentence comes next, and the
     // bare "undefined on" is only for what is left.
-    const outside = limitOutsideDomain(parent, link.from, link.to)
+    const outside =
+      limitOutsideDomain(parent, link.from, link.to) ??
+      (other ? limitOutsideDomain(other, link.from, link.to, 'the second curve') : null)
     if (outside) return miss(outside)
-    const pole = poleBetween(parent, models, link.from, link.to)
+    const pole =
+      poleBetween(parent, models, link.from, link.to) ??
+      (other ? poleBetween(other, models, link.from, link.to) : null)
     return miss(
       pole === null
         ? `undefined on [${fixed(link.from, 2)}, ${fixed(link.to, 2)}]`
         : `undefined across the pole at x = ${fixed(pole, 2)}`,
     )
   }
-  const value = link.abs ? Math.abs(res.value) : res.value
-  const lhs = link.abs ? `|${integralSymbol(link.from, link.to)}|` : integralSymbol(link.from, link.to)
+  // areaBetween has already taken |f − g| piece by piece, which is the thing
+  // `abs` means between curves; taking |·| again here would be harmless but
+  // would also hide a sign the signed reading is entitled to.
+  const value = link.abs && !between ? Math.abs(res.value) : res.value
   return {
     text: `${lhs} ${res.exact ? '=' : '≈'} ${fixed(value, 3)}`,
     problem: null,
@@ -277,8 +321,19 @@ export function areaReadout(
   }
 }
 
-/** "a = -3.50 is outside this curve's domain [-3.42, 4.47]", or null. */
-function limitOutsideDomain(curve: FittedCurve, a: number, b: number): string | null {
+/**
+ * "a = -3.50 is outside this curve's domain [-3.42, 4.47]", or null.
+ *
+ * `noun` names WHICH curve the limit left: between two curves the region needs
+ * both of them, and "outside this curve's domain" on the card of the one the
+ * limit is comfortably inside is a sentence that sends a teacher hunting.
+ */
+function limitOutsideDomain(
+  curve: FittedCurve,
+  a: number,
+  b: number,
+  noun = 'this curve',
+): string | null {
   const d = curve.domain
   if (!d) return null
   const lo = Math.min(d[0], d[1])
@@ -288,7 +343,7 @@ function limitOutsideDomain(curve: FittedCurve, a: number, b: number): string | 
   const which = out(a) ? 'a' : out(b) ? 'b' : null
   if (!which) return null
   const v = which === 'a' ? a : b
-  return `${which} = ${fixed(v, 2)} is outside this curve's domain [${fixed(lo, 2)}, ${fixed(hi, 2)}]`
+  return `${which} = ${fixed(v, 2)} is outside ${noun}'s domain [${fixed(lo, 2)}, ${fixed(hi, 2)}]`
 }
 
 /**
@@ -545,6 +600,83 @@ export function defaultBounds(
 }
 
 /**
+ * [a, b] for a fresh area BETWEEN two curves.
+ *
+ * The region an AP question is about is almost always the one the curves
+ * enclose, so the opening interval runs from the first crossing in view to the
+ * last: outermost, not nearest, because two parabolas meeting at ±1 with a
+ * third crossing between them still bound ONE region and [−1, 1] is it.
+ *
+ * One crossing bounds nothing, so it gets a unit of room on each side — enough
+ * to see the two curves separate — and none at all falls back to the same rule
+ * `defaultBounds` uses, on the overlap of the two curves instead of one.
+ *
+ * Every case is clipped to where BOTH curves are: an interval reaching past
+ * the end of either sketch is a region with one boundary missing, and
+ * `areaBetween` would rightly refuse to put a number on it.
+ */
+export function defaultBetweenBounds(
+  parent: FittedCurve,
+  other: FittedCurve,
+  models: Record<string, ModelSpec>,
+  window: [number, number],
+): [number, number] {
+  const [alo, ahi] = spanOf(parent, window)
+  const [blo, bhi] = spanOf(other, window)
+  // Where both curves live, whether or not the board is looking at it.
+  const olo = Math.max(alo, blo)
+  const ohi = Math.min(ahi, bhi)
+  // The RESTRICTIONS, separately: a curve with no domain is everywhere, and
+  // must not be clipped to the window merely because that is where it was
+  // drawn. spanOf's window fallback is for choosing a region to open on; this
+  // is for refusing one the curve is not on.
+  const dlo = Math.max(domLo(parent), domLo(other))
+  const dhi = Math.min(domHi(parent), domHi(other))
+  const [wlo, whi] =
+    Number.isFinite(window?.[0]) && Number.isFinite(window?.[1]) && window[1] > window[0]
+      ? window
+      : [olo, ohi]
+  const vlo = Math.max(olo, wlo)
+  const vhi = Math.min(ohi, whi)
+
+  let hits: number[] = []
+  if (vhi > vlo) {
+    try {
+      hits = curveIntersections(parent, other, models, [vlo, vhi])
+    } catch {
+      hits = []
+    }
+  }
+
+  if (hits.length >= 2) {
+    return [round6(hits[0]), round6(hits[hits.length - 1])]
+  }
+  if (hits.length === 1) {
+    const x = hits[0]
+    // Clipped to the DOMAINS, not to the window: a teacher who zoomed in on
+    // the crossing still gets the region, and can pan to see the rest of it.
+    const lo = Math.max(x - 1, dlo)
+    const hi = Math.min(x + 1, dhi)
+    if (hi > lo) return [round6(lo), round6(hi)]
+    return [round6(x), round6(x)]
+  }
+
+  if (!(vhi > vlo)) {
+    // The two curves share no x the board is looking at. Hand back the overlap
+    // itself, or — when even that is empty — a degenerate interval, which
+    // reads as 0 rather than as a region that is not there.
+    return ohi > olo ? [round6(olo), round6(ohi)] : [round6(olo), round6(olo)]
+  }
+  // Round INWARD to halves, exactly as defaultBounds does, and never past the
+  // overlap: [-3.42, 4.47] must not become [-3.5, 4.5].
+  const slack = 1e-9 * Math.max(1, Math.abs(vlo), Math.abs(vhi))
+  const a = Math.ceil((vlo - slack) * 2) / 2
+  const b = Math.floor((vhi + slack) * 2) / 2
+  if (b - a >= 0.5) return [round6(Math.max(a, vlo)), round6(Math.min(b, vhi))]
+  return [round6(vlo), round6(vhi)]
+}
+
+/**
  * Carry an interval with the ends of its curve.
  *
  * A limit sitting ON an end of the sketch means "to the end": when the
@@ -555,6 +687,12 @@ export function defaultBounds(
  * pointing at nothing. `prev` maps curve id → the domain that curve had the
  * last time this ran; a curve missing from it is skipped (a freshly loaded
  * document, not a drag). Returns null when no link had to move.
+ *
+ * Between two curves the interval belongs to the INTERSECTION of the two
+ * domains: that is the only x-range where "the area between them" is a thing
+ * that exists, so shortening either sketch pulls the limits back, and an end
+ * sitting on the intersection's edge travels with whichever curve is currently
+ * making that edge.
  */
 export function followDomains(
   links: readonly CalcLink[],
@@ -568,8 +706,15 @@ export function followDomains(
     if (!prev.has(link.parentId)) return
     const parent = byId.get(link.parentId)
     if (!parent) return
-    const was = sorted(prev.get(link.parentId) ?? null)
-    const now = sorted(parent.domain)
+    const otherId = link.kind === 'area' ? link.otherId : undefined
+    const other = otherId === undefined ? undefined : byId.get(otherId)
+    if (otherId !== undefined && (!other || !prev.has(otherId))) return
+    const was = both(
+      sorted(prev.get(link.parentId) ?? null),
+      other ? sorted(prev.get(otherId as string) ?? null) : null,
+      other !== undefined,
+    )
+    const now = both(sorted(parent.domain), other ? sorted(other.domain) : null, other !== undefined)
     if (String(was) === String(now)) return
     const carry = (v: number): number => {
       let x = v
@@ -591,6 +736,40 @@ export function followDomains(
   })
   return out
 }
+
+/**
+ * The x-range two curves share: the intersection, with "no domain" meaning no
+ * restriction rather than an empty one. `pair` false is the one-curve case,
+ * where `b` is not a second domain but an absence.
+ *
+ * An empty intersection is reported as no restriction. The two sketches no
+ * longer overlap at all, and there is no honest place to put the limits: the
+ * readout will refuse in words, which is better than silently collapsing the
+ * region to a point on the way past.
+ */
+function both(
+  a: [number, number] | null,
+  b: [number, number] | null,
+  pair: boolean,
+): [number, number] | null {
+  if (!pair) return a
+  if (!a) return b
+  if (!b) return a
+  const lo = Math.max(a[0], b[0])
+  const hi = Math.min(a[1], b[1])
+  return hi > lo ? [lo, hi] : null
+}
+
+/** A curve's own x-restriction, as a half-line pair; ±Infinity when it has none. */
+const domLo = (c: FittedCurve): number =>
+  c.domain && Number.isFinite(c.domain[0]) && Number.isFinite(c.domain[1]) && c.domain[1] > c.domain[0]
+    ? c.domain[0]
+    : -Infinity
+
+const domHi = (c: FittedCurve): number =>
+  c.domain && Number.isFinite(c.domain[0]) && Number.isFinite(c.domain[1]) && c.domain[1] > c.domain[0]
+    ? c.domain[1]
+    : Infinity
 
 const sorted = (d: [number, number] | null): [number, number] | null =>
   d && Number.isFinite(d[0]) && Number.isFinite(d[1])
@@ -701,11 +880,18 @@ export interface AreaRow {
   from: number
   to: number
   abs: boolean
-  /** "∫₀² = 2.667" */
+  /** "∫₀² = 2.667", or "∫₀² |f − g| ≈ 2.828" between two curves. */
   text: string
   problem: string | null
   /** Integrand evaluations, when the value was found numerically. */
   samples: number | null
+  /**
+   * The OTHER curve's label, when this is an area between two curves, so the
+   * card can say "between f and g" without being handed the curves. Absent for
+   * the ordinary area to the x-axis — and absent, with a problem set, when the
+   * second curve is gone.
+   */
+  otherLabel?: string
 }
 
 export interface RiemannRow {
@@ -813,7 +999,8 @@ export function cardCalc(
       case 'area': {
         const here = slot(link.parentId)
         if (!here) break
-        const r = areaReadout(link, parent, models)
+        const other = link.otherId === undefined ? undefined : curveById(curves, link.otherId)
+        const r = areaReadout(link, parent, models, other)
         here.areas.push({
           linkId: link.id,
           from: link.from,
@@ -822,6 +1009,7 @@ export function cardCalc(
           text: r.text,
           problem: r.problem,
           samples: r.samples,
+          ...(other ? { otherLabel: nameOf(other) } : {}),
         })
         break
       }

@@ -4101,6 +4101,34 @@ button.card-eq {
   white-space: nowrap;
 }
 
+/* "Between y = x^2 and y = 2 - x^2": two equations, not a number, so it keeps
+   the mono of the readout but is allowed to wrap rather than force the card
+   wide. The number itself goes on the line beneath. */
+.calc-between {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* The readout when it has a line of its own (between two curves): indented
+   under the sentence that said WHICH two. */
+.calc-line-read {
+  padding-left: var(--sp-2);
+}
+
+/* This curve is the far side of somebody else's region. Stated, not offered:
+   quiet type, no controls, and a pointer to the card that owns it. */
+.calc-row-quiet .calc-tag,
+.calc-read-quiet {
+  color: var(--faint);
+}
+
+.calc-read-quiet {
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .calc-drop {
   flex: 0 0 auto;
   width: 20px;

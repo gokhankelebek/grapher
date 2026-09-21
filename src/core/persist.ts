@@ -584,6 +584,8 @@ export interface StoredCalcLink {
   kind: CalcKind
   id: string
   parentId: string
+  /** Area between two curves only; absent means the region runs to the axis. */
+  otherId?: string
   curveId?: string
   x?: number
   from?: number
@@ -1068,6 +1070,10 @@ export function calcLinkToStored(l: CalcLink): StoredCalcLink {
         kind: 'area',
         id: l.id,
         parentId: l.parentId,
+        // Written only when it is there. An area to the x-axis is the area to
+        // the x-axis, and an absent second curve must not become `otherId:
+        // undefined` in the bytes of every document that never had one.
+        ...(l.otherId !== undefined && l.otherId !== '' ? { otherId: l.otherId } : {}),
         from: l.from,
         to: l.to,
         // false is the default, so it is not written: an unsigned toggle
@@ -1103,9 +1109,22 @@ export function storedToCalcLink(raw: unknown): CalcLink | null {
     case 'derivative':
       if (!isStr(curveId) || !curveId) return null
       return { kind: 'derivative', id, parentId, curveId }
-    case 'area':
+    case 'area': {
       if (!isNum(raw.from) || !isNum(raw.to)) return null
-      return { kind: 'area', id, parentId, from: raw.from, to: raw.to, abs: raw.abs === true }
+      // A second curve that is not a usable id is no second curve: the link
+      // still describes the area under the parent, which is the region the
+      // rest of its own numbers were measured on.
+      const otherId = isStr(raw.otherId) && raw.otherId ? raw.otherId : undefined
+      return {
+        kind: 'area',
+        id,
+        parentId,
+        ...(otherId ? { otherId } : {}),
+        from: raw.from,
+        to: raw.to,
+        abs: raw.abs === true,
+      }
+    }
     case 'riemann':
       if (!isNum(raw.from) || !isNum(raw.to)) return null
       return {
@@ -1561,6 +1580,15 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
       if (!curveIds.has(link.parentId)) {
         problems.push(
           `A ${calcNoun(link.kind)} was dropped: the curve it belonged to is no longer in this document.`,
+        )
+        degraded = true
+        continue
+      }
+      if (link.kind === 'area' && link.otherId !== undefined && !curveIds.has(link.otherId)) {
+        // The same loss as a missing parent, and reported the same way: the
+        // region between f and a curve that is gone is not the region under f.
+        problems.push(
+          `A ${calcNoun(link.kind)} was dropped: the second curve it was measured against is no longer in this document.`,
         )
         degraded = true
         continue

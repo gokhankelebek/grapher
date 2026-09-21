@@ -13,7 +13,8 @@ import type { FittedCurve, ModelSpec } from '../src/core/types'
 import { MODELS } from '../src/core/fit/models'
 import { parseExpression } from '../src/core/parse/index'
 import {
-  tangentAt, derivativeModel, areaUnder, riemann, hasExactDerivative,
+  tangentAt, derivativeModel, areaUnder, areaBetween, curveIntersections,
+  riemann, hasExactDerivative,
   type RiemannMethod,
 } from '../src/core/calculus'
 
@@ -823,6 +824,177 @@ describe('closed form vs. brute force', () => {
 // Performance — this runs while a slider is being dragged
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Area between two curves
+//
+// Every number here is an AP exercise done by hand. ∫₀¹ (x − x²) = 1/2 − 1/3
+// = 1/6. ∫₀^π (sin − cos) = [−cos − sin]₀^π = (1 − 0) − (−1 − 0) = 2, while
+// ∫₀^π |sin − cos| splits at π/4, where the two cross, into (√2 − 1) + (√2 + 1)
+// = 2√2 — which is exactly the difference the split makes, since the signed
+// integral is 2 and the unsigned one is 2.83.
+// ---------------------------------------------------------------------------
+
+describe('areaBetween', () => {
+  /** y = x², y = x, y = 2 − x², y = sin x, y = cos x, y = 1/x. */
+  const sq = curve('poly2', [0, 0, 1])
+  const lin = curve('line', [0, 1])
+  const capped = curve('poly2', [2, 0, -1])
+  const sin = curve('sine', [1, 1, 0, 0])
+  const cos = curve('sine', [1, 1, Math.PI / 2, 0])
+  const recip = curve('recip', [1, 0, 0])
+
+  it('x and x² on [0, 1] is 1/6, in closed form', () => {
+    const r = areaBetween(lin, sq, MODELS, 0, 1, false)!
+    expect(r).not.toBeNull()
+    expect(r.value).toBeCloseTo(1 / 6, 14)
+    expect(r.exact).toBe(true)
+    expect(r.samples).toBeUndefined()
+  })
+
+  it('names the parent as f: x² minus x is the same area, negative', () => {
+    const r = areaBetween(sq, lin, MODELS, 0, 1, false)!
+    expect(r.value).toBeCloseTo(-1 / 6, 14)
+    expect(r.exact).toBe(true)
+    // |f − g| does not care which curve was asked first.
+    expect(areaBetween(sq, lin, MODELS, 0, 1, true)!.value).toBeCloseTo(1 / 6, 14)
+    expect(areaBetween(lin, sq, MODELS, 0, 1, true)!.value).toBeCloseTo(1 / 6, 14)
+  })
+
+  it('b < a flips the sign, with and without |·|', () => {
+    expect(areaBetween(lin, sq, MODELS, 1, 0, false)!.value).toBeCloseTo(-1 / 6, 14)
+    expect(areaBetween(lin, sq, MODELS, 1, 0, true)!.value).toBeCloseTo(-1 / 6, 14)
+  })
+
+  it('a = b is zero area, not a refusal', () => {
+    const r = areaBetween(lin, sq, MODELS, 2, 2, true)!
+    expect(r.value).toBe(0)
+    expect(r.exact).toBe(true)
+  })
+
+  it('∫(sin − cos) on [0, π] is 2, numerically', () => {
+    const r = areaBetween(sin, cos, MODELS, 0, Math.PI, false)!
+    expect(r).not.toBeNull()
+    expect(r.value).toBeCloseTo(2, 9)
+    expect(r.exact).toBe(false)
+    expect(r.samples).toBeGreaterThan(0)
+  })
+
+  it('∫|sin − cos| on [0, π] is 2√2 — the split at π/4 is what makes it so', () => {
+    const r = areaBetween(sin, cos, MODELS, 0, Math.PI, true)!
+    expect(r.value).toBeCloseTo(2 * Math.SQRT2, 9)
+    expect(r.exact).toBe(false)
+    // Not the same number as the signed integral, and not |signed| either:
+    // the cancellation either side of π/4 is exactly what |·| undoes.
+    expect(Math.abs(r.value - 2)).toBeGreaterThan(0.8)
+  })
+
+  it('x² and 2 − x² enclose 8/3 between their crossings', () => {
+    expect(areaBetween(sq, capped, MODELS, -1, 1, true)!.value).toBeCloseTo(8 / 3, 13)
+    // x² is the LOWER curve there, so f − g is negative all the way across.
+    expect(areaBetween(sq, capped, MODELS, -1, 1, false)!.value).toBeCloseTo(-8 / 3, 13)
+    expect(areaBetween(capped, sq, MODELS, -1, 1, false)!.value).toBeCloseTo(8 / 3, 13)
+  })
+
+  it('refuses across a pole of EITHER curve', () => {
+    // 1/x blows up at 0; y = x is perfectly well behaved, and does not make
+    // the integral exist.
+    expect(areaBetween(recip, lin, MODELS, -1, 2, false)).toBeNull()
+    expect(areaBetween(recip, lin, MODELS, -1, 2, true)).toBeNull()
+    expect(areaBetween(lin, recip, MODELS, -1, 2, false)).toBeNull()
+    // Clear of the pole it is an ordinary integral again.
+    expect(areaBetween(recip, lin, MODELS, 1, 2, false)).not.toBeNull()
+  })
+
+  it('refuses outside either curve’s own domain', () => {
+    const half = curve('line', [0, 1], [0, 3])
+    expect(areaBetween(sq, half, MODELS, -1, 2, false)).toBeNull()
+    expect(areaBetween(half, sq, MODELS, -1, 2, false)).toBeNull()
+    expect(areaBetween(half, sq, MODELS, 0, 3, false)).not.toBeNull()
+  })
+
+  it('refuses a curve that is not a function of x', () => {
+    const circle = curve('circle', [0, 0, 2])
+    expect(areaBetween(sq, circle, MODELS, 0, 1, false)).toBeNull()
+    expect(areaBetween(circle, sq, MODELS, 0, 1, false)).toBeNull()
+  })
+
+  it('works against a typed expression, numerically', () => {
+    const { curve: c, models } = typed('y = sin(x)')
+    const zero = curve('line', [0, 0])
+    const r = areaBetween(c, zero, { ...models }, 0, Math.PI, false)!
+    expect(r.value).toBeCloseTo(2, 8)
+    expect(r.exact).toBe(false)
+    expect(allFinite(r as unknown as Record<string, unknown>)).toBe(true)
+  })
+
+  it('agrees with areaUnder when the other curve is the x-axis', () => {
+    const axis = curve('line', [0, 0])
+    const cubic = curve('poly3', [0, -4, 0, 1])
+    for (const [a, b] of [[0, 2], [-2, 2], [1, 3]] as Array<[number, number]>) {
+      expect(areaBetween(cubic, axis, MODELS, a, b, false)!.value).toBeCloseTo(
+        areaUnder(cubic, MODELS, a, b)!.value,
+        12,
+      )
+    }
+  })
+})
+
+describe('curveIntersections', () => {
+  const sq = curve('poly2', [0, 0, 1])
+  const lin = curve('line', [0, 1])
+  const capped = curve('poly2', [2, 0, -1])
+  const sin = curve('sine', [1, 1, 0, 0])
+  const cos = curve('sine', [1, 1, Math.PI / 2, 0])
+  const recip = curve('recip', [1, 0, 0])
+
+  it('finds both crossings of x² and 2 − x², sorted', () => {
+    const xs = curveIntersections(sq, capped, MODELS, [-4, 4])
+    expect(xs).toHaveLength(2)
+    expect(xs[0]).toBeCloseTo(-1, 12)
+    expect(xs[1]).toBeCloseTo(1, 12)
+  })
+
+  it('finds sin = cos at π/4 on [0, π]', () => {
+    const xs = curveIntersections(sin, cos, MODELS, [0, Math.PI])
+    expect(xs).toHaveLength(1)
+    expect(xs[0]).toBeCloseTo(Math.PI / 4, 9)
+  })
+
+  it('counts a tangency once', () => {
+    // x² and 2x − 1 touch at x = 1 without crossing: (x − 1)².
+    const tangentLine = curve('line', [-1, 2])
+    const xs = curveIntersections(sq, tangentLine, MODELS, [-4, 4])
+    expect(xs).toHaveLength(1)
+    expect(xs[0]).toBeCloseTo(1, 9)
+  })
+
+  it('reports no crossing where there is none', () => {
+    expect(curveIntersections(sq, curve('line', [-3, 0]), MODELS, [-4, 4])).toEqual([])
+    // Two identical curves cross everywhere, which is not a list of points.
+    expect(curveIntersections(sq, curve('poly2', [0, 0, 1]), MODELS, [-4, 4])).toEqual([])
+  })
+
+  it('never reports the pole as a crossing', () => {
+    // 1/x = x at ±1. At x = 0 the difference changes sign through infinity,
+    // which is the sign change a naive scan would call a root.
+    const xs = curveIntersections(recip, lin, MODELS, [-3, 3])
+    expect(xs.some((x) => Math.abs(x) < 0.5)).toBe(false)
+    expect(xs.map((x) => Math.round(x * 1e6) / 1e6)).toEqual([-1, 1])
+  })
+
+  it('clips to both domains', () => {
+    const right = curve('line', [0, 1], [0.5, 4])
+    // x and x² meet at 0 and 1; only 1 is on the restricted line.
+    const xs = curveIntersections(sq, right, MODELS, [-4, 4])
+    expect(xs).toHaveLength(1)
+    expect(xs[0]).toBeCloseTo(1, 12)
+  })
+
+  it('is empty for a curve that is not a function of x', () => {
+    expect(curveIntersections(sq, curve('circle', [0, 0, 2]), MODELS, [-4, 4])).toEqual([])
+  })
+})
+
 describe('performance', () => {
   // Best of five: the budget is about the code, not about what else the test
   // runner is doing on the machine at that instant — a single timing under a
@@ -860,6 +1032,31 @@ describe('performance', () => {
     const ms = bestOf(() => {
       for (let i = 0; i < 100; i++) areaUnder(curve('poly3', [1, 2, 3, 4]), MODELS, -2, 2)
     })
+    expect(ms).toBeLessThan(2)
+  })
+
+  it('areaBetween on a typed expression and a curve is under 2ms', () => {
+    const { curve: f, models } = typed('y = sin(x)*e^(x/3) + x^2')
+    const g = curve('sine', [2, 1.3, 0.4, 1])
+    for (let i = 0; i < 3; i++) areaBetween(f, g, models, -3, 3, false)
+    expect(areaBetween(f, g, models, -3, 3, false)).not.toBeNull()
+    const ms = bestOf(() => areaBetween(f, g, models, -3, 3, false))
+    expect(ms).toBeLessThan(2)
+  })
+
+  it('the |f − g| path, split at every crossing, is under 2ms', () => {
+    const { curve: f, models } = typed('y = sin(x)*e^(x/3) + x^2')
+    const g = curve('sine', [2, 1.3, 0.4, 1])
+    for (let i = 0; i < 3; i++) areaBetween(f, g, models, -3, 3, true)
+    const r = areaBetween(f, g, models, -3, 3, true)!
+    expect(r).not.toBeNull()
+    // The split really happened: |f − g| is strictly more than |∫(f − g)|
+    // when the curves cross, and these two cross three times on [-3, 3].
+    expect(curveIntersections(f, g, models, [-3, 3]).length).toBeGreaterThan(1)
+    expect(r.value).toBeGreaterThan(
+      Math.abs(areaBetween(f, g, models, -3, 3, false)!.value),
+    )
+    const ms = bestOf(() => areaBetween(f, g, models, -3, 3, true))
     expect(ms).toBeLessThan(2)
   })
 

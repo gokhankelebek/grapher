@@ -24,6 +24,8 @@ import type { AreaLink, BoardInput, CalcLink, DocMeta } from '../src/core/persis
 import {
   areaReadout,
   cardCalc,
+  countPhrase,
+  defaultBetweenBounds,
   defaultBounds,
   dependentsOf,
   followDomains,
@@ -679,5 +681,326 @@ describe('areaReadout — a limit off the end of a sketch', () => {
     const r = areaReadout(link, parent, MODELS)
     expect(r.value).toBeNull()
     expect(r.problem).toBe("a = −3.50 is outside this curve's domain [−3.42, 4.47]")
+  })
+})
+
+
+// ===========================================================================
+// Area between two curves
+//
+// The mathematics is tested in tests/calculus.test.ts. What is tested here is
+// the LINK: that a second curve reaches the readout, the shading, the card,
+// the dependents and the file — and that losing it is reported rather than
+// quietly turning the region into the area under f, which is a different
+// region with a different number.
+// ===========================================================================
+
+/** y = 2 − x², the other half of the board's ±1 example. */
+function capped(id = 'h'): FittedCurve {
+  return {
+    id,
+    modelId: 'poly2',
+    params: [2, 0, -1],
+    kind: 'explicit',
+    domain: null,
+    color: '#f5a524',
+    strokeWidth: 2.5,
+    visible: true,
+    error: 0,
+  }
+}
+
+const between = (over: Partial<AreaLink> = {}): AreaLink => ({
+  kind: 'area',
+  id: 'B',
+  parentId: 'g',
+  otherId: 'h',
+  from: -1,
+  to: 1,
+  abs: true,
+  ...over,
+})
+
+describe('areaReadout between two curves', () => {
+  it('reads ∫ (f − g) for the signed integral and ∫ |f − g| for the area', () => {
+    const f = square()          // y = x²
+    const g = capped()          // y = 2 − x²
+    const signed = areaReadout(between({ abs: false }), f, MODELS, g)
+    expect(signed.problem).toBeNull()
+    expect(signed.text).toBe('∫ (f − g) = −2.667')
+    expect(signed.value).toBeCloseTo(-8 / 3, 12)
+
+    const area = areaReadout(between({ abs: true }), f, MODELS, g)
+    expect(area.text).toBe('∫ |f − g| = 2.667')
+    expect(area.value).toBeCloseTo(8 / 3, 12)
+  })
+
+  it('writes the bounds into the symbol when they are small whole numbers', () => {
+    const r = areaReadout(between({ from: 0, to: 2, abs: false }), square(), MODELS, capped())
+    expect(r.text.startsWith('∫₀² (f − g)')).toBe(true)
+  })
+
+  it('says ≈ and counts samples when the pair had to be integrated', () => {
+    const sin: FittedCurve = { ...square(), id: 's', modelId: 'sine', params: [1, 1, 0, 0] }
+    const cos: FittedCurve = { ...square(), id: 'c', modelId: 'sine', params: [1, 1, Math.PI / 2, 0] }
+    const link = between({ parentId: 's', otherId: 'c', from: 0, to: Math.PI, abs: true })
+    const r = areaReadout(link, sin, MODELS, cos)
+    expect(r.text).toBe('∫ |f − g| ≈ 2.828')
+    expect(r.value).toBeCloseTo(2 * Math.SQRT2, 9)
+    expect(r.samples).toBeGreaterThan(0)
+  })
+
+  it('names the missing curve rather than reading out the area under f', () => {
+    const r = areaReadout(between(), square(), MODELS, undefined)
+    expect(r.value).toBeNull()
+    expect(r.problem).toBe('the second curve is gone')
+    expect(r.text).toBe('∫ |f − g| = —')
+  })
+
+  it('names WHICH domain a limit left', () => {
+    const f = square()
+    const g: FittedCurve = { ...capped(), domain: [-0.5, 0.5] }
+    const r = areaReadout(between({ abs: false }), f, MODELS, g)
+    expect(r.value).toBeNull()
+    expect(r.problem).toBe("a = −1.00 is outside the second curve's domain [−0.50, 0.50]")
+  })
+
+  it('refuses across a pole of the second curve, naming it', () => {
+    const recip: FittedCurve = { ...capped(), id: 'h', modelId: 'recip', params: [1, 0, 0] }
+    const r = areaReadout(between({ from: -1, to: 2, abs: false }), square(), MODELS, recip)
+    expect(r.value).toBeNull()
+    expect(r.problem).toContain('pole at x = 0.00')
+  })
+
+  it('leaves the area-to-the-axis sentence exactly as it was', () => {
+    const plain = { kind: 'area', id: 'A', parentId: 'g', from: 0, to: 2, abs: false } as AreaLink
+    expect(areaReadout(plain, square(), MODELS).text).toBe('∫₀² = 2.667')
+  })
+})
+
+describe('the overlay is shaded BETWEEN the curves', () => {
+  it('passes the second curve through as the overlay’s other boundary', () => {
+    const f = square()
+    const g = capped()
+    const out = overlaysFor([between()], [f, g], MODELS)
+    expect(out).toEqual([{ kind: 'area', curveId: 'g', from: -1, to: 1, against: 'h' }])
+  })
+
+  it('draws nothing when the second curve is gone or hidden', () => {
+    const f = square()
+    expect(overlaysFor([between()], [f], MODELS)).toEqual([])
+    const hidden: FittedCurve = { ...capped(), visible: false }
+    expect(overlaysFor([between()], [f, hidden], MODELS)).toEqual([])
+  })
+
+  it('still shades to the axis for a link with no second curve', () => {
+    const plain = { kind: 'area', id: 'A', parentId: 'g', from: 0, to: 2, abs: false } as AreaLink
+    const out = overlaysFor([plain], [square()], MODELS)
+    expect(out[0]).toEqual({ kind: 'area', curveId: 'g', from: 0, to: 2 })
+    expect('against' in out[0]).toBe(false)
+  })
+})
+
+describe('a between-link is a dependent of BOTH curves', () => {
+  const links: CalcLink[] = [
+    between(),
+    { kind: 'area', id: 'A', parentId: 'g', from: 0, to: 1, abs: false },
+  ]
+
+  it('dies when the second curve is deleted', () => {
+    const dead = dependentsOf(links, ['h'])
+    expect([...dead.linkIds]).toEqual(['B'])
+    expect([...dead.curveIds].sort()).toEqual(['h'])
+  })
+
+  it('still dies with its parent', () => {
+    expect([...dependentsOf(links, ['g']).linkIds].sort()).toEqual(['A', 'B'])
+  })
+
+  it('is counted by the toast, like any other object', () => {
+    const n = dependentsOf(links, ['h']).linkIds.size
+    expect(countPhrase(n, 'object')).toBe('1 object')
+  })
+})
+
+describe('defaultBetweenBounds', () => {
+  const win: [number, number] = [-6, 6]
+
+  it('opens on the outermost crossings in view', () => {
+    const b = defaultBetweenBounds(square(), capped(), MODELS, win)
+    expect(b[0]).toBeCloseTo(-1, 9)
+    expect(b[1]).toBeCloseTo(1, 9)
+  })
+
+  it('gives one crossing a unit of room on each side', () => {
+    // x and x² meet at 0 and 1; a window of [0.5, 6] sees only x = 1.
+    const b = defaultBetweenBounds(square(), line('g', 0, 1), MODELS, [0.5, 6])
+    expect(b).toEqual([0, 2])
+  })
+
+  it('clips that room to both domains', () => {
+    const short: FittedCurve = { ...line('g', 0, 1), domain: [0.6, 1.4] }
+    const b = defaultBetweenBounds(square(), short, MODELS, [0.5, 6])
+    expect(b[0]).toBeCloseTo(0.6, 9)
+    expect(b[1]).toBeCloseTo(1.4, 9)
+  })
+
+  it('falls back to the overlap of both domains, rounded inward to halves', () => {
+    const a: FittedCurve = { ...square(), domain: [-3.42, 4.47] }
+    const b: FittedCurve = { ...line('g', -1, 0), domain: [-1.2, 9] }  // y = −1: never met
+    expect(defaultBetweenBounds(a, b, MODELS, win)).toEqual([-1, 4])
+  })
+
+  it('never opens on a window either curve is not on', () => {
+    const a: FittedCurve = { ...square(), domain: [0, 2] }
+    const b: FittedCurve = { ...line('g', -1, 0), domain: [1, 5] }
+    const [from, to] = defaultBetweenBounds(a, b, MODELS, win)
+    expect(from).toBeGreaterThanOrEqual(1)
+    expect(to).toBeLessThanOrEqual(2)
+  })
+})
+
+describe('followDomains clamps a between-link into both domains', () => {
+  const dom = (f: [number, number] | null, g: [number, number] | null) => [
+    { ...square(), domain: f },
+    { ...capped(), domain: g },
+  ]
+  const prev2 = (
+    f: [number, number] | null,
+    g: [number, number] | null,
+  ): Map<string, [number, number] | null> => new Map([['g', f], ['h', g]])
+
+  it('pulls a limit back when the SECOND sketch shrinks past it', () => {
+    const next = followDomains(
+      [between({ from: -1, to: 1, abs: true })],
+      prev2([-3, 3], [-3, 3]),
+      dom([-3, 3], [-3, 0.4]),
+    )
+    expect(next?.[0]).toMatchObject({ from: -1, to: 0.4 })
+  })
+
+  it('carries a limit sitting on the edge of the overlap', () => {
+    // b was ON the overlap's right end (the second curve's); extending that
+    // curve takes b with it, up to where the FIRST curve now ends.
+    const next = followDomains(
+      [between({ from: -2, to: 2, abs: true })],
+      prev2([-4, 4], [-2, 2]),
+      dom([-4, 4], [-2, 3]),
+    )
+    expect(next?.[0]).toMatchObject({ from: -2, to: 3 })
+  })
+
+  it('does nothing while it has not seen both curves before', () => {
+    const links = [between({ from: -1, to: 1 })]
+    expect(followDomains(links, new Map([['g', [-3, 3] as [number, number]]]), dom([-3, 3], [-3, 0.4]))).toBeNull()
+  })
+
+  it('does nothing when neither domain moved', () => {
+    expect(
+      followDomains([between({ from: -1, to: 1 })], prev2([-3, 3], [-3, 3]), dom([-3, 3], [-3, 3])),
+    ).toBeNull()
+  })
+})
+
+describe('the card says which two curves', () => {
+  it('hands the other curve’s label to the area row', () => {
+    const f = square()
+    const g = capped()
+    const cards = cardCalc([between()], [f, g], MODELS, nameOf)
+    const row = cards['g'].areas[0]
+    expect(row.otherLabel).toBe(nameOf(g))
+    expect(row.text).toBe('∫ |f − g| = 2.667')
+    expect(row.problem).toBeNull()
+    // The row lives on the PARENT's card, as every area row does.
+    expect(cards['h'].areas).toEqual([])
+  })
+
+  it('leaves otherLabel off an ordinary area, and off a lost second curve', () => {
+    const plain = { kind: 'area', id: 'A', parentId: 'g', from: 0, to: 2, abs: false } as AreaLink
+    expect(cardCalc([plain], [square()], MODELS, nameOf)['g'].areas[0].otherLabel).toBeUndefined()
+    const orphan = cardCalc([between()], [square()], MODELS, nameOf)['g'].areas[0]
+    expect(orphan.otherLabel).toBeUndefined()
+    expect(orphan.problem).toBe('the second curve is gone')
+  })
+})
+
+describe('otherId survives the file', () => {
+  it('round-trips with the second curve named', () => {
+    const links: CalcLink[] = [between({ from: -1, to: 1, abs: true })]
+    const input = board({ curves: [square(), capped()], calc: links })
+    const res = deserializeDoc(serializeDoc(docFromBoard(META, input, 2000)))
+    expect(res.problems).toEqual([])
+    expect(res.board!.calc).toEqual(links)
+  })
+
+  it('writes otherId only when it is there', () => {
+    const stored = boardToStored(
+      board({
+        curves: [square(), capped()],
+        calc: [
+          between({ id: 'B', from: -1, to: 1, abs: true }),
+          { kind: 'area', id: 'A', parentId: 'g', from: 0, to: 2, abs: false },
+        ],
+      }),
+    )
+    expect(stored.calc![0]).toEqual({
+      kind: 'area',
+      id: 'B',
+      parentId: 'g',
+      otherId: 'h',
+      from: -1,
+      to: 1,
+      abs: true,
+    })
+    expect('otherId' in stored.calc![1]).toBe(false)
+  })
+
+  it('is byte-identical for a document that never had one', () => {
+    const plain = board({
+      curves: [cubic(), square()],
+      calc: [{ kind: 'area', id: 'A', parentId: 'g', from: 0, to: 2, abs: false }],
+    })
+    const before = '{"kind":"area","id":"A","parentId":"g","from":0,"to":2}'
+    const text = serializeDoc(docFromBoard(META, plain, 2000))
+    expect(text).toContain(before)
+    expect(text).not.toContain('otherId')
+  })
+
+  it('drops the link and reports it when the second curve is not in the document', () => {
+    const res = deserializeDoc(
+      serializeDoc(
+        createDoc(
+          'Lesson',
+          boardToStored(
+            board({ curves: [square()], calc: [between({ otherId: 'vanished' })] }),
+          ),
+        ),
+      ),
+    )
+    expect(res.board!.calc).toEqual([])
+    expect(res.degraded).toBe(true)
+    expect(res.problems.join(' ')).toContain('shaded area')
+    expect(res.problems.join(' ')).toContain('second curve')
+  })
+
+  it('ignores an otherId that is not a usable id, keeping the area under f', () => {
+    const raw = {
+      version: 2,
+      id: 'd',
+      name: 'n',
+      createdAt: 1,
+      modifiedAt: 1,
+      board: {
+        curves: [square()],
+        viewport: { cx: 0, cy: 0, ppu: 60 },
+        selectedId: null,
+        mode: 'draw',
+        calc: [{ kind: 'area', id: 'A', parentId: 'g', otherId: 42, from: 0, to: 2 }],
+      },
+    }
+    const res = deserializeDoc(JSON.stringify(raw))
+    expect(res.board!.calc).toEqual([
+      { kind: 'area', id: 'A', parentId: 'g', from: 0, to: 2, abs: false },
+    ])
   })
 })
