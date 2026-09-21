@@ -263,6 +263,7 @@ export type SpecialPointKind =
   | 'extreme'      // closed/polar curves: leftmost, rightmost, top, bottom
   | 'petal-tip'    // polar: local maximum of |r|
   | 'hole'         // removable discontinuity: f undefined at x, finite two-sided limit (pos = the limit)
+  | 'intersection' // where this curve meets another (SpecialPoint.withId names the other)
 
 export interface SpecialPoint {
   kind: SpecialPointKind
@@ -278,6 +279,14 @@ export interface SpecialPoint {
    */
   exactX?: string
   exactY?: string
+  /**
+   * For kind 'intersection': the id of the other curve. Produced by
+   * src/core/analyze.ts intersectionPoints(parent, other, models, range),
+   * which lists the points where parent and other meet inside `range`,
+   * exact forms verified against f − g, one SpecialPoint per meeting point
+   * (tangencies once), never a pole.
+   */
+  withId?: string
   /**
    * True when the location is known in closed form (a line's root, a
    * parabola's vertex) rather than located numerically. Lets the UI avoid

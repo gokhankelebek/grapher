@@ -1481,6 +1481,7 @@ function kindLabel(k: SpecialPointKind): string {
     case 'extreme': return 'edge point'
     case 'petal-tip': return 'petal tip'
     case 'hole': return 'hole'
+    case 'intersection': return 'intersection'
   }
 }
 
