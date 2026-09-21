@@ -37,6 +37,7 @@ import {
   TOUCH_PAN_SLOP,
   classifyPointerDown,
   classifyWheel,
+  wheelZoomFactor,
   hitRadii,
   penGuardActive,
   pointerKind,
@@ -44,7 +45,7 @@ import {
   tipPlacement,
   wheelPanDelta,
 } from './gestures'
-import type { DrawIntent, HitRadii, PointerKind } from './gestures'
+import type { DrawIntent, HitRadii, PointerKind, WheelPref } from './gestures'
 import { sampleCurveScreen, distToPolyline } from './sample'
 import { formatCoord } from './numeric'
 import { axesPhrase, axisKeys, featureAxes } from './featureEdit'
@@ -102,6 +103,8 @@ interface Props {
    * target part company the moment a teacher projects.
    */
   present?: PaintScale | null
+  /** What a plain mouse wheel does; 'auto' tells a wheel from a trackpad. */
+  wheelPref?: WheelPref
   /**
    * How each axis is measured — 'decimal' or 'pi', per axis. Absent means the
    * decimal grid, so a caller that never mentions it draws what it always drew.
@@ -424,6 +427,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     models,
     theme,
     present,
+    wheelPref,
     axisUnits,
     selectedId,
     mode,
@@ -881,6 +885,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   }, [])
 
   // ------------------------------------------------------------------- wheel
+  const wheelPrefRef = useRef<WheelPref>(wheelPref ?? 'auto')
+  wheelPrefRef.current = wheelPref ?? 'auto'
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
@@ -889,7 +895,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       const vp = vpRef.current
       const rect = canvas.getBoundingClientRect()
       const pos = { x: e.clientX - rect.left, y: e.clientY - rect.top }
-      if (classifyWheel(e) === 'pan') {
+      if (classifyWheel(e, wheelPrefRef.current) === 'pan') {
         // A two-finger scroll is a SCROLL. Treating it as zoom meant a Mac
         // trackpad rescaled the whole board while the teacher thought they
         // were moving along the x-axis — and rescaling is not undoable.
@@ -901,7 +907,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       } else {
         // Zoom: trackpad pinch (which browsers deliver as a ctrlKey wheel) and
         // the explicit modifier. Still anchored on the cursor.
-        const factor = Math.exp(-e.deltaY * (e.ctrlKey ? 0.012 : 0.0018))
+        const factor = wheelZoomFactor(e)
         const anchor = toMath(pos, vp)
         vp.pxPerUnit = clampPpu(vp.pxPerUnit * factor)
         vp.center = {

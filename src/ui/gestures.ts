@@ -118,12 +118,64 @@ export function classifyPointerDown(i: {
 export const penGuardActive = (lastPenAt: number, now: number): boolean =>
   now - lastPenAt < PEN_GUARD_MS
 
+/** What a plain mouse wheel does. 'auto' tells a wheel from a trackpad. */
+export type WheelPref = 'auto' | 'zoom' | 'pan'
+
+export interface WheelLike {
+  ctrlKey: boolean
+  metaKey: boolean
+  shiftKey?: boolean
+  deltaX?: number
+  deltaY?: number
+  deltaMode?: number
+}
+
 /**
- * A plain (or two-axis) wheel is a SCROLL, and must pan. Only a pinch — which
- * browsers deliver as a ctrlKey wheel — or an explicit modifier zooms.
+ * Is this wheel event a MOUSE WHEEL rather than a trackpad scroll?
+ *
+ * A wheel clicks in notches: one axis, whole numbers (Windows ±100, Firefox
+ * lines, macOS ±4·k). A trackpad scroll is a gesture: fractional deltas,
+ * momentum, and usually a little of the other axis. The threshold of 4 keeps
+ * a slow two-finger scroll that happens to land on an integer 1, 2 or 3 from
+ * being read as a notch.
  */
-export const classifyWheel = (e: { ctrlKey: boolean; metaKey: boolean }): 'zoom' | 'pan' =>
-  e.ctrlKey || e.metaKey ? 'zoom' : 'pan'
+export const looksLikeMouseWheel = (e: WheelLike): boolean => {
+  const dx = e.deltaX ?? 0
+  const dy = e.deltaY ?? 0
+  if (e.deltaMode !== undefined && e.deltaMode !== 0) return true
+  if (dx !== 0) return false
+  return Number.isInteger(dy) && Math.abs(dy) >= 4
+}
+
+/**
+ * A pinch (delivered as a ctrlKey wheel) or ⌘-wheel always zooms; shift-wheel
+ * always scrolls. Otherwise a mouse wheel zooms — as it does in Desmos and
+ * GeoGebra — and a trackpad's two-finger scroll pans, because rescaling the
+ * board while the teacher meant to move along the x-axis is not undoable.
+ * `pref` overrides the guess for hardware it gets wrong.
+ */
+export const classifyWheel = (e: WheelLike, pref: WheelPref = 'auto'): 'zoom' | 'pan' => {
+  if (e.ctrlKey || e.metaKey) return 'zoom'
+  if (e.shiftKey) return 'pan'
+  if (pref === 'zoom') return 'zoom'
+  if (pref === 'pan') return 'pan'
+  return looksLikeMouseWheel(e) ? 'zoom' : 'pan'
+}
+
+/**
+ * Zoom factor for one wheel event, anchored on the cursor by the caller.
+ * A pinch is gentle per event (the browser sends many); a mouse notch is
+ * capped at one hundred units so Windows (±100) and macOS (±4·k, several
+ * events per notch) both land near a quarter-step per click; a modifier
+ * wheel on a trackpad sits in between.
+ */
+export function wheelZoomFactor(e: WheelLike): number {
+  const dy = Number.isFinite(e.deltaY ?? 0) ? (e.deltaY ?? 0) : 0
+  if (e.ctrlKey) return Math.exp(-dy * 0.012)
+  const unit = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 100 : 1
+  const notch = Math.max(-100, Math.min(100, dy * unit)) / 100
+  return Math.exp(-notch * (looksLikeMouseWheel(e) ? 0.28 : 0.18))
+}
 
 /** Wheel deltas in CSS px, whichever unit the event chose to speak in. */
 export function wheelPanDelta(

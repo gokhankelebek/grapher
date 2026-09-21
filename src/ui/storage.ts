@@ -17,6 +17,7 @@ import { countBoard, serializeDoc } from '../core/persist'
 import { DEFAULT_EXPORT } from './renderBoard'
 import type { FitExportSettings } from './exportFit'
 import { clampFitSettings, defaultFit, isAspect } from './exportFit'
+import type { WheelPref } from './gestures'
 
 const PREFIX = 'grapher.v1'
 const INDEX_KEY = `${PREFIX}.index`
@@ -342,6 +343,12 @@ export interface Prefs {
    * demo and leave, not a state a document is in.
    */
   presentScale: number
+  /**
+   * What a plain mouse wheel does on the board. 'auto' zooms for a wheel and
+   * pans for a trackpad's two-finger scroll; the other two are for hardware
+   * the guess gets wrong.
+   */
+  wheel: WheelPref
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -350,6 +357,7 @@ export const DEFAULT_PREFS: Prefs = {
   exportByDoc: {},
   exportDefaults: { ...DEFAULT_EXPORT, ...defaultFit('cartesian') },
   presentScale: 2.5,
+  wheel: 'auto',
 }
 
 /** Never trust what came back from storage: a bad value falls back silently. */
@@ -389,6 +397,7 @@ export function readPrefs(): Prefs {
       exportByDoc,
       exportDefaults,
       presentScale: clampPresentScale(parsed.presentScale),
+      wheel: parsed.wheel === 'zoom' || parsed.wheel === 'pan' ? parsed.wheel : 'auto',
     }
   } catch {
     return { ...DEFAULT_PREFS, exportByDoc: {} }

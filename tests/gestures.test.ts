@@ -6,6 +6,8 @@ import {
   TOUCH_PAN_SLOP,
   classifyPointerDown,
   classifyWheel,
+  looksLikeMouseWheel,
+  wheelZoomFactor,
   hitRadii,
   penGuardActive,
   pointerKind,
@@ -153,13 +155,51 @@ describe('penGuardActive', () => {
 })
 
 describe('wheel', () => {
-  it('pans for a plain or two-axis wheel', () => {
+  const mouse = { ctrlKey: false, metaKey: false, deltaX: 0, deltaY: 100, deltaMode: 0 }
+  const macMouse = { ctrlKey: false, metaKey: false, deltaX: 0, deltaY: -8, deltaMode: 0 }
+  const lines = { ctrlKey: false, metaKey: false, deltaX: 0, deltaY: 3, deltaMode: 1 }
+  const trackpad = { ctrlKey: false, metaKey: false, deltaX: 0, deltaY: -2.3333, deltaMode: 0 }
+  const twoAxis = { ctrlKey: false, metaKey: false, deltaX: 12, deltaY: 40, deltaMode: 0 }
+  const slowPad = { ctrlKey: false, metaKey: false, deltaX: 0, deltaY: 2, deltaMode: 0 }
+
+  it('tells a mouse wheel (whole-number, one-axis notches) from a trackpad scroll', () => {
+    expect(looksLikeMouseWheel(mouse)).toBe(true)
+    expect(looksLikeMouseWheel(macMouse)).toBe(true)
+    expect(looksLikeMouseWheel(lines)).toBe(true)
+    expect(looksLikeMouseWheel(trackpad)).toBe(false)
+    expect(looksLikeMouseWheel(twoAxis)).toBe(false)
+    expect(looksLikeMouseWheel(slowPad)).toBe(false)
+  })
+
+  it('zooms for a mouse wheel and pans for a trackpad, by default', () => {
+    expect(classifyWheel(mouse)).toBe('zoom')
+    expect(classifyWheel(macMouse)).toBe('zoom')
+    expect(classifyWheel(trackpad)).toBe('pan')
+    expect(classifyWheel(twoAxis)).toBe('pan')
+    // The old shape — no deltas at all — is a trackpad-style scroll.
     expect(classifyWheel({ ctrlKey: false, metaKey: false })).toBe('pan')
   })
 
-  it('zooms only for a pinch (ctrlKey) or an explicit modifier', () => {
-    expect(classifyWheel({ ctrlKey: true, metaKey: false })).toBe('zoom')
-    expect(classifyWheel({ ctrlKey: false, metaKey: true })).toBe('zoom')
+  it('zooms for a pinch (ctrlKey) or ⌘, scrolls for shift, whatever the deltas', () => {
+    expect(classifyWheel({ ...trackpad, ctrlKey: true })).toBe('zoom')
+    expect(classifyWheel({ ...trackpad, metaKey: true })).toBe('zoom')
+    expect(classifyWheel({ ...mouse, shiftKey: true })).toBe('pan')
+  })
+
+  it('lets the preference override the guess', () => {
+    expect(classifyWheel(trackpad, 'zoom')).toBe('zoom')
+    expect(classifyWheel(mouse, 'pan')).toBe('pan')
+    expect(classifyWheel({ ...mouse, shiftKey: true }, 'zoom')).toBe('pan')
+    expect(classifyWheel({ ...trackpad, ctrlKey: true }, 'pan')).toBe('zoom')
+  })
+
+  it('zoom factor: a notch is a quarter-step either way, a pinch is gentle, never NaN', () => {
+    expect(wheelZoomFactor(mouse)).toBeCloseTo(Math.exp(-0.28), 6)
+    expect(wheelZoomFactor({ ...mouse, deltaY: -100 })).toBeCloseTo(Math.exp(0.28), 6)
+    expect(wheelZoomFactor({ ...mouse, deltaY: 1000 })).toBeCloseTo(Math.exp(-0.28), 6) // capped
+    expect(wheelZoomFactor(lines)).toBeCloseTo(Math.exp(-0.99 * 0.28), 6)
+    expect(wheelZoomFactor({ ...trackpad, ctrlKey: true })).toBeCloseTo(Math.exp(2.3333 * 0.012), 6)
+    expect(wheelZoomFactor({ ...mouse, deltaY: NaN })).toBe(1)
   })
 
   it('reads deltas in whatever unit the event speaks', () => {

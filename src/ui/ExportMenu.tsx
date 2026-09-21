@@ -22,6 +22,13 @@ import type {
 } from '../core/persist'
 import type { FigureStyleId, Theme } from '../core/types'
 import { RULINGS } from './boardGrid'
+import type { WheelPref } from './gestures'
+
+const WHEEL_PREFS: { value: WheelPref; label: string; title: string }[] = [
+  { value: 'auto', label: 'Auto', title: 'Zoom for a mouse wheel, scroll for a trackpad' },
+  { value: 'zoom', label: 'Zoom', title: 'A plain wheel always zooms, anchored on the cursor' },
+  { value: 'pan', label: 'Scroll', title: 'A plain wheel always moves the board' },
+]
 import { FigurePicker } from './FigurePicker'
 import { backgroundLockedNote, fixesBackground } from './figureStyle'
 
@@ -69,6 +76,9 @@ interface Props {
    */
   grid: BoardGrid | null
   onGrid(next: BoardGrid): void
+  /** What a plain mouse wheel does on the board (a global preference). */
+  wheel: WheelPref
+  onWheel(next: WheelPref): void
   /**
    * WHICH LOOK the board is drawn in, or null on a board that has no figure
    * style to be drawn in (a number line) — the section is then not drawn.
@@ -117,6 +127,8 @@ export function ExportMenu({
   onAxisUnit,
   grid,
   onGrid,
+  wheel,
+  onWheel,
   figure,
   screenTheme,
   caption,
@@ -338,6 +350,33 @@ export function ExportMenu({
               </div>
             </>
           )}
+
+          <div className="exp-menu-sep" />
+          <div className="exp-title">Mouse wheel</div>
+          <div
+            className="seg exp-seg"
+            role="group"
+            aria-label="Mouse wheel"
+            data-testid="wheel-pref"
+            data-wheel={wheel}
+          >
+            {WHEEL_PREFS.map((w) => (
+              <button
+                key={w.value}
+                className={`seg-btn${wheel === w.value ? ' seg-on' : ''}`}
+                data-testid={`wheel-pref-${w.value}`}
+                aria-pressed={wheel === w.value}
+                onClick={() => onWheel(w.value)}
+                title={w.title}
+              >
+                {w.label}
+              </button>
+            ))}
+          </div>
+          <div className="exp-note">
+            Auto zooms for a mouse wheel and scrolls for a trackpad's two-finger swipe. A pinch
+            or ⌘-wheel always zooms, shift-wheel always scrolls.
+          </div>
 
           <div className="exp-menu-sep" />
           <div className="exp-title">Output size</div>

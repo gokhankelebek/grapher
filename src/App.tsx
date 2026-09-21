@@ -146,6 +146,7 @@ import {
   writeExportSettings,
 } from './ui/storage'
 import type { SaveOutcome } from './ui/storage'
+import type { WheelPref } from './ui/gestures'
 
 /**
  * The canvas is MODELESS — Space or a middle-drag or two fingers pan, a tap
@@ -423,6 +424,11 @@ export default function App() {
    * questions ("what do I want to look at" vs "what goes on the paper").
    */
   const [canvasTheme, setCanvasTheme] = useState<'dark' | 'light'>(() => readPrefs().canvasTheme)
+  const [wheelPref, setWheelPrefState] = useState<WheelPref>(() => readPrefs().wheel)
+  const setWheelPref = useCallback((next: WheelPref): void => {
+    setWheelPrefState(next)
+    updatePrefs({ wheel: next })
+  }, [])
   /**
    * How each axis is MEASURED, as this document states it.
    *
@@ -4694,6 +4700,7 @@ export default function App() {
           onFeatureEdit={applyFeature}
           theme={boardTheme}
           present={present}
+          wheelPref={wheelPref}
           axisUnits={axisUnits}
           overlays={overlays}
           fields={fieldScene}
@@ -4813,6 +4820,8 @@ export default function App() {
                 onAxisUnit={setAxisUnit}
                 grid={kind === 'cartesian' ? boardGrid : null}
                 onGrid={setRuling}
+                wheel={wheelPref}
+                onWheel={setWheelPref}
                 figure={kind === 'cartesian' ? figureStyle : null}
                 screenTheme={screenTheme}
                 caption={figureCaption}
