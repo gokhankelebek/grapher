@@ -107,11 +107,26 @@ export interface DerivativeLink {
   curveId: string
 }
 
-/** The signed region between `parentId` and the x-axis over [from, to]. */
+/**
+ * The signed region between `parentId` and the x-axis over [from, to] — or,
+ * when `otherId` names a second curve, the region BETWEEN the two curves.
+ *
+ * Between curves the number is ∫(f − g) dx with f the parent and g the
+ * other; `abs` then means ∫|f − g| — the area between them in the AP sense,
+ * top minus bottom wherever they cross — rather than |∫(f − g)|. Deleting
+ * either curve removes the link. Contract for the halves:
+ *   src/core/calculus.ts   areaBetween(parent, other, models, a, b, abs): AreaResult | null
+ *                          curveIntersections(parent, other, models, range): number[]
+ *   src/ui/calcLinks.ts    defaultBetweenBounds(parent, other, models, window)
+ *                          areaReadout / overlaysFor / cardCalc / dependentsOf /
+ *                          followDomains all understand `otherId`
+ */
 export interface AreaLink {
   kind: 'area'
   id: string
   parentId: string
+  /** The second curve, for an area between curves. Absent: the x-axis. */
+  otherId?: string
   from: number
   to: number
   /** Read out |∫| instead of the signed value. The picture is the same. */
