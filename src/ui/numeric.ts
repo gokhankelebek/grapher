@@ -149,7 +149,9 @@ export function formatSig(v: number, opts?: { scale?: number }): string {
 //      byte what this app printed before exact forms existed. A form that is
 //      no more than a plain numeral for the number already on the row ("2"
 //      beside 2.000) counts as no form at all, by rule 3 and not as an
-//      exception to it: it is one value written twice.
+//      exception to it: it is one value written twice — except that a
+//      coordinate CONFIRMED to be a whole number prints bare on both sides,
+//      "(−1, 2)" and "(√2, 2) ≈ (1.414, 2)", never padded to "2.000".
 //
 // A chip asks for rule 2 to be dropped (`decimal: false`): a label on the board
 // is a name for the point, not a table of it, and "(√3, 0) ≈ (1.732, 0)" on a
@@ -187,6 +189,26 @@ export interface PointParts {
 
 /** A closed form that is a plain numeral: "2", "−1", "1.5". */
 const PLAIN_FORM = /^[-−+]?(\d+\.?\d*|\.\d+)$/
+/** A closed form that is a whole number: "2", "−1". */
+const INT_FORM = /^[-−+]?\d+$/
+
+/**
+ * A coordinate the curve has CONFIRMED to be a whole number prints bare —
+ * "(−1, 2)", "(√2, 2)" — not padded to the decimal column "(−1.000, 2.000)".
+ * The padding exists so that a column of measured decimals lines up; a value
+ * that is known to be exactly 2 is not a measurement, and "2.000" would claim
+ * a precision it does not have while hiding the one it does. Only a verified
+ * integer form qualifies: a sketched vertex that merely rounds to 2.000 keeps
+ * its decimals.
+ */
+function bareInteger(s: string | undefined, v: number): string | null {
+  if (typeof s !== 'string') return null
+  const t = s.trim()
+  if (!INT_FORM.test(t)) return null
+  const n = Number(t.replace(/−/g, '-'))
+  if (!Number.isFinite(n) || Math.abs(n - v) > 1e-9 * Math.max(1, Math.abs(v))) return null
+  return n === 0 ? '0' : `${n < 0 ? '−' : ''}${Math.abs(n)}`
+}
 
 /**
  * A stored exact form, or null — where "no form" also covers a form with
@@ -226,8 +248,8 @@ function defaultAxes(kind: SpecialPoint['kind']): 'x' | 'pair' {
 export function pointParts(p: SpecialPoint, opts: PointTextOpts = {}): PointParts {
   const o = { scale: opts.scale, exact: p.exact }
   const axes = opts.axes ?? defaultAxes(p.kind)
-  const dx = formatCoord(p.pos.x, o)
-  const dy = formatCoord(p.pos.y, o)
+  const dx = bareInteger(p.exactX, p.pos.x) ?? formatCoord(p.pos.x, o)
+  const dy = bareInteger(p.exactY, p.pos.y) ?? formatCoord(p.pos.y, o)
   const ex = exactForm(p.exactX, p.pos.x)
   const ey = exactForm(p.exactY, p.pos.y)
 

@@ -100,6 +100,7 @@ describe('pointText — exact form first, decimal beside it', () => {
   it('a pair with ONE closed form keeps the other coordinate decimal, in place', () => {
     // Rule 1: each coordinate prints the form it has. The pair stays a pair —
     // a closed form is never invented for the coordinate that has none.
+    // The y is 1 but nothing has CONFIRMED it, so it keeps its decimals.
     expect(pointText(MAX_HALF)).toBe('(π/2, 1.000) ≈ (1.571, 1.000)')
   })
 
@@ -118,16 +119,21 @@ describe('pointText — exact form first, decimal beside it', () => {
       exactX: '−1',
       exactY: '2',
     })
-    expect(pointText(vertex)).toBe('(−1.000, 2.000)')
+    expect(pointText(vertex)).toBe('(−1, 2)')
     expect(pointParts(vertex).exact).toBeNull()
     // The chip is the decimal too — there is no other reading to prefer.
-    expect(pointText(vertex, { decimal: false })).toBe('(−1.000, 2.000)')
+    expect(pointText(vertex, { decimal: false })).toBe('(−1, 2)')
   })
 
-  it('a numeral alongside a real form drops out of the exact side only', () => {
-    // MAX_HALF's y is plainly 1; its x is not plainly anything.
+  it('a confirmed whole number prints bare on both sides, and is not a form', () => {
+    // MAX_HALF's y is plainly 1; its x is not plainly anything. Confirmed by
+    // the curve, the 1 is written as 1 — not 1.000 — and adds no "≈" of its own.
     const both = { ...MAX_HALF, exactY: '1' } as SpecialPoint
-    expect(pointText(both)).toBe(pointText(MAX_HALF))
+    expect(pointText(both)).toBe('(π/2, 1) ≈ (1.571, 1)')
+    expect(pointParts(both).exact).toBe('(π/2, 1)')
+    const vertex = pt({ kind: 'minimum', pos: { x: -1, y: 2 }, label: 'min', exactX: '−1', exactY: '2' })
+    expect(pointText(vertex)).toBe('(−1, 2)')
+    expect(pointParts(vertex).exact).toBeNull()
   })
 
   it('a fraction or a radical is kept, however short', () => {

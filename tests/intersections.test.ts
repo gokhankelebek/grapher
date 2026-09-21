@@ -418,8 +418,8 @@ describe('CurveCard — the Intersections row', () => {
     const groups = cardIntersections('f', marks(), () => 'g')
     const text = plain(renderCard(PARABOLA, groups))
     expect(text).toContain('Intersections')
-    expect(text).toContain('with g: (−√2, 2.000) ≈ (−1.414, 2.000),')
-    expect(text).toContain('(√2, 2.000) ≈ (1.414, 2.000)')
+    expect(text).toContain('with g: (−√2, 2) ≈ (−1.414, 2),')
+    expect(text).toContain('(√2, 2) ≈ (1.414, 2)')
   })
 
   it('the closed form is its own element, so the decimal can step back a tone', () => {
@@ -432,7 +432,7 @@ describe('CurveCard — the Intersections row', () => {
 
   it("the OTHER curve's card says the same thing, with this curve's name on it", () => {
     const text = plain(renderCard(TWO, cardIntersections('g', marks(), () => 'f')))
-    expect(text).toContain('with f: (−√2, 2.000) ≈ (−1.414, 2.000),')
+    expect(text).toContain('with f: (−√2, 2) ≈ (−1.414, 2),')
   })
 
   it('no crossings, no row — and the card is what it always was', () => {

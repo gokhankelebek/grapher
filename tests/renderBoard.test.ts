@@ -153,7 +153,7 @@ const PARABOLA: FittedCurve = {
   kind: 'explicit', domain: null,
   color: CURVE_COLORS[0], strokeWidth: 2.5, visible: true, error: 0,
 }
-const VERTEX_LABEL = '(3.000, \u22122.000)'
+const VERTEX_LABEL = '(3, \u22122)'
 // The analyzer knows this intercept in closed form (0.3x² − 1.8x + 7/10), so
 // the plate says the closed form and not the decimal: a chip is a NAME for the
 // point. What these tests are about — which points get a label at all, and
