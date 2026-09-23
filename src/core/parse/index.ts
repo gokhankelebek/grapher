@@ -856,11 +856,26 @@ function precOf(n: Node): number {
     case 'bin':
       switch (n.op) {
         case '+': case '-': return 1
-        case '*': return 2
+        // A product whose first factor is negated is WRITTEN with a leading
+        // minus (−u·v, see toLatex), so it sits at the precedence of a
+        // negation: as the right operand of −, + or × it must be wrapped.
+        case '*': return stripLeadingNeg(n) ? 1 : 2
         case '/': return isAtomic(n.a) && isAtomic(n.b) ? 2 : 4 // \frac is self-delimiting
         case '^': return 3
       }
   }
+}
+
+/**
+ * For a product chain whose leftmost factor is a negation — (−2)(x+1)²(x−3),
+ * parsed left-associatively — the same chain with that one minus removed;
+ * null otherwise. The minus is then written once, in front of the product.
+ */
+function stripLeadingNeg(n: Node): Node | null {
+  if (n.t !== 'bin' || n.op !== '*') return null
+  if (n.a.t === 'neg') return { t: 'bin', op: '*', a: n.a.a, b: n.b }
+  const inner = stripLeadingNeg(n.a)
+  return inner ? { t: 'bin', op: '*', a: inner, b: n.b } : null
 }
 
 function isAtomic(n: Node): boolean {
@@ -921,7 +936,16 @@ function toLatex(n: Node): string {
         }
         case '-': return `${toLatex(n.a)}-${child(n.b, 2)}`
         case '*': {
-          const ls = child(n.a, 2)
+          // (−u)·v is written −u·v: a leading minus belongs to the whole
+          // product, and "(−x)(x − 1/2)" reads as if the sign were a factor.
+          const positive = stripLeadingNeg(n)
+          if (positive) return `-${toLatex(positive)}`
+          // A fraction coefficient is typeset as a fraction: "1/2x" reads as
+          // 1/(2x), which is not what (1/2)·x means.
+          const ls =
+            n.a.t === 'bin' && n.a.op === '/' && isAtomic(n.a.a) && isAtomic(n.a.b)
+              ? `\\frac{${toLatex(n.a.a)}}{${toLatex(n.a.b)}}`
+              : child(n.a, 2)
           const rs = child(n.b, 2)
           return `${ls}${mulSep(ls, rs)}${rs}`
         }
@@ -1864,4 +1888,40 @@ export function compileExpr(src: string): CompileOutcome {
     }
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }
+}
+
+// ----------------------------------------------------------------------------
+// Raw AST access — used by ./factored.ts, which reads a typed product of
+// factors structurally (roots, multiplicities, the leading coefficient)
+// instead of re-parsing the source with regular expressions. Same tokenizer
+// and Pratt parser; no head handling (`f(x) =` stays the implicit product
+// f·x on the left), no piecewise/restriction syntax, nothing compiled.
+// ----------------------------------------------------------------------------
+
+/** The parser's own AST node (read-only use outside this module). */
+export type ExprNode = Node
+
+export type AstOutcome =
+  | { ok: true; lhs: ExprNode; rhs: ExprNode | null }
+  | { ok: false; error: string; pos?: number }
+
+/** Parse `lhs ( '=' rhs )?` into the raw AST. */
+export function parseAst(src: string): AstOutcome {
+  try {
+    if (!src || src.trim() === '') return { ok: false, error: 'Empty expression' }
+    const { lhs, rhs } = new Parser(src).parseInput()
+    return { ok: true, lhs, rhs }
+  } catch (err) {
+    if (err instanceof ParseError) {
+      return err.pos !== undefined
+        ? { ok: false, error: err.message, pos: err.pos }
+        : { ok: false, error: err.message }
+    }
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/** Evaluate an AST node at `x` (free constants read as NaN, y as NaN). */
+export function evalAst(n: ExprNode, x: number): number {
+  return compile(n)(NO_PARAMS, x, NaN)
 }
