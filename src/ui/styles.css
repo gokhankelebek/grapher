@@ -4418,3 +4418,286 @@ button.calc-field-btn {
 .shape-coord-expr .calc-field-value {
   border-bottom: 1px dotted var(--faint);
 }
+
+/* ------------------------------------------------------------ built from roots */
+/*
+ * "Build from roots" (the second button beside "+") and the Roots section on a
+ * typed curve's card share one set of rows: a root, its multiplicity, what the
+ * graph does there, and ×. They borrow the calc-* vocabulary for fields, chips
+ * and the drop button; only the row layout and the stepper are new.
+ */
+
+/* Two buttons on the header row: only the first pushes right. */
+.factor-btn {
+  margin-left: 0;
+}
+
+.factor-open {
+  color: var(--accent);
+  border-color: rgba(79, 156, 249, 0.45);
+  background: var(--accent-soft);
+}
+
+.fe-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.fe-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.fe-title {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.fe-close {
+  margin-left: auto;
+}
+
+.fe-a-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.fe-or {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-left: var(--sp-2);
+  white-space: nowrap;
+}
+
+.fe-through {
+  flex: 0 0 auto;
+}
+
+.fe-input {
+  width: 58px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border-soft);
+  background: var(--panel);
+}
+
+.fe-input:focus {
+  outline: none;
+  border-color: rgba(79, 156, 249, 0.55);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.fe-input:disabled {
+  color: var(--muted);
+  border-style: dashed;
+}
+
+.fe-input-part {
+  width: 44px;
+}
+
+.fe-input-bad,
+.fe-input-bad:focus {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 2px rgba(249, 95, 98, 0.14);
+}
+
+.fe-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.fe-list-title {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+/* root · multiplicity · behaviour · × — one grid, so the behaviour wraps
+   inside its own cell and the × always stays at the end of its row. */
+.fe-row {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-1) var(--sp-2);
+  min-width: 0;
+}
+
+.fe-root {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.fe-mult {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  background: var(--panel);
+}
+
+.fe-step {
+  width: 20px;
+  height: 22px;
+  color: var(--muted);
+  font-size: var(--fs-md);
+  line-height: 1;
+}
+
+.fe-step:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--panel-3);
+}
+
+.fe-step:disabled {
+  opacity: 0.35;
+}
+
+.fe-mult-input {
+  width: 18px;
+  text-align: center;
+}
+
+.fe-mult-input:focus {
+  outline: none;
+}
+
+/* What the graph does there: the sentence the lesson is about. */
+.fe-behaviour {
+  min-width: 0;
+  line-height: 1.3;
+  color: var(--curve, var(--accent));
+  font-size: var(--fs-xs);
+}
+
+.fe-behaviour-none {
+  color: var(--faint);
+}
+
+.fe-drop {
+  justify-self: end;
+}
+
+.fe-adds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+
+.fe-rational {
+  align-self: flex-start;
+}
+
+.fe-link {
+  align-self: flex-start;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  text-decoration: underline dotted;
+}
+
+.fe-link:hover {
+  color: var(--text);
+}
+
+.fe-preview {
+  min-height: 36px;
+  padding: var(--sp-2);
+  border-radius: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  overflow-x: auto;
+}
+
+.fe-preview-none {
+  color: var(--faint);
+}
+
+.fe-end {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.fe-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.fe-actions .expr-hint {
+  margin-top: 0;
+}
+
+.fe-build {
+  margin-left: auto;
+  padding: var(--sp-1) var(--sp-3);
+  border-radius: 6px;
+  border: 1px solid rgba(79, 156, 249, 0.55);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.fe-build:hover:not(:disabled) {
+  background: rgba(79, 156, 249, 0.26);
+}
+
+.fe-build:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* The Roots section on a card: a collapsible title, then the same rows. */
+.fe-section {
+  margin-top: var(--sp-1);
+  gap: var(--sp-2);
+}
+
+.fe-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  align-self: flex-start;
+  margin-bottom: 0;
+}
+
+.fe-caret {
+  font-size: var(--fs-xs);
+}
+
+.fe-through-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-left: var(--sp-1);
+}
+
+.fe-chip-x {
+  color: var(--faint);
+}
+
+.fe-chip-x:hover {
+  color: var(--text);
+}
+
+@media (pointer: coarse) {
+  .fe-step {
+    width: 36px;
+    height: 44px;
+  }
+  .fe-input,
+  .fe-mult-input {
+    font-size: var(--fs-field-touch);
+    min-height: 44px;
+  }
+}

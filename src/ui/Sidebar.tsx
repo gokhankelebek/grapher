@@ -6,7 +6,9 @@ import type {
   ModelSpec,
   NLItem,
   SpecialPoint,
+  Vec2,
 } from '../core/types'
+import type { FactoredSpec } from '../core/factored'
 import type { StyleMap } from '../App'
 import type { NLPart } from '../render/numberline'
 import { CurveCard } from './CurveCard'
@@ -19,6 +21,7 @@ import { ShapeCard } from './ShapeCard'
 import type { BoardShape, ShapeCardData } from './shapeLinks'
 import { NLCard } from './NLCard'
 import { ExprInput } from './ExprInput'
+import { FactorEditor } from './FactorEditor'
 import { BoardKindSwitch } from './BoardKindSwitch'
 
 interface Props {
@@ -80,6 +83,16 @@ interface Props {
   onOpacity(id: string, opacity: number): void
   onExprToggle(): void
   onExprSubmit(src: string): string | null
+  /** "Build from roots" is open at the top of the list. */
+  factorOpen?: boolean
+  onFactorToggle?(): void
+  /** Put a function built from its roots on the board. Error, or null. */
+  onFactorBuild?(spec: FactoredSpec, through: Vec2 | null): string | null
+  /** Rewrite a typed curve's line in place from its Roots section. */
+  onFactorRestate?(id: string, src: string, label: string): string | null
+  /** The point a curve was built through, if it was. */
+  factorThroughFor?(id: string): Vec2 | null
+  onFactorThroughDrop?(id: string): void
   /** What this curve's card says about calculus. Undefined = nothing to say. */
   /**
    * Where each curve meets the OTHERS, already named — the row is the same
@@ -187,6 +200,12 @@ export function Sidebar({
   onOpacity,
   onExprToggle,
   onExprSubmit,
+  factorOpen = false,
+  onFactorToggle,
+  onFactorBuild,
+  onFactorRestate,
+  factorThroughFor,
+  onFactorThroughDrop,
   intersectionsFor,
   calcFor,
   onAddCalc,
@@ -244,9 +263,32 @@ export function Sidebar({
             >
               +
             </button>
+            {!numberLine && onFactorToggle && (
+              <button
+                className={`add-btn factor-btn${factorOpen ? ' factor-open' : ''}`}
+                title={
+                  factorOpen
+                    ? 'Close Build from roots (Esc)'
+                    : 'Build a polynomial or rational function from its roots'
+                }
+                aria-label="Build from roots"
+                aria-pressed={factorOpen}
+                onClick={onFactorToggle}
+              >
+                {/* A tiny x-axis with its roots on it. */}
+                <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+                  <line x1="0.5" y1="7" x2="13.5" y2="7" stroke="currentColor" strokeWidth="1.2" />
+                  <circle cx="3.5" cy="7" r="1.8" fill="currentColor" />
+                  <circle cx="10.5" cy="7" r="1.8" fill="currentColor" />
+                </svg>
+              </button>
+            )}
           </div>
         </div>
         <div className="sidebar-list">
+          {!numberLine && factorOpen && onFactorBuild && onFactorToggle && (
+            <FactorEditor onBuild={onFactorBuild} onClose={onFactorToggle} />
+          )}
           {exprOpen && (
             <ExprInput
               onSubmit={onExprSubmit}
@@ -321,6 +363,15 @@ export function Sidebar({
               onAddAreaBetween={() => onAddAreaBetween(curve.id)}
               onCalcChange={onCalcChange}
               onCalcRemove={onCalcRemove}
+              onFactorRestate={
+                onFactorRestate
+                  ? (src, label) => onFactorRestate(curve.id, src, label)
+                  : undefined
+              }
+              factorThrough={factorThroughFor?.(curve.id) ?? null}
+              onFactorThroughDrop={
+                onFactorThroughDrop ? () => onFactorThroughDrop(curve.id) : undefined
+              }
             />
           ))}
           {!numberLine &&

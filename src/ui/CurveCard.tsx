@@ -9,8 +9,11 @@ import type {
   ParamMeta,
   SpecialPoint,
   SpecialPointKind,
+  Vec2,
 } from '../core/types'
 import type { CurveStyle } from '../App'
+import { RootsSection } from './FactorEditor'
+import { safeReadFactored } from './factorLinks'
 import { fitQuality } from '../core/fit/recognize'
 import { findAsymptotes } from '../core/holes'
 import { Latex } from './Latex'
@@ -112,6 +115,15 @@ interface Props {
   /** State one change to one object. `live` = a drag or slider in flight. */
   onCalcChange(change: CalcChange, live?: boolean): void
   onCalcRemove(linkId: string): void
+  /**
+   * Rewrite this TYPED curve's line in place — same id, colour and links —
+   * from its Roots section. Absent = no Roots section (tests, number lines).
+   */
+  onFactorRestate?(src: string, label: string): string | null
+  /** The point this curve was built through, whose `a` is re-solved on edit. */
+  factorThrough?: Vec2 | null
+  /** Stop keeping that point. */
+  onFactorThroughDrop?(): void
 }
 
 /**
@@ -582,11 +594,25 @@ export function CurveCard({
   onAddAreaBetween,
   onCalcChange,
   onCalcRemove,
+  onFactorRestate,
+  factorThrough,
+  onFactorThroughDrop,
 }: Props) {
   const spec: ModelSpec | undefined = models[curve.modelId]
   const isExpression = curve.modelId.startsWith('expr_')
   /** A typed curve whose model couldn't be rebuilt: shown, but inert. */
   const broken = Boolean(brokenReason)
+
+  /**
+   * The curve's line read back as factors — "y = (x + 1)^2(x - 3)" is a
+   * leading coefficient and two roots — or null for anything else (an
+   * unfactored x^2 - 1, a sketch, a sum of products). Only a typed curve:
+   * a sketched cubic already has its own zero handles.
+   */
+  const factored = useMemo(
+    () => (isExpression && !broken && curve.kind === 'explicit' ? safeReadFactored(exprSource) : null),
+    [isExpression, broken, curve.kind, exprSource],
+  )
 
   // Inline coefficient editing lives in ParamRow, one editor per row.
 
@@ -1382,6 +1408,16 @@ export function CurveCard({
 
       {selected && (
         <div className="card-body" onClick={(e) => e.stopPropagation()}>
+          {/* A function built from its roots is edited BY its roots: they
+              are the numbers a teacher set, so they come first. */}
+          {factored && onFactorRestate && (
+            <RootsSection
+              spec={factored}
+              through={factorThrough ?? null}
+              onRestate={onFactorRestate}
+              onDropThrough={factorThrough ? onFactorThroughDrop : undefined}
+            />
+          )}
           {/* Teaching order: the numbers you move, then what they do to the
               curve, and only then which curve this is being read as. */}
           {meta.length > 0 && (

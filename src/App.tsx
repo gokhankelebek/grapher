@@ -81,13 +81,17 @@ import {
   intersectionSpan,
 } from './ui/intersections'
 import type { BoardIntersection, CurveIntersections } from './ui/intersections'
-import { snapPlaced } from './ui/snap'
+import { snapCoord, snapPlaced } from './ui/snap'
+import { factoredSource } from './core/factored'
+import type { FactoredSpec } from './core/factored'
+import { moveRoot, rootHandles, safeReadFactored } from './ui/factorLinks'
+import type { FactorSide } from './ui/factorLinks'
 import { curveBounds, splitNotice, unionBoxes } from './ui/curveState'
 import { answerPieces } from './ui/nlText'
 import { AnswerContext } from './ui/answerContext'
 import { AnalysisOverlay, drawContextMarkers } from './ui/AnalysisOverlay'
 import type { AnalysisOverlayHandle } from './ui/AnalysisOverlay'
-import type { FeatureEditResult, FigureStyleId, SpecialPoint } from './core/types'
+import type { FeatureEditResult, FigureStyleId, ParsedPlot, SpecialPoint } from './core/types'
 import { FIGURE_STYLES } from './core/types'
 import { describePoints } from './ui/featureEdit'
 import { readCurveEquation } from './ui/equationText'
@@ -425,6 +429,31 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [drawingActive, setDrawingActive] = useState(false)
   const [exprOpen, setExprOpen] = useState(false)
+  /** "Build from roots" open at the top of the list (src/ui/FactorEditor.tsx). */
+  const [factorOpen, setFactorOpen] = useState(false)
+  /**
+   * Curves built THROUGH A POINT from "Build from roots": curve id → the
+   * point. While a curve is in here its leading coefficient is re-solved on
+   * every root edit and every root drag, so it keeps passing through the
+   * point. UI-side and deliberately not persisted or undone: it is a promise
+   * about how edits behave, not part of the function, and the equation on the
+   * card is always the whole truth about the curve.
+   */
+  const [factorThrough, setFactorThrough] = useState<Record<string, Vec2>>({})
+  const factorThroughRef = useRef<Record<string, Vec2>>({})
+  factorThroughRef.current = factorThrough
+  /**
+   * The root being dragged: which handle, inside which edit bracket, and the
+   * spec it is rewriting. The drag edits THIS spec rather than re-reading the
+   * line every frame, so a root dragged past another one stays the root the
+   * finger is holding even if the line writes its factors in another order.
+   */
+  const factorDragRef = useRef<{
+    handleId: string
+    curveId: string
+    bracket: unknown
+    spec: FactoredSpec
+  } | null>(null)
   const [extraModels, setExtraModels] = useState<Record<string, ModelSpec>>({})
   /**
    * Tangent lines, derivative curves, shaded areas and Riemann sums, as the
@@ -3498,7 +3527,7 @@ export default function App() {
   // ------------------------------------------------------- typed expressions
   /** Parse and add a typed expression. Returns an error message, or null on success. */
   const addExpression = useCallback(
-    (src: string): string | null => {
+    (src: string, label = 'add equation'): string | null => {
       // A differential equation is not an equation: "dy/dx = x - y" would be
       // read by parseExpression as a product of d, y and x set equal to
       // another, and the board would quietly draw an implicit curve nobody
@@ -3562,12 +3591,100 @@ export default function App() {
           curves: [...curvesRef.current, curve],
           exprSources: { ...exprSourcesRef.current, [curve.id]: src },
         },
-        'add equation',
+        label,
       )
       setSelectedId(curve.id)
       return null
     },
     [addField, addShape, commitState, pickColor],
+  )
+
+  /**
+   * The one path that makes a curve a TYPED EXPRESSION from a parsed line, in
+   * place: same id, colour, style, calculus links and name — only its model,
+   * domain and source change. A card's retyped equation takes it, and so does
+   * every edit from a Roots section and every dragged root on the board.
+   *
+   * `live` is a drag in flight: the state moves inside the bracket the press
+   * opened (so a whole drag is one undo, named `label`) instead of committing
+   * an entry of its own.
+   */
+  const restateAsExpression = useCallback(
+    (
+      id: string,
+      src: string,
+      plot: ParsedPlot,
+      label: string,
+      live: boolean,
+    ): string | null => {
+      const curve = curvesRef.current.find((c) => c.id === id)
+      if (!curve) return null
+      const modelId = `expr_${++exprCounterRef.current}`
+      let spec: ModelSpec
+      try {
+        spec = plot.makeModel(modelId)
+      } catch {
+        return 'Could not build a plot from this expression'
+      }
+      setExtraModels((prev) => ({ ...prev, [modelId]: spec }))
+      // The ink belonged to the family that just went away; keeping it would
+      // let an oversketch try to refit a model that no longer exists. Undo
+      // restores the whole curve, ink included.
+      const { sourceStroke: _ink, ...bare } = curve
+      const { [id]: _wasBroken, ...restBroken } = brokenExprRef.current
+      const { [id]: _shown, ...restShown } = displaySourcesRef.current
+      const patch: StatePatch = {
+        curves: curvesRef.current.map((c) =>
+          c.id === id
+            ? {
+                ...bare,
+                modelId,
+                kind: plot.kind,
+                params: plot.defaultParams.slice(),
+                domain: plot.domain,
+                error: 0,
+              }
+            : c,
+        ),
+        exprSources: { ...exprSourcesRef.current, [id]: src },
+        brokenExpr: restBroken,
+        displaySources: restShown,
+      }
+      if (live) {
+        relabelEdit(label)
+        noteEdit(id, { kind: 'equation' })
+        applyState(patch)
+      } else {
+        commitState({ ...patch, edits: withEdit(id, { kind: 'equation' }) }, label)
+        setSelectedId(id)
+      }
+      return null
+    },
+    [applyState, commitState, noteEdit, relabelEdit, withEdit],
+  )
+
+  /**
+   * Rewrite a TYPED curve's line and restate it in place — the Roots
+   * section's edits and a dragged root both end here. Refuses (with the
+   * parser's words) a line that does not parse, and does nothing for a line
+   * that has not changed.
+   */
+  const restateTypedCurve = useCallback(
+    (id: string, src: string, label: string, live = false): string | null => {
+      const curve = curvesRef.current.find((c) => c.id === id)
+      if (!curve || !curve.modelId.startsWith('expr_')) return null
+      if (exprSourcesRef.current[id] === src && brokenExprRef.current[id] === undefined) return null
+      let res: ReturnType<typeof readCurveEquation>
+      try {
+        res = readCurveEquation(src, curve, undefined)
+      } catch {
+        return 'The parser crashed on this input'
+      }
+      if (!res.ok) return res.error
+      if (res.mode === 'family') return null
+      return restateAsExpression(id, src, res.plot, label, live)
+    },
+    [restateAsExpression],
   )
 
   /**
@@ -3628,43 +3745,9 @@ export default function App() {
       if (isExpr && exprSourcesRef.current[id] === src && brokenExprRef.current[id] === undefined) {
         return null
       }
-      const modelId = `expr_${++exprCounterRef.current}`
-      let spec: ModelSpec
-      try {
-        spec = res.plot.makeModel(modelId)
-      } catch {
-        return 'Could not build a plot from this expression'
-      }
-      setExtraModels((prev) => ({ ...prev, [modelId]: spec }))
       const lost = isExpr ? null : (familySpec?.name ?? null)
-      // The ink belonged to the family that just went away; keeping it would
-      // let an oversketch try to refit a model that no longer exists. Undo
-      // restores the whole curve, ink included.
-      const { sourceStroke: _ink, ...bare } = curve
-      const { [id]: _wasBroken, ...restBroken } = brokenExprRef.current
-      const { [id]: _shown, ...restShown } = displaySourcesRef.current
-      commitState(
-        {
-          curves: curvesRef.current.map((c) =>
-            c.id === id
-              ? {
-                  ...bare,
-                  modelId,
-                  kind: res.plot.kind,
-                  params: res.plot.defaultParams.slice(),
-                  domain: res.plot.domain,
-                  error: 0,
-                }
-              : c,
-          ),
-          exprSources: { ...exprSourcesRef.current, [id]: src },
-          brokenExpr: restBroken,
-          displaySources: restShown,
-          edits: withEdit(id, { kind: 'equation' }),
-        },
-        'edit equation',
-      )
-      setSelectedId(id)
+      const err = restateAsExpression(id, src, res.plot, 'edit equation', false)
+      if (err) return err
       if (lost) {
         showFeatureNote({
           kind: 'moved',
@@ -3674,7 +3757,98 @@ export default function App() {
       }
       return null
     },
-    [commitState, showFeatureNote, withEdit],
+    [restateAsExpression, commitState, showFeatureNote, withEdit],
+  )
+
+  // ======================================================= built from roots
+  //
+  // A function set by its roots is an ordinary TYPED curve: "Build from roots"
+  // writes its line (src/core/factored.ts) and hands it to addExpression, and
+  // every later edit — a Roots section on the card, a root dragged on the
+  // board — rewrites that line and restates the curve in place through the
+  // same path a retyped equation takes. Nothing downstream knows.
+
+  /** "Add to graph": the normal typed-equation path, one undo entry. */
+  const buildFromRoots = useCallback(
+    (spec: FactoredSpec, through: Vec2 | null): string | null => {
+      let src: string
+      try {
+        src = factoredSource(spec)
+      } catch {
+        return 'These factors could not be written out.'
+      }
+      const before = curvesRef.current
+      const err = addExpression(src, 'build from roots')
+      if (err) return err
+      const made = curvesRef.current.find((c) => !before.includes(c))
+      if (made && through) {
+        setFactorThrough((m) => ({ ...m, [made.id]: { x: through.x, y: through.y } }))
+      }
+      setFactorOpen(false)
+      return null
+    },
+    [addExpression],
+  )
+
+  /** One committed edit from a card's Roots section. */
+  const restateFactors = useCallback(
+    (id: string, src: string, label: string): string | null =>
+      restateTypedCurve(id, src, label, false),
+    [restateTypedCurve],
+  )
+
+  const dropFactorThrough = useCallback((id: string): void => {
+    setFactorThrough((m) => {
+      if (!(id in m)) return m
+      const { [id]: _gone, ...rest } = m
+      return rest
+    })
+  }, [])
+
+  const factorThroughFor = useCallback(
+    (id: string): Vec2 | null => factorThrough[id] ?? null,
+    [factorThrough],
+  )
+
+  /**
+   * Drag one root along the x-axis. Snapped to the grid's own ladder, written
+   * as a plain number, restated live inside the bracket the press opened — so
+   * the whole drag is one undo. `a` is kept, unless the curve was built
+   * through a point, in which case it is re-solved to keep passing through it.
+   */
+  const dragFactorRoot = useCallback(
+    (curveId: string, side: FactorSide, index: number, handleId: string, to: Vec2): void => {
+      const bracket = preEditRef.current
+      let s = factorDragRef.current
+      if (!s || s.handleId !== handleId || s.curveId !== curveId || s.bracket !== bracket || !bracket) {
+        const spec = safeReadFactored(exprSourcesRef.current[curveId])
+        if (!spec) return
+        s = { handleId, curveId, bracket, spec }
+        factorDragRef.current = s
+      }
+      const next = moveRoot(
+        s.spec,
+        side,
+        index,
+        snapCoord(to.x, vpRef.current),
+        factorThroughRef.current[curveId] ?? null,
+      )
+      if (!next || next === s.spec) return
+      let src: string
+      try {
+        src = factoredSource(next)
+      } catch {
+        return
+      }
+      const err = restateTypedCurve(
+        curveId,
+        src,
+        side === 'num' ? 'move root' : 'move asymptote',
+        true,
+      )
+      if (!err) s.spec = next
+    },
+    [restateTypedCurve],
   )
 
   // ======================================================= number-line items
@@ -4190,6 +4364,29 @@ export default function App() {
         })
       }
     }
+    // A function built from its roots: each real root is a handle ON the
+    // x-axis, where a teacher points at it — the numerator's as "root", the
+    // denominator's at its asymptote. Mid-drag the handles come from the spec
+    // being dragged, so the one under the finger keeps its identity.
+    const typed = curves.find((c) => c.id === selectedId)
+    if (typed && typed.visible && typed.kind === 'explicit' && typed.modelId.startsWith('expr_')) {
+      const drag = factorDragRef.current
+      const spec =
+        drag && drag.curveId === typed.id && drag.bracket !== null && drag.bracket === preEditRef.current
+          ? drag.spec
+          : safeReadFactored(exprSources[typed.id])
+      if (spec) {
+        for (const h of rootHandles(spec)) {
+          const id = `factor:${typed.id}:${h.side}:${h.index}`
+          out.push({
+            id,
+            pos: { x: h.x, y: 0 },
+            label: h.label,
+            onDrag: (pos) => dragFactorRoot(typed.id, h.side, h.index, id, pos),
+          })
+        }
+      }
+    }
     // A shape's VERTICES. They are the shape — everything else about a
     // triangle is derived from its three corners — so they are grabbable the
     // moment its card is selected, and a drag rewrites the line that put them
@@ -4223,6 +4420,8 @@ export default function App() {
     shapes,
     shapeCompiled,
     dragShapeVertex,
+    exprSources,
+    dragFactorRoot,
   ])
 
   const copyTimerRef = useRef(0)
@@ -5067,7 +5266,19 @@ export default function App() {
         onDash={setDash}
         onEnds={setEnds}
         onOpacity={setOpacity}
-        onExprToggle={() => setExprOpen((o) => !o)}
+        onExprToggle={() => {
+          setFactorOpen(false)
+          setExprOpen((o) => !o)
+        }}
+        factorOpen={factorOpen}
+        onFactorToggle={() => {
+          setExprOpen(false)
+          setFactorOpen((o) => !o)
+        }}
+        onFactorBuild={buildFromRoots}
+        onFactorRestate={restateFactors}
+        factorThroughFor={factorThroughFor}
+        onFactorThroughDrop={dropFactorThrough}
         onExprSubmit={kind === 'number-line' ? addInequality : addExpression}
         calcFor={calcFor}
         onAddCalc={addCalcObject}
