@@ -155,13 +155,43 @@ export function curveScale(
 ): number | undefined {
   const box = curveBounds(curve, spec, fallback)
   if (!box) return undefined
-  const dy = box.max.y - box.min.y
   const dx = box.max.x - box.min.x
+  // A pole throws a handful of samples out to 10⁴ and beyond; the full extent
+  // would then make every ordinary value on the curve look like residue. The
+  // span between the 5th and 95th percentile of the sampled heights is the
+  // size the curve's numbers actually live at.
+  let dy = box.max.y - box.min.y
+  const ys = curvePoints(curve, spec, fallback)
+    .map((p) => p.y)
+    .filter(finite)
+    .sort((a, b) => a - b)
+  if (ys.length >= 20) {
+    const at = (q: number): number => ys[Math.min(ys.length - 1, Math.max(0, Math.round(q * (ys.length - 1))))]
+    const robust = at(0.95) - at(0.05)
+    if (robust > 0 && robust < dy) dy = robust
+  }
   // The y-extent is the one the readouts are measured against; a flat curve
   // (y = 3) has none, and then its horizontal run is the only size it has.
   const scale = Number.isFinite(dy) && dy > 0 ? dy : dx
   if (!Number.isFinite(scale) || scale <= 0) return undefined
   return scale
+}
+
+/**
+ * The size of the x-range a curve's points are read over: its x-extent.
+ * Floors x readouts the way curveScale floors y — a sketched vertex at
+ * x = 0.0005 on a ±8 board is the 0 it looks like — without ever tying an x
+ * to how tall the graph is.
+ */
+export function curveXScale(
+  curve: FittedCurve,
+  spec: ModelSpec | undefined,
+  fallback: [number, number] = [-8, 8],
+): number | undefined {
+  const box = curveBounds(curve, spec, fallback)
+  if (!box) return undefined
+  const dx = box.max.x - box.min.x
+  return Number.isFinite(dx) && dx > 0 ? dx : undefined
 }
 
 /**

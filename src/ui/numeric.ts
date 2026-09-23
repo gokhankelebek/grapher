@@ -163,8 +163,10 @@ export function formatSig(v: number, opts?: { scale?: number }): string {
 export const APPROX = '≈'
 
 export interface PointTextOpts {
-  /** Magnitude the point lives at — formatCoord's zero floor. */
+  /** Magnitude of the curve's values — formatCoord's zero floor for y. */
   scale?: number
+  /** Magnitude of its x-range — the zero floor for x. Absent: residue only. */
+  xScale?: number
   /**
    * Print the decimal beside the exact form (rule 2). Default true, which is
    * the card. False is the chip: the exact form alone, decimal only as the
@@ -246,10 +248,15 @@ function defaultAxes(kind: SpecialPoint['kind']): 'x' | 'pair' {
  * decimal in a lighter tone than the closed form it approximates.
  */
 export function pointParts(p: SpecialPoint, opts: PointTextOpts = {}): PointParts {
-  const o = { scale: opts.scale, exact: p.exact }
+  // `scale` is how big the curve's VALUES are, so it sets the zero floor for y
+  // only. An x is a position, and must never be floored by the height of the
+  // graph: a rational function whose pole spikes to 10⁴ used to print an
+  // inflection at x = −0.195 as "0".
+  const oy = { scale: opts.scale, exact: p.exact }
+  const ox = { scale: opts.xScale, exact: p.exact }
   const axes = opts.axes ?? defaultAxes(p.kind)
-  const dx = bareInteger(p.exactX, p.pos.x) ?? formatCoord(p.pos.x, o)
-  const dy = bareInteger(p.exactY, p.pos.y) ?? formatCoord(p.pos.y, o)
+  const dx = bareInteger(p.exactX, p.pos.x) ?? formatCoord(p.pos.x, ox)
+  const dy = bareInteger(p.exactY, p.pos.y) ?? formatCoord(p.pos.y, oy)
   const ex = exactForm(p.exactX, p.pos.x)
   const ey = exactForm(p.exactY, p.pos.y)
 

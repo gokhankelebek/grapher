@@ -182,7 +182,10 @@ describe('pointText — exact form first, decimal beside it', () => {
       exact: false,
       exactY: '3.27',
     })
-    expect(pointParts(tiny, { scale: 6.5 }).decimal).toBe('(0, 3.270)')
+    // x is floored by the curve's x-range, y by its height — never x by height.
+    expect(pointParts(tiny, { scale: 6.5, xScale: 16 }).decimal).toBe('(0, 3.270)')
+    const nearPole = pt({ kind: 'inflection', pos: { x: -0.195, y: 2.211 }, label: 'inflection', exact: false })
+    expect(pointParts(nearPole, { scale: 16000, xScale: 16 }).decimal).toBe('(−0.1950, 2.211)')
   })
 })
 

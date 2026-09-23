@@ -18,7 +18,7 @@ import { fitQuality } from '../core/fit/recognize'
 import { findAsymptotes } from '../core/holes'
 import { Latex } from './Latex'
 import { APPROX, exactDetail, formatCoord, parseNumeric, pointParts } from './numeric'
-import { alignedValues, curveScale, derivesFromInk } from './curveState'
+import { alignedValues, curveScale, curveXScale, derivesFromInk } from './curveState'
 import { axisKeys, featureAxes } from './featureEdit'
 import { curveEquationText, displayEquationLatex } from './equationText'
 import { N_MAX, N_MIN, RIEMANN_METHODS } from './calcLinks'
@@ -788,6 +788,10 @@ export function CurveCard({
     () => (selected ? curveScale(curve, spec) : undefined),
     [selected, curve, spec],
   )
+  const xScale = useMemo(
+    () => (selected ? curveXScale(curve, spec) : undefined),
+    [selected, curve, spec],
+  )
 
   // Group the special points by kind, keeping each point's original index so
   // hovering a value can address the right marker on canvas.
@@ -1470,7 +1474,7 @@ export function CurveCard({
                         // The separator is part of the value's own text: a
                         // comma that can wrap on its own ends a line with a
                         // dangling punctuation mark.
-                        const parts = pointParts(point, { scale })
+                        const parts = pointParts(point, { scale, xScale })
                         // Both readings in one attribute, for a copy or a test
                         // that wants the value as a value. Only emitted where
                         // there IS a closed form, so a row of plain decimals
@@ -1628,7 +1632,7 @@ export function CurveCard({
                         <span className="an-with" key={g.id}>
                           <span className="an-with-name">{`with ${g.name}:`}</span>{' '}
                           {g.points.map((point, n) => {
-                            const parts = pointParts(point, { scale })
+                            const parts = pointParts(point, { scale, xScale })
                             const comma = n === g.points.length - 1 ? '' : ','
                             return (
                               <span
