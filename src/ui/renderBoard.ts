@@ -51,6 +51,8 @@ import type { Polyline, SlopeField } from '../render/fields'
 import { drawPolylines, drawSlopeFields } from '../render/fields'
 import type { Shape } from '../render/shapes'
 import { drawShapes } from '../render/shapes'
+import type { ScatterSet } from '../render/scatter'
+import { drawScatter } from '../render/scatter'
 import { drawNLItem, drawNumberLineAxis, nlLanes } from '../render/numberline'
 import type { NLPart } from '../render/numberline'
 import { pointText } from './numeric'
@@ -288,6 +290,24 @@ export interface BoardScene {
    */
   shapes?: readonly Shape[]
   /**
+   * Data sets — the (x, y) rows of a pasted or typed table, as a scatter plot.
+   *
+   * Painted after every curve and before the shapes and the analysis layer:
+   * the regression is an ordinary curve, and a class judges it by looking at
+   * the data AGAINST it, so the points sit on top. A set whose `residualsTo`
+   * names a visible explicit curve also gets a thin half-alpha segment from
+   * each point to that curve, under every marker.
+   *
+   * Colours go through the same ink as the curves: print-mapped on a light
+   * ground, and theme.axis under a mono figure style (SAT / AP).
+   *
+   * FIGURE, not chrome: it exports. Absent or empty means the board draws
+   * exactly the command stream it drew before this field existed.
+   *
+   * Cartesian only; a number-line board ignores it.
+   */
+  scatter?: readonly ScatterSet[]
+  /**
    * The LOOK of the whole board: the screen, a textbook worksheet, an SAT
    * item, an AP free-response figure. See FigureStyle in core/types.
    *
@@ -346,6 +366,7 @@ export { FIGURE_STYLES }
 export type { Overlay, OverlayRect } from '../render/overlays'
 export type { Polyline, SlopeField } from '../render/fields'
 export type { Shape } from '../render/shapes'
+export type { ScatterMarker, ScatterSet } from '../render/scatter'
 
 /**
  * Trig by name, at a word boundary, so `sinh`/`cosh`/`tanh` (not periodic) and
@@ -1242,6 +1263,32 @@ function explicitScreenY(
   }
 }
 
+/**
+ * The curve a data set's residuals run to, as math x -> math y (null where it
+ * is undefined), or null when `id` is not a VISIBLE EXPLICIT curve with an
+ * evaluator: a residual is a vertical distance, and only y = f(x) has one.
+ */
+function residualCurve(
+  scene: BoardScene,
+  id: string,
+): ((x: number) => number | null) | null {
+  const curve = scene.curves.find((c) => c.id === id)
+  if (!curve || !curve.visible || curve.kind !== 'explicit') return null
+  const model = scene.models[curve.modelId]
+  const f = model?.evalExplicit
+  if (!f) return null
+  const d = curve.domain
+  return (x: number): number | null => {
+    if (d && (x < d[0] || x > d[1])) return null
+    try {
+      const y = f.call(model, curve.params, x)
+      return Number.isFinite(y) ? y : null
+    } catch {
+      return null
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Figure styles
 // ---------------------------------------------------------------------------
@@ -1742,6 +1789,24 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
     }
     ctx.setLineDash([])
     ctx.globalAlpha = 1
+  }
+
+  // Data: on top of every curve (the fit is judged by the points against it),
+  // under the shapes and the analysis layer. Residuals, when asked for, go
+  // under the markers and end on the named curve.
+  const scatter = scene.scatter
+  if (scatter && scatter.length > 0) {
+    try {
+      drawScatter(ctx, scatter, {
+        vp,
+        theme,
+        paint: ink,
+        scale,
+        curveAt: (id) => residualCurve(scene, id),
+      })
+    } catch {
+      /* data render failed — the figure still stands */
+    }
   }
 
   // Shapes: on top of every curve, under the analysis layer. The figure is

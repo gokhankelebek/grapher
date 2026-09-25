@@ -14,6 +14,7 @@ import {
   type BoardChrome,
   type BoardScene,
   type Polyline,
+  type ScatterSet,
   type Shape,
   type SlopeField,
 } from '../src/ui/renderBoard'
@@ -21,7 +22,7 @@ import { MockCtx, MockPath2D, withMockPath2D } from './mockCanvas'
 import { MODELS } from '../src/core/fit/models'
 import { analyzeCurve } from '../src/core/analyze'
 import { getHandles } from '../src/core/fit/edit'
-import { DARK_THEME, LIGHT_THEME, CURVE_COLORS, PRINT_CURVE_COLORS } from '../src/core/types'
+import { DARK_THEME, LIGHT_THEME, CURVE_COLORS, PRINT_CURVE_COLORS, FIGURE_STYLES } from '../src/core/types'
 import type { FittedCurve, SpecialPoint, Viewport } from '../src/core/types'
 
 const VP: Viewport = { center: { x: 0, y: 0 }, pxPerUnit: 60, widthPx: 900, heightPx: 700 }
@@ -747,5 +748,75 @@ describe('renderBoard — a hole states its coordinates and draws no marker', ()
     // drawAsymptotes runs inside that loop and sets a dash of its own; the
     // shapes, the analysis layer and the caption are all drawn after it.
     expect(render(scene({ chrome: null })).getLineDash()).toEqual([])
+  })
+})
+
+// ===========================================================================
+// Scatter — data sets as points.
+//
+// Same claim again: a board that never mentions `scatter` (or says `[]`, or
+// has only hidden sets) emits the byte-identical command stream it emitted
+// before the layer existed; data that IS present reaches the export, on top
+// of the curve it is fitted to. The layer's own geometry is pinned in
+// tests/scatter.render.test.ts.
+// ===========================================================================
+
+describe('renderBoard — scatter absent changes nothing', () => {
+  const stream = (ctx: MockCtx): string =>
+    JSON.stringify({
+      cmds: ctx.own.cmds,
+      texts: ctx.texts,
+      fills: ctx.fills,
+      strokeStyles: ctx.strokeStyles,
+      fillStyles: ctx.fillStyles,
+      counts: [ctx.strokeCount, ctx.fillCount, ctx.textCount,
+               ctx.saveCount, ctx.restoreCount, ctx.arcCount],
+      paths: ctx.strokedPaths.map((p) => p.cmds),
+    })
+
+  const DATA: ScatterSet = {
+    id: 'data', xs: [-2, -1, 0, 1, 2], ys: [1, -0.5, 0.2, -1.8, 0.4],
+    color: CURVE_COLORS[2], visible: true, residualsTo: CUBIC.id,
+  }
+
+  it('`scatter: []` and hidden sets are byte-identical to the field being absent', () => {
+    for (const chrome of [null, chromeOn()]) {
+      for (const figure of [undefined, FIGURE_STYLES.sat]) {
+        const before = render(scene({ chrome, figure }))
+        expect(stream(render(scene({ chrome, figure, scatter: [] })))).toBe(stream(before))
+        expect(stream(render(scene({ chrome, figure, scatter: [{ ...DATA, visible: false }] }))))
+          .toBe(stream(before))
+      }
+    }
+  })
+
+  /** MockCtx does not note a style on fill(); the data layer only fills. */
+  class FillCtx extends MockCtx {
+    paints: string[] = []
+    fill(): void { this.paints.push(`fill ${this.fillStyle}`); super.fill() }
+    stroke(p?: MockPath2D): void { this.paints.push(`stroke ${this.strokeStyle}`); super.stroke(p) }
+  }
+  const fillRender = (s: BoardScene): FillCtx => {
+    const ctx = new FillCtx()
+    withMockPath2D(() => renderBoard(ctx as unknown as CanvasRenderingContext2D, s))
+    return ctx
+  }
+
+  it('a data set reaches the figure (chrome:null), on top of the curve', () => {
+    const plain = render(scene({ chrome: null }))
+    const withData = fillRender(scene({ chrome: null, scatter: [DATA] }))
+    expect(withData.arcCount - plain.arcCount, 'rim + disc per point')
+      .toBe(2 * DATA.xs.length)
+    const curve = withData.paints.indexOf(`stroke ${CURVE_COLORS[0]}`)
+    const data = withData.paints.indexOf(`fill ${CURVE_COLORS[2]}`)
+    expect(curve).toBeGreaterThanOrEqual(0)
+    expect(data, 'the data was never drawn').toBeGreaterThanOrEqual(0)
+    expect(curve, 'the data went under the curve').toBeLessThan(data)
+  })
+
+  it('maps to the print palette on a light ground, like every stroke', () => {
+    const ctx = fillRender(scene({ theme: LIGHT_THEME, chrome: null, scatter: [DATA] }))
+    expect(ctx.paints).toContain(`fill ${PRINT_CURVE_COLORS[2]}`)
+    expect(ctx.paints).not.toContain(`fill ${CURVE_COLORS[2]}`)
   })
 })
