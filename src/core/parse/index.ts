@@ -912,6 +912,9 @@ function mulSep(ls: string, rs: string): string {
   // (by our own tokenizer, and by a human) as scientific notation 2e+1 = 20.
   // `e` is the only right operand that can start a numeric exponent, since
   // params are single letters and `e` is always the constant.
+  // Before e^… a thin space is enough — "5\,e^{0.2x}" reads as a textbook
+  // writes it, and still never as scientific notation.
+  if (/[0-9]$/.test(ls) && /^e\^/.test(rs)) return '\\,'
   if (/[0-9]$/.test(ls) && /^e/.test(rs)) return ' \\cdot '
   const leftEndsLetter = /[A-Za-z]$/.test(ls)
   if (leftEndsLetter && (/^[A-Za-z]/.test(rs) || GREEK_STARTS.some((g) => rs.startsWith(g)))) {
@@ -953,7 +956,10 @@ function toLatex(n: Node): string {
           if (isAtomic(n.a) && isAtomic(n.b)) return `${toLatex(n.a)}/${toLatex(n.b)}`
           return `\\frac{${toLatex(n.a)}}{${toLatex(n.b)}}`
         case '^': {
-          const base = precOf(n.a) < 4 ? wrap(toLatex(n.a)) : toLatex(n.a)
+          // A decimal base is written in parentheses, (1.05)^{x}: bare, the
+          // coefficient in front of it runs into it ("3 · 1.05^x").
+          const decimalBase = n.a.t === 'num' && n.a.raw.includes('.')
+          const base = precOf(n.a) < 4 || decimalBase ? wrap(toLatex(n.a)) : toLatex(n.a)
           return `${base}^{${toLatex(n.b)}}`
         }
       }
