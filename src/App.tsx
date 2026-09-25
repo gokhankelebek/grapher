@@ -86,6 +86,10 @@ import { factoredSource } from './core/factored'
 import type { FactoredSpec } from './core/factored'
 import { moveRoot, rootHandles, safeReadFactored } from './ui/factorLinks'
 import type { FactorSide } from './ui/factorLinks'
+import { expSource } from './core/exponential'
+import type { ExpSpec } from './core/exponential'
+import { EXP_HANDLE_LABEL, dragExpHandle, expHandles, safeReadExponential } from './ui/expLinks'
+import type { ExpHandleKind } from './ui/expLinks'
 import { curveBounds, splitNotice, unionBoxes } from './ui/curveState'
 import { answerPieces } from './ui/nlText'
 import { AnswerContext } from './ui/answerContext'
@@ -453,6 +457,20 @@ export default function App() {
     curveId: string
     bracket: unknown
     spec: FactoredSpec
+  } | null>(null)
+  /** "Build ▾ → Exponential" open at the top of the list (src/ui/ExpEditor.tsx). */
+  const [expOpen, setExpOpen] = useState(false)
+  /**
+   * The exponential handle being dragged, and the spec it started from. Each
+   * handle sets ONE quantity from the pointer's absolute height, so every
+   * frame is computed from the spec at the press — never from the previous
+   * frame's rounding.
+   */
+  const expDragRef = useRef<{
+    handleId: string
+    curveId: string
+    bracket: unknown
+    spec: ExpSpec
   } | null>(null)
   const [extraModels, setExtraModels] = useState<Record<string, ModelSpec>>({})
   /**
@@ -3851,6 +3869,80 @@ export default function App() {
     [restateTypedCurve],
   )
 
+  // ======================================================= exponentials
+  //
+  // y = a·b^((x − h)/p) + k, stated the precalculus way, is an ordinary TYPED
+  // curve too: "Build ▾ → Exponential" writes its line (src/core/exponential.ts)
+  // and hands it to addExpression; the card's Exponential section, its "rate
+  // as" rewrite and the three board handles all rewrite that line and restate
+  // the curve in place through restateTypedCurve — exactly the roots path.
+
+  /** "Add to graph": the normal typed-equation path, one undo entry. */
+  const buildExponential = useCallback(
+    (spec: ExpSpec): string | null => {
+      let src: string
+      try {
+        src = expSource(spec)
+      } catch {
+        return 'This exponential could not be written out.'
+      }
+      const err = addExpression(src, 'build exponential')
+      if (err) return err
+      setExpOpen(false)
+      return null
+    },
+    [addExpression],
+  )
+
+  /**
+   * A SKETCHED curve replaced by a typed line, in place: same id, colour and
+   * links, one undo entry. "Convert to typed exponential" takes it — a fitted
+   * a·e^{bx} + c becomes y = a(b)^x + k, and from then on it is an ordinary
+   * typed exponential with an Exponential section of its own.
+   */
+  const convertToTyped = useCallback(
+    (id: string, src: string, label: string): string | null => {
+      let outcome: ReturnType<typeof parseExpression>
+      try {
+        outcome = parseExpression(src)
+      } catch {
+        return 'The parser crashed on this input'
+      }
+      if (!outcome.ok) return outcome.error
+      return restateAsExpression(id, src, outcome.plot, label, false)
+    },
+    [restateAsExpression],
+  )
+
+  /**
+   * Drag one exponential handle vertically: the asymptote (k, with a kept —
+   * the whole curve shifts), the y-intercept (a) or the point one period
+   * later (b, with a kept). Snapped to the grid's ladder, restated live inside
+   * the press's bracket, so a whole drag is one undo.
+   */
+  const dragExp = useCallback(
+    (curveId: string, which: ExpHandleKind, handleId: string, to: Vec2): void => {
+      const bracket = preEditRef.current
+      let s = expDragRef.current
+      if (!s || s.handleId !== handleId || s.curveId !== curveId || s.bracket !== bracket || !bracket) {
+        const spec = safeReadExponential(exprSourcesRef.current[curveId])
+        if (!spec) return
+        s = { handleId, curveId, bracket, spec }
+        expDragRef.current = s
+      }
+      const next = dragExpHandle(s.spec, which, snapCoord(to.y, vpRef.current))
+      if (!next) return
+      let src: string
+      try {
+        src = expSource(next)
+      } catch {
+        return
+      }
+      restateTypedCurve(curveId, src, EXP_HANDLE_LABEL[which], true)
+    },
+    [restateTypedCurve],
+  )
+
   // ======================================================= number-line items
   //
   // The whole content of this figure is where each endpoint sits and whether it
@@ -4375,6 +4467,31 @@ export default function App() {
         drag && drag.curveId === typed.id && drag.bracket !== null && drag.bracket === preEditRef.current
           ? drag.spec
           : safeReadFactored(exprSources[typed.id])
+      const exp = spec ? null : safeReadExponential(exprSources[typed.id])
+      if (exp) {
+        for (const h of expHandles(exp)) {
+          const id = `exp:${typed.id}:${h.which}`
+          // The asymptote is a whole line, so its handle sits where the eye
+          // starts reading it: the board's LEFT EDGE. The viewport pans without
+          // re-rendering App, so x is read live, at paint and hit-test time.
+          const pos: Vec2 =
+            h.which === 'k'
+              ? {
+                  get x(): number {
+                    const vp = vpRef.current
+                    return vp.center.x - vp.widthPx / 2 / vp.pxPerUnit + 28 / vp.pxPerUnit
+                  },
+                  y: h.pos.y,
+                }
+              : h.pos
+          out.push({
+            id,
+            pos,
+            label: h.label,
+            onDrag: (p) => dragExp(typed.id, h.which, id, p),
+          })
+        }
+      }
       if (spec) {
         for (const h of rootHandles(spec)) {
           const id = `factor:${typed.id}:${h.side}:${h.index}`
@@ -4422,6 +4539,7 @@ export default function App() {
     dragShapeVertex,
     exprSources,
     dragFactorRoot,
+    dragExp,
   ])
 
   const copyTimerRef = useRef(0)
@@ -5268,13 +5386,24 @@ export default function App() {
         onOpacity={setOpacity}
         onExprToggle={() => {
           setFactorOpen(false)
+          setExpOpen(false)
           setExprOpen((o) => !o)
         }}
         factorOpen={factorOpen}
         onFactorToggle={() => {
           setExprOpen(false)
+          setExpOpen(false)
           setFactorOpen((o) => !o)
         }}
+        expOpen={expOpen}
+        onExpToggle={() => {
+          setExprOpen(false)
+          setFactorOpen(false)
+          setExpOpen((o) => !o)
+        }}
+        onExpBuild={buildExponential}
+        onExpRestate={restateFactors}
+        onConvertTyped={convertToTyped}
         onFactorBuild={buildFromRoots}
         onFactorRestate={restateFactors}
         factorThroughFor={factorThroughFor}

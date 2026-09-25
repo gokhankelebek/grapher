@@ -610,7 +610,15 @@ function endSide(f: Fn, side: 1 | -1, x0: number, mag: number): EndLine | null {
 
   const n = fs.length
   const ms = fs.map((v, i) => v / xs[i])
-  const mTol = CONVERGE_REL * Math.max(1, Math.abs(ms[n - 1]))
+  // m_k = m + b/x_k: the slope estimate carries a residue the size of the
+  // curve's own values over x. An absolute tolerance ignored that and read
+  // y = 190(1/2)^(x/5.7) + 50 as "not converged" — any level |k| ≳ 11 was
+  // missed. The residue term scales with the curve's magnitude, so a level
+  // of 50 or 5·10⁶ settles like a level of 1, while x·ln x (m = ln x, steps
+  // of 2.3 at every rung) still fails by orders of magnitude.
+  const mTol =
+    CONVERGE_REL * Math.max(1, Math.abs(ms[n - 1])) +
+    (END_RATIO * Math.max(mag, Math.abs(fs[n - 1] - ms[n - 1] * xs[n - 1]))) / Math.abs(xs[n - 1])
   if (tailLimit(ms, mTol) === null) return null
 
   // Richardson on the last two rungs: m_k = m + b/x_k + O(x_k^−2), and the

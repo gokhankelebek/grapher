@@ -14,6 +14,8 @@ import type {
 import type { CurveStyle } from '../App'
 import { RootsSection } from './FactorEditor'
 import { safeReadFactored } from './factorLinks'
+import { ExpSection } from './ExpEditor'
+import { fittedExp, safeReadExponential } from './expLinks'
 import { fitQuality } from '../core/fit/recognize'
 import { findAsymptotes } from '../core/holes'
 import { Latex } from './Latex'
@@ -124,6 +126,16 @@ interface Props {
   factorThrough?: Vec2 | null
   /** Stop keeping that point. */
   onFactorThroughDrop?(): void
+  /**
+   * Rewrite this TYPED curve's line in place from its Exponential section —
+   * the same restate path as the Roots section. Absent = no section.
+   */
+  onExpRestate?(src: string, label: string): string | null
+  /**
+   * Replace this SKETCHED curve with a typed line, in place ("Convert to
+   * typed exponential"). Absent = no menu item.
+   */
+  onConvertTyped?(src: string, label: string): string | null
 }
 
 /**
@@ -597,6 +609,8 @@ export function CurveCard({
   onFactorRestate,
   factorThrough,
   onFactorThroughDrop,
+  onExpRestate,
+  onConvertTyped,
 }: Props) {
   const spec: ModelSpec | undefined = models[curve.modelId]
   const isExpression = curve.modelId.startsWith('expr_')
@@ -612,6 +626,28 @@ export function CurveCard({
   const factored = useMemo(
     () => (isExpression && !broken && curve.kind === 'explicit' ? safeReadFactored(exprSource) : null),
     [isExpression, broken, curve.kind, exprSource],
+  )
+
+  /**
+   * The line read back as an exponential — "y = 200(1/2)^(x/5.7) + 10" is a
+   * starting value, a half-life and an asymptote — or null. Only a typed
+   * curve, and never one the Roots section already speaks for.
+   */
+  const exponential = useMemo(
+    () =>
+      isExpression && !broken && curve.kind === 'explicit' && !factored
+        ? safeReadExponential(exprSource)
+        : null,
+    [isExpression, broken, curve.kind, exprSource, factored],
+  )
+
+  /**
+   * A SKETCH that fitted the library's a·e^{bx} + c, stated the precalculus
+   * way: one read-only line, and a menu item that makes it a typed curve.
+   */
+  const fitted = useMemo(
+    () => (!isExpression && !broken && curve.modelId === 'exp' ? fittedExp(curve.params) : null),
+    [isExpression, broken, curve.modelId, curve.params],
   )
 
   // Inline coefficient editing lives in ParamRow, one editor per row.
@@ -1225,6 +1261,14 @@ export function CurveCard({
               {menuItem(curve.visible ? 'Hide' : 'Show', onToggleVisible)}
               {menuItem(copied ? 'Copied' : 'Copy LaTeX', copyLatex)}
               {menuItem('Delete', onDelete, 'card-menu-danger')}
+              {fitted && onConvertTyped && (
+                <>
+                  <div className="card-menu-sep" />
+                  {menuItem('Convert to typed exponential', () => {
+                    onConvertTyped(fitted.src, 'convert to typed exponential')
+                  })}
+                </>
+              )}
               {calc?.canAdd && (
                 <>
                   <div className="card-menu-sep" />
@@ -1421,6 +1465,14 @@ export function CurveCard({
               onRestate={onFactorRestate}
               onDropThrough={factorThrough ? onFactorThroughDrop : undefined}
             />
+          )}
+          {exponential && onExpRestate && (
+            <ExpSection spec={exponential} onRestate={onExpRestate} />
+          )}
+          {fitted && (
+            <div className="xe-fitted-note" data-testid="fitted-exp-note">
+              {fitted.note}
+            </div>
           )}
           {/* Teaching order: the numbers you move, then what they do to the
               curve, and only then which curve this is being read as. */}

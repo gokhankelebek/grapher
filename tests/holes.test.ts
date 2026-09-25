@@ -898,3 +898,31 @@ describe('cost', () => {
     expect(per, `${per.toFixed(3)} ms per call`).toBeLessThan(1)
   })
 })
+
+describe('findEndAsymptotes — a level well away from 0', () => {
+  it('reads y = k for an exponential whatever the size of k', () => {
+    // The slope estimate's residue is k/x; an absolute tolerance used to miss
+    // every level with |k| ≳ 11.
+    for (const [src, k] of [
+      ['y = 190(1/2)^(x/5.7) + 50', 50],
+      ['y = 3(2)^x - 400', -400],
+      ['y = 3atan(x) + 40', null],
+    ] as const) {
+      const { curve, models } = typed(src)
+      const lines = findEndAsymptotes(curve, models)
+      expect(lines.length, src).toBeGreaterThan(0)
+      if (k !== null) {
+        expect(lines).toHaveLength(1)
+        expect(lines[0]).toMatchObject({ kind: 'line', dir: { x: 1, y: 0 } })
+        expect((lines[0] as { a: { y: number } }).a.y).toBeCloseTo(k, 6)
+      }
+    }
+  })
+
+  it('still invents nothing for growth, drift or oscillation', () => {
+    for (const src of ['y = x ln(x)', 'y = ln(x)', 'y = sqrt(x)', 'y = x + sin(x)', 'y = x^2 + 50']) {
+      const { curve, models } = typed(src)
+      expect(findEndAsymptotes(curve, models), src).toEqual([])
+    }
+  })
+})

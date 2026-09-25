@@ -4701,3 +4701,130 @@ button.calc-field-btn {
     min-height: 44px;
   }
 }
+
+/* ------------------------------------------------------------ Build ▾ */
+/*
+ * "Build ▾" on the sidebar header: one menu for every way of building a
+ * function from what a teacher states (src/ui/BuildMenu.tsx). It borrows the
+ * card menu's panel and items.
+ */
+.build-wrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.build-btn {
+  width: auto;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.build-caret {
+  opacity: 0.8;
+}
+
+.build-menu {
+  width: auto;
+  min-width: 200px;
+}
+
+.build-item {
+  white-space: nowrap;
+}
+
+.build-item-on {
+  color: var(--accent);
+}
+
+.build-item-on::after {
+  content: ' ✓';
+}
+
+/* ------------------------------------------------------------ exponential */
+/*
+ * The "Build ▾ → Exponential" card and the Exponential section on a typed
+ * curve's card (src/ui/ExpEditor.tsx). Same vocabulary as the roots editor —
+ * fe-* rows and fields — plus tabs, a select, and the rate sentences.
+ */
+.xe-tabs {
+  align-self: flex-start;
+}
+
+.xe-tab {
+  padding: 2px var(--sp-2);
+  font-size: var(--fs-sm);
+}
+
+.xe-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.xe-select {
+  padding: 2px var(--sp-1);
+  border-radius: 4px;
+  border: 1px solid var(--border-soft);
+  background: var(--panel);
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+.xe-select:focus {
+  outline: none;
+  border-color: rgba(79, 156, 249, 0.55);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.xe-shift {
+  align-self: flex-start;
+}
+
+.xe-formula {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.xe-facts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.xe-sentences,
+.xe-features {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+/* The rate, in the curve's own colour: the sentence the lesson is about. */
+.xe-sentences {
+  color: var(--curve, var(--accent));
+}
+
+.xe-features {
+  color: var(--muted);
+}
+
+/* A sketched exponential, read the precalculus way. */
+.xe-fitted-note {
+  margin-bottom: var(--sp-2);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+@media (pointer: coarse) {
+  .xe-select {
+    min-height: 44px;
+    font-size: var(--fs-field-touch);
+  }
+}

@@ -9,6 +9,7 @@ import type {
   Vec2,
 } from '../core/types'
 import type { FactoredSpec } from '../core/factored'
+import type { ExpSpec } from '../core/exponential'
 import type { StyleMap } from '../App'
 import type { NLPart } from '../render/numberline'
 import { CurveCard } from './CurveCard'
@@ -22,6 +23,8 @@ import type { BoardShape, ShapeCardData } from './shapeLinks'
 import { NLCard } from './NLCard'
 import { ExprInput } from './ExprInput'
 import { FactorEditor } from './FactorEditor'
+import { ExpEditor } from './ExpEditor'
+import { BuildMenu } from './BuildMenu'
 import { BoardKindSwitch } from './BoardKindSwitch'
 
 interface Props {
@@ -93,6 +96,15 @@ interface Props {
   /** The point a curve was built through, if it was. */
   factorThroughFor?(id: string): Vec2 | null
   onFactorThroughDrop?(id: string): void
+  /** "Build ▾ → Exponential" is open at the top of the list. */
+  expOpen?: boolean
+  onExpToggle?(): void
+  /** Put an exponential stated the precalculus way on the board. Error, or null. */
+  onExpBuild?(spec: ExpSpec): string | null
+  /** Rewrite a typed curve's line in place from its Exponential section. */
+  onExpRestate?(id: string, src: string, label: string): string | null
+  /** Replace a sketched curve with a typed line, in place. */
+  onConvertTyped?(id: string, src: string, label: string): string | null
   /** What this curve's card says about calculus. Undefined = nothing to say. */
   /**
    * Where each curve meets the OTHERS, already named — the row is the same
@@ -206,6 +218,11 @@ export function Sidebar({
   onFactorRestate,
   factorThroughFor,
   onFactorThroughDrop,
+  expOpen = false,
+  onExpToggle,
+  onExpBuild,
+  onExpRestate,
+  onConvertTyped,
   intersectionsFor,
   calcFor,
   onAddCalc,
@@ -263,31 +280,22 @@ export function Sidebar({
             >
               +
             </button>
-            {!numberLine && onFactorToggle && (
-              <button
-                className={`add-btn factor-btn${factorOpen ? ' factor-open' : ''}`}
-                title={
-                  factorOpen
-                    ? 'Close Build from roots (Esc)'
-                    : 'Build a polynomial or rational function from its roots'
-                }
-                aria-label="Build from roots"
-                aria-pressed={factorOpen}
-                onClick={onFactorToggle}
-              >
-                {/* A tiny x-axis with its roots on it. */}
-                <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
-                  <line x1="0.5" y1="7" x2="13.5" y2="7" stroke="currentColor" strokeWidth="1.2" />
-                  <circle cx="3.5" cy="7" r="1.8" fill="currentColor" />
-                  <circle cx="10.5" cy="7" r="1.8" fill="currentColor" />
-                </svg>
-              </button>
+            {!numberLine && (onFactorToggle || onExpToggle) && (
+              <BuildMenu
+                factorOpen={factorOpen}
+                expOpen={expOpen}
+                onFactorToggle={onFactorToggle}
+                onExpToggle={onExpToggle}
+              />
             )}
           </div>
         </div>
         <div className="sidebar-list">
           {!numberLine && factorOpen && onFactorBuild && onFactorToggle && (
             <FactorEditor onBuild={onFactorBuild} onClose={onFactorToggle} />
+          )}
+          {!numberLine && expOpen && onExpBuild && onExpToggle && (
+            <ExpEditor onBuild={onExpBuild} onClose={onExpToggle} />
           )}
           {exprOpen && (
             <ExprInput
@@ -371,6 +379,12 @@ export function Sidebar({
               factorThrough={factorThroughFor?.(curve.id) ?? null}
               onFactorThroughDrop={
                 onFactorThroughDrop ? () => onFactorThroughDrop(curve.id) : undefined
+              }
+              onExpRestate={
+                onExpRestate ? (src, label) => onExpRestate(curve.id, src, label) : undefined
+              }
+              onConvertTyped={
+                onConvertTyped ? (src, label) => onConvertTyped(curve.id, src, label) : undefined
               }
             />
           ))}
