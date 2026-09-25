@@ -90,6 +90,21 @@ import { expSource } from './core/exponential'
 import type { ExpSpec } from './core/exponential'
 import { EXP_HANDLE_LABEL, dragExpHandle, expHandles, safeReadExponential } from './ui/expLinks'
 import type { ExpHandleKind } from './ui/expLinks'
+import { logSource } from './core/logarithmic'
+import type { LogSpec } from './core/logarithmic'
+import {
+  LOG_HANDLE_LABEL,
+  MIRROR_COLOR,
+  MIRROR_DASH,
+  MIRROR_SRC,
+  dragLogHandle,
+  inverseColor,
+  inverseSources,
+  logHandles,
+  planInverse,
+  safeReadLogarithmic,
+} from './ui/logLinks'
+import type { LogHandleKind } from './ui/logLinks'
 import { curveBounds, splitNotice, unionBoxes } from './ui/curveState'
 import { answerPieces } from './ui/nlText'
 import { AnswerContext } from './ui/answerContext'
@@ -471,6 +486,15 @@ export default function App() {
     curveId: string
     bracket: unknown
     spec: ExpSpec
+  } | null>(null)
+  /** "Build ▾ → Logarithmic" open at the top of the list (src/ui/LogEditor.tsx). */
+  const [logOpen, setLogOpen] = useState(false)
+  /** The logarithm handle being dragged, and the spec at the press (as expDragRef). */
+  const logDragRef = useRef<{
+    handleId: string
+    curveId: string
+    bracket: unknown
+    spec: LogSpec
   } | null>(null)
   const [extraModels, setExtraModels] = useState<Record<string, ModelSpec>>({})
   /**
@@ -3943,6 +3967,144 @@ export default function App() {
     [restateTypedCurve],
   )
 
+  // ======================================================= logarithms
+  //
+  // y = a·log_b(c(x − h)) + k is one more ordinary TYPED curve: "Build ▾ →
+  // Logarithmic" writes its line (src/core/logarithmic.ts) and hands it to
+  // addExpression; the card's Logarithmic section, its "write in base"
+  // switch and the three board handles rewrite that line and restate it in
+  // place through restateTypedCurve — exactly the exponential path.
+
+  /** "Add to graph": the normal typed-equation path, one undo entry. */
+  const buildLogarithm = useCallback(
+    (spec: LogSpec): string | null => {
+      let src: string
+      try {
+        src = logSource(spec)
+      } catch {
+        return 'This logarithm could not be written out.'
+      }
+      const err = addExpression(src, 'build logarithm')
+      if (err) return err
+      setLogOpen(false)
+      return null
+    },
+    [addExpression],
+  )
+
+  /**
+   * Drag one logarithm handle: the asymptote along the x-axis (h — the curve
+   * shifts horizontally), the anchor vertically (k) or the base point
+   * vertically (a). Every frame is computed from the spec at the press,
+   * snapped, restated live inside the press's bracket: one undo per drag.
+   */
+  const dragLog = useCallback(
+    (curveId: string, which: LogHandleKind, handleId: string, to: Vec2): void => {
+      const bracket = preEditRef.current
+      let s = logDragRef.current
+      if (!s || s.handleId !== handleId || s.curveId !== curveId || s.bracket !== bracket || !bracket) {
+        const spec = safeReadLogarithmic(exprSourcesRef.current[curveId])
+        if (!spec) return
+        s = { handleId, curveId, bracket, spec }
+        logDragRef.current = s
+      }
+      const snapped: Vec2 = {
+        x: snapCoord(to.x, vpRef.current),
+        y: snapCoord(to.y, vpRef.current),
+      }
+      const next = dragLogHandle(s.spec, which, snapped)
+      if (!next) return
+      let src: string
+      try {
+        src = logSource(next)
+      } catch {
+        return
+      }
+      restateTypedCurve(curveId, src, LOG_HANDLE_LABEL[which], true)
+    },
+    [restateTypedCurve],
+  )
+
+  /**
+   * "Show inverse" on an Exponential or a Logarithmic section: the exact
+   * inverse as a NEW, independent typed curve in the paired palette colour,
+   * and — once per board — the mirror line y = x, dashed. One undo entry.
+   * The inverse is not linked: editing the original later does not move it.
+   */
+  const showInverse = useCallback(
+    (id: string): void => {
+      const curve = curvesRef.current.find((c) => c.id === id)
+      const from = exprSourcesRef.current[id]
+      if (!curve || !from) return
+      const plan = planInverse(from, Object.values(exprSourcesRef.current))
+      if (!plan) {
+        showFeatureNote({ kind: 'moved', key: Date.now(), text: 'This curve has no inverse to show.' })
+        return
+      }
+      const lines: { src: string; color: string; mirror: boolean }[] = []
+      if (plan.src) lines.push({ src: plan.src, color: inverseColor(curve.color), mirror: false })
+      if (plan.mirror) lines.push({ src: MIRROR_SRC, color: MIRROR_COLOR, mirror: true })
+      if (lines.length === 0) {
+        showFeatureNote({ kind: 'moved', key: Date.now(), text: plan.notice })
+        return
+      }
+      const made: FittedCurve[] = []
+      let mirror: FittedCurve | undefined
+      const models: Record<string, ModelSpec> = {}
+      const sources: Record<string, string> = {}
+      for (const line of lines) {
+        let outcome: ReturnType<typeof parseExpression>
+        try {
+          outcome = parseExpression(line.src)
+        } catch {
+          return
+        }
+        if (!outcome.ok) {
+          showFeatureNote({ kind: 'moved', key: Date.now(), text: outcome.error })
+          return
+        }
+        const modelId = `expr_${++exprCounterRef.current}`
+        try {
+          models[modelId] = outcome.plot.makeModel(modelId)
+        } catch {
+          return
+        }
+        const c: FittedCurve = {
+          id: nextId(),
+          modelId,
+          params: outcome.plot.defaultParams.slice(),
+          kind: outcome.plot.kind,
+          domain: outcome.plot.domain,
+          color: line.color,
+          strokeWidth: 2.5,
+          visible: true,
+          error: 0,
+        }
+        made.push(c)
+        if (line.mirror) mirror = c
+        sources[c.id] = line.src
+      }
+      setExtraModels((prev) => ({ ...prev, ...models }))
+      commitState(
+        {
+          curves: [...curvesRef.current, ...made],
+          exprSources: { ...exprSourcesRef.current, ...sources },
+          ...(mirror
+            ? {
+                styles: {
+                  ...stylesRef.current,
+                  [mirror.id]: { ...stylesRef.current[mirror.id], dash: MIRROR_DASH.slice() },
+                },
+              }
+            : {}),
+        },
+        'show inverse',
+      )
+      showFeatureNote({ kind: 'moved', key: Date.now(), text: plan.notice })
+    },
+    [commitState, showFeatureNote],
+  )
+
   // ======================================================= number-line items
   //
   // The whole content of this figure is where each endpoint sits and whether it
@@ -4468,6 +4630,20 @@ export default function App() {
           ? drag.spec
           : safeReadFactored(exprSources[typed.id])
       const exp = spec ? null : safeReadExponential(exprSources[typed.id])
+      const log = spec || exp ? null : safeReadLogarithmic(exprSources[typed.id])
+      if (log) {
+        // Mid-drag the handles come from the spec at the press, moved — the
+        // asymptote handle stays the one under the finger.
+        for (const h of logHandles(log)) {
+          const id = `log:${typed.id}:${h.which}`
+          out.push({
+            id,
+            pos: h.pos,
+            label: h.label,
+            onDrag: (p) => dragLog(typed.id, h.which, id, p),
+          })
+        }
+      }
       if (exp) {
         for (const h of expHandles(exp)) {
           const id = `exp:${typed.id}:${h.which}`
@@ -4540,6 +4716,7 @@ export default function App() {
     exprSources,
     dragFactorRoot,
     dragExp,
+    dragLog,
   ])
 
   const copyTimerRef = useRef(0)
@@ -4564,6 +4741,12 @@ export default function App() {
   )
   const boardCurveNamesRef = useRef(boardCurveNames)
   boardCurveNamesRef.current = boardCurveNames
+
+  /** The exponentials "Build ▾ → Logarithmic → Inverse of…" can pick, named. */
+  const logInverseSources = useMemo(
+    () => (logOpen ? inverseSources(curves, exprSources, boardCurveNames) : []),
+    [logOpen, curves, exprSources, boardCurveNames],
+  )
 
   /** The caption the board would write for itself, right now. */
   const autoCaption = defaultCaption(figureStyle, namesInOrder(curves, boardCurveNames))
@@ -5387,20 +5570,34 @@ export default function App() {
         onExprToggle={() => {
           setFactorOpen(false)
           setExpOpen(false)
+          setLogOpen(false)
           setExprOpen((o) => !o)
         }}
         factorOpen={factorOpen}
         onFactorToggle={() => {
           setExprOpen(false)
           setExpOpen(false)
+          setLogOpen(false)
           setFactorOpen((o) => !o)
         }}
         expOpen={expOpen}
         onExpToggle={() => {
           setExprOpen(false)
           setFactorOpen(false)
+          setLogOpen(false)
           setExpOpen((o) => !o)
         }}
+        logOpen={logOpen}
+        onLogToggle={() => {
+          setExprOpen(false)
+          setFactorOpen(false)
+          setExpOpen(false)
+          setLogOpen((o) => !o)
+        }}
+        onLogBuild={buildLogarithm}
+        logInverseSources={logInverseSources}
+        onLogRestate={restateFactors}
+        onShowInverse={showInverse}
         onExpBuild={buildExponential}
         onExpRestate={restateFactors}
         onConvertTyped={convertToTyped}

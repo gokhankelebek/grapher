@@ -55,7 +55,7 @@ import { evalText } from './factorLinks'
 type Mode = 'draft' | 'commit'
 
 /** One typed value — a draft's is the state; a card's commits on Enter/blur. */
-function XField({
+export function XField({
   value,
   mode,
   label,
@@ -144,7 +144,7 @@ function XField({
 }
 
 /** A field in a draft is red when it has text that is not a number. */
-function badText(t: string): boolean {
+export function badText(t: string): boolean {
   return t.trim() !== '' && t.trim() !== 'e' && evalText(t) === null
 }
 
@@ -155,19 +155,27 @@ const TABS: { tab: ExpTab; label: string }[] = [
 ]
 
 /** The sentences and features under a preview or on a card. */
-function ExpFacts({ sentences, features }: { sentences: string[]; features: string[] }) {
+export function ExpFacts({
+  sentences,
+  features,
+  testPrefix = 'exp',
+}: {
+  sentences: string[]
+  features: string[]
+  testPrefix?: string
+}) {
   if (sentences.length === 0 && features.length === 0) return null
   return (
     <div className="xe-facts">
       {sentences.length > 0 && (
-        <ul className="xe-sentences" data-testid="exp-sentences">
+        <ul className="xe-sentences" data-testid={`${testPrefix}-sentences`}>
           {sentences.map((s, i) => (
             <li key={i}>{s}</li>
           ))}
         </ul>
       )}
       {features.length > 0 && (
-        <ul className="xe-features" data-testid="exp-features">
+        <ul className="xe-features" data-testid={`${testPrefix}-features`}>
           {features.map((s, i) => (
             <li key={i}>{s}</li>
           ))}
@@ -582,9 +590,11 @@ interface SectionProps {
   spec: ExpSpec
   /** Rewrite the curve's line in place. Error message, or null. */
   onRestate(src: string, label: string): string | null
+  /** "Show inverse": add the exact inverse (a logarithm) and y = x. */
+  onShowInverse?(): void
 }
 
-export function ExpSection({ spec, onRestate }: SectionProps) {
+export function ExpSection({ spec, onRestate, onShowInverse }: SectionProps) {
   const [open, setOpen] = useState(true)
   const [error, setError] = useState<string | null>(null)
   useEffect(() => setError(null), [spec])
@@ -677,6 +687,22 @@ export function ExpSection({ spec, onRestate }: SectionProps) {
           </div>
           <ExpFacts sentences={rate?.sentences ?? []} features={features} />
           {error && <div className="expr-error">{error}</div>}
+          {onShowInverse && (
+            <div className="fe-a-row">
+              <button
+                type="button"
+                className="calc-chip xe-inverse"
+                data-testid="exp-show-inverse"
+                title="Add the inverse function (a logarithm) and the mirror line y = x"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onShowInverse()
+                }}
+              >
+                Show inverse
+              </button>
+            </div>
+          )}
           <div className="field-hint">
             Drag the asymptote, the y-intercept or the point one period later on the board.
           </div>

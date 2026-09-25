@@ -22,6 +22,10 @@
 //      ^              30 (right-assoc))
 //   Paren-less function application binds a full product: sin 2x = sin(2x),
 //   sin x + 1 = sin(x) + 1.
+//   Logarithms in any base: log_B(u) := `log_` base arg, where base is a
+//   number literal, a constant, a single letter or '(' expr ')', never
+//   depending on the variable; arg is '(' expr ')' or paren-less like ln x.
+//   log_(B, u) is the same call. log_e(u) is ln(u). See Parser.logBaseNud.
 // ============================================================================
 
 import type { CurveKind, ModelSpec, ParamMeta, ParseOutcome, ParsedPlot } from '../types'
@@ -75,6 +79,23 @@ const FUNCS: Record<string, FuncDef> = {
   sign:  { arity: 1, fn: (a) => Math.sign(a),  latex: (x) => `\\operatorname{sign}${wrap(x[0])}` },
   min:   { arity: 2, fn: (a, b) => Math.min(a, b), latex: (x) => `\\min${wrap(`${x[0]},\\,${x[1]}`)}` },
   max:   { arity: 2, fn: (a, b) => Math.max(a, b), latex: (x) => `\\max${wrap(`${x[0]},\\,${x[1]}`)}` },
+  // log_B(u): args are [B, u] (source order, so free constants keep their
+  // order of first appearance). Typed only as `log_…` — the tokenizer never
+  // produces the name `log_` from a plain word. See LOG_BASE below.
+  log_:  { arity: 2, fn: (b, u) => logBase(b, u), latex: (x) => `\\log_{${x[0]}}${wrap(x[1])}` },
+}
+
+/**
+ * log_b(u) = ln(u)/ln(b). A base that is not positive, or is 1, has no
+ * logarithm: NaN everywhere (a slider passing through b = 1 lifts the pen
+ * rather than drawing ±∞). Bases 2 and 10 use the exact library functions,
+ * so log_10(1000) is 3 and log_2(8) is 3, not 2.9999999999999996.
+ */
+function logBase(b: number, u: number): number {
+  if (!(b > 0) || b === 1 || !Number.isFinite(b)) return Number.NaN
+  if (b === 10) return Math.log10(u)
+  if (b === 2) return Math.log2(u)
+  return Math.log(u) / Math.log(b)
 }
 
 const CONSTS: Record<string, { v: number; latex: string }> = {
@@ -131,7 +152,8 @@ function levenshtein(a: string, b: string): number {
 /** Suggest a known function/constant name at Levenshtein distance <= 1. */
 function suggest(word: string): string | null {
   const lower = word.toLowerCase()
-  const candidates = [...Object.keys(FUNCS), ...Object.keys(CONSTS), 'theta']
+  // `log_` is reached only through the subscript syntax, never suggested as a word
+  const candidates = [...Object.keys(FUNCS).filter((w) => !w.includes('_')), ...Object.keys(CONSTS), 'theta']
   if (lower !== word && candidates.includes(lower)) return lower
   let best: string | null = null
   let bestD = 2
@@ -175,6 +197,13 @@ function tokenize(src: string): Token[] {
       let j = i
       while (j < n && /[A-Za-z0-9]/.test(src[j])) j++
       const word = src.slice(i, j)
+      // log_B: the subscript marks an arbitrary base (log_3, log_(1/2), log_b).
+      // The underscore is consumed here; the base is read by the parser.
+      if (word === 'log' && src[j] === '_') {
+        toks.push({ type: 'ident', text: 'log_', pos: i, value: 0 })
+        i = j + 1
+        continue
+      }
       if (!/[0-9]/.test(word) || isKnownName(word)) {
         // pure letters (parser classifies / errors) or a known digit-bearing
         // name such as log2
@@ -321,8 +350,109 @@ class Parser {
     throw new ParseError('internal parser error', tok.pos)
   }
 
+  /**
+   * `log_B(u)`, after the `log_` token. B is one of
+   *   a number literal     log_3(x), log_10(x), log_2.5(x)
+   *   a constant or letter log_e(x) (= ln), log_pi(x), log_b(x) (a slider)
+   *   a parenthesised constant expression   log_(1/2)(x), log_(sqrt(2))(x)
+   * and must not depend on the variable. The argument is parenthesised, or
+   * paren-less exactly like `ln x`: `log_2 x` = log₂(x), `log_2 3x` = log₂(3x),
+   * `log_2 x + 1` = log₂(x) + 1 — the digits after `_` are always the whole
+   * base, so `log_2x` is log₂(x) too. `log_(B, u)` (one pair of parentheses,
+   * a comma) is the same call, and is how the AST prints back as source.
+   */
+  private logBaseNud(tok: Token): Node {
+    const at = this.peek()
+    const needBase = (): never => {
+      throw new ParseError(
+        `'log_' needs a base, e.g. log_2(x) or log_(1/2)(x)`,
+        at.type === 'end' ? tok.pos : at.pos,
+      )
+    }
+    let base: Node
+    let args: Node[] | null = null
+    switch (at.type) {
+      case 'num':
+        this.next()
+        base = { t: 'num', v: at.value, raw: at.text }
+        break
+      case 'ident': {
+        const w = at.text
+        if (VAR_NAMES.has(w)) {
+          this.next()
+          base = { t: 'var', name: w as VarName }
+        } else if (w in CONSTS) {
+          this.next()
+          base = { t: 'const', name: w as keyof typeof CONSTS }
+        } else if (w.length === 1 && !(w in FUNCS)) {
+          this.next()
+          base = this.registerParam(w)
+        } else {
+          throw new ParseError(
+            `Put a longer base in parentheses, e.g. log_(${w === 'sqrt' ? 'sqrt(2)' : w})(x)`,
+            at.pos,
+          )
+        }
+        break
+      }
+      case 'lparen': {
+        this.next()
+        base = this.parseExpr(0)
+        if (this.peek().type === 'comma') {
+          // log_(B, u)
+          this.next()
+          args = [base, this.parseExpr(0)]
+        }
+        const close = this.peek()
+        if (close.type !== 'rparen') this.fail(close, "')'")
+        this.next()
+        break
+      }
+      case 'op':
+        if (at.text === '-') {
+          throw new ParseError('The base of a logarithm must be a positive number, e.g. log_2(x)', at.pos)
+        }
+        return needBase()
+      default:
+        return needBase()
+    }
+    const vars = new Set<VarName>()
+    collectVars(base, vars)
+    if (vars.size > 0) {
+      const v = [...vars][0]
+      throw new ParseError(
+        `The base of a logarithm must be a number — it cannot depend on ${v === 'theta' ? 'θ' : v}`,
+        at.pos,
+      )
+    }
+    if (!args) {
+      const nxt = this.peek()
+      let arg: Node
+      if (nxt.type === 'lparen') {
+        this.next()
+        arg = this.parseExpr(0)
+        const close = this.peek()
+        if (close.type === 'comma') {
+          throw new ParseError(`'log_' takes one argument — unexpected ',' at position ${close.pos}`, close.pos)
+        }
+        if (close.type !== 'rparen') this.fail(close, "')'")
+        this.next()
+      } else if (this.startsExpr(nxt) || (nxt.type === 'op' && (nxt.text === '-' || nxt.text === '+'))) {
+        // paren-less application binds a full product, stops at + / − (as ln x)
+        arg = this.parseExpr(BP_ADD)
+      } else {
+        throw new ParseError(`A logarithm needs an argument, e.g. log_2(x)`, nxt.pos)
+      }
+      args = [base, arg]
+    }
+    // log_e is ln: one function, one spelling on the card
+    if (args[0].t === 'const' && args[0].name === 'e') return { t: 'call', fn: 'ln', args: [args[1]] }
+    return { t: 'call', fn: 'log_', args }
+  }
+
   private identNud(tok: Token): Node {
     const w = tok.text
+    if (w === 'log_') return this.logBaseNud(tok)
     const fdef = FUNCS[w]
     if (fdef) {
       if (this.peek().type === 'lparen') {
@@ -588,7 +718,10 @@ const TRIG_POLE: Record<string, 'cos' | 'sin'> = {
  * the zeros of g are singularities of ln(g) exactly as they are of 1/g. The
  * base changes nothing — it only scales the logarithm by a constant.
  */
-const LOG_ARG: ReadonlySet<string> = new Set(['ln', 'log', 'log2', 'log10'])
+const LOG_ARG: ReadonlySet<string> = new Set(['ln', 'log', 'log2', 'log10', 'log_'])
+
+/** The argument of a logarithm call (log_B(u) carries [B, u]). */
+const logArgOf = (n: { fn: string; args: Node[] }): Node => (n.fn === 'log_' ? n.args[1] : n.args[0])
 
 /** One sub-expression whose zeros are singular, and where they may lie. */
 interface SingSource {
@@ -638,7 +771,7 @@ function collectSingSources(n: Node, within: Piece[] | null, out: SingSource[]):
       } else if (LOG_ARG.has(n.fn)) {
         // ln(x² − 4) stops being a formula where x² − 4 does: at ±2, where it
         // dives to −∞. The argument is a denominator wearing a third hat.
-        out.push({ q: compile(n.args[0]), within })
+        out.push({ q: compile(logArgOf(n)), within })
       }
       for (const arg of n.args) collectSingSources(arg, within, out)
       break
@@ -923,6 +1056,14 @@ function mulSep(ls: string, rs: string): string {
   return ''
 }
 
+/** The subscript of \log_{…}: a fraction n/d as \frac, everything else as usual. */
+function baseLatex(n: Node): string {
+  if (n.t === 'bin' && n.op === '/' && isAtomic(n.a) && isAtomic(n.b)) {
+    return `\\frac{${toLatex(n.a)}}{${toLatex(n.b)}}`
+  }
+  return toLatex(n)
+}
+
 function toLatex(n: Node): string {
   switch (n.t) {
     case 'num': return numLatex(n.raw)
@@ -930,7 +1071,10 @@ function toLatex(n: Node): string {
     case 'var': return VAR_LATEX[n.name]
     case 'param': return n.name
     case 'neg': return `-${child(n.a, 2)}`
-    case 'call': return FUNCS[n.fn].latex(n.args.map(toLatex))
+    case 'call':
+      // log_B: a simple fraction base is typeset as one, \log_{\frac{1}{2}}
+      if (n.fn === 'log_') return FUNCS.log_.latex([baseLatex(n.args[0]), toLatex(n.args[1])])
+      return FUNCS[n.fn].latex(n.args.map(toLatex))
     case 'bin':
       switch (n.op) {
         case '+': {
@@ -1077,6 +1221,7 @@ function compileEquation(src: string): {
   cls: Classified
   paramNames: string[]
   vars: Set<VarName>
+  logBases: Set<string>
 } {
   const parser = new Parser(src)
   const { lhs, rhs } = parser.parseInput()
@@ -1100,8 +1245,33 @@ function compileEquation(src: string): {
     collectVars(lhs, vars)
     if (rhs) collectVars(rhs, vars)
   }
-  return { cls, paramNames, vars }
+  return { cls, paramNames, vars, logBases: logBaseParams([lhs, rhs]) }
 }
+
+/**
+ * Free constants used as the bare base of a logarithm (the b of log_b(x)).
+ * Every other slider starts at 1, but a base of 1 has no logarithm — the
+ * curve would start out invisible — so these start at 2.
+ */
+function logBaseParams(nodes: readonly (Node | null)[]): Set<string> {
+  const out = new Set<string>()
+  const walk = (n: Node): void => {
+    switch (n.t) {
+      case 'neg': walk(n.a); break
+      case 'bin': walk(n.a); walk(n.b); break
+      case 'call':
+        if (n.fn === 'log_' && n.args[0].t === 'param') out.add(n.args[0].name)
+        for (const a of n.args) walk(a)
+        break
+      default: break
+    }
+  }
+  for (const n of nodes) if (n) walk(n)
+  return out
+}
+
+/** The default value of one free constant. */
+const LOG_BASE_DEFAULT = 2
 
 function makePlot(
   kind: CurveKind,
@@ -1110,8 +1280,9 @@ function makePlot(
   domain: [number, number] | null,
   ev: Evaluator,
   sing: SingPlan | null = null,
+  logBases: ReadonlySet<string> = new Set(),
 ): ParsedPlot {
-  const defaultParams = paramNames.map(() => 1)
+  const defaultParams = paramNames.map((nm) => (logBases.has(nm) ? LOG_BASE_DEFAULT : 1))
   return {
     kind,
     latex,
@@ -1125,7 +1296,7 @@ function makePlot(
         name: 'Expression',
         latex: () => latex,
         paramMeta: (params: number[]) =>
-          paramNames.map((nm, i) => metaFor(nm, params[i] ?? 1)),
+          paramNames.map((nm, i) => metaFor(nm, params[i] ?? defaultParams[i])),
       }
       if (kind === 'explicit') {
         spec.evalExplicit = (params, x) => ev(params, x, 0)
@@ -1436,7 +1607,7 @@ function parseRestricted(src: string, cut: Cut): ParsedPlot {
     throw new ParseError('Empty condition — write something like {0 < x < 3}', cut.at)
   }
 
-  const { cls, paramNames, vars } = compileEquation(base)
+  const { cls, paramNames, vars, logBases } = compileEquation(base)
   if (cls.kind !== 'explicit' && cls.kind !== 'polar') {
     throw new ParseError(
       'A domain restriction needs an explicit curve — write it as y = f(x) or r = f(θ)',
@@ -1471,7 +1642,7 @@ function parseRestricted(src: string, cut: Cut): ParsedPlot {
   if (holes && holes.length > 0) latex += `,\\ ${exclusionLatex(holes, vTex)}`
   else if (!isWholeLine(pieces)) latex += `,\\ ${setLatex(pieces, vTex)}`
 
-  return makePlot(cls.kind, latex, paramNames, layout.domain, layout.ev, plan)
+  return makePlot(cls.kind, latex, paramNames, layout.domain, layout.ev, plan, logBases)
 }
 
 /** The `y =` / `f(x) =` / `r =` head of a piecewise definition. */
@@ -1669,7 +1840,7 @@ function buildPiecewise(headRaw: string, headAt: number, raws: RawBranch[]): Par
     const rows = branches.map((b) => `${b.bodyTex} & ${b.condTex}`)
     latex = `${head.tex} = \\begin{cases} ${rows.join(' \\\\ ')} \\end{cases}`
   }
-  return makePlot(kind, latex, paramNames, layout.domain, layout.ev, plan)
+  return makePlot(kind, latex, paramNames, layout.domain, layout.ev, plan, logBaseParams(bodies))
 }
 
 /** `piecewise(e1, c1, e2, c2, ...)` with an optional final default value. */
@@ -1778,10 +1949,10 @@ export function parseExpression(src: string): ParseOutcome {
     const restricted = parsePieced(src)
     if (restricted) return { ok: true, plot: restricted }
 
-    const { cls, paramNames } = compileEquation(src)
+    const { cls, paramNames, logBases } = compileEquation(src)
     return {
       ok: true,
-      plot: makePlot(cls.kind, cls.latex, paramNames, cls.domain, cls.ev, singPlanOf(cls.body)),
+      plot: makePlot(cls.kind, cls.latex, paramNames, cls.domain, cls.ev, singPlanOf(cls.body), logBases),
     }
   } catch (err) {
     if (err instanceof ParseError) {

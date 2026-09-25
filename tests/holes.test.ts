@@ -251,8 +251,30 @@ describe('logarithmic asymptotes', () => {
     }
   })
 
+  it('log_B in any base is a vertical asymptote where its argument is 0', () => {
+    expect(singOf('y = log_3(x)')).toEqual([0])
+    expect(polesOf('y = log_3(x)')).toEqual([0])
+    expect(asymptotesOf('y = log_3(x)')).toEqual([{ kind: 'vertical', x: 0 }])
+    // a base below 1 flips the dive to +∞; it is a pole all the same
+    expect(singOf('y = log_(1/2)(x - 1)')).toEqual([1])
+    expect(polesOf('y = log_(1/2)(x - 1)')).toEqual([1])
+    expect(holesOf('y = log_(1/2)(x - 1)')).toEqual([])
+    expect(asymptotesOf('y = log_(1/2)(x - 1)')).toEqual([{ kind: 'vertical', x: 1 }])
+    // reflected: domain x < 3
+    expect(polesOf('y = 2log_5(3 - x) + 1')).toEqual([3])
+    // a slider base (starting at 2), and the two-argument spelling
+    expect(polesOf('y = log_b(x + 2)')).toEqual([-2])
+    expect(polesOf('y = log_(10, x - 4)')).toEqual([4])
+    // x·log_3(x) is a hole, exactly as x·ln(x) is
+    const holes = holesOf('y = x log_3(x)')
+    expect(holes).toHaveLength(1)
+    expect(holes[0].x).toBe(0)
+    expect(polesOf('y = x log_3(x)')).toEqual([])
+  })
+
   it('the two listings never disagree: a hole is never also a pole', () => {
     for (const src of [
+      'y = log_3(x)', 'y = log_(1/2)(x - 1)', 'y = x log_3(x)',
       'y = ln(x)', 'y = ln(x^2-4)', 'y = ln(abs(x))', 'y = x ln(x)',
       'y = x ln(abs(x))', 'y = ln(x)/x', 'y = log2(x-1)', 'y = 1/ln(x)',
       'y = (x^2-1)/(x-1)', 'y = tan(x)', 'y = abs(x)/x', 'y = x^-0.5',

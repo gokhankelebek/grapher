@@ -10,6 +10,7 @@ import type {
 } from '../core/types'
 import type { FactoredSpec } from '../core/factored'
 import type { ExpSpec } from '../core/exponential'
+import type { LogSpec } from '../core/logarithmic'
 import type { StyleMap } from '../App'
 import type { NLPart } from '../render/numberline'
 import { CurveCard } from './CurveCard'
@@ -24,6 +25,8 @@ import { NLCard } from './NLCard'
 import { ExprInput } from './ExprInput'
 import { FactorEditor } from './FactorEditor'
 import { ExpEditor } from './ExpEditor'
+import { LogEditor } from './LogEditor'
+import type { InverseSource } from './logLinks'
 import { BuildMenu } from './BuildMenu'
 import { BoardKindSwitch } from './BoardKindSwitch'
 
@@ -105,6 +108,17 @@ interface Props {
   onExpRestate?(id: string, src: string, label: string): string | null
   /** Replace a sketched curve with a typed line, in place. */
   onConvertTyped?(id: string, src: string, label: string): string | null
+  /** "Build ▾ → Logarithmic" is open at the top of the list. */
+  logOpen?: boolean
+  onLogToggle?(): void
+  /** Put a logarithm stated the precalculus way on the board. Error, or null. */
+  onLogBuild?(spec: LogSpec): string | null
+  /** The exponentials on the board "Inverse of…" can pick. */
+  logInverseSources?: readonly InverseSource[]
+  /** Rewrite a typed curve's line in place from its Logarithmic section. */
+  onLogRestate?(id: string, src: string, label: string): string | null
+  /** "Show inverse" on an Exponential or Logarithmic section. */
+  onShowInverse?(id: string): void
   /** What this curve's card says about calculus. Undefined = nothing to say. */
   /**
    * Where each curve meets the OTHERS, already named — the row is the same
@@ -223,6 +237,12 @@ export function Sidebar({
   onExpBuild,
   onExpRestate,
   onConvertTyped,
+  logOpen = false,
+  onLogToggle,
+  onLogBuild,
+  logInverseSources,
+  onLogRestate,
+  onShowInverse,
   intersectionsFor,
   calcFor,
   onAddCalc,
@@ -280,12 +300,14 @@ export function Sidebar({
             >
               +
             </button>
-            {!numberLine && (onFactorToggle || onExpToggle) && (
+            {!numberLine && (onFactorToggle || onExpToggle || onLogToggle) && (
               <BuildMenu
                 factorOpen={factorOpen}
                 expOpen={expOpen}
+                logOpen={logOpen}
                 onFactorToggle={onFactorToggle}
                 onExpToggle={onExpToggle}
+                onLogToggle={onLogToggle}
               />
             )}
           </div>
@@ -296,6 +318,9 @@ export function Sidebar({
           )}
           {!numberLine && expOpen && onExpBuild && onExpToggle && (
             <ExpEditor onBuild={onExpBuild} onClose={onExpToggle} />
+          )}
+          {!numberLine && logOpen && onLogBuild && onLogToggle && (
+            <LogEditor onBuild={onLogBuild} onClose={onLogToggle} sources={logInverseSources} />
           )}
           {exprOpen && (
             <ExprInput
@@ -386,6 +411,10 @@ export function Sidebar({
               onConvertTyped={
                 onConvertTyped ? (src, label) => onConvertTyped(curve.id, src, label) : undefined
               }
+              onLogRestate={
+                onLogRestate ? (src, label) => onLogRestate(curve.id, src, label) : undefined
+              }
+              onShowInverse={onShowInverse ? () => onShowInverse(curve.id) : undefined}
             />
           ))}
           {!numberLine &&

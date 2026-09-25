@@ -16,6 +16,8 @@ import { RootsSection } from './FactorEditor'
 import { safeReadFactored } from './factorLinks'
 import { ExpSection } from './ExpEditor'
 import { fittedExp, safeReadExponential } from './expLinks'
+import { LogSection } from './LogEditor'
+import { fittedLog, safeReadLogarithmic } from './logLinks'
 import { fitQuality } from '../core/fit/recognize'
 import { findAsymptotes } from '../core/holes'
 import { Latex } from './Latex'
@@ -136,6 +138,16 @@ interface Props {
    * typed exponential"). Absent = no menu item.
    */
   onConvertTyped?(src: string, label: string): string | null
+  /**
+   * Rewrite this TYPED curve's line in place from its Logarithmic section —
+   * the same restate path again. Absent = no section.
+   */
+  onLogRestate?(src: string, label: string): string | null
+  /**
+   * "Show inverse" on the Exponential or Logarithmic section: add the exact
+   * inverse as a new typed curve (and y = x once). Absent = no button.
+   */
+  onShowInverse?(): void
 }
 
 /**
@@ -611,6 +623,8 @@ export function CurveCard({
   onFactorThroughDrop,
   onExpRestate,
   onConvertTyped,
+  onLogRestate,
+  onShowInverse,
 }: Props) {
   const spec: ModelSpec | undefined = models[curve.modelId]
   const isExpression = curve.modelId.startsWith('expr_')
@@ -642,11 +656,30 @@ export function CurveCard({
   )
 
   /**
+   * The line read back as a logarithm — "y = ln(x - 1) + 2", "y = log_2(x)",
+   * "y = 3log(2x)", however it was typed — or null. Only a typed curve that
+   * neither section above already speaks for.
+   */
+  const logarithmic = useMemo(
+    () =>
+      isExpression && !broken && curve.kind === 'explicit' && !factored && !exponential
+        ? safeReadLogarithmic(exprSource)
+        : null,
+    [isExpression, broken, curve.kind, exprSource, factored, exponential],
+  )
+
+  /**
    * A SKETCH that fitted the library's a·e^{bx} + c, stated the precalculus
    * way: one read-only line, and a menu item that makes it a typed curve.
    */
   const fitted = useMemo(
     () => (!isExpression && !broken && curve.modelId === 'exp' ? fittedExp(curve.params) : null),
+    [isExpression, broken, curve.modelId, curve.params],
+  )
+
+  /** The same for a sketch that fitted a·ln(x − b) + c. */
+  const fittedLn = useMemo(
+    () => (!isExpression && !broken && curve.modelId === 'log' ? fittedLog(curve.params) : null),
     [isExpression, broken, curve.modelId, curve.params],
   )
 
@@ -1269,6 +1302,14 @@ export function CurveCard({
                   })}
                 </>
               )}
+              {fittedLn && onConvertTyped && (
+                <>
+                  <div className="card-menu-sep" />
+                  {menuItem('Convert to typed logarithm', () => {
+                    onConvertTyped(fittedLn.src, 'convert to typed logarithm')
+                  })}
+                </>
+              )}
               {calc?.canAdd && (
                 <>
                   <div className="card-menu-sep" />
@@ -1467,11 +1508,19 @@ export function CurveCard({
             />
           )}
           {exponential && onExpRestate && (
-            <ExpSection spec={exponential} onRestate={onExpRestate} />
+            <ExpSection spec={exponential} onRestate={onExpRestate} onShowInverse={onShowInverse} />
+          )}
+          {logarithmic && onLogRestate && (
+            <LogSection spec={logarithmic} onRestate={onLogRestate} onShowInverse={onShowInverse} />
           )}
           {fitted && (
             <div className="xe-fitted-note" data-testid="fitted-exp-note">
               {fitted.note}
+            </div>
+          )}
+          {fittedLn && (
+            <div className="xe-fitted-note" data-testid="fitted-log-note">
+              {fittedLn.note}
             </div>
           )}
           {/* Teaching order: the numbers you move, then what they do to the

@@ -445,6 +445,123 @@ describe('parse — LaTeX generation', () => {
   })
 })
 
+describe('parse — log_B in any base', () => {
+  it('evaluates as ln(u)/ln(B), exactly for bases 2 and 10', () => {
+    expect(f('log_3(x)', 9)).toBeCloseTo(2, 14)
+    expect(f('log_3(x)', 1 / 27)).toBeCloseTo(-3, 14)
+    expect(f('log_(1/2)(x - 1)', 5)).toBeCloseTo(-2, 14)
+    expect(f('log_10(x)', 1000)).toBe(3)
+    expect(f('log_2(x)', 8)).toBe(3)
+    expect(f('log_2.5(x)', 6.25)).toBeCloseTo(2, 14)
+    expect(f('log_0.5(x)', 8)).toBeCloseTo(-3, 14)
+    expect(f('log_(sqrt(2))(x)', 4)).toBeCloseTo(4, 12)
+    expect(f('log_pi(x)', Math.PI ** 3)).toBeCloseTo(3, 12)
+    for (const x of [0.6, 1, 2.7, 9]) {
+      expect(f('log_e(x)', x)).toBe(Math.log(x))
+      expect(f('log_(2, x)', x)).toBe(Math.log2(x))
+      expect(f('2log_5(x - 1/2) + 4', x)).toBeCloseTo((2 * Math.log(x - 0.5)) / Math.log(5) + 4, 12)
+    }
+  })
+
+  it('is undefined outside its domain and for a base that is not a base', () => {
+    expect(f('log_3(x)', 0)).toBe(-Infinity)
+    expect(f('log_3(x)', -1)).toBeNaN()
+    expect(f('log_1(x)', 5)).toBeNaN()
+    expect(f('log_0(x)', 5)).toBeNaN()
+    expect(f('log_(-2)(x)', 5)).toBeNaN()
+    expect(f('log_(1/2 + 1/2)(x)', 5)).toBeNaN()
+  })
+
+  it('a paren-less argument binds a full product and stops at + / −, like ln x', () => {
+    expect(f('log_2 x + 1', 8)).toBe(4)
+    expect(f('log_2 2x', 4)).toBe(3)
+    // the digits after _ are the whole base: log_2x is log₂(x), never log(2x)
+    expect(f('log_2x', 8)).toBe(3)
+    expect(plot('log_2x').latex).toBe(plot('log_2(x)').latex)
+    expect(f('log_b x', 8)).toBe(3)
+    expect(f('ln x + 1', 1)).toBe(1) // (and ln is unchanged)
+  })
+
+  it('a single-letter base is a slider that starts at 2, not at 1', () => {
+    const p = plot('a log_b(x)')
+    expect(p.paramNames).toEqual(['a', 'b'])
+    expect(p.defaultParams).toEqual([1, 2])
+    expect(f('a log_b(x)', 8)).toBe(3)
+    expect(f('a log_b(x)', 9, [2, 3])).toBeCloseTo(4, 12)
+    expect(plot('log_(b)(x)').defaultParams).toEqual([2])
+    // only a BARE letter is a base slider: (2b) is an ordinary constant
+    expect(plot('log_(2b)(x)').defaultParams).toEqual([1])
+    expect(plot('f(x) = log_b(x) + c').defaultParams).toEqual([2, 1])
+    expect(plot('y = { log_b(x) if x > 0 ; 0 otherwise }').defaultParams).toEqual([2])
+    expect(plot('y = log_b(x) {x > 1}').defaultParams).toEqual([2])
+    // the slider range is built around the value it starts at
+    const meta = p.makeModel('m').paramMeta([1, 2])
+    expect(meta[1].min).toBeLessThan(2)
+    expect(meta[1].max).toBeGreaterThan(2)
+  })
+
+  const tex: Array<[string, string]> = [
+    ['log_3(x)', 'y = \\log_{3}\\left(x\\right)'],
+    ['log_(1/2)(x - 1)', 'y = \\log_{\\frac{1}{2}}\\left(x-1\\right)'],
+    ['log_10(x)', 'y = \\log_{10}\\left(x\\right)'],
+    ['log_2.5(x)', 'y = \\log_{2.5}\\left(x\\right)'],
+    ['log_(sqrt(2))(x)', 'y = \\log_{\\sqrt{2}}\\left(x\\right)'],
+    ['log_b(x)', 'y = \\log_{b}\\left(x\\right)'],
+    ['log_pi(x)', 'y = \\log_{\\pi}\\left(x\\right)'],
+    ['log_e(x)', 'y = \\ln\\left(x\\right)'],
+    ['2log_3(x - 1) + 4', 'y = 2\\log_{3}\\left(x-1\\right)+4'],
+    ['-log_(1/2)(2(x + 3))', 'y = -\\log_{\\frac{1}{2}}\\left(2\\left(x+3\\right)\\right)'],
+    ['log_2 x + 1', 'y = \\log_{2}\\left(x\\right)+1'],
+    ['f(x) = log_3(x)', 'f\\left(x\\right) = \\log_{3}\\left(x\\right)'],
+  ]
+  for (const [src, want] of tex) {
+    it(`latex(${JSON.stringify(src)})`, () => {
+      expect(plot(src).latex).toBe(want)
+    })
+  }
+
+  it('the base must not depend on the variable — a positioned error', () => {
+    const e1 = err('log_(x)(2)')
+    expect(e1.error).toMatch(/^The base of a logarithm must be a number/)
+    expect(e1.pos).toBe(4)
+    const e2 = err('y = log_x(2)')
+    expect(e2.error).toMatch(/^The base of a logarithm must be a number/)
+    expect(e2.pos).toBe(8)
+    expect(err('log_(x + 1)(3)').error).toMatch(/must be a number/)
+    expect(err('f(t) = log_t(3)').error).toMatch(/cannot depend on t/)
+    expect(err('r = log_theta(2)').error).toMatch(/cannot depend on θ/)
+  })
+
+  it('a missing base or argument is an error, never a guess', () => {
+    const bare = err('log_')
+    expect(bare.error).toMatch(/needs a base/)
+    expect(bare.pos).toBe(0)
+    expect(err('log_ + 1').error).toMatch(/needs a base/)
+    expect(err('y = log_(x')).toBeTruthy()
+    expect(err('log_3').error).toMatch(/needs an argument/)
+    expect(err('log_3 * 2').error).toMatch(/needs an argument/)
+    // a sign may start a paren-less argument, exactly as for ln: log_3 -x
+    expect(plot('log_3 -x').latex).toBe('y = \\log_{3}\\left(-x\\right)')
+    expect(plot('ln -x').latex).toBe('y = \\ln\\left(-x\\right)')
+    expect(err('log_-2(x)').error).toMatch(/positive number/)
+    expect(err('log_sqrt(2)(x)').error).toMatch(/parentheses, e\.g\. log_\(sqrt\(2\)\)\(x\)/)
+    expect(err('log_ab(x)').error).toMatch(/parentheses/)
+    expect(err('log_3(x, 2)').error).toMatch(/one argument/)
+    expect(err('log_{3}(x)').error).toMatch(/Unexpected character '\{'/)
+  })
+
+  it('leaves log, ln, log2 and log10 exactly as they were', () => {
+    expect(f('log(x)', 1000)).toBe(3)
+    expect(plot('log(x)').latex).toBe('y = \\log\\left(x\\right)')
+    expect(plot('log2(x)').latex).toBe('y = \\log_{2}\\left(x\\right)')
+    expect(plot('log10(x)').latex).toBe('y = \\log_{10}\\left(x\\right)')
+    expect(plot('ln x').latex).toBe('y = \\ln\\left(x\\right)')
+    expect(err('logg(x)').error).toMatch(/did you mean 'log'\?/)
+    expect(err('x_2').error).toMatch(/Unexpected character '_'/)
+    expect(err('ln_2(x)').error).toMatch(/Unexpected character '_'/)
+  })
+})
+
 // ===========================================================================
 // Regressions for the two P0 correctness bugs found in the parser audit.
 // ===========================================================================
@@ -575,6 +692,9 @@ describe('latex round-trip fuzz', () => {
         const [a, j] = readGroup(s, i + 13); out += ` ${a}`; i = j; continue
       }
       if (s.startsWith('\\log_{2}', i)) { out += ' log2'; i += 8; continue }
+      if (s.startsWith('\\log_{', i)) {
+        const [b, j] = readGroup(s, i + 5); out += ` log_(${delatex(b)})`; i = j; continue
+      }
       if (s.startsWith('\\left\\lfloor', i)) { out += ' floor('; i += 12; continue }
       if (s.startsWith('\\right\\rfloor', i)) { out += ')'; i += 13; continue }
       if (s.startsWith('\\left\\lceil', i)) { out += ' ceil('; i += 11; continue }
@@ -609,6 +729,8 @@ describe('latex round-trip fuzz', () => {
   const UNARY = ['sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh',
     'sqrt', 'cbrt', 'abs', 'ln', 'log', 'log2', 'exp']
   const PARAMS = ['a', 'b', 'c', 'k', 'w']
+  /** Bases for log_B: literals, fractions, constants, a slider, log_e (= ln). */
+  const LOG_BASES = ['2', '3', '10', '2.5', '0.5', '(1/2)', '(sqrt(2))', '(2/3)', 'b', 'e', 'pi', '(a)']
 
   function num(r: Rng): string {
     const roll = r()
@@ -619,10 +741,18 @@ describe('latex round-trip fuzz', () => {
     return String(Math.floor(r() * 5) + 1)
   }
 
-  function genExpr(r: Rng, vars: string[], depth: number): string {
+  // logB: also generate log_B(…) in any base. Off by default, so the seeds
+  // below keep generating exactly the inputs they always have.
+  function genExpr(r: Rng, vars: string[], depth: number, logB = false): string {
     if (depth <= 0) return r() < 0.45 ? pick(r, vars) : (r() < 0.75 ? num(r) : pick(r, PARAMS))
     const roll = r()
-    const sub = (d = depth - 1) => genExpr(r, vars, d)
+    const sub = (d = depth - 1) => genExpr(r, vars, d, logB)
+    if (logB && roll >= 0.38 && roll < 0.52) {
+      const base = pick(r, LOG_BASES)
+      if (roll < 0.44) return `log_${base}(${sub()})`
+      if (roll < 0.48) return `log_${base} ${sub(0)}`             // paren-less, as ln x
+      return `${num(r)}log_${base}(${sub()})`
+    }
     if (roll < 0.18) return `${sub()} ${pick(r, ['+', '-'])} ${sub()}`
     if (roll < 0.3) return `${sub()} ${pick(r, ['*', '/'])} ${sub()}`
     if (roll < 0.38) return `(${sub()})^${r() < 0.5 ? String(Math.floor(r() * 4)) : `(${sub(0)})`}`
@@ -637,17 +767,17 @@ describe('latex round-trip fuzz', () => {
     return `${sub()} ${pick(r, ['+', '-', '*'])} ${sub()}`
   }
 
-  function genInput(r: Rng): string {
+  function genInput(r: Rng, logB = false): string {
     const roll = r()
     if (roll < 0.2) {
-      const e = genExpr(r, ['theta'], 3)
+      const e = genExpr(r, ['theta'], 3, logB)
       return r() < 0.5 ? `r = ${e}` : e
     }
-    if (roll < 0.35) return `${genExpr(r, ['x', 'y'], 3)} = ${genExpr(r, ['x', 'y'], 2)}`
-    if (roll < 0.45) return `${pick(r, ['f', 'g', 'h'])}(x) = ${genExpr(r, ['x'], 3)}`
-    if (roll < 0.5) return `${pick(r, ['f', 'g'])}(t) = ${genExpr(r, ['t'], 3)}`
-    if (roll < 0.7) return `y = ${genExpr(r, ['x'], 3)}`
-    return genExpr(r, ['x'], 3)
+    if (roll < 0.35) return `${genExpr(r, ['x', 'y'], 3, logB)} = ${genExpr(r, ['x', 'y'], 2, logB)}`
+    if (roll < 0.45) return `${pick(r, ['f', 'g', 'h'])}(x) = ${genExpr(r, ['x'], 3, logB)}`
+    if (roll < 0.5) return `${pick(r, ['f', 'g'])}(t) = ${genExpr(r, ['t'], 3, logB)}`
+    if (roll < 0.7) return `y = ${genExpr(r, ['x'], 3, logB)}`
+    return genExpr(r, ['x'], 3, logB)
   }
 
   // Tolerance is deliberately loose. The bug class this guards against (a curve
@@ -709,6 +839,27 @@ describe('latex round-trip fuzz', () => {
     })
   }
 
+  for (const seed of [21, 22]) {
+    it(`4000 generated inputs with log_B in any base round-trip through latex (seed ${seed})`, () => {
+      const rng = makeRng(seed)
+      const bad: string[] = []
+      let parsed = 0
+      let withLog = 0
+      for (let i = 0; i < 4000; i++) {
+        const src = genInput(rng, true)
+        if (parseExpression(src).ok) {
+          parsed++
+          if (src.includes('log_')) withLog++
+        }
+        const found = roundTrip(src)
+        if (found) bad.push(found)
+      }
+      expect(bad.slice(0, 5).join('\n---\n')).toBe('')
+      // the generator really does exercise the new syntax
+      expect(withLog).toBeGreaterThan(parsed / 5)
+    })
+  }
+
   it('round-trips the step functions and other fixed shapes', () => {
     const fixed = [
       'floor(x)', 'ceil(2x)', 'sign(x-1)', 'floor(x)+ceil(x)', 'sign(x) * floor(|x|)',
@@ -716,6 +867,8 @@ describe('latex round-trip fuzz', () => {
       'x^2 + y^2 = 4', 'r = 1 + cos(theta)', 'f(x) = a x^2 + b', 'y = f(x)',
       'min(x, 2)', 'max(sin x, 0)', '|x - 2| + 1', '|(-x)(abs 6)|', 'sqrt(x)/(x+1)',
       'a sin(b x + c) + d', 'log2(x+1)', 'cbrt(x)', 'x*y = 1', 'exp(-x^2)', '2^3^2',
+      'log_3(x)', 'log_(1/2)(x - 1)', 'f(x) = log_b(a x)', 'log_2 x + 1', 'log_(sqrt(2))(x)',
+      '2log_10(x) - 1', 'log_e(x)', 'log_(2, x)', 'r = log_3(theta)', '-log_(1/3)(2(x + 3)) - 1',
     ]
     const bad = fixed.map(roundTrip).filter(Boolean)
     expect(bad.join('\n---\n')).toBe('')
@@ -766,8 +919,8 @@ describe('latex round-trip fuzz', () => {
 
   const rel = (r: Rng): string => (r() < 0.5 ? '<=' : '<')
 
-  function genRestricted(r: Rng): string {
-    const e = genExpr(r, ['x'], 3)
+  function genRestricted(r: Rng, logB = false): string {
+    const e = genExpr(r, ['x'], 3, logB)
     const lo = Math.floor(r() * 7) - 3
     const hi = lo + 1 + Math.floor(r() * 5)
     return pick(r, [
@@ -781,14 +934,14 @@ describe('latex round-trip fuzz', () => {
     ])
   }
 
-  function genPiecewise(r: Rng): string {
+  function genPiecewise(r: Rng, logB = false): string {
     const n = 2 + Math.floor(r() * 2)
     const cuts: number[] = []
     let c = Math.floor(r() * 5) - 4
     for (let i = 0; i < n - 1; i++) { cuts.push(c); c += 1 + Math.floor(r() * 3) }
     const rows: string[] = []
     for (let i = 0; i < n; i++) {
-      const body = genExpr(r, ['x'], 2)
+      const body = genExpr(r, ['x'], 2, logB)
       if (i === 0) rows.push(`${body} if x ${rel(r)} ${cuts[0]}`)
       else if (i === n - 1) {
         rows.push(r() < 0.4 ? `${body} otherwise` : `${body} if x >${r() < 0.5 ? '=' : ''} ${cuts[i - 1]}`)
@@ -853,6 +1006,17 @@ describe('latex round-trip fuzz', () => {
       expect(bad.slice(0, 5).join('\n---\n')).toBe('')
     })
   }
+
+  it('restricted and piecewise inputs with log_B round-trip (seed 23)', () => {
+    const rng = makeRng(23)
+    const bad: string[] = []
+    for (let i = 0; i < 2000; i++) {
+      const src = rng() < 0.5 ? genRestricted(rng, true) : genPiecewise(rng, true)
+      const found = roundTripPieced(src)
+      if (found) bad.push(found)
+    }
+    expect(bad.slice(0, 5).join('\n---\n')).toBe('')
+  })
 
   it('round-trips the fixed restricted and piecewise shapes', () => {
     const fixed = [
