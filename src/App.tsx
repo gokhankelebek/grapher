@@ -71,6 +71,35 @@ import {
   shapeVertices,
 } from './ui/shapeLinks'
 import type { BoardShape, CompiledShape, ShapeCardData } from './ui/shapeLinks'
+import {
+  REG_DIGITS_DEFAULT,
+  applyPaste,
+  clampRegDigits,
+  dataBox,
+  dataCard,
+  dataColumns,
+  dataLegend,
+  dropRegressionsFor,
+  linkedCurves,
+  makeFitCache,
+  nextTableName,
+  planIsEmpty,
+  planRegressionSync,
+  regressionFor,
+  removeRow as removeDataRow,
+  scatterSets,
+  setCell as setDataCell,
+} from './ui/dataLinks'
+import type {
+  BoardData,
+  DataCardData,
+  DataMarker,
+  DataRegression,
+  PasteMode,
+  RegressionKind,
+} from './ui/dataLinks'
+import type { DataParse } from './core/data'
+import { fitRegression, regressionSource } from './core/data'
 import { POLAR_OFFER, suggestPolarRuling } from './ui/boardGrid'
 import { defaultCaption, exportLook, screenLook } from './ui/figureStyle'
 import { curveNames, namesInOrder } from './render/curveNames'
@@ -134,7 +163,15 @@ import {
   renderBoardToCanvas,
   suggestAxisUnits,
 } from './ui/renderBoard'
-import type { AxisUnits, BoardScene, Overlay, Polyline, Shape, SlopeField } from './ui/renderBoard'
+import type {
+  AxisUnits,
+  BoardScene,
+  Overlay,
+  Polyline,
+  ScatterSet,
+  Shape,
+  SlopeField,
+} from './ui/renderBoard'
 import { clampFitSettings, contentBounds, exportViewport } from './ui/exportFit'
 import type { FitExportSettings } from './ui/exportFit'
 import { PresentBar } from './ui/PresentBar'
@@ -361,6 +398,11 @@ interface Snapshot {
    */
   shapes: BoardShape[]
   /**
+   * The data tables, in the same history once more: deleting a table takes
+   * its regression curves with it, and one undo has to bring all of them back.
+   */
+  data: BoardData[]
+  /**
    * The LOOK the board is in, and the line printed under the figure.
    *
    * Unlike the ruling and the axis units — which are ways of MEASURING a board
@@ -410,6 +452,7 @@ interface StatePatch {
   calc?: CalcLink[]
   fields?: BoardField[]
   shapes?: BoardShape[]
+  data?: BoardData[]
   figure?: FigureStyleId
   caption?: string | null
   candidates?: Map<string, FitResult[]>
@@ -539,6 +582,13 @@ export default function App() {
    * the line rather than being stored beside it.
    */
   const [shapes, setShapes] = useState<BoardShape[]>([])
+  /**
+   * Data tables: the cells exactly as the teacher typed or pasted them, and
+   * the regressions fitted to each one as LINKS to typed curves. The scatter
+   * plot and every fit are recomputed from the cells on every change, which
+   * is what lets one edited y re-fit every regression in place.
+   */
+  const [dataSets, setDataSets] = useState<BoardData[]>([])
   /**
    * Which RULING this board is drawn on — the square lattice or the polar one.
    *
@@ -722,6 +772,24 @@ export default function App() {
   const calcRef = useRef<CalcLink[]>([])
   const fieldsRef = useRef<BoardField[]>([])
   const shapesRef = useRef<BoardShape[]>([])
+  const dataRef = useRef<BoardData[]>([])
+  /**
+   * regressionId -> the equation the regression sync last wrote on (or found
+   * on) its curve. A curve whose equation is neither that nor what the table
+   * now says was edited by hand, and the regression lets go of it.
+   */
+  const regWrittenRef = useRef<Map<string, string>>(new Map())
+  /** Regressions whose curve the BOARD hid because the fit stopped existing. */
+  const regAutoHiddenRef = useRef<Set<string>>(new Set())
+  /** Fits, cached on the numbers: the sync asks on every board change. */
+  const fitCacheRef = useRef(makeFitCache())
+  /**
+   * The undo entry a run of typing in ONE cell folds into, and which cell it
+   * is: every keystroke re-fits live, but one cell edit is one undo.
+   */
+  const cellFoldRef = useRef<{ key: string; snap: Snapshot } | null>(null)
+  /** frameBox, reachable from the data handlers declared above it. */
+  const frameBoxRef = useRef<(box: { min: Vec2; max: Vec2 }) => void>(() => {})
   const boardGridRef = useRef<BoardGrid>('cartesian')
   boardGridRef.current = boardGrid
   const figureStyleRef = useRef<FigureStyleId>('screen')
@@ -965,6 +1033,7 @@ export default function App() {
       calc: calcRef.current,
       fields: fieldsRef.current,
       shapes: shapesRef.current,
+      data: dataRef.current,
       figure: figureStyleRef.current,
       caption: figureCaptionRef.current,
       candidates: candidatesRef.current,
@@ -1018,6 +1087,10 @@ export default function App() {
       shapesRef.current = s.shapes
       setShapes(s.shapes)
     }
+    if (s.data) {
+      dataRef.current = s.data
+      setDataSets(s.data)
+    }
     // Compared against undefined, not truthiness: '' is a caption a teacher
     // deliberately cleared, and an undo has to be able to bring it back.
     if (s.figure !== undefined) {
@@ -1064,7 +1137,8 @@ export default function App() {
       (prev.curves.some((c) => c.id === sel) ||
         prev.items.some((i) => i.id === sel) ||
         prev.fields.some((f) => f.id === sel) ||
-        prev.shapes.some((sh) => sh.id === sel))
+        prev.shapes.some((sh) => sh.id === sel) ||
+        prev.data.some((d) => d.id === sel))
         ? sel
         : null,
     )
@@ -1088,7 +1162,8 @@ export default function App() {
       (next.curves.some((c) => c.id === sel) ||
         next.items.some((i) => i.id === sel) ||
         next.fields.some((f) => f.id === sel) ||
-        next.shapes.some((sh) => sh.id === sel))
+        next.shapes.some((sh) => sh.id === sel) ||
+        next.data.some((d) => d.id === sel))
         ? sel
         : null,
     )
@@ -1127,7 +1202,9 @@ export default function App() {
         pre.fields !== fieldsRef.current ||
         // And a dragged vertex: it rewrites the shape's own line and touches
         // no curve at all.
-        pre.shapes !== shapesRef.current)
+        pre.shapes !== shapesRef.current ||
+        // And a table: a dragged regression handle can detach its link.
+        pre.data !== dataRef.current)
     ) {
       undoRef.current = [...undoRef.current.slice(-(HISTORY_LIMIT - 1)), pre]
       redoRef.current = []
@@ -1240,6 +1317,7 @@ export default function App() {
       calc: [],
       fields: [],
       shapes: [],
+      data: [],
       grid: 'cartesian',
       figure: 'screen',
       caption: '',
@@ -1267,6 +1345,7 @@ export default function App() {
       calc: calcRef.current,
       fields: fieldsRef.current,
       shapes: shapesRef.current,
+      data: dataRef.current,
       grid: boardGridRef.current,
       figure: figureStyleRef.current,
       // The DERIVED caption is not the document's: it is re-derived from the
@@ -1382,6 +1461,11 @@ export default function App() {
     fieldsRef.current = board.fields
     // And the shapes: the lines come back, every vertex is evaluated again.
     shapesRef.current = board.shapes
+    // And the tables: the cells come back, every fit is re-asked of them.
+    dataRef.current = board.data
+    regWrittenRef.current = new Map()
+    regAutoHiddenRef.current = new Set()
+    cellFoldRef.current = null
     boardGridRef.current = board.grid
     figureStyleRef.current = board.figure
     figureCaptionRef.current = board.captionAuto ? null : board.caption
@@ -1411,6 +1495,7 @@ export default function App() {
     setCalcLinks(board.calc)
     setFields(board.fields)
     setShapes(board.shapes)
+    setDataSets(board.data)
     setBoardGrid(board.grid)
     setFigureStyle(board.figure)
     setFigureCaption(board.captionAuto ? null : board.caption)
@@ -1524,6 +1609,8 @@ export default function App() {
     // And a shape, for exactly the same reason — a dragged vertex changes one
     // line of text and no curve at all.
     shapes,
+    // And a data table: a typed cell changes no curve until the fit re-runs.
+    dataSets,
     // And the ruling, which is a property of the document like the units.
     boardGrid,
     // And the look the figure is in, with its caption: both are the document's
@@ -1831,6 +1918,7 @@ export default function App() {
             ...fieldsRef.current.map((f) => f.color),
             // And a shape, for the same reason again: one list, one palette.
             ...shapesRef.current.map((sh) => sh.color),
+            ...dataRef.current.map((d) => d.color),
           ]
     const used = new Set(onBoard)
     for (const color of CURVE_COLORS) {
@@ -1870,7 +1958,12 @@ export default function App() {
 
   /** Everything `ids` owns, transitively: the curves and the links. */
   const removeWithDependents = useCallback(
-    (ids: string[], label: string): { curves: FittedCurve[]; lost: CalcLink[] } => {
+    (
+      ids: string[],
+      label: string,
+      /** The tables as they should be after this commit (a table being deleted). */
+      dataBase: BoardData[] = dataRef.current,
+    ): { curves: FittedCurve[]; lost: CalcLink[] } => {
       const dead = dependentsOf(calcRef.current, ids)
       const lost = calcRef.current.filter((l) => dead.linkIds.has(l.id))
       const curves = curvesRef.current.filter((c) => !dead.curveIds.has(c.id))
@@ -1903,6 +1996,9 @@ export default function App() {
           brokenExpr,
           displaySources,
           edits,
+          // A regression whose curve goes is not a regression any more: the
+          // entry leaves its table in the same commit.
+          data: dropRegressionsFor(dataBase, dead.curveIds),
         },
         label,
       )
@@ -1946,7 +2042,8 @@ export default function App() {
     if (
       curvesRef.current.length === 0 &&
       fieldsRef.current.length === 0 &&
-      shapesRef.current.length === 0
+      shapesRef.current.length === 0 &&
+      dataRef.current.length === 0
     ) {
       return
     }
@@ -1961,6 +2058,7 @@ export default function App() {
         calc: [],
         fields: [],
         shapes: [],
+        data: [],
         styles,
         exprSources: {},
         brokenExpr: {},
@@ -3802,6 +3900,480 @@ export default function App() {
     [restateAsExpression, commitState, showFeatureNote, withEdit],
   )
 
+  // ============================================================= data tables
+  //
+  // A table is the teacher's text — every cell as typed or pasted — plus the
+  // regressions fitted to it as LINKS: {kind, curveId, digits}. Each
+  // regression's curve is an ordinary TYPED curve whose source is the fitted
+  // equation, so its card gets the Exponential / Logarithmic sections, the
+  // analysis and the calculus for free. Whenever the table changes, every
+  // linked regression is re-fitted and its curve restated IN PLACE (same id,
+  // colour, style and name), exactly as a tangent follows its parent — see
+  // src/ui/dataLinks.ts for the rules, including when a hand-edited curve
+  // lets go of its table.
+
+  /** One table, replaced in place. */
+  const mapData = useCallback(
+    (id: string, fn: (d: BoardData) => BoardData): BoardData[] =>
+      dataRef.current.map((d) => (d.id === id ? fn(d) : d)),
+    [],
+  )
+
+  /**
+   * One undo entry per CELL edit, however many keystrokes: the first
+   * keystroke commits, the rest fold into that entry while nothing else has
+   * been done since. Every keystroke still re-fits live.
+   */
+  const foldCommit = useCallback(
+    (key: string, patch: StatePatch, label: string): void => {
+      const top = undoRef.current[undoRef.current.length - 1]
+      const fold = cellFoldRef.current
+      if (fold && fold.key === key && top !== undefined && top === fold.snap) {
+        redoRef.current = []
+        applyState(patch)
+        return
+      }
+      commitState(patch, label)
+      cellFoldRef.current = { key, snap: undoRef.current[undoRef.current.length - 1] }
+    },
+    [applyState, commitState],
+  )
+
+  /** A parsed equation as a curve's model, registered under a fresh expr_N. */
+  const typedModel = useCallback(
+    (src: string): { modelId: string; spec: ModelSpec; plot: ParsedPlot } | null => {
+      let outcome: ReturnType<typeof parseExpression>
+      try {
+        outcome = parseExpression(src)
+      } catch {
+        return null
+      }
+      if (!outcome.ok) return null
+      const modelId = `expr_${++exprCounterRef.current}`
+      try {
+        return { modelId, spec: outcome.plot.makeModel(modelId), plot: outcome.plot }
+      } catch {
+        return null
+      }
+    },
+    [],
+  )
+
+  /** "Build ▾ → Data table": an empty table, selected, ready to type or paste into. */
+  const addDataTable = useCallback((): void => {
+    const table: BoardData = {
+      id: nextId(),
+      name: nextTableName(dataRef.current),
+      xLabel: 'x',
+      yLabel: 'y',
+      rows: [],
+      color: pickColor(),
+      visible: true,
+      regressions: [],
+    }
+    commitState({ data: [...dataRef.current, table] }, 'add data table')
+    setSelectedId(table.id)
+  }, [commitState, pickColor])
+
+  const setDataCellText = useCallback(
+    (id: string, row: number, col: 'x' | 'y', text: string): void => {
+      const d = dataRef.current.find((t) => t.id === id)
+      if (!d) return
+      const before = d.rows[row]?.[col] ?? ''
+      if (before === text) return
+      foldCommit(
+        `${id}:${row}:${col}`,
+        { data: mapData(id, (t) => ({ ...t, rows: setDataCell(t.rows, row, col, text) })) },
+        'edit table cell',
+      )
+    },
+    [foldCommit, mapData],
+  )
+
+  const setDataLabel = useCallback(
+    (id: string, col: 'x' | 'y', text: string): void => {
+      const d = dataRef.current.find((t) => t.id === id)
+      if (!d) return
+      const key = col === 'x' ? 'xLabel' : 'yLabel'
+      if (d[key] === text) return
+      foldCommit(`${id}:label:${col}`, { data: mapData(id, (t) => ({ ...t, [key]: text })) }, 'rename column')
+    },
+    [foldCommit, mapData],
+  )
+
+  const removeDataRowAt = useCallback(
+    (id: string, row: number): void => {
+      const d = dataRef.current.find((t) => t.id === id)
+      if (!d || row < 0 || row >= d.rows.length) return
+      commitState({ data: mapData(id, (t) => ({ ...t, rows: removeDataRow(t.rows, row) })) }, 'remove row')
+    },
+    [commitState, mapData],
+  )
+
+  const pasteData = useCallback(
+    (id: string, parse: DataParse, mode: PasteMode): void => {
+      const d = dataRef.current.find((t) => t.id === id)
+      if (!d || !parse.ok) return
+      const wasEmpty = dataColumns(d.rows).xs.length === 0
+      const next = applyPaste(d, parse, mode)
+      commitState(
+        { data: mapData(id, (t) => ({ ...t, ...next })) },
+        mode === 'append' ? 'append pasted data' : 'paste data',
+      )
+      // The first data a table gets is framed: pasted years and populations
+      // would otherwise land far off a board sitting on −8 … 8.
+      if (wasEmpty) {
+        const box = dataBox({ ...d, ...next })
+        if (box) frameBoxRef.current(box)
+      }
+    },
+    [commitState, mapData],
+  )
+
+  const toggleDataVisible = useCallback(
+    (id: string): void => {
+      const d = dataRef.current.find((t) => t.id === id)
+      if (!d) return
+      commitState(
+        { data: mapData(id, (t) => ({ ...t, visible: !t.visible })) },
+        d.visible ? 'hide data' : 'show data',
+      )
+    },
+    [commitState, mapData],
+  )
+
+  /**
+   * Recolour a table. Its linked regression curves that still wear the
+   * table's colour change with it, in the same commit — a curve the teacher
+   * recoloured to tell two fits apart keeps the colour they gave it.
+   */
+  const cycleDataColor = useCallback(
+    (id: string): void => {
+      const d = dataRef.current.find((t) => t.id === id)
+      if (!d) return
+      const i = CURVE_COLORS.indexOf(d.color)
+      const next = CURVE_COLORS[(i + 1) % CURVE_COLORS.length]
+      const follow = new Set(linkedCurves(d))
+      commitState(
+        {
+          data: mapData(id, (t) => ({ ...t, color: next })),
+          curves: curvesRef.current.map((c) =>
+            follow.has(c.id) && c.color === d.color ? { ...c, color: next } : c,
+          ),
+        },
+        'change colour',
+      )
+    },
+    [commitState, mapData],
+  )
+
+  const setDataMarker = useCallback(
+    (id: string, marker: DataMarker): void => {
+      const d = dataRef.current.find((t) => t.id === id)
+      if (!d || (d.marker ?? 'dot') === marker) return
+      commitState(
+        {
+          data: mapData(id, (t) => {
+            const { marker: _was, ...rest } = t
+            return marker === 'dot' ? rest : { ...rest, marker }
+          }),
+        },
+        'point markers',
+      )
+    },
+    [commitState, mapData],
+  )
+
+  /**
+   * Take a table off the board, with every regression curve that follows it —
+   * one commit, one toast, one undo. A DETACHED regression's curve stays: it
+   * stopped being the table's the moment its equation was edited by hand.
+   */
+  const deleteData = useCallback(
+    (id: string): void => {
+      const d = dataRef.current.find((t) => t.id === id)
+      if (!d) return
+      const onBoard = new Set(curvesRef.current.map((c) => c.id))
+      const linked = linkedCurves(d).filter((cid) => onBoard.has(cid))
+      const rest = dataRef.current.filter((t) => t.id !== id)
+      if (linked.length === 0) {
+        commitState({ data: rest }, 'delete data table')
+        showToast('Deleted the table. Undo brings it back.', {
+          action: { label: 'Undo', run: () => undo() },
+        })
+      } else {
+        removeWithDependents(linked, 'delete data table', rest)
+        showToast(
+          `Deleted the table and its ${countPhrase(linked.length, 'regression curve')}. Undo brings all of it back.`,
+          { ms: 5000, action: { label: 'Undo', run: () => undo() } },
+        )
+      }
+      setSelectedId((sel) => (sel === id ? null : sel))
+    },
+    [commitState, removeWithDependents, showToast, undo],
+  )
+
+  /** The rows again, as a new table. Its regressions are not copied: a fit is one click. */
+  const duplicateData = useCallback(
+    (id: string): void => {
+      const d = dataRef.current.find((t) => t.id === id)
+      if (!d) return
+      const copy: BoardData = {
+        ...d,
+        id: nextId(),
+        name: nextTableName(dataRef.current),
+        rows: d.rows.map((r) => ({ ...r })),
+        color: pickColor(),
+        regressions: [],
+      }
+      commitState({ data: [...dataRef.current, copy] }, 'duplicate table')
+      setSelectedId(copy.id)
+    },
+    [commitState, pickColor],
+  )
+
+  /**
+   * Fit `kind` and put its curve on the board, LINKED: a typed curve in the
+   * table's colour whose equation is regressionSource(fit, digits). Refuses
+   * with the fitter's own sentence.
+   */
+  const addRegression = useCallback(
+    (id: string, kind: RegressionKind): string | null => {
+      const d = dataRef.current.find((t) => t.id === id)
+      if (!d) return null
+      if (d.regressions.some((r) => r.kind === kind && !r.detached)) {
+        return 'That regression is already on the board.'
+      }
+      const cols = dataColumns(d.rows)
+      const res = fitRegression(kind, cols.xs, cols.ys)
+      if (!res.ok) return res.error ?? 'This model cannot be fitted to the data.'
+      const src = regressionSource(res, REG_DIGITS_DEFAULT)
+      const built = src ? typedModel(src) : null
+      if (!built) return 'The fitted equation could not be drawn.'
+      setExtraModels((prev) => ({ ...prev, [built.modelId]: built.spec }))
+      const curve: FittedCurve = {
+        id: nextId(),
+        modelId: built.modelId,
+        params: built.plot.defaultParams.slice(),
+        kind: built.plot.kind,
+        domain: built.plot.domain,
+        color: d.color,
+        strokeWidth: 2,
+        visible: true,
+        error: 0,
+      }
+      const reg: DataRegression = {
+        id: nextId(),
+        kind,
+        curveId: curve.id,
+        digits: REG_DIGITS_DEFAULT,
+        residuals: false,
+      }
+      regWrittenRef.current.set(reg.id, src)
+      commitState(
+        {
+          curves: [...curvesRef.current, curve],
+          exprSources: { ...exprSourcesRef.current, [curve.id]: src },
+          data: mapData(id, (t) => ({ ...t, regressions: [...t.regressions, reg] })),
+        },
+        `${kind} regression`,
+      )
+      return null
+    },
+    [commitState, mapData, typedModel],
+  )
+
+  /**
+   * × on a regression. A linked one takes its curve (and anything built on
+   * that curve) with it; a detached one only lets go — its curve is an
+   * ordinary curve now, with a card and a × of its own.
+   */
+  const removeRegression = useCallback(
+    (id: string, regId: string): void => {
+      const d = dataRef.current.find((t) => t.id === id)
+      const reg = d?.regressions.find((r) => r.id === regId)
+      if (!d || !reg) return
+      const onBoard = curvesRef.current.some((c) => c.id === reg.curveId)
+      if (reg.detached || !onBoard) {
+        commitState(
+          { data: mapData(id, (t) => ({ ...t, regressions: t.regressions.filter((r) => r.id !== regId) })) },
+          'forget regression',
+        )
+        return
+      }
+      removeWithDependents([reg.curveId], 'remove regression')
+    },
+    [commitState, mapData, removeWithDependents],
+  )
+
+  const mapRegression = useCallback(
+    (id: string, regId: string, fn: (r: DataRegression) => DataRegression): BoardData[] =>
+      mapData(id, (t) => ({ ...t, regressions: t.regressions.map((r) => (r.id === regId ? fn(r) : r)) })),
+    [mapData],
+  )
+
+  const setRegressionDigits = useCallback(
+    (id: string, regId: string, digits: number): void => {
+      const d = dataRef.current.find((t) => t.id === id)
+      const reg = d?.regressions.find((r) => r.id === regId)
+      const next = clampRegDigits(digits)
+      if (!reg || reg.digits === next) return
+      commitState({ data: mapRegression(id, regId, (r) => ({ ...r, digits: next })) }, `${next} digits`)
+    },
+    [commitState, mapRegression],
+  )
+
+  /** Residuals to this fit — one set per table, so turning one on turns the others off. */
+  const toggleResiduals = useCallback(
+    (id: string, regId: string): void => {
+      const d = dataRef.current.find((t) => t.id === id)
+      const reg = d?.regressions.find((r) => r.id === regId)
+      if (!reg) return
+      const on = !reg.residuals
+      commitState(
+        {
+          data: mapData(id, (t) => ({
+            ...t,
+            regressions: t.regressions.map((r) =>
+              r.id === regId ? { ...r, residuals: on } : r.residuals && on ? { ...r, residuals: false } : r,
+            ),
+          })),
+        },
+        on ? 'show residuals' : 'hide residuals',
+      )
+    },
+    [commitState, mapData],
+  )
+
+  /** Re-attach a detached regression: the next sync writes the fit over the hand edit. */
+  const refitRegression = useCallback(
+    (id: string, regId: string): void => {
+      const d = dataRef.current.find((t) => t.id === id)
+      const reg = d?.regressions.find((r) => r.id === regId)
+      if (!d || !reg || !reg.detached) return
+      if (!curvesRef.current.some((c) => c.id === reg.curveId)) return
+      // Another linked fit of the same kind would be the same curve twice.
+      if (d.regressions.some((r) => r.id !== regId && r.kind === reg.kind && !r.detached)) {
+        showToast(`This table already has a linked ${reg.kind} regression.`, { ms: 3000 })
+        return
+      }
+      regWrittenRef.current.delete(regId)
+      commitState(
+        {
+          data: mapRegression(id, regId, (r) => {
+            const { detached: _d, ...rest } = r
+            return rest
+          }),
+        },
+        'follow the table again',
+      )
+    },
+    [commitState, mapRegression, showToast],
+  )
+
+  /**
+   * Re-fit every linked regression and restate its curve in place.
+   *
+   * Runs after any change to the tables, the curves or their equations, and
+   * does nothing unless a fit actually says something new. Like the calculus
+   * sync it never pushes history: a curve re-fitting is the consequence of
+   * the edit that changed the table, and rides inside that edit's undo entry.
+   */
+  const syncRegressions = useCallback((): void => {
+    const tables = dataRef.current
+    if (tables.length === 0) {
+      if (regWrittenRef.current.size > 0) regWrittenRef.current = new Map()
+      if (regAutoHiddenRef.current.size > 0) regAutoHiddenRef.current = new Set()
+      return
+    }
+    const plan = planRegressionSync({
+      data: tables,
+      curves: curvesRef.current,
+      exprSources: exprSourcesRef.current,
+      written: regWrittenRef.current,
+      autoHidden: regAutoHiddenRef.current,
+      fit: fitCacheRef.current,
+    })
+    regWrittenRef.current = plan.written
+    regAutoHiddenRef.current = plan.autoHidden
+    if (planIsEmpty(plan)) return
+
+    const patch: StatePatch = {}
+    const register: Record<string, ModelSpec> = {}
+    const curvePatch = new Map<string, Partial<FittedCurve>>()
+    let exprSources = exprSourcesRef.current
+    let brokenExpr = brokenExprRef.current
+    for (const r of plan.restate) {
+      const built = typedModel(r.src)
+      if (!built) continue
+      register[built.modelId] = built.spec
+      curvePatch.set(r.curveId, {
+        modelId: built.modelId,
+        kind: built.plot.kind,
+        params: built.plot.defaultParams.slice(),
+        domain: built.plot.domain,
+        error: 0,
+      })
+      exprSources = { ...exprSources, [r.curveId]: r.src }
+      if (brokenExpr[r.curveId] !== undefined) {
+        const { [r.curveId]: _gone, ...rest } = brokenExpr
+        brokenExpr = rest
+      }
+    }
+    for (const h of plan.hide) curvePatch.set(h.curveId, { ...curvePatch.get(h.curveId), visible: false })
+    for (const h of plan.show) curvePatch.set(h.curveId, { ...curvePatch.get(h.curveId), visible: true })
+    if (curvePatch.size > 0) {
+      patch.curves = curvesRef.current.map((c) => {
+        const p = curvePatch.get(c.id)
+        if (!p) return c
+        const { sourceStroke: _ink, ...bare } = c
+        return { ...bare, ...p }
+      })
+    }
+    if (exprSources !== exprSourcesRef.current) patch.exprSources = exprSources
+    if (brokenExpr !== brokenExprRef.current) patch.brokenExpr = brokenExpr
+    if (plan.detach.length > 0) {
+      const gone = new Set(plan.detach.map((x) => x.regId))
+      patch.data = tables.map((t) =>
+        t.regressions.some((r) => gone.has(r.id))
+          ? {
+              ...t,
+              regressions: t.regressions.map((r) =>
+                gone.has(r.id) ? { ...r, detached: true, residuals: false } : r,
+              ),
+            }
+          : t,
+      )
+    }
+    if (Object.keys(register).length > 0) setExtraModels((prev) => ({ ...prev, ...register }))
+    applyState(patch)
+  }, [applyState, typedModel])
+
+  useEffect(() => {
+    syncRegressions()
+  }, [curves, dataSets, exprSources, syncRegressions])
+
+  // ------------------------------------------------------- what the tables draw
+  const curveIdSet = useMemo(() => new Set(curves.map((c) => c.id)), [curves])
+
+  const scatterScene = useMemo<ScatterSet[]>(
+    () => (kind === 'cartesian' ? scatterSets(dataSets, curveIdSet) : []),
+    [kind, dataSets, curveIdSet],
+  )
+  const scatterSceneRef = useRef<ScatterSet[]>(scatterScene)
+  scatterSceneRef.current = scatterScene
+
+  const dataCards = useMemo<Record<string, DataCardData>>(() => {
+    const out: Record<string, DataCardData> = {}
+    for (const d of dataSets) out[d.id] = dataCard(d, exprSources, curveIdSet, fitCacheRef.current)
+    return out
+  }, [dataSets, exprSources, curveIdSet])
+
+  const dataCardFor = useCallback(
+    (id: string): DataCardData | undefined => dataCards[id],
+    [dataCards],
+  )
+
   // ======================================================= built from roots
   //
   // A function set by its roots is an ordinary TYPED curve: "Build from roots"
@@ -4370,6 +4942,29 @@ export default function App() {
   /** Fraction of the frame left as breathing room around the figure. */
   const FIT_MARGIN = 0.12
 
+  /** Point the board at `box`, with the fit margin all round. */
+  const frameBox = useCallback(
+    (box: { min: { x: number; y: number }; max: { x: number; y: number } }): void => {
+    const vp = vpRef.current
+    const w = Math.max(box.max.x - box.min.x, 1e-6)
+    const h = Math.max(box.max.y - box.min.y, 1e-6)
+    const usableW = vp.widthPx * (1 - 2 * FIT_MARGIN)
+    const usableH = vp.heightPx * (1 - 2 * FIT_MARGIN)
+    const ppu = clampPpu(Math.min(usableW / w, usableH / h))
+    vp.pxPerUnit = ppu
+    vp.center = {
+      x: (box.min.x + box.max.x) / 2,
+      y: kindRef.current === 'number-line' ? 0 : (box.min.y + box.max.y) / 2,
+    }
+    stageRef.current?.redraw()
+    nlStageRef.current?.redraw()
+    overlayRef.current?.redraw()
+    refreshSolveSpan()
+    scheduleSave()
+    },
+    [refreshSolveSpan, scheduleSave],
+  )
+
   /**
    * Frame everything on the board, in one click.
    *
@@ -4421,28 +5016,37 @@ export default function App() {
           boxes.push({ min: { x: minX, y: minY }, max: { x: maxX, y: maxY } })
         }
       }
+      // And a data table's points: a scatter plot with no fit yet is still
+      // the figure.
+      for (const d of dataRef.current) {
+        if (!d.visible) continue
+        const b = dataBox(d)
+        if (b) boxes.push(b)
+      }
       box = unionBoxes(boxes)
     }
     if (!box) {
       showToast('Nothing visible to frame.', { ms: 2000 })
       return
     }
-    const w = Math.max(box.max.x - box.min.x, 1e-6)
-    const h = Math.max(box.max.y - box.min.y, 1e-6)
-    const usableW = vp.widthPx * (1 - 2 * FIT_MARGIN)
-    const usableH = vp.heightPx * (1 - 2 * FIT_MARGIN)
-    const ppu = clampPpu(Math.min(usableW / w, usableH / h))
-    vp.pxPerUnit = ppu
-    vp.center = {
-      x: (box.min.x + box.max.x) / 2,
-      y: kindRef.current === 'number-line' ? 0 : (box.min.y + box.max.y) / 2,
-    }
-    stageRef.current?.redraw()
-    nlStageRef.current?.redraw()
-    overlayRef.current?.redraw()
-    refreshSolveSpan()
-    scheduleSave()
-  }, [refreshSolveSpan, scheduleSave, showToast])
+    frameBox(box)
+  }, [frameBox, showToast])
+
+  frameBoxRef.current = frameBox
+
+  /** "Zoom to data" on a table's menu: frame its points, nothing else. */
+  const zoomToData = useCallback(
+    (id: string): void => {
+      const d = dataRef.current.find((t) => t.id === id)
+      const box = d ? dataBox(d) : null
+      if (!box) {
+        showToast('This table has no points to frame yet.', { ms: 2000 })
+        return
+      }
+      frameBox(box)
+    },
+    [frameBox, showToast],
+  )
 
   /** Pan/zoom happened: the marker layer rides the same viewport. */
   const viewportChanged = useCallback((): void => {
@@ -4863,13 +5467,16 @@ export default function App() {
   const exportContent = useCallback(() => {
     const vp = vpRef.current
     const half = vp.widthPx / 2 / vp.pxPerUnit
-    return contentBounds({
+    const box = contentBounds({
       kind: kindRef.current,
       curves: curvesRef.current,
       items: itemsRef.current,
       models: modelsRef.current,
       window: [vp.center.x - half, vp.center.x + half],
     })
+    if (kindRef.current !== 'cartesian') return box
+    // A scatter plot is the figure too: a fitted export frames the points.
+    return unionBoxes([box, ...dataRef.current.filter((d) => d.visible).map(dataBox)])
   }, [])
 
   const buildExportScene = useCallback(
@@ -4947,6 +5554,9 @@ export default function App() {
       // scene by the same field the screen uses rather than by a second code
       // path that could forget them.
       shapes: shapeSceneRef.current,
+      // And the data: a scatter plot and its residuals are the lesson on a
+      // regression board, so the PNG gets the same sets the screen drew.
+      ...(scatterSceneRef.current.length > 0 ? { scatter: scatterSceneRef.current } : {}),
       // And on the ruling the screen is on: a polar board exported on squares
       // would be a different picture of the same curve.
       grid: boardGridRef.current,
@@ -5392,6 +6002,8 @@ export default function App() {
           deleteField(selectedRef.current)
         } else if (shapesRef.current.some((sh) => sh.id === selectedRef.current)) {
           deleteShape(selectedRef.current)
+        } else if (dataRef.current.some((d) => d.id === selectedRef.current)) {
+          deleteData(selectedRef.current)
         } else deleteCurve(selectedRef.current)
       } else if (NUDGE[e.key]) {
         const [ux, uy] = NUDGE[e.key]
@@ -5447,6 +6059,7 @@ export default function App() {
     deleteCurve,
     deleteField,
     deleteShape,
+    deleteData,
     deleteItem,
     nudgeSelected,
     commitWithSnap,
@@ -5485,6 +6098,9 @@ export default function App() {
               // And a shape: △ABC on the wall, so the class knows which
               // triangle the lesson is about when two are on the board.
               ...shapeLegend(shapes, shapeCompiled),
+              // And a table, by name, in its colour: the dots on the wall
+              // are "Table 1", and its fit is the curve chip beside it.
+              ...dataLegend(dataSets),
             ],
     [
       presentMode,
@@ -5498,6 +6114,7 @@ export default function App() {
       fieldCompiled,
       shapes,
       shapeCompiled,
+      dataSets,
     ],
   )
 
@@ -5510,7 +6127,7 @@ export default function App() {
   const hasBoardContent =
     kind === 'number-line'
       ? items.length > 0
-      : curves.length > 0 || fields.length > 0 || shapes.length > 0
+      : curves.length > 0 || fields.length > 0 || shapes.length > 0 || dataSets.length > 0
 
   /** What every number-line card needs to speak for its whole answer. */
   const answerBoard = useMemo(() => ({ items, styles }), [items, styles])
@@ -5635,6 +6252,30 @@ export default function App() {
         onShapeParamSetExact={setShapeParamExact}
         onShapeEquation={setShapeEquation}
         onShapeCoord={setShapeCoord}
+        onDataAdd={() => {
+          setExprOpen(false)
+          setFactorOpen(false)
+          setExpOpen(false)
+          setLogOpen(false)
+          addDataTable()
+        }}
+        data={dataSets}
+        dataCardFor={dataCardFor}
+        onDataDelete={deleteData}
+        onDataDuplicate={duplicateData}
+        onDataToggleVisible={toggleDataVisible}
+        onDataCycleColor={cycleDataColor}
+        onDataZoom={zoomToData}
+        onDataMarker={setDataMarker}
+        onDataCell={setDataCellText}
+        onDataLabel={setDataLabel}
+        onDataRemoveRow={removeDataRowAt}
+        onDataPaste={pasteData}
+        onRegressionAdd={addRegression}
+        onRegressionRemove={removeRegression}
+        onRegressionDigits={setRegressionDigits}
+        onRegressionResiduals={toggleResiduals}
+        onRegressionRefit={refitRegression}
       />
       </AnswerContext.Provider>
 
@@ -5716,6 +6357,7 @@ export default function App() {
           fields={fieldScene}
           polylines={fieldPolylines}
           shapes={shapeScene}
+          scatter={scatterScene}
           grid={boardGrid}
           figure={boardFigure}
           caption={boardCaption}
@@ -6038,6 +6680,7 @@ export default function App() {
           curves.length === 0 &&
           fields.length === 0 &&
           shapes.length === 0 &&
+          dataSets.length === 0 &&
           !drawingActive &&
           !loadNotice?.fatal && (
           <div className="empty-hint" aria-hidden="true">

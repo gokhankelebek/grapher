@@ -30,6 +30,7 @@ import { parseShape } from './parse/shapes'
 import { MODELS } from './fit/models'
 import { derivativeModel } from './calculus'
 import type { RiemannMethod } from './calculus'
+import type { RegressionKind } from './data'
 
 /**
  * Bump when the on-disk shape changes in a way older readers can't handle.
@@ -239,6 +240,77 @@ export interface BoardShape {
   visible: boolean
 }
 
+// --- data tables --------------------------------------------------------------
+//
+// A table of (x, y) rows a teacher typed or pasted, drawn as a scatter plot,
+// and the regressions fitted to it. Same rule again: what is stored is the
+// TEACHER'S TEXT — every cell exactly as typed, numbers parsed on use — and
+// the regressions as LINKS ({kind, curveId, digits}), never as coefficients.
+// Each regression's curve is an ordinary typed curve (its source is the
+// fitted equation), so it is stored with the curves; the link only says which
+// curve follows which table, and it is re-fitted from the rows on load.
+
+/** How a table's points are drawn. Mirrors render/scatter's ScatterMarker. */
+export type DataMarker = 'dot' | 'ring' | 'cross' | 'square'
+
+const DATA_MARKERS: readonly DataMarker[] = ['dot', 'ring', 'cross', 'square']
+
+/** Coefficient digits a regression's equation is written with. */
+export const REG_DIGITS_MIN = 2
+export const REG_DIGITS_MAX = 6
+export const REG_DIGITS_DEFAULT = 4
+
+/** Integerise and clamp a digits count. One rule, shared with the card. */
+export function clampRegDigits(v: unknown): number {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return REG_DIGITS_DEFAULT
+  return Math.min(REG_DIGITS_MAX, Math.max(REG_DIGITS_MIN, Math.round(v)))
+}
+
+const REG_KINDS: readonly RegressionKind[] = [
+  'linear', 'quadratic', 'cubic', 'quartic',
+  'exponential', 'power', 'logarithmic', 'logistic', 'sinusoidal',
+]
+
+export const isRegressionKind = (v: unknown): v is RegressionKind =>
+  typeof v === 'string' && (REG_KINDS as readonly string[]).includes(v)
+
+/** One regression fitted to a table: which model, which curve draws it. */
+export interface DataRegression {
+  id: string
+  kind: RegressionKind
+  /** The typed curve the fit writes into. */
+  curveId: string
+  /** Coefficient digits, REG_DIGITS_MIN..MAX. */
+  digits: number
+  /** Draw each point's residual to this curve. At most one per table. */
+  residuals: boolean
+  /**
+   * The curve's equation was edited by hand, so it no longer follows the
+   * table: it is an ordinary curve, and the card says so.
+   */
+  detached?: boolean
+}
+
+/** One cell pair as the teacher typed it. */
+export interface DataRow {
+  x: string
+  y: string
+}
+
+/** A data table as the board holds it. The rows are the only truth. */
+export interface BoardData {
+  id: string
+  name: string
+  xLabel: string
+  yLabel: string
+  rows: DataRow[]
+  color: string
+  visible: boolean
+  /** Absent = dot. */
+  marker?: DataMarker
+  regressions: DataRegression[]
+}
+
 // --- board ruling -----------------------------------------------------------
 //
 // Which LATTICE a cartesian board is drawn on: the square grid, or the
@@ -398,6 +470,11 @@ const MAX_FIELDS = 100
 const MAX_SOLUTIONS = 100
 /** And for shapes. A figure with more than this in it is a damaged record. */
 const MAX_SHAPES = 200
+/** And for data tables, their rows, their regressions and one cell's text. */
+const MAX_DATA = 50
+const MAX_DATA_ROWS = 10000
+const MAX_REGRESSIONS = 20
+const MAX_CELL_CHARS = 64
 /** Stored stroke resolution. Keeps boards small; plenty for refit and hit tests. */
 export const MAX_STORED_STROKE = 120
 const MAX_STROKE_IN = 20000
@@ -512,6 +589,16 @@ export interface StoredBoard {
    */
   shapes?: StoredShape[]
   /**
+   * The data tables on this board — every cell as the teacher typed it — and
+   * the regressions fitted to them, as links to their typed curves.
+   *
+   * Omitted entirely when there are none, which is every document written
+   * before this field existed: such a board serialises byte-for-byte as it did
+   * then, and an older reader drops a key it does not know (the regression
+   * curves survive there as ordinary typed curves).
+   */
+  data?: StoredData[]
+  /**
    * The ruling: 'polar' when the board is drawn on circles and spokes.
    *
    * Written ONLY for a polar board. The square ruling is the default and what
@@ -555,6 +642,40 @@ export interface StoredShape {
   fill?: true
   /** Written only when the shape is hidden. */
   hidden?: true
+}
+
+/**
+ * One data table as JSON. Defaults are omitted, by the rule every other
+ * record here follows: a control nobody touched must not change the bytes.
+ */
+export interface StoredData {
+  id: string
+  name: string
+  color: string
+  /** Omitted at "x". */
+  xLabel?: string
+  /** Omitted at "y". */
+  yLabel?: string
+  /** [x, y] cell text per row, exactly as typed. */
+  rows: [string, string][]
+  /** Written only when the table is hidden. */
+  hidden?: true
+  /** Omitted at 'dot'. */
+  marker?: DataMarker
+  /** Omitted when there are none. */
+  regressions?: StoredRegression[]
+}
+
+export interface StoredRegression {
+  id: string
+  kind: RegressionKind
+  curveId: string
+  /** Omitted at the default (4). */
+  digits?: number
+  /** Written only when on. */
+  residuals?: true
+  /** Written only when the curve was edited by hand. */
+  detached?: true
 }
 
 /**
@@ -663,6 +784,8 @@ export interface BoardInput {
   fields?: readonly BoardField[]
   /** Shapes. Absent or empty writes nothing at all, by the same rule. */
   shapes?: readonly BoardShape[]
+  /** Data tables. Absent or empty writes nothing at all, by the same rule. */
+  data?: readonly BoardData[]
   /** The ruling. Absent means 'cartesian', which writes nothing at all. */
   grid?: BoardGrid
   /** The figure style. Absent means 'screen', which writes nothing at all. */
@@ -728,6 +851,11 @@ export interface HydratedBoard {
    * figure a lesson was built around and leave no trace of what it said.
    */
   shapes: BoardShape[]
+  /**
+   * The data tables that could be read. A table that is not readable is
+   * dropped and REPORTED; so is a regression whose curve is gone.
+   */
+  data: BoardData[]
   /** The ruling this document states. 'cartesian' when it is silent. */
   grid: BoardGrid
   /** The figure style this document states. 'screen' when it is silent. */
@@ -924,6 +1052,10 @@ export function boardToStored(input: BoardInput): StoredBoard {
   const shapes = input.shapes ?? []
   if (shapes.length > 0) board.shapes = shapes.slice(0, MAX_SHAPES).map(shapeToStored)
 
+  // And for the data tables.
+  const data = input.data ?? []
+  if (data.length > 0) board.data = data.slice(0, MAX_DATA).map(dataToStored)
+
   // The ruling, only when it is not the square one every document has always
   // been drawn on.
   if (input.grid === 'polar') board.grid = 'polar'
@@ -1000,6 +1132,99 @@ export function storedToShape(raw: unknown): { shape: BoardShape } | { error: st
       visible: raw.hidden !== true,
     },
   }
+}
+
+/** One data table as JSON: the cells as typed, defaults omitted. */
+export function dataToStored(d: BoardData): StoredData {
+  const out: StoredData = { id: d.id, name: d.name, color: d.color, rows: [] }
+  if (d.xLabel !== 'x') out.xLabel = d.xLabel
+  if (d.yLabel !== 'y') out.yLabel = d.yLabel
+  out.rows = d.rows.slice(0, MAX_DATA_ROWS).map((r) => [r.x, r.y])
+  if (d.visible === false) out.hidden = true
+  if (d.marker !== undefined && d.marker !== 'dot') out.marker = d.marker
+  if (d.regressions.length > 0) {
+    out.regressions = d.regressions.slice(0, MAX_REGRESSIONS).map((r) => {
+      const sr: StoredRegression = { id: r.id, kind: r.kind, curveId: r.curveId }
+      const digits = clampRegDigits(r.digits)
+      if (digits !== REG_DIGITS_DEFAULT) sr.digits = digits
+      if (r.residuals) sr.residuals = true
+      if (r.detached) sr.detached = true
+      return sr
+    })
+  }
+  return out
+}
+
+/** A cell out of an untrusted blob: text as typed, a stored number as its text. */
+function cellOf(v: unknown): string {
+  if (isStr(v)) return v.slice(0, MAX_CELL_CHARS)
+  if (isNum(v)) return String(v)
+  return ''
+}
+
+/**
+ * One data table out of an untrusted blob. The rows are salvaged cell by cell
+ * (an unreadable cell is a blank one, which the plot skips); a regression
+ * that is unreadable is dropped and counted, so the loader can say so.
+ */
+export function storedToData(
+  raw: unknown,
+): { data: BoardData; droppedRegressions: number } | { error: string } {
+  if (!isObj(raw)) return { error: 'it was not readable' }
+  const { id, name, color } = raw
+  if (!isStr(id) || !id) return { error: 'it had no id' }
+  if (!Array.isArray(raw.rows)) return { error: 'its rows were unreadable' }
+  const rows: DataRow[] = []
+  for (const r of raw.rows.slice(0, MAX_DATA_ROWS)) {
+    if (Array.isArray(r)) rows.push({ x: cellOf(r[0]), y: cellOf(r[1]) })
+    else if (isObj(r)) rows.push({ x: cellOf(r.x), y: cellOf(r.y) })
+    else rows.push({ x: '', y: '' })
+  }
+  const regressions: DataRegression[] = []
+  let droppedRegressions = 0
+  const rawRegs = Array.isArray(raw.regressions) ? raw.regressions : []
+  if (raw.regressions !== undefined && !Array.isArray(raw.regressions)) droppedRegressions++
+  const seenRegs = new Set<string>()
+  for (const rr of rawRegs.slice(0, MAX_REGRESSIONS)) {
+    if (
+      !isObj(rr) ||
+      !isStr(rr.id) ||
+      !rr.id ||
+      seenRegs.has(rr.id) ||
+      !isStr(rr.curveId) ||
+      !rr.curveId ||
+      !isRegressionKind(rr.kind)
+    ) {
+      droppedRegressions++
+      continue
+    }
+    seenRegs.add(rr.id)
+    const reg: DataRegression = {
+      id: rr.id,
+      kind: rr.kind,
+      curveId: rr.curveId,
+      digits: clampRegDigits(rr.digits),
+      residuals: rr.residuals === true,
+    }
+    if (rr.detached === true) reg.detached = true
+    regressions.push(reg)
+  }
+  const label = (v: unknown, dflt: string): string =>
+    isStr(v) ? v.slice(0, MAX_LABEL_CHARS) : dflt
+  const data: BoardData = {
+    id,
+    name: isStr(name) && name.trim() ? name.slice(0, MAX_LABEL_CHARS) : 'Table',
+    xLabel: label(raw.xLabel, 'x'),
+    yLabel: label(raw.yLabel, 'y'),
+    rows,
+    color: isStr(color) && color ? color : '#4f9cf9',
+    visible: raw.hidden !== true,
+    regressions,
+  }
+  if (isStr(raw.marker) && (DATA_MARKERS as readonly string[]).includes(raw.marker) && raw.marker !== 'dot') {
+    data.marker = raw.marker as DataMarker
+  }
+  return { data, droppedRegressions }
 }
 
 /**
@@ -1761,6 +1986,68 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
     shapes.push(built.shape)
   }
 
+  // ---- data tables
+  //
+  // The cells come back as typed; the scatter plot and every regression are
+  // re-fitted from them. A table that cannot be read is dropped and reported.
+  // A regression whose curve is not on the board any more is dropped and
+  // reported too: it would be a fit with nowhere to draw.
+  const data: BoardData[] = []
+  const rawData = Array.isArray(rawBoard.data) ? rawBoard.data : []
+  if (rawBoard.data !== undefined && !Array.isArray(rawBoard.data)) {
+    problems.push('The list of data tables was unreadable.')
+    degraded = true
+  }
+  if (rawData.length > MAX_DATA) {
+    problems.push(`Only the first ${MAX_DATA} data tables were loaded.`)
+    degraded = true
+  }
+  {
+    const curveIds = new Set(curves.map((c) => c.id))
+    const claimed = new Set<string>()
+    for (const raw of rawData.slice(0, MAX_DATA)) {
+      const built = storedToData(raw)
+      if ('error' in built) {
+        const nm = isObj(raw) && isStr(raw.name) ? raw.name : null
+        problems.push(
+          nm
+            ? `The data table “${nm}” could not be restored: ${built.error}.`
+            : `A data table could not be restored: ${built.error}.`,
+        )
+        degraded = true
+        continue
+      }
+      if (seen.has(built.data.id)) {
+        problems.push('A data table was dropped: two objects claimed the same id.')
+        degraded = true
+        continue
+      }
+      seen.add(built.data.id)
+      const table = built.data
+      if (built.droppedRegressions > 0) {
+        const k = built.droppedRegressions
+        problems.push(
+          `${k} damaged regression${k === 1 ? '' : 's'} on “${table.name}” could not be read.`,
+        )
+        degraded = true
+      }
+      const kept: DataRegression[] = []
+      for (const r of table.regressions) {
+        if (!curveIds.has(r.curveId) || claimed.has(r.curveId)) {
+          problems.push(
+            `A ${r.kind} regression on “${table.name}” was dropped: the curve it drew is no longer in this document.`,
+          )
+          degraded = true
+          continue
+        }
+        claimed.add(r.curveId)
+        kept.push(r)
+      }
+      table.regressions = kept
+      data.push(table)
+    }
+  }
+
   // ---- the ruling. Unreadable or absent is not a repair: it is the default.
   const grid = storedGrid(rawBoard.grid)
 
@@ -1795,6 +2082,7 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
     ...items.map((i) => i.id),
     ...fields.map((f) => f.id),
     ...shapes.map((s) => s.id),
+    ...data.map((d) => d.id),
   ])
   const selectedId =
     isStr(rawBoard.selectedId) && selectable.has(rawBoard.selectedId)
@@ -1818,6 +2106,7 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
       calc,
       fields,
       shapes,
+      data,
       grid,
       figure,
       caption,
@@ -1848,6 +2137,7 @@ function blankHydrated(): HydratedBoard {
     calc: [],
     fields: [],
     shapes: [],
+    data: [],
     grid: 'cartesian',
     figure: 'screen',
     caption: '',

@@ -20,6 +20,9 @@ import type { CalcChange, CalcKind, CardCalc } from './calcLinks'
 import { FieldCard } from './FieldCard'
 import type { BoardField, FieldCardData } from './fieldLinks'
 import { ShapeCard } from './ShapeCard'
+import { DataCard } from './DataCard'
+import type { DataParse } from '../core/data'
+import type { BoardData, DataCardData, DataMarker, PasteMode, RegressionKind } from './dataLinks'
 import type { BoardShape, ShapeCardData } from './shapeLinks'
 import { NLCard } from './NLCard'
 import { ExprInput } from './ExprInput'
@@ -176,7 +179,33 @@ interface Props {
   onShapeEquation(id: string, src: string): string | null
   /** Type one exact coordinate, which rewrites that coordinate's source text. */
   onShapeCoord(id: string, pair: number, axis: 'x' | 'y', value: number): void
+  /** "Build ▾ → Data table". Absent hides the item. */
+  onDataAdd?(): void
+  /**
+   * The data tables on this board. In the SAME list once more: a table is an
+   * object a teacher put on the board, with a colour dot and a ⋯ menu.
+   */
+  data?: BoardData[]
+  dataCardFor?(id: string): DataCardData | undefined
+  onDataDelete?(id: string): void
+  onDataDuplicate?(id: string): void
+  onDataToggleVisible?(id: string): void
+  onDataCycleColor?(id: string): void
+  onDataZoom?(id: string): void
+  onDataMarker?(id: string, marker: DataMarker): void
+  onDataCell?(id: string, row: number, col: 'x' | 'y', text: string): void
+  onDataLabel?(id: string, col: 'x' | 'y', text: string): void
+  onDataRemoveRow?(id: string, row: number): void
+  onDataPaste?(id: string, parse: DataParse, mode: PasteMode): void
+  onRegressionAdd?(id: string, kind: RegressionKind): string | null
+  onRegressionRemove?(id: string, regId: string): void
+  onRegressionDigits?(id: string, regId: string, digits: number): void
+  onRegressionResiduals?(id: string, regId: string): void
+  onRegressionRefit?(id: string, regId: string): void
 }
+
+const NO_DATA: BoardData[] = []
+const noop = (): void => {}
 
 /** Stable empty array for the cards that aren't selected. */
 const EMPTY_ANALYSIS: SpecialPoint[] = []
@@ -273,6 +302,24 @@ export function Sidebar({
   onShapeParamSetExact,
   onShapeEquation,
   onShapeCoord,
+  onDataAdd,
+  data = NO_DATA,
+  dataCardFor,
+  onDataDelete = noop,
+  onDataDuplicate = noop,
+  onDataToggleVisible = noop,
+  onDataCycleColor = noop,
+  onDataZoom = noop,
+  onDataMarker = noop,
+  onDataCell = noop,
+  onDataLabel = noop,
+  onDataRemoveRow = noop,
+  onDataPaste = noop,
+  onRegressionAdd = () => null,
+  onRegressionRemove = noop,
+  onRegressionDigits = noop,
+  onRegressionResiduals = noop,
+  onRegressionRefit = noop,
 }: Props) {
   const numberLine = kind === 'number-line'
 
@@ -284,7 +331,9 @@ export function Sidebar({
           <div className="sidebar-head-row">
             <span className="sidebar-title">{numberLine ? 'Solution set' : 'Curves'}</span>
             <span className="sidebar-count">
-              {numberLine ? items.length : curves.length + fields.length + shapes.length}
+              {numberLine
+                ? items.length
+                : curves.length + fields.length + shapes.length + data.length}
             </span>
             <button
               className={`add-btn${exprOpen ? ' add-open' : ''}`}
@@ -300,7 +349,7 @@ export function Sidebar({
             >
               +
             </button>
-            {!numberLine && (onFactorToggle || onExpToggle || onLogToggle) && (
+            {!numberLine && (onFactorToggle || onExpToggle || onLogToggle || onDataAdd) && (
               <BuildMenu
                 factorOpen={factorOpen}
                 expOpen={expOpen}
@@ -308,6 +357,7 @@ export function Sidebar({
                 onFactorToggle={onFactorToggle}
                 onExpToggle={onExpToggle}
                 onLogToggle={onLogToggle}
+                onDataAdd={onDataAdd}
               />
             )}
           </div>
@@ -465,6 +515,35 @@ export function Sidebar({
                   onParamSetExact={(i, v) => onShapeParamSetExact(shape.id, i, v)}
                   onEquationCommit={(src) => onShapeEquation(shape.id, src)}
                   onCoordSet={(pair, axis, v) => onShapeCoord(shape.id, pair, axis, v)}
+                />
+              )
+            })}
+          {!numberLine &&
+            data.map((table) => {
+              const card = dataCardFor?.(table.id)
+              if (!card) return null
+              return (
+                <DataCard
+                  key={table.id}
+                  data={table}
+                  card={card}
+                  selected={table.id === selectedId}
+                  onSelect={() => onSelect(table.id)}
+                  onDelete={() => onDataDelete(table.id)}
+                  onDuplicate={() => onDataDuplicate(table.id)}
+                  onToggleVisible={() => onDataToggleVisible(table.id)}
+                  onCycleColor={() => onDataCycleColor(table.id)}
+                  onZoom={() => onDataZoom(table.id)}
+                  onMarker={(m) => onDataMarker(table.id, m)}
+                  onCell={(row, col, text) => onDataCell(table.id, row, col, text)}
+                  onLabel={(col, text) => onDataLabel(table.id, col, text)}
+                  onRemoveRow={(row) => onDataRemoveRow(table.id, row)}
+                  onPaste={(parse, mode) => onDataPaste(table.id, parse, mode)}
+                  onAddRegression={(kind) => onRegressionAdd(table.id, kind)}
+                  onRemoveRegression={(regId) => onRegressionRemove(table.id, regId)}
+                  onDigits={(regId, d) => onRegressionDigits(table.id, regId, d)}
+                  onResiduals={(regId) => onRegressionResiduals(table.id, regId)}
+                  onRefit={(regId) => onRegressionRefit(table.id, regId)}
                 />
               )
             })}

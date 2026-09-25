@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from 'react'
 // polynomial or a rational function), as an exponential (a starting value
 // and a rate) and as a logarithm (its base, asymptote and shifts). One small menu instead of a button per builder. Each item opens
 // its editor at the top of the list; choosing the one already open closes it.
+// "Data table" is the one action: it adds a table to the list and selects it.
 // ============================================================================
 
 interface Props {
@@ -17,6 +18,8 @@ interface Props {
   onFactorToggle?(): void
   onExpToggle?(): void
   onLogToggle?(): void
+  /** Add a data table to the list (an action, not an editor that stays open). */
+  onDataAdd?(): void
 }
 
 export function BuildMenu({
@@ -26,6 +29,7 @@ export function BuildMenu({
   onFactorToggle,
   onExpToggle,
   onLogToggle,
+  onDataAdd,
 }: Props) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -97,6 +101,25 @@ export function BuildMenu({
           {item('From roots (polynomial / rational)', factorOpen, onFactorToggle, 'build-roots')}
           {item('Exponential', expOpen, onExpToggle, 'build-exp')}
           {item('Logarithmic', logOpen, onLogToggle, 'build-log')}
+          {onDataAdd && (
+            <>
+              <div className="card-menu-sep" role="separator" />
+              <button
+                type="button"
+                role="menuitem"
+                data-testid="build-data"
+                className="card-menu-item build-item"
+                title="A table of x and y — type it or paste two columns from a spreadsheet — then fit a regression"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setOpen(false)
+                  onDataAdd()
+                }}
+              >
+                Data table
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>

@@ -34,6 +34,7 @@ import type {
   BoardIntersection,
   Overlay,
   Polyline,
+  ScatterSet,
   Shape,
   SlopeField,
 } from './renderBoard'
@@ -141,6 +142,11 @@ interface Props {
    * PNG cannot disagree about where a vertex is.
    */
   shapes?: readonly Shape[] | null
+  /**
+   * Data tables as scatter plots, with their residuals. Straight into the
+   * scene like the shapes, so the screen and the PNG draw the same points.
+   */
+  scatter?: readonly ScatterSet[] | null
   /**
    * The RULING: the square lattice, or the circles and spokes a polar curve is
    * read off. Absent means the square one, so a caller that never mentions it
@@ -479,6 +485,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     fields,
     polylines,
     shapes,
+    scatter,
     grid,
     figure,
     caption,
@@ -513,6 +520,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   const fieldsRef = useRef<readonly SlopeField[] | null | undefined>(fields)
   const polylinesRef = useRef<readonly Polyline[] | null | undefined>(polylines)
   const shapesRef = useRef<readonly Shape[] | null | undefined>(shapes)
+  const scatterRef = useRef<readonly ScatterSet[] | null | undefined>(scatter)
   const gridRef = useRef<BoardGrid | null | undefined>(grid)
   const figureRef = useRef<FigureStyle | null | undefined>(figure)
   const captionRef = useRef<string | null | undefined>(caption)
@@ -671,6 +679,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       fields: fieldsRef.current ?? undefined,
       polylines: polylinesRef.current ?? undefined,
       shapes: shapesRef.current ?? undefined,
+      ...(scatterRef.current && scatterRef.current.length > 0 ? { scatter: scatterRef.current } : {}),
       grid: gridRef.current ?? undefined,
       figure: figureRef.current ?? undefined,
       caption: captionRef.current ?? undefined,
@@ -754,6 +763,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     fieldsRef.current = fields
     polylinesRef.current = polylines
     shapesRef.current = shapes
+    scatterRef.current = scatter
     gridRef.current = grid
     figureRef.current = figure
     captionRef.current = caption
@@ -776,6 +786,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     fields,
     polylines,
     shapes,
+    scatter,
     grid,
     figure,
     caption,

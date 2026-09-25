@@ -4419,6 +4419,276 @@ button.calc-field-btn {
   border-bottom: 1px dotted var(--faint);
 }
 
+/* ------------------------------------------------------------ data tables */
+/*
+ * A table's card is a shape's card is a field's card is a curve's card — the
+ * same dot, menu and body — plus the two things only a table has: a GRID of
+ * the teacher's own cells, and the list of regressions fitted to it, each
+ * printed the way a TI-84 prints it after ExpReg.
+ */
+
+.data-count {
+  margin-left: var(--sp-1);
+}
+
+.data-grid-wrap {
+  max-height: 280px;
+  overflow: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+}
+
+.data-grid {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.data-grid th,
+.data-grid td {
+  padding: 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.data-grid thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel-2);
+}
+
+.data-idx {
+  width: 28px;
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  text-align: right;
+  padding-right: var(--sp-1) !important;
+  font-variant-numeric: tabular-nums;
+}
+
+.data-drop-col {
+  width: 24px;
+  text-align: center;
+}
+
+.data-drop-col .calc-drop {
+  opacity: 0;
+}
+
+.data-grid tr:hover .calc-drop,
+.data-drop-col .calc-drop:focus-visible {
+  opacity: 1;
+}
+
+.data-cell {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.data-cell:focus {
+  outline: none;
+  border-color: rgba(79, 156, 249, 0.55);
+  background: var(--panel);
+}
+
+.data-head-cell {
+  color: var(--muted);
+  font-family: var(--font);
+  font-weight: 600;
+}
+
+.data-cell-bad {
+  color: var(--danger);
+  text-decoration: underline dotted;
+}
+
+.data-row-skipped .data-idx {
+  color: var(--danger);
+}
+
+.data-row-new .data-cell::placeholder {
+  color: var(--faint);
+}
+
+.data-actions {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1);
+  margin: var(--sp-2) 0;
+}
+
+.data-reg-wrap {
+  position: static;
+}
+
+/* The menu opens under the row, as wide as the card: the sidebar clips
+   anything wider, and the refusal reasons need the room. */
+.data-reg-menu {
+  left: 0;
+  right: 0;
+  width: auto;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.data-reg-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px var(--sp-2);
+}
+
+.data-reg-item-name {
+  flex: 1 1 auto;
+}
+
+.data-reg-item-r2 {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.data-reg-item:disabled {
+  cursor: default;
+}
+
+.data-reg-item:disabled:hover {
+  background: transparent;
+}
+
+.data-reg-refused .data-reg-item-name {
+  color: var(--faint);
+}
+
+.data-reg-why {
+  flex: 1 1 100%;
+  color: var(--faint);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  white-space: normal;
+}
+
+.data-paste {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin-bottom: var(--sp-2);
+}
+
+.data-paste-text {
+  width: 100%;
+  resize: vertical;
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: 6px;
+  border: 1px solid var(--border-soft);
+  background: var(--panel);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+.data-paste-text:focus {
+  outline: none;
+  border-color: rgba(79, 156, 249, 0.55);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.data-report {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: var(--sp-2);
+}
+
+.data-report-x {
+  align-self: flex-start;
+  margin-top: var(--sp-1);
+}
+
+.data-skipped {
+  margin-top: var(--sp-1);
+}
+
+/* One regression: name and TI command, the equation, r and r². */
+.data-regs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+
+.data-reg {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: var(--sp-2);
+  border-left: 2px solid var(--curve, var(--accent));
+  cursor: default;
+}
+
+.data-reg-kind {
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.data-reg-drop {
+  margin-left: auto;
+}
+
+.data-reg-eq {
+  overflow-x: auto;
+}
+
+.data-reg-stats .calc-read {
+  flex: 0 1 auto;
+  margin-right: var(--sp-1);
+}
+
+.data-reg-data {
+  white-space: normal;
+}
+
+.data-reg-why-line {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.data-reg-failed .data-reg-eq,
+.data-reg-detached .data-reg-eq {
+  opacity: 0.55;
+}
+
+.data-reg-detached {
+  border-left-style: dashed;
+}
+
+.data-reg-controls {
+  margin-top: var(--sp-1);
+}
+
+.data-digits {
+  min-width: 1.2em;
+  text-align: center;
+}
+
+.data-reg-notes {
+  margin-top: 2px;
+}
+
 /* ------------------------------------------------------------ built from roots */
 /*
  * "Build from roots" (the second button beside "+") and the Roots section on a
