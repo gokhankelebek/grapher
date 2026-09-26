@@ -1289,6 +1289,54 @@ function analyzeParametric(curve: FittedCurve, spec: ModelSpec): SpecialPoint[] 
   return out.sort((p, q) => p.pos.x - q.pos.x)
 }
 
+/**
+ * Only points the curve actually passes through.
+ *
+ * A piecewise function approaching an EXCLUDED end — x² + 1 on x < 0 near
+ * (0, 1) — looks to the numeric scans like a minimum and an inflection
+ * there, but f(0) belongs to another piece (it is 3) and the point is an
+ * open dot, not a feature. Every zero, extremum, inflection and intercept
+ * of a curve with pieces is checked against f itself at its x; one that
+ * f does not reach is dropped. Holes are points f does NOT reach by
+ * definition and are kept; curves without pieces are untouched.
+ */
+function ownedPoints(points: SpecialPoint[], curve: FittedCurve, spec: ModelSpec): SpecialPoint[] {
+  if (!spec.pieces || !spec.evalExplicit) return points
+  let pieces: ReturnType<NonNullable<ModelSpec['pieces']>>
+  try {
+    pieces = spec.pieces(curve.params)
+  } catch {
+    return points
+  }
+  if (!pieces || pieces.length === 0) return points
+  const f = spec.evalExplicit
+  const at = (x: number): number => {
+    try {
+      return f.call(spec, curve.params, x)
+    } catch {
+      return Number.NaN
+    }
+  }
+  // Finite piece ends; a scan converging on one from inside lands a hair
+  // away from it, so "at the end" is judged with a small tolerance.
+  const ends: number[] = []
+  for (const q of pieces) {
+    if (Number.isFinite(q.lo)) ends.push(q.lo)
+    if (Number.isFinite(q.hi)) ends.push(q.hi)
+  }
+  const near = (x: number, e: number): boolean => Math.abs(x - e) <= 1e-6 * Math.max(1, Math.abs(e))
+  return points.filter((p) => {
+    if (p.kind === 'hole' || p.kind === 'intersection') return true
+    const x = p.pos.x
+    const same = (y: number): boolean =>
+      Number.isFinite(y) && Math.abs(y - p.pos.y) <= 1e-6 * Math.max(1, Math.abs(y), Math.abs(p.pos.y))
+    const end = ends.find((e) => near(x, e))
+    // At a piece end the point must be the value f takes AT the end.
+    if (end !== undefined) return same(at(end))
+    return same(at(x))
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -1301,7 +1349,7 @@ export function analyzeCurve(
     const spec = models[curve.modelId]
     if (!spec || !curve.params.every(Number.isFinite)) return []
 
-    if (spec.evalExplicit) return analyzeExplicit(curve, spec, models)
+    if (spec.evalExplicit) return ownedPoints(analyzeExplicit(curve, spec, models), curve, spec)
     if (spec.evalPolar) return analyzePolar(curve, spec, models)
     if (spec.kind === 'implicit') {
       if (curve.modelId === 'circle') return analyzeCircle(curve)

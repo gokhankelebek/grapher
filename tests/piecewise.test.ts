@@ -1265,3 +1265,23 @@ describe('stepSpec', () => {
     ])
   })
 })
+
+describe('analysis on a piecewise curve reports only points the curve reaches', () => {
+  it('no minimum or inflection at the open end (0, 1) of x² + 1 on x < 0', async () => {
+    const { parseExpression } = await import('../src/core/parse')
+    const { analyzeCurve } = await import('../src/core/analyze')
+    const r = parseExpression('f(x) = {x^2 + 1 if x < 0, 3 if 0 <= x <= 2, -x + 5 if x > 2}')
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const spec = r.plot.makeModel('expr_1')
+    const curve = {
+      id: 'c', modelId: 'expr_1', params: r.plot.defaultParams, kind: r.plot.kind,
+      domain: r.plot.domain, color: '#4f9cf9', strokeWidth: 2.5, visible: true, error: 0,
+    } as never
+    const pts = analyzeCurve(curve, { expr_1: spec })
+    const atOpenEnd = pts.filter((p) => Math.abs(p.pos.x) < 1e-6 && Math.abs(p.pos.y - 1) < 1e-6)
+    expect(atOpenEnd).toEqual([])
+    expect(pts.some((p) => p.kind === 'zero' && Math.abs(p.pos.x - 5) < 1e-9)).toBe(true)
+    expect(pts.some((p) => p.kind === 'y-intercept' && Math.abs(p.pos.y - 3) < 1e-9)).toBe(true)
+  })
+})
