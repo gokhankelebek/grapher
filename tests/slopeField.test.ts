@@ -64,9 +64,9 @@ describe('parseSlopeField — the AP classics', () => {
   it("y' = x*y, and the juxtaposed spelling agrees", () => {
     expect(field("y' = x*y").f(3, 4)).toBeCloseTo(12, 12)
     expect(field("y' = x y").f(3, 4)).toBeCloseTo(12, 12)
-    // 'xy' lexes as one multi-letter name here, exactly as it does in every
-    // other equation box in the app — same engine, same rule.
-    expect(err("y' = xy").error).toMatch(/multi-letter names aren't supported/)
+    // 'xy' is the product x·y here, exactly as it is in every other equation
+    // box in the app — same engine, same rule.
+    expect(field("y' = xy").f(3, 4)).toBeCloseTo(12, 12)
   })
 
   it('dy/dx = -x/y', () => {
