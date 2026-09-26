@@ -6,6 +6,7 @@
 import { describe, it, expect } from 'vitest'
 import type { ParsedPlot } from '../src/core/types'
 import { parseExpression } from '../src/core/parse'
+import type { FunctionEnv } from '../src/core/functionEnv'
 import { makeRng } from './helpers'
 
 // ---------------------------------------------------------------------------
@@ -1214,6 +1215,134 @@ describe('latex round-trip fuzz', () => {
     ]
     const bad = fixed.map(roundTripPieced).filter(Boolean)
     expect(bad.join('\n---\n')).toBe('')
+  })
+
+  // -------------------------------------------------------------------------
+  // Named calls (functions that use other functions) are ADDITIVE: an env
+  // changes nothing unless the line calls a letter the env defines. The
+  // generators never put '(' straight after a letter (their heads f(x) =,
+  // g(t) = are exempt as the line's own name), so every input must come out
+  // byte-identical with an env that defines ALL of those letters.
+  // -------------------------------------------------------------------------
+
+  const ENV_ALL: FunctionEnv = {
+    has: (n) => ['f', 'g', 'h', 'a', 'b', 'c', 'k', 'w'].includes(n),
+    eval: (_n, x) => 1000 + x, // anything; it must never be asked
+  }
+
+  /** A fingerprint of everything an outcome shows the App. */
+  function fingerprint(src: string, env?: FunctionEnv): string {
+    const o = parseExpression(src, env)
+    if (!o.ok) return JSON.stringify(o)
+    const p = o.plot
+    const m = p.makeModel('m')
+    const params = p.paramNames.map((_, i) => 0.7 + i * 0.4)
+    const vals = [-2.5, -0.5, 0.25, 1.5, 3].map((u) =>
+      String(
+        m.evalExplicit ? m.evalExplicit(params, u)
+          : m.evalPolar ? m.evalPolar(params, u)
+          : m.evalImplicit!(params, u, 0.4),
+      ),
+    )
+    const sing = m.singularities ? m.singularities(params, [-5, 5]).map(String) : null
+    return JSON.stringify([p.kind, p.latex, p.paramNames, p.defaultParams, p.domain, m.latex(params), vals, sing])
+  }
+
+  it('every generated input parses byte-identically with an env defining f, g, h and the sliders', () => {
+    const rng = makeRng(4242)
+    const bad: string[] = []
+    for (let i = 0; i < 3000; i++) {
+      const roll = rng()
+      const src =
+        roll < 0.5 ? genInput(rng)
+          : roll < 0.65 ? genInput(rng, true, true)
+          : roll < 0.8 ? genRestricted(rng)
+          : genPiecewise(rng)
+      const a = fingerprint(src)
+      if (fingerprint(src, ENV_ALL) !== a) bad.push(`${src} (env)`)
+      if (fingerprint(src, { has: () => false, eval: () => NaN }) !== a) bad.push(`${src} (empty env)`)
+    }
+    expect(bad.slice(0, 5).join('\n')).toBe('')
+  })
+
+  it('generated named calls round-trip through latex (with the env)', () => {
+    const env: FunctionEnv = {
+      has: (n) => n === 'f' || n === 'g',
+      eval: (n, x) => (n === 'f' ? x * x - 1 : Math.sin(x) + 0.5 * x),
+    }
+    const rng = makeRng(77)
+    const call = (): string => {
+      const primes = pick(rng, ['', '', "'", "''"])
+      return `${pick(rng, ['f', 'g'])}${primes}(${genExpr(rng, ['x'], 2)})`
+    }
+    const bad: string[] = []
+    let parsed = 0
+    for (let i = 0; i < 1500; i++) {
+      const roll = rng()
+      const src =
+        roll < 0.3 ? `y = ${num(rng)}${call()} + ${genExpr(rng, ['x'], 1)}`
+          : roll < 0.5 ? `h(x) = ${call()}${call()}`
+          : roll < 0.7 ? `${call()} - ${pick(rng, ['f', 'g'])}(${call()})`
+          : roll < 0.85 ? `(${call()})^2 / ${call()}`
+          : `-${call()}`
+      const first = parseExpression(src, env)
+      if (!first.ok) continue
+      parsed++
+      const round = delatex(first.plot.latex.replace(/^[^=]*= /, ''))
+      const second = parseExpression(round, env)
+      if (!second.ok) { bad.push(`${src}\n  round: ${round}\n  ${second.error}`); continue }
+      const ma = first.plot.makeModel('a'), mb = second.plot.makeModel('b')
+      const params = first.plot.paramNames.map((_, j) => 0.7 + j * 0.4)
+      for (const u of [-2.25, -0.75, 0.5, 1.25, 2.75]) {
+        const va = ma.evalExplicit!(params, u), vb = mb.evalExplicit!(params, u)
+        if (!sameNum(va, vb)) { bad.push(`${src}\n  round: ${round}\n  at ${u}: ${va} vs ${vb}`); break }
+      }
+    }
+    expect(bad.slice(0, 5).join('\n---\n')).toBe('')
+    expect(parsed).toBeGreaterThan(1000)
+  })
+})
+
+describe('named calls leave every env-less reading alone', () => {
+  const ENV_FG: FunctionEnv = { has: (n) => n === 'f' || n === 'g', eval: (_n, x) => x * x }
+  const same = (src: string, env: FunctionEnv) => {
+    const a = parseExpression(src)
+    const b = parseExpression(src, env)
+    expect(JSON.stringify(b.ok ? [b.plot.latex, b.plot.paramNames, b.plot.kind] : b), src)
+      .toBe(JSON.stringify(a.ok ? [a.plot.latex, a.plot.paramNames, a.plot.kind] : a))
+  }
+
+  it('a(x+1) is still a slider times a bracket, with or without an env', () => {
+    expect(plot('a(x+1)').paramNames).toEqual(['a'])
+    expect(plot('a(x+1)').latex).toBe('y = a\\left(x+1\\right)')
+    same('a(x+1)', ENV_FG)
+    same('y = a(x - h)^2 + k', ENV_FG)
+  })
+
+  it('without an env, f(x) is the product f·x and f\'(x) is the old error', () => {
+    expect(plot('y = f(x) + 1').paramNames).toEqual(['f'])
+    expect(err("f'(x)").error).toMatch(/Unexpected character/)
+    expect(err("y = 2f''(x)").error).toMatch(/Unexpected character/)
+  })
+
+  it('definition heads f(x) = … are untouched by an env that has f', () => {
+    for (const src of ['f(x) = x^2', 'f(x) = a x^2 + b', 'g(t) = 2t + 1', 'f(x) = { -x if x < 0 ; x if x >= 0 }',
+      'f(x) = x^2 {0 < x < 3}', 'f(x) = piecewise(x^2, x < 0, 2x)']) {
+      same(src, ENV_FG)
+    }
+    expect(plot('f(x) = x^2').latex).toBe('f\\left(x\\right) = x^{2}')
+  })
+
+  it("y' = x (a slope field, read elsewhere) and y(x) are untouched", () => {
+    const envY: FunctionEnv = { has: () => true, eval: () => 0 }
+    for (const src of ["y' = x", "y' = x - y", 'y(x+1) = 2', 'x(x - 1)', 'e(x + 1)', 't(t+1)', 'r = theta(1)']) {
+      same(src, envY)
+    }
+  })
+
+  it('a space before the bracket is a product even for a defined name', () => {
+    const r = parseExpression('f (x)', ENV_FG)
+    expect(r.ok && r.plot.paramNames).toEqual(['f'])
   })
 })
 

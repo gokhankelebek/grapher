@@ -26,9 +26,20 @@
 //   number literal, a constant, a single letter or '(' expr ')', never
 //   depending on the variable; arg is '(' expr ')' or paren-less like ln x.
 //   log_(B, u) is the same call. log_e(u) is ln(u). See Parser.logBaseNud.
+//
+// Named calls (functions that use other functions — see ../functionEnv.ts):
+//   parseExpression(src, env), compileExpr(src, env), analyzeExpr(src, env)
+//   take an optional FunctionEnv. A single letter the env defines, IMMEDIATELY
+//   followed by `(` — or by `'(` / `''(` — is a call of that curve:
+//       f(x − 1)   f(g(x))   f'(x)   f''(2x)
+//   and becomes one AST node, { t: 'ucall', name, arg, order }. Nothing else
+//   changes: without an env, or for a letter the env does not define,
+//   `a(x + 1)` is still the slider a times (x + 1), and `f'(x)` is still the
+//   "Unexpected character" it always was. See Parser.userCall.
 // ============================================================================
 
 import type { CurveKind, ModelSpec, ParamMeta, ParseOutcome, ParsedPlot } from '../types'
+import type { FunctionEnv } from '../functionEnv'
 import {
   CondError,
   compactLatex,
@@ -62,6 +73,11 @@ const wrap = (s: string) => `\\left(${s}\\right)`
  */
 const has = (table: object, key: string): boolean =>
   Object.prototype.hasOwnProperty.call(table, key)
+
+/** env.has, and a throwing env is an env that does not have the name. */
+function envHas(env: FunctionEnv, name: string): boolean {
+  try { return env.has(name) === true } catch { return false }
+}
 
 const FUNCS: Record<string, FuncDef> = {
   sin:   { arity: 1, fn: (a) => Math.sin(a),   latex: (x) => `\\sin${wrap(x[0])}` },
@@ -159,6 +175,71 @@ type Node =
   | { t: 'neg'; a: Node }
   | { t: 'bin'; op: '+' | '-' | '*' | '/' | '^'; a: Node; b: Node }
   | { t: 'call'; fn: string; args: Node[] }
+  | UCallNode
+
+/**
+ * A call of a named curve: f(u), f'(u), f''(u). Made only when an env was
+ * given AND defines `name` (see Parser.userCall). The node carries the env it
+ * was parsed against, so the compiled closure asks the env for f at EVERY
+ * evaluation — the model sees f's current formula and sliders, never a copy.
+ */
+interface UCallNode {
+  t: 'ucall'
+  name: string
+  arg: Node
+  /** 0 = f(u), 1 = f′(u), 2 = f″(u) — numeric, from env.eval */
+  order: 0 | 1 | 2
+  env: FunctionEnv
+}
+
+// ----------------------------------------------------------------------------
+// Named calls — derivatives of a curve known only through env.eval
+// ----------------------------------------------------------------------------
+
+/**
+ * Richardson step for f′: the one src/core/calculus.ts uses (eps^(1/5) —
+ * truncation O(h⁴) and roundoff O(eps/h) both ≈ 1e-13), scaled to |u|.
+ */
+const H_UCALL_D1 = Math.pow(Number.EPSILON, 1 / 5)
+/** Richardson step for f″: truncation O(h⁴) against roundoff O(eps/h²). */
+const H_UCALL_D2 = Math.pow(Number.EPSILON, 1 / 6)
+
+/**
+ * f′(u) by Richardson extrapolation of the central difference — four
+ * evaluations, no corner test (it runs per sample, hundreds of times a frame;
+ * a corner simply shows as the slope jumping). NaN where f is undefined
+ * nearby. Exported for ../functionEnv.ts (the horizontal line test).
+ */
+export function richardsonD1(f: (u: number) => number, u: number): number {
+  let h = H_UCALL_D1 * Math.max(1, Math.abs(u))
+  const up = u + h
+  h = up - u // a step the floating-point grid can actually take
+  const d1 = (f(up) - f(u - h)) / (2 * h)
+  const d2 = (f(u + h / 2) - f(u - h / 2)) / h
+  return (4 * d2 - d1) / 3
+}
+
+/** f″(u): Richardson-extrapolated second central difference, five evaluations. */
+export function richardsonD2(f: (u: number) => number, u: number): number {
+  let h = H_UCALL_D2 * Math.max(1, Math.abs(u))
+  const up = u + h
+  h = up - u
+  const f0 = f(u)
+  const k1 = (f(up) - 2 * f0 + f(u - h)) / (h * h)
+  const q = h / 2
+  const k2 = (f(u + q) - 2 * f0 + f(u - q)) / (q * q)
+  return (4 * k2 - k1) / 3
+}
+
+function containsUcall(n: Node): boolean {
+  switch (n.t) {
+    case 'ucall': return true
+    case 'neg': return containsUcall(n.a)
+    case 'bin': return containsUcall(n.a) || containsUcall(n.b)
+    case 'call': return n.args.some(containsUcall)
+    default: return false
+  }
+}
 
 // ----------------------------------------------------------------------------
 // Errors
@@ -217,11 +298,35 @@ function isKnownName(w: string): boolean {
 }
 
 type TokType = 'num' | 'ident' | 'op' | 'lparen' | 'rparen' | 'comma' | 'eq' | 'bar' | 'end'
-interface Token { type: TokType; text: string; pos: number; value: number }
+interface Token {
+  type: TokType
+  text: string
+  pos: number
+  value: number
+  /** f' / f'': the primes after a named curve's letter (only ever set with an env) */
+  primes?: 1 | 2
+}
+
+/**
+ * How many primes follow the letter ending at `j` when they lead straight
+ * into '(' — `f'(`, `f''(` — else 0. Three primes, or a space, is not a call.
+ */
+function primesBeforeParen(src: string, j: number): 0 | 1 | 2 {
+  if (src[j] !== "'") return 0
+  if (src[j + 1] === '(') return 1
+  if (src[j + 1] === "'" && src[j + 2] === '(') return 2
+  return 0
+}
 
 const NUM_RE = /^(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?/
 
-function tokenize(src: string): Token[] {
+/**
+ * `callable(letter)` says which single letters may take primes (f'(x)); with
+ * none, a prime is the error it always was. `lenient` skips characters the
+ * expression grammar does not know ({, <, ;, …) instead of failing — used
+ * only by namedCallSites, which reads a whole line, conditions and all.
+ */
+function tokenize(src: string, callable?: (w: string) => boolean, lenient = false): Token[] {
   const toks: Token[] = []
   let i = 0
   const n = src.length
@@ -251,6 +356,16 @@ function tokenize(src: string): Token[] {
       if (!/[0-9]/.test(word) || isKnownName(word)) {
         // pure letters (parser classifies / errors) or a known digit-bearing
         // name such as log2
+        // f'(u), f''(u): a named curve's derivative. Only for a letter the
+        // env defines — everywhere else the prime stays an error.
+        if (callable && word.length === 1 && !isKnownName(word) && callable(word)) {
+          const primes = primesBeforeParen(src, j)
+          if (primes > 0) {
+            toks.push({ type: 'ident', text: word, pos: i, value: 0, primes: primes as 1 | 2 })
+            i = j + primes
+            continue
+          }
+        }
         toks.push({ type: 'ident', text: word, pos: i, value: 0 })
         i = j
         continue
@@ -282,6 +397,7 @@ function tokenize(src: string): Token[] {
     if (c === ',') { toks.push({ type: 'comma', text: c, pos: i, value: 0 }); i++; continue }
     if (c === '=') { toks.push({ type: 'eq', text: c, pos: i, value: 0 }); i++; continue }
     if (c === '|') { toks.push({ type: 'bar', text: c, pos: i, value: 0 }); i++; continue }
+    if (lenient) { i++; continue }
     throw new ParseError(`Unexpected character '${c}' at position ${i}`, i)
   }
   toks.push({ type: 'end', text: '', pos: n, value: 0 })
@@ -303,9 +419,27 @@ class Parser {
   private barDepth = 0
   paramIndex = new Map<string, number>()
   paramNames: string[] = []
+  private env: FunctionEnv | null
+  /** the name this line defines (`g` of `g(x) = …`) when the env has it */
+  private selfName: string | null
+  /** true when token 0 is that definition's head, `g` of `g(x) =` */
+  private headAtStart: boolean
 
-  constructor(src: string) {
-    this.toks = tokenize(src)
+  /**
+   * `env` turns `f(u)` into a call of the named curve f (see userCall).
+   * `self` is the name the line defines: its head (token 0, when
+   * `headAtStart`) parses as it always has; any other `self(` is an error.
+   */
+  constructor(
+    src: string,
+    env?: FunctionEnv | null,
+    self?: { name: string; headAtStart: boolean } | null,
+  ) {
+    this.env = env ?? null
+    this.selfName = self?.name ?? null
+    this.headAtStart = self?.headAtStart ?? false
+    const e = this.env
+    this.toks = tokenize(src, e ? (w) => envHas(e, w) : undefined)
   }
 
   private peek(): Token { return this.toks[this.k] }
@@ -590,8 +724,49 @@ class Parser {
     return { t: 'bin', op: '^', a: call, b: { t: 'num', v: n, raw: t.text } }
   }
 
+  /**
+   * `f(u)`, `f'(u)`, `f''(u)` for a curve the env defines, after its letter.
+   * The '(' must follow the letter (or its primes) directly: `f (x)` stays
+   * the product f·x, as it always was. One argument, any expression —
+   * f(g(x)), f(2x), f(x − 1) — and the call is an atom, so f(x)^2, 2f(x) and
+   * f(x)g(x) mean what they say.
+   */
+  private userCall(tok: Token): Node {
+    const name = tok.text
+    const order = tok.primes ?? 0
+    const typed = `${name}${"'".repeat(order)}`
+    this.next() // '('
+    const arg = this.parseExpr(0)
+    const close = this.peek()
+    if (close.type === 'comma') {
+      throw new ParseError(`'${typed}' takes one argument — unexpected ',' at position ${close.pos}`, close.pos)
+    }
+    if (close.type !== 'rparen') this.fail(close, "')'")
+    this.next()
+    return { t: 'ucall', name, arg, order, env: this.env! }
+  }
+
+  /** Is `tok` a named call — an env letter with '(' right after it (and its primes)? */
+  private isUserCall(tok: Token): boolean {
+    if (!this.env || tok.text.length !== 1 || isKnownName(tok.text)) return false
+    if (!envHas(this.env, tok.text)) return false
+    const nxt = this.peek()
+    return nxt.type === 'lparen' && nxt.pos === tok.pos + 1 + (tok.primes ?? 0)
+  }
+
   private identNud(tok: Token): Node {
     if (tok.text === 'log_') return this.logBaseNud(tok)
+    if (this.isUserCall(tok)) {
+      const isHead = this.headAtStart && this.k === 1 && tok.primes === undefined
+      if (tok.text === this.selfName && !isHead) {
+        const n = tok.text
+        throw new ParseError(
+          `${n} cannot use itself — this line defines ${n}, so its own formula cannot call ${n} (at position ${tok.pos})`,
+          tok.pos,
+        )
+      }
+      if (!isHead) return this.userCall(tok)
+    }
     // arcsin → asin: the AST only ever carries the one name
     const w = FUNC_ALIASES.get(tok.text) ?? tok.text
     const fdef = has(FUNCS, w) ? FUNCS[w] : undefined
@@ -667,6 +842,7 @@ function collectVars(n: Node, out: Set<VarName>): void {
     case 'neg': collectVars(n.a, out); break
     case 'bin': collectVars(n.a, out); collectVars(n.b, out); break
     case 'call': for (const a of n.args) collectVars(a, out); break
+    case 'ucall': collectVars(n.arg, out); break
     default: break
   }
 }
@@ -683,6 +859,7 @@ function countParam(n: Node, name: string): number {
       for (const a of n.args) c += countParam(a, name)
       return c
     }
+    case 'ucall': return countParam(n.arg, name)
     default: return 0
   }
 }
@@ -704,6 +881,7 @@ function reindexParams(n: Node, names: string[] = [], index = new Map<string, nu
     case 'neg': reindexParams(n.a, names, index); break
     case 'bin': reindexParams(n.a, names, index); reindexParams(n.b, names, index); break
     case 'call': for (const a of n.args) reindexParams(a, names, index); break
+    case 'ucall': reindexParams(n.arg, names, index); break
     default: break
   }
   return names
@@ -787,6 +965,19 @@ function compile(n: Node): Evaluator {
       const f = compile(n.args[0])
       return (p, a, b) => fn(f(p, a, b), 0)
     }
+    case 'ucall': {
+      // Asked of the env at every evaluation: g follows f's slider live.
+      const inner = compile(n.arg)
+      const env = n.env
+      const name = n.name
+      const at = (u: number): number => {
+        const v = env.eval(name, u)
+        return typeof v === 'number' ? v : Number.NaN
+      }
+      if (n.order === 0) return (p, a, b) => at(inner(p, a, b))
+      if (n.order === 1) return (p, a, b) => richardsonD1(at, inner(p, a, b))
+      return (p, a, b) => richardsonD2(at, inner(p, a, b))
+    }
   }
   throw new ParseError('internal compile error')
 }
@@ -842,6 +1033,8 @@ interface SingSource {
   q: Evaluator
   /** null = anywhere; otherwise only zeros this piecewise branch owns count */
   within: Piece[] | null
+  /** q calls a named curve, so its zeros move when that curve changes */
+  live?: boolean
 }
 
 /** Everything a compiled expression knows about its own singularities. */
@@ -860,18 +1053,34 @@ function negativeExponent(n: Node): boolean {
   return false
 }
 
-/** Walk the AST once, compiling every sub-expression whose zeros are singular. */
+/**
+ * Walk the AST once, compiling every sub-expression whose zeros are singular.
+ *
+ * A named call f(u) contributes NONE of its own: f's poles and holes are
+ * f's business, and are not visible through env.eval. Only the call's
+ * argument is walked, and a named call INSIDE a written denominator, tan or
+ * logarithm counts as usual — 1/f(x) is singular where f(x) = 0. So the
+ * singularities of g(x) = 2f(x − 1) + 3 with f = 1/x are NOT reported (g
+ * draws its asymptote as a steep pen stroke, not as a found pole), while
+ * those of 1/f(x), tan(f(x)) or f(1/x) are.
+ */
 function collectSingSources(n: Node, within: Piece[] | null, out: SingSource[]): void {
+  const push = (m: Node, q: Evaluator): void => {
+    out.push(containsUcall(m) ? { q, within, live: true } : { q, within })
+  }
   switch (n.t) {
+    case 'ucall':
+      collectSingSources(n.arg, within, out)
+      break
     case 'neg':
       collectSingSources(n.a, within, out)
       break
     case 'bin':
       if (n.op === '/') {
-        out.push({ q: compile(n.b), within })
+        push(n.b, compile(n.b))
       } else if (n.op === '^' && negativeExponent(n.b)) {
         // x^-2 is 1/x²: the base is a denominator wearing a different hat
-        out.push({ q: compile(n.a), within })
+        push(n.a, compile(n.a))
       }
       collectSingSources(n.a, within, out)
       collectSingSources(n.b, within, out)
@@ -881,11 +1090,11 @@ function collectSingSources(n: Node, within: Piece[] | null, out: SingSource[]):
       if (trig) {
         const inner = compile(n.args[0])
         const g = trig === 'cos' ? Math.cos : Math.sin
-        out.push({ q: (p, a, b) => g(inner(p, a, b)), within })
+        push(n.args[0], (p, a, b) => g(inner(p, a, b)))
       } else if (LOG_ARG.has(n.fn)) {
         // ln(x² − 4) stops being a formula where x² − 4 does: at ±2, where it
         // dives to −∞. The argument is a denominator wearing a third hat.
-        out.push({ q: compile(logArgOf(n)), within })
+        push(logArgOf(n), compile(logArgOf(n)))
       }
       for (const arg of n.args) collectSingSources(arg, within, out)
       break
@@ -1075,6 +1284,11 @@ function computeSingularities(
 function makeSingularities(
   plan: SingPlan,
 ): (params: number[], range: [number, number]) => number[] {
+  // A source that calls a named curve moves when THAT curve changes, which
+  // (params, range) cannot see — so such a plan is rescanned on every ask.
+  if (plan.sources.some((s) => s.live)) {
+    return (params, range) => computeSingularities(plan, params, range)
+  }
   let key: string | null = null
   let cached: number[] = []
   return (params, range) => {
@@ -1098,7 +1312,8 @@ function precOf(n: Node): number {
     case 'const':
     case 'var':
     case 'param':
-    case 'call': return 4
+    case 'call':
+    case 'ucall': return 4
     case 'neg': return 1
     case 'bin':
       switch (n.op) {
@@ -1189,6 +1404,9 @@ function toLatex(n: Node): string {
       // log_B: a simple fraction base is typeset as one, \log_{\frac{1}{2}}
       if (n.fn === 'log_') return FUNCS.log_.latex([baseLatex(n.args[0]), toLatex(n.args[1])])
       return FUNCS[n.fn].latex(n.args.map(toLatex))
+    case 'ucall':
+      // f\left(x-1\right), f'\left(x\right), f''\left(x\right)
+      return `${n.name}${"'".repeat(n.order)}${wrap(toLatex(n.arg))}`
     case 'bin':
       switch (n.op) {
         case '+': {
@@ -1330,14 +1548,34 @@ function classify(lhs: Node, rhs: Node | null): Classified {
 // Plot assembly — shared by the plain, restricted and piecewise paths.
 // ----------------------------------------------------------------------------
 
+/** `g(x) =` at the very start of a line: the head of a definition. */
+const DEF_HEAD_RE = /^\s*([A-Za-z])\s*\(\s*([A-Za-z]+|θ)\s*\)\s*=(?!=)/
+
+/**
+ * The curve a line DEFINES, when the env knows that name: `g` for
+ * `g(x) = 2f(x − 1) + 3`. Its head parses as it always has (matchFuncDef
+ * drops it), and a call of it anywhere else on the line is refused. `y = …`
+ * and bare expressions define nothing. Without an env, or when the env does
+ * not have the name, null — and the line parses exactly as before.
+ */
+function selfOf(src: string, env: FunctionEnv | null | undefined): { name: string; headAtStart: boolean } | null {
+  if (!env) return null
+  const m = DEF_HEAD_RE.exec(src)
+  if (!m) return null
+  const name = m[1]
+  const arg = m[2] === 'θ' ? 'theta' : m[2]
+  if (isKnownName(name) || !VAR_NAMES.has(arg) || !envHas(env, name)) return null
+  return { name, headAtStart: true }
+}
+
 /** Parse one whole equation into its classified, compiled form. */
-function compileEquation(src: string): {
+function compileEquation(src: string, env?: FunctionEnv | null): {
   cls: Classified
   paramNames: string[]
   vars: Set<VarName>
   logBases: Set<string>
 } {
-  const parser = new Parser(src)
+  const parser = new Parser(src, env, selfOf(src, env))
   const { lhs, rhs } = parser.parseInput()
 
   // "f(x) = x^2" — plot the body, not the implicit relation f·x = x².
@@ -1377,6 +1615,7 @@ function logBaseParams(nodes: readonly (Node | null)[]): Set<string> {
         if (n.fn === 'log_' && n.args[0].t === 'param') out.add(n.args[0].name)
         for (const a of n.args) walk(a)
         break
+      case 'ucall': walk(n.arg); break
       default: break
     }
   }
@@ -1705,7 +1944,7 @@ const varTexOf = (ctx: CondCtx, want: VarName): string => ctx.tex ?? VAR_LATEX[w
  * `y = f(x) <condition>` — one expression, restricted.
  * `cut` has already located the condition.
  */
-function parseRestricted(src: string, cut: Cut): ParsedPlot {
+function parseRestricted(src: string, cut: Cut, env?: FunctionEnv | null): ParsedPlot {
   const base = src.slice(0, cut.at)
   if (cut.kind === 'brace' && src.slice(cut.end).trim() !== '') {
     throw new ParseError(
@@ -1721,7 +1960,7 @@ function parseRestricted(src: string, cut: Cut): ParsedPlot {
     throw new ParseError('Empty condition — write something like {0 < x < 3}', cut.at)
   }
 
-  const { cls, paramNames, vars, logBases } = compileEquation(base)
+  const { cls, paramNames, vars, logBases } = compileEquation(base, env)
   if (cls.kind !== 'explicit' && cls.kind !== 'polar') {
     throw new ParseError(
       'A domain restriction needs an explicit curve — write it as y = f(x) or r = f(θ)',
@@ -1840,13 +2079,17 @@ function splitBranch(seg: { text: string; at: number }): RawBranch {
 }
 
 /** Compile the branch bodies, sharing one deduplicated parameter list. */
-function compileBranchBodies(raws: RawBranch[]): { bodies: Node[]; paramNames: string[] } {
+function compileBranchBodies(
+  raws: RawBranch[],
+  env?: FunctionEnv | null,
+  selfName: string | null = null,
+): { bodies: Node[]; paramNames: string[] } {
   const bodies = raws.map((b) => {
     if (b.expr.trim() === '') {
       throw new ParseError(`Each piece needs a formula, e.g. 'x^2 if x < 0'`, b.exprAt)
     }
     return atOffset(b.exprAt, () => {
-      const parser = new Parser(b.expr)
+      const parser = new Parser(b.expr, env, selfName ? { name: selfName, headAtStart: false } : null)
       const { lhs, rhs } = parser.parseInput()
       if (rhs !== null) {
         throw new ParseError(`A piece is a formula, not an equation — drop the '='`)
@@ -1862,9 +2105,16 @@ function compileBranchBodies(raws: RawBranch[]): { bodies: Node[]; paramNames: s
   return { bodies, paramNames }
 }
 
-function buildPiecewise(headRaw: string, headAt: number, raws: RawBranch[]): ParsedPlot {
+function buildPiecewise(
+  headRaw: string,
+  headAt: number,
+  raws: RawBranch[],
+  env?: FunctionEnv | null,
+): ParsedPlot {
   const head = parseHead(headRaw, headAt)
-  const { bodies, paramNames } = compileBranchBodies(raws)
+  // `f(x) = { f(x − 1) if … }`: the pieces may call other curves, not f
+  const selfName = env && head.fnName !== null && envHas(env, head.fnName) ? head.fnName : null
+  const { bodies, paramNames } = compileBranchBodies(raws, env, selfName)
 
   const vars = new Set<VarName>()
   for (const b of bodies) collectVars(b, vars)
@@ -1989,7 +2239,7 @@ const PIECEWISE_RE = /^(\s*)piecewise\s*\(/i
  * The front door for both new shapes. Returns null when `src` is an ordinary
  * equation, so the plain path stays byte-for-byte what it was.
  */
-function parsePieced(src: string): ParsedPlot | null {
+function parsePieced(src: string, env?: FunctionEnv | null): ParsedPlot | null {
   const cut = findCut(src, COND_WORDS)
 
   if (cut === null) {
@@ -2007,7 +2257,7 @@ function parsePieced(src: string): ParsedPlot | null {
       throw new ParseError(`Unexpected text after piecewise(...) at position ${close + 1}`, close + 1)
     }
     const raws = piecewiseCall(src.slice(open + 1, close), open + 1)
-    return buildPiecewise(eqAt < 0 ? '' : src.slice(0, eqAt), 0, raws)
+    return buildPiecewise(eqAt < 0 ? '' : src.slice(0, eqAt), 0, raws, env)
   }
 
   // A brace that IS the whole right-hand side is a piecewise body; a brace
@@ -2029,11 +2279,11 @@ function parsePieced(src: string): ParsedPlot | null {
       }
       const segs = splitTop(cut.cond, cut.condAt, ';')
       const raws = segs.map(splitBranch)
-      return buildPiecewise(head.slice(0, -1), 0, raws)
+      return buildPiecewise(head.slice(0, -1), 0, raws, env)
     }
   }
 
-  return parseRestricted(src, cut)
+  return parseRestricted(src, cut, env)
 }
 
 /** Index of the ')' closing the '(' at `i`; -1 when it never closes. */
@@ -2054,16 +2304,26 @@ function matchParen(src: string, i: number): number {
 // Public API
 // ----------------------------------------------------------------------------
 
-export function parseExpression(src: string): ParseOutcome {
+/**
+ * Parse one typed line into a plot.
+ *
+ * `env` (optional) names the curves the line may call — f(x − 1), f(g(x)),
+ * f'(x), f''(x) — each evaluated through env.eval at the moment the model is
+ * evaluated, never snapshotted (see ../functionEnv.ts). Without it, or for a
+ * letter it does not define, every input parses exactly as it always has.
+ * A line `f(x) = …` whose own name the env has cannot call f: that is a
+ * positioned error.
+ */
+export function parseExpression(src: string, env?: FunctionEnv | null): ParseOutcome {
   try {
     if (!src || src.trim() === '') {
       return { ok: false, error: 'Empty expression' }
     }
     // "y = x^2 {0 <= x < 3}", "y = { x^2 if x < 0 ; 2x if x >= 0 }", ...
-    const restricted = parsePieced(src)
+    const restricted = parsePieced(src, env)
     if (restricted) return { ok: true, plot: restricted }
 
-    const { cls, paramNames, logBases } = compileEquation(src)
+    const { cls, paramNames, logBases } = compileEquation(src, env)
     return {
       ok: true,
       plot: makePlot(cls.kind, cls.latex, paramNames, cls.domain, cls.ev, singPlanOf(cls.body), logBases),
@@ -2104,10 +2364,11 @@ const NO_PARAMS: readonly number[] = []
  * Parse one self-contained expression and report whether it is constant.
  * Positions in errors are relative to `src`.
  */
-export function analyzeExpr(src: string): ExprAnalysis {
+export function analyzeExpr(src: string, env?: FunctionEnv | null): ExprAnalysis {
   try {
     if (!src || src.trim() === '') return { ok: false, error: 'Empty expression' }
-    const parser = new Parser(src)
+    // With an env, f(2) is a constant too — its value is f's value NOW
+    const parser = new Parser(src, env)
     const { lhs, rhs } = parser.parseInput()
     if (rhs !== null) return { ok: false, error: "Unexpected '='" }
     const vars = new Set<VarName>()
@@ -2153,10 +2414,11 @@ export type CompileOutcome =
  * Parse and compile one self-contained expression (no '='). Positions in
  * errors are relative to `src`.
  */
-export function compileExpr(src: string): CompileOutcome {
+export function compileExpr(src: string, env?: FunctionEnv | null): CompileOutcome {
   try {
     if (!src || src.trim() === '') return { ok: false, error: 'Empty expression' }
-    const parser = new Parser(src)
+    // With an env, the closure calls named curves live, as parseExpression's does
+    const parser = new Parser(src, env)
     const { lhs, rhs } = parser.parseInput()
     if (rhs !== null) return { ok: false, error: "Unexpected '='" }
     const vars = new Set<VarName>()
@@ -2215,4 +2477,53 @@ export function parseAst(src: string): AstOutcome {
 /** Evaluate an AST node at `x` (free constants read as NaN, y as NaN). */
 export function evalAst(n: ExprNode, x: number): number {
   return compile(n)(NO_PARAMS, x, NaN)
+}
+
+// ----------------------------------------------------------------------------
+// Named-call sites — used by ../functionEnv.ts (referencedNames), which must
+// say which curves a line calls BEFORE any env exists, so the App can order
+// and wire curves before parsing them. Same tokenizer, so a letter is a call
+// here exactly when the parser, given an env with that letter, would call it.
+// ----------------------------------------------------------------------------
+
+export interface NamedCallSite {
+  name: string
+  /** offset of the letter in the source */
+  pos: number
+  /** 0 = f(u), 1 = f'(u), 2 = f''(u) */
+  order: 0 | 1 | 2
+}
+
+/**
+ * Every single letter that is not a built-in name (x, y, r, t, e) and is
+ * followed IMMEDIATELY by `(`, `'(` or `''(` — in source order, repeats
+ * included — except the base of log_b(…) and the head of a definition
+ * `g(x) = …` (whose name is returned as `head`). `a(x + 1)` IS listed: the
+ * letter is a call exactly when some curve is named a; the caller decides.
+ * Never throws: characters the expression grammar does not know (conditions,
+ * braces) are skipped.
+ */
+export function namedCallSites(src: string): { head: string | null; sites: NamedCallSite[] } {
+  const sites: NamedCallSite[] = []
+  if (typeof src !== 'string' || src.trim() === '') return { head: null, sites }
+  let head: string | null = null
+  const m = DEF_HEAD_RE.exec(src)
+  if (m && !isKnownName(m[1]) && VAR_NAMES.has(m[2] === 'θ' ? 'theta' : m[2])) head = m[1]
+  let toks: Token[]
+  try {
+    toks = tokenize(src, () => true, true)
+  } catch {
+    return { head, sites }
+  }
+  for (let i = 0; i < toks.length - 1; i++) {
+    const tok = toks[i]
+    if (tok.type !== 'ident' || tok.text.length !== 1 || isKnownName(tok.text)) continue
+    if (i > 0 && toks[i - 1].type === 'ident' && toks[i - 1].text === 'log_') continue // log_b(x)
+    const nxt = toks[i + 1]
+    const primes = tok.primes ?? 0
+    if (nxt.type !== 'lparen' || nxt.pos !== tok.pos + 1 + primes) continue
+    if (head !== null && i === 0 && primes === 0) continue // the head g of g(x) = …
+    sites.push({ name: tok.text, pos: tok.pos, order: primes as 0 | 1 | 2 })
+  }
+  return { head, sites }
 }
