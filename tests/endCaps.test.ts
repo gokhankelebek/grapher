@@ -802,3 +802,79 @@ describe('caps are figure, not chrome', () => {
       .toEqual(['closed', 'closed'])
   })
 })
+
+// ===========================================================================
+// 6. Piecewise ends (ModelSpec.pieces) — the piece-dot layer owns them
+// ===========================================================================
+
+describe('a piece end is the piece layer’s, not the end cap’s', () => {
+  /** 0.5x² − 1 on [−2, 3), stated as ONE piece with its inclusivity. */
+  const half: ModelSpec = {
+    ...MODELS.poly2,
+    id: 'halfpw',
+    pieces: () => [{ lo: -2, hi: 3, loClosed: true, hiClosed: false }],
+  }
+  const models = { ...MODELS, halfpw: half }
+  const PW = curve({ modelId: 'halfpw', params: [-1, 0, 0.5], domain: [-2, 3] })
+
+  it('curveEndPoints flags both ends, and auto resolves them to nothing', () => {
+    const pts = curveEndPoints(PW, models, VP)
+    expect(pts.start).toMatchObject({ kind: 'domain', piece: true })
+    expect(pts.end).toMatchObject({ kind: 'domain', piece: true })
+    const r = resolveEnds(undefined, PW, FIGURE_STYLES.sat, pts)
+    expect([r.start, r.end]).toEqual(['none', 'none'])
+  })
+
+  it('SAT draws the piece’s ● and ○, not the domain’s ● ●', () => {
+    const drawn = satCaps(render(scene({ curves: [PW], models, figure: FIGURE_STYLES.sat })))
+    expect(drawn.map((c) => c.kind).sort()).toEqual(['closed', 'open'])
+    const open = drawn.find((c) => c.kind === 'open')!
+    expect(open.at.x).toBeCloseTo(sx(3), 6)
+    expect(open.at.y).toBeCloseTo(sy(3.5), 4)
+  })
+
+  it('a named cap still wins, and is the only mark at that end', () => {
+    const drawn = satCaps(render(scene({
+      curves: [PW], models, figure: FIGURE_STYLES.sat,
+      styles: { c1: { ends: { end: 'arrow' } } },
+    })))
+    expect(drawn.map((c) => c.kind).sort()).toEqual(['arrow', 'closed'])
+  })
+
+  it('an end that runs off the board is still an arrow', () => {
+    const wide: ModelSpec = {
+      ...half, id: 'widepw',
+      pieces: () => [{ lo: -2, hi: 9, loClosed: true, hiClosed: true }],
+    }
+    const c = curve({ modelId: 'widepw', params: [-1, 0, 0.5], domain: [-2, 9] })
+    const pts = curveEndPoints(c, { ...MODELS, widepw: wide }, VP)
+    expect(pts.end!.kind).toBe('exit')
+    expect(pts.end).not.toHaveProperty('piece')
+  })
+
+  it('the piece dot is the end cap’s own glyph: same stream as a named cap', () => {
+    const lib = curve({ modelId: 'poly2', params: [-1, 0, 0.5], domain: [-2, 3] })
+    const named = render(scene({
+      curves: [lib], styles: { c1: { ends: { start: 'closed', end: 'open' } } },
+    }))
+    const piece = render(scene({ curves: [PW], models }))
+    // The piece layer puts its rings down before its filled dots; compare
+    // glyph by glyph, left to right.
+    const dots = (c: CapCtx): Op[] =>
+      c.ops
+        .filter((o) => !o.path && o.arcs.length === 1)
+        .map((o, i) => ({ o, i }))
+        .sort((a, b) => a.o.arcs[0].x - b.o.arcs[0].x || a.i - b.i)
+        .map((e) => e.o)
+    expect(dots(piece)).toHaveLength(dots(named).length)
+    dots(piece).forEach((o, i) => {
+      const n = dots(named)[i]
+      // lineWidth only means something on a stroke; a fill inherits whatever
+      // the previous stroke left behind.
+      const lw = (e: Op): number | null => (e.kind === 'stroke' ? e.lw : null)
+      expect([o.kind, o.style, lw(o), o.arcs[0].r]).toEqual([n.kind, n.style, lw(n), n.arcs[0].r])
+      expect(o.arcs[0].x).toBeCloseTo(n.arcs[0].x, 6)
+      expect(o.arcs[0].y).toBeCloseTo(n.arcs[0].y, 4)
+    })
+  })
+})

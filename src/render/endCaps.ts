@@ -29,9 +29,11 @@ import type {
   FigureStyle,
   FittedCurve,
   ModelSpec,
+  PieceInfo,
   Vec2,
   Viewport,
 } from '../core/types'
+import { ppuX } from '../core/types'
 import type { CurveTrace } from './curves'
 import { traceCurve } from './curves'
 import { arrowGeometry } from './shapes'
@@ -89,6 +91,10 @@ export interface ResolvedEnds {
  */
 function autoCap(p: CurveEndPoint): ResolvedCap {
   if (p.kind === 'exit') return 'arrow'
+  // A piecewise definition's own end: src/render/pieceDots.ts marks it, in
+  // every figure style, with the piece's own inclusivity. A second glyph from
+  // here — the 'closed' a declared domain end guesses — would stack on it.
+  if (p.piece) return 'none'
   if (p.kind === 'natural') return p.closed ? 'closed' : 'open'
   return 'closed'
 }
@@ -169,6 +175,14 @@ export interface CurveEndPoint {
    * hole, where the limit exists and the value does not, opens.
    */
   closed?: boolean
+  /**
+   * Present (and true) only when this 'domain' or 'natural' end sits on a
+   * FINITE end of one of the model's pieces (ModelSpec.pieces): the piece-dot
+   * layer (src/render/pieceDots.ts) owns that point and marks it filled or
+   * open as the definition says, so an 'auto' cap here says nothing. A cap the
+   * teacher NAMED still wins, and the piece layer then leaves the point alone.
+   */
+  piece?: boolean
 }
 
 export interface CurveEndPoints {
@@ -179,6 +193,49 @@ export interface CurveEndPoints {
 }
 
 const NO_ENDS: CurveEndPoints = { start: null, end: null }
+
+/**
+ * The model's pieces, read defensively: an explicit curve whose model reports
+ * a non-empty `pieces` list gets it back sorted by lower bound, every entry
+ * with ordered, non-NaN bounds (±Infinity allowed). Everything else — no
+ * `pieces`, an empty list, a throwing one, a non-explicit curve — is null,
+ * which is the signal that nothing piecewise happens.
+ */
+export function curvePieces(
+  curve: FittedCurve, models: Record<string, ModelSpec>,
+): PieceInfo[] | null {
+  if (curve.kind !== 'explicit') return null
+  const model = models[curve.modelId]
+  if (!model || typeof model.pieces !== 'function') return null
+  let raw: PieceInfo[] | null | undefined
+  try {
+    raw = model.pieces(curve.params)
+  } catch {
+    return null
+  }
+  if (!Array.isArray(raw) || raw.length === 0) return null
+  const out = raw.filter(
+    (p) => p != null && typeof p.lo === 'number' && typeof p.hi === 'number' &&
+      !Number.isNaN(p.lo) && !Number.isNaN(p.hi) && p.lo <= p.hi,
+  )
+  if (out.length === 0) return null
+  return out.slice().sort((a, b) => a.lo - b.lo || a.hi - b.hi)
+}
+
+/** Every FINITE piece end, or null when the curve has no pieces. */
+function pieceBounds(curve: FittedCurve, models: Record<string, ModelSpec>): number[] | null {
+  const pieces = curvePieces(curve, models)
+  if (!pieces) return null
+  const out: number[] = []
+  for (const p of pieces) {
+    if (Number.isFinite(p.lo)) out.push(p.lo)
+    if (Number.isFinite(p.hi)) out.push(p.hi)
+  }
+  return out.length > 0 ? out : null
+}
+
+/** A cap this close (screen px, along x) to a piece end is at that piece end. */
+const PIECE_END_TOL = 1
 
 function unit(x: number, y: number): Vec2 | null {
   const l = Math.hypot(x, y)
@@ -273,6 +330,11 @@ export function curveEndPoints(
 
   const w = vp.widthPx
   const h = vp.heightPx
+  const bounds = pieceBounds(curve, models)
+  const px = ppuX(vp)
+  const atPiece = (sxAt: number): boolean =>
+    bounds !== null &&
+    bounds.some((b) => Math.abs(vp.widthPx / 2 + (b - vp.center.x) * px - sxAt) <= PIECE_END_TOL)
   const on = (p: { x: number; y: number }): boolean =>
     p.x >= -EDGE_TOL && p.x <= w + EDGE_TOL && p.y >= -EDGE_TOL && p.y <= h + EDGE_TOL
 
@@ -309,7 +371,9 @@ export function curveEndPoints(
       // there, and only an arrow needs somewhere to point.
       const dir = smoothDir(first, run, i + step, step) ?? { x: step, y: 0 }
       if (isSpanEnd && atDomain) {
-        return { at: { x: first.x, y: first.y }, dir, kind: 'domain' }
+        const out: CurveEndPoint = { at: { x: first.x, y: first.y }, dir, kind: 'domain' }
+        if (atPiece(first.x)) out.piece = true
+        return out
       }
       // Refine the boundary rather than settling for the last sample: the last
       // sample of sqrt(x) sits a sampling step short of (0, 0), and a dot a
@@ -317,7 +381,11 @@ export function curveEndPoints(
       // lands on the boundary itself, exactly where the formula is written.
       const nat = lower ? trace!.naturalStart(idx) : trace!.naturalEnd(idx)
       if (nat && on(nat)) {
-        return { at: { x: nat.x, y: nat.y }, dir, kind: 'natural', closed: nat.closed }
+        const out: CurveEndPoint = {
+          at: { x: nat.x, y: nat.y }, dir, kind: 'natural', closed: nat.closed,
+        }
+        if (atPiece(nat.x)) out.piece = true
+        return out
       }
       return null
     }
@@ -376,8 +444,21 @@ function drawArrow(ctx: CanvasRenderingContext2D, p: CurveEndPoint, paint: EndCa
   ctx.fill()
 }
 
-function drawDot(
-  ctx: CanvasRenderingContext2D, p: CurveEndPoint, closed: boolean, paint: EndCapPaint,
+/** What a dot needs to be drawn: the ink, the ground, the presentation scale. */
+export interface EndDotPaint {
+  color: string
+  bg: string
+  stroke: number
+}
+
+/**
+ * One end dot — filled (closed: the point is on the graph) or hollow (open:
+ * it is not) — at `at`, screen px. Exported so the piece dots of a piecewise
+ * graph (src/render/pieceDots.ts) are this glyph and not a copy of it: one
+ * fact, one mark, wherever on the graph it is stated.
+ */
+export function drawEndDot(
+  ctx: CanvasRenderingContext2D, at: Vec2, closed: boolean, paint: EndDotPaint,
 ): void {
   const r = END_DOT_R * paint.stroke
   if (closed) {
@@ -385,18 +466,18 @@ function drawDot(
     // a black gridline is a thickening, not a point. The ring separates it.
     const ring = END_CLOSED_RING * paint.stroke
     ctx.beginPath()
-    ctx.arc(p.at.x, p.at.y, r + ring / 2, 0, TWO_PI)
+    ctx.arc(at.x, at.y, r + ring / 2, 0, TWO_PI)
     ctx.lineWidth = ring
     ctx.strokeStyle = paint.bg
     ctx.stroke()
     ctx.beginPath()
-    ctx.arc(p.at.x, p.at.y, r, 0, TWO_PI)
+    ctx.arc(at.x, at.y, r, 0, TWO_PI)
     ctx.fillStyle = paint.color
     ctx.fill()
     return
   }
   ctx.beginPath()
-  ctx.arc(p.at.x, p.at.y, r, 0, TWO_PI)
+  ctx.arc(at.x, at.y, r, 0, TWO_PI)
   ctx.fillStyle = paint.bg
   ctx.fill()
   ctx.lineWidth = END_OPEN_RING * paint.stroke
@@ -416,9 +497,10 @@ function drawOne(
   // better. A domain end that fell off the board is a run-off, and a run-off
   // is an arrow; a natural endpoint the domain never mentioned is a dot.
   const c = auto ? autoCap(p) : cap
+  if (c === 'none') return
   if (!Number.isFinite(p.at.x) || !Number.isFinite(p.at.y)) return
   if (c === 'arrow') drawArrow(ctx, p, paint)
-  else drawDot(ctx, p, c === 'closed', paint)
+  else drawEndDot(ctx, p.at, c === 'closed', paint)
 }
 
 /**

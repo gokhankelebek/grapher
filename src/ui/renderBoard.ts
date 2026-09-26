@@ -44,6 +44,8 @@ import { drawPolarGrid } from '../render/polarGrid'
 import { curveLineWidth, drawCurve, drawInk, traceCurve } from '../render/curves'
 import { END_DOT_R, curveEndPoints, drawCurveEnds, resolveEnds } from '../render/endCaps'
 import { drawAsymptotes, drawHoles, holeRange } from '../render/holes'
+import type { PieceMarks } from '../render/pieceDots'
+import { drawPieceDots, pieceMarks } from '../render/pieceDots'
 import { findAsymptotes, findHoles } from '../core/holes'
 import type { Overlay } from '../render/overlays'
 import { drawOverlays } from '../render/overlays'
@@ -1804,6 +1806,38 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
           }
         }
       }
+      // A PIECEWISE graph's filled and open dots (src/render/pieceDots.ts):
+      // like a hole, a fact about the function, so every style draws them.
+      // Absent `pieces` (every curve but a typed piecewise / restricted line)
+      // this is one null and nothing else.
+      let pieces: PieceMarks | null = null
+      try {
+        pieces = pieceMarks(c, models, vp, scale.stroke)
+      } catch {
+        pieces = null
+      }
+      // A cap the teacher NAMED at a piece end wins over the piece's dot.
+      let named: Vec2[] = []
+      if (pieces && pieces.dots.length > 0) {
+        const asked = style?.ends
+        const startNamed = asked?.start !== undefined && asked.start !== 'auto'
+        const endNamed = asked?.end !== undefined && asked.end !== 'auto'
+        if (startNamed || endNamed) {
+          try {
+            const pts = curveEndPoints(c, models, vp)
+            if (startNamed && pts.start) named.push(pts.start.at)
+            if (endNamed && pts.end) named.push(pts.end.at)
+          } catch {
+            named = []
+          }
+        }
+      }
+      // A hole at a piece end is the piece's mark (or, at a continuous join,
+      // the piece layer's considered silence), never a second ring.
+      if (pieces && holes.length > 0) {
+        for (const d of pieces.dots) capped.push(d.at)
+        for (const j of pieces.joins) capped.push(j)
+      }
       drawHoles(
         ctx,
         vp,
@@ -1811,6 +1845,14 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
         { color: c.color, bg: theme.bg, stroke: scale.stroke },
         capped,
       )
+      if (pieces && pieces.dots.length > 0) {
+        drawPieceDots(
+          ctx,
+          pieces.dots,
+          { color: c.color, bg: theme.bg, stroke: scale.stroke },
+          named,
+        )
+      }
     } catch {
       /* curve render failed — skip */
     }
