@@ -18,6 +18,7 @@ import {
   GRID_MINOR_WIDTH,
   drawGrid,
   formatTick,
+  tickLabel,
 } from '../src/render/grid'
 import { HALO_ALPHA_DARK, HALO_ALPHA_LIGHT, drawCurve, drawInk } from '../src/render/curves'
 import {
@@ -783,5 +784,15 @@ describe('number line — tick density and weight', () => {
       Math.max(...c.own.cmds.filter(cm => cm.op === 'arc').map(cm => (cm as { r: number }).r))
     expect(dot(paint(1))).toBeCloseTo(nlDotRadius(NL_BAR_WIDTH), 6)
     expect(dot(paint(2))).toBeCloseTo(nlDotRadius(NL_BAR_WIDTH * 2), 6)
+  })
+})
+
+describe('grid — tick labels in scientific notation', () => {
+  it('draws large and tiny steps as a×10ⁿ, never as e-notation', () => {
+    expect(tickLabel({ major: 5e7, minorDiv: 5 }, 3)).toBe('1.5×10⁸')
+    expect(tickLabel({ major: 1e8, minorDiv: 5 }, 1)).toBe('10⁸')
+    expect(tickLabel({ major: 1e8, minorDiv: 5 }, -2)).toBe('−2×10⁸')
+    expect(tickLabel({ major: 1e-5, minorDiv: 5 }, 2)).toBe('2×10⁻⁵')
+    expect(tickLabel({ major: 100, minorDiv: 5 }, 3)).toBe('300')
   })
 })

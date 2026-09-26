@@ -209,7 +209,28 @@ export function isPiStep(s: GridStep | PiStep): s is PiStep {
  */
 export function tickLabel(step: GridStep | PiStep, k: number): string {
   const s = isPiStep(step) ? formatPiTick(k * step.num, step.den) : formatTick(k * step.major)
-  return s.startsWith('-') ? `\u2212${s.slice(1)}` : s
+  return displayTick(s)
+}
+
+const SUPERSCRIPT: Record<string, string> = {
+  '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
+  '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹', '-': '⁻',
+}
+
+/**
+ * A tick label as it is DRAWN: a true minus, and scientific notation the way
+ * a textbook writes it — "1.5×10⁸", not the "1.5e8" a population axis used to
+ * print. The formatters keep ASCII so their strings stay comparable.
+ */
+function displayTick(s: string): string {
+  const m = /^(-?)(\d+(?:\.\d+)?)e([+-]?\d+)(π?)$/.exec(s)
+  let out = s
+  if (m) {
+    const exp = String(parseInt(m[3], 10)).replace(/[-0-9]/g, (c) => SUPERSCRIPT[c])
+    const mant = m[2] === '1' ? '' : `${m[2]}×`
+    out = `${m[1]}${mant}10${exp}${m[4]}`
+  }
+  return out.startsWith('-') ? `\u2212${out.slice(1)}` : out
 }
 
 // ---------------------------------------------------------------------------
@@ -384,7 +405,7 @@ export function minorTickLabel(step: GridStep | PiStep, m: number): string {
   const s = isPiStep(step)
     ? formatPiTick(m * step.num, step.den * step.minorDiv)
     : formatTick(m * (step.major / step.minorDiv))
-  return s.startsWith('-') ? `\u2212${s.slice(1)}` : s
+  return displayTick(s)
 }
 
 interface Tick {
