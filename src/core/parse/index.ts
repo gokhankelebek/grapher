@@ -38,11 +38,13 @@
 //   "Unexpected character" it always was. See Parser.userCall.
 // ============================================================================
 
-import type { CurveKind, ModelSpec, ParamMeta, ParseOutcome, ParsedPlot } from '../types'
+import type { CurveKind, ModelSpec, ParamMeta, ParseOutcome, ParsedPlot, PieceInfo } from '../types'
 import type { FunctionEnv } from '../functionEnv'
 import {
   CondError,
   compactLatex,
+  complementOf,
+  liveClause,
   exclusionLatex,
   excludedPoints,
   extentOf,
@@ -52,6 +54,7 @@ import {
   setLatex,
   WHOLE_LINE,
   type CondCtx,
+  type LiveClause,
   type Piece,
 } from './condition'
 
@@ -1634,6 +1637,7 @@ function makePlot(
   ev: Evaluator,
   sing: SingPlan | null = null,
   logBases: ReadonlySet<string> = new Set(),
+  pieces: ((params: readonly number[]) => PieceInfo[]) | null = null,
 ): ParsedPlot {
   const defaultParams = paramNames.map((nm) => (logBases.has(nm) ? LOG_BASE_DEFAULT : 1))
   return {
@@ -1654,6 +1658,7 @@ function makePlot(
       if (kind === 'explicit') {
         spec.evalExplicit = (params, x) => ev(params, x, 0)
         spec.singularities = makeSingularities(sing ?? emptySingPlan())
+        if (pieces) spec.pieces = (params) => pieces(params)
       } else if (kind === 'polar') {
         spec.evalPolar = (params, theta) => ev(params, theta, 0)
         // Same slot, read in θ: the candidates src/core/holes.ts sorts into
@@ -1846,6 +1851,14 @@ interface Branch {
   bodyTex: string
   /** the branch condition, as KaTeX */
   condTex: string
+  /**
+   * The set this branch owns when a bound is a SLIDER (`x < a`): recomputed
+   * from the current params. `pieces` then holds the default-params set,
+   * for the printed table only. See liveBranch.
+   */
+  live?: (params: readonly number[]) => Piece[]
+  /** an `otherwise` / `else` branch: it owns what no earlier branch claimed */
+  otherwise?: boolean
 }
 
 const isWholeLine = (ps: readonly Piece[]): boolean =>
@@ -1864,6 +1877,7 @@ function planBranches(
   branches: Branch[],
 ): { domain: [number, number] | null; ev: Evaluator } {
   const single = branches.length === 1
+  if (branches.some((b) => b.live)) return { domain: null, ev: liveGate(branches) }
   if (single && isWholeLine(branches[0].pieces)) {
     return { domain: kind === 'polar' ? [0, TWO_PI] : null, ev: branches[0].ev }
   }
@@ -1896,6 +1910,168 @@ function planBranches(
     domain: finite ? [ext[0], ext[1]] : null,
     ev: plain ? branches[0].ev : gated,
   }
+}
+
+/** The set a branch owns at these params (a live branch follows its sliders). */
+const setAt = (b: Branch, params: readonly number[]): Piece[] => (b.live ? b.live(params) : b.pieces)
+
+/**
+ * The gated evaluator for branches whose bounds are sliders. The sets are
+ * recomputed only when the params change — never per x.
+ */
+function liveGate(branches: Branch[]): Evaluator {
+  const evs = branches.map((b) => b.ev)
+  let last: number[] | null = null
+  let sets: Piece[][] = []
+  const current = (p: readonly number[]): Piece[][] => {
+    let same = last !== null && last.length === p.length
+    for (let i = 0; same && i < p.length; i++) if (!Object.is(last![i], p[i])) same = false
+    if (!same) {
+      last = [...p]
+      sets = branches.map((b) => setAt(b, p))
+    }
+    return sets
+  }
+  return (p, a, b) => {
+    const ss = current(p)
+    for (let i = 0; i < ss.length; i++) {
+      if (inPieces(ss[i], a)) return evs[i](p, a, b)
+    }
+    return Number.NaN
+  }
+}
+
+/**
+ * ModelSpec.pieces for an explicit piecewise / restricted curve: every
+ * interval a branch OWNS, left to right, with its ends as written (≤ closed,
+ * < open). "Owns" is the evaluator's rule — the first matching branch wins —
+ * so these are exactly the pieces the graph has, and exactly the dots a
+ * textbook draws:
+ *
+ *   - a UNION condition (x < −1 or x > 2) is reported as its separate
+ *     intervals — each has its own ends to mark;
+ *   - an EXCLUSION (x ≠ 2) is not a piece end: the branch is taken as the
+ *     whole line and the excluded point is left to the holes layer (the
+ *     parser already lists it as an exact singularity) — unless an EARLIER
+ *     branch claims that point (`{ 5 if x = 2 ; x^2 if x != 2 }`), in which
+ *     case the point is simply another branch's, as below;
+ *   - a branch loses whatever an earlier branch already claimed, so
+ *     `{ 1 if x < 5 ; 2 if x < 10 }` has the pieces x < 5 and 5 ≤ x < 10,
+ *     and an `otherwise` branch owns the complement of every earlier one.
+ *
+ * Null when there is nothing to mark: one branch that owns the whole line
+ * (an ordinary curve, or a pure exclusion like 1/x {x ≠ 0}).
+ */
+function pieceInfoOf(
+  kind: CurveKind,
+  branches: Branch[],
+): ((params: readonly number[]) => PieceInfo[]) | null {
+  if (kind !== 'explicit' || branches.length === 0) return null
+  const owned = (params: readonly number[]): Piece[] => {
+    const out: Piece[] = []
+    const before: Piece[] = []
+    for (const b of branches) {
+      const set = setAt(b, params)
+      const holes = b.otherwise ? null : excludedPoints(set)
+      const claim = b.otherwise || (holes && holes.length > 0) ? WHOLE_LINE() : set
+      // claim minus everything already claimed: A ∩ ¬B = ¬(¬A ∪ B)
+      const mine = before.length === 0 ? claim : complementOf([...complementOf(claim), ...before])
+      out.push(...mine)
+      before.push(...set)
+    }
+    return out
+  }
+  const toInfo = (ps: Piece[]): PieceInfo[] =>
+    ps
+      .map((q) => ({
+        lo: q.lo,
+        hi: q.hi,
+        loClosed: Number.isFinite(q.lo) && q.loC,
+        hiClosed: Number.isFinite(q.hi) && q.hiC,
+      }))
+      .sort((a, b) => a.lo - b.lo || a.hi - b.hi || 0)
+  if (branches.length === 1) {
+    const b = branches[0]
+    if (!b.live) {
+      const ps = owned([])
+      if (ps.length === 1 && isWholeLine(ps)) return null
+      const info = toInfo(ps)
+      return () => info.map((q) => ({ ...q }))
+    }
+  } else if (!branches.some((b) => b.live)) {
+    const info = toInfo(owned([]))
+    return () => info.map((q) => ({ ...q }))
+  }
+  return (params) => toInfo(owned(params))
+}
+
+/**
+ * A condition the constant-folding parser refused may still be ONE interval
+ * whose bounds are sliders: `0 <= x < a`, `x > b`, `[a, b)`. Returns the
+ * branch's live set (params → pieces), the LaTeX to print, and the
+ * default-params pieces; the sliders it uses are appended to `paramNames`.
+ * Null when the condition is not of that shape (the caller rethrows).
+ */
+function liveBranch(
+  cond: string,
+  want: VarName,
+  ctx: CondCtx,
+  paramNames: string[],
+  defaults: (names: readonly string[]) => number[],
+): {
+  live: (params: readonly number[]) => Piece[]
+  pieces: Piece[]
+  tex: (v: string) => string
+  setTex: (v: string) => string
+} | null {
+  const compiled = new Map<string, CompiledExpr>()
+  const cl: LiveClause | null = liveClause(cond, ctx, want, (text) => {
+    const c = compileExpr(text)
+    if (!c.ok || c.expr.vars.length > 0) return null
+    compiled.set(text, c.expr)
+    return { tex: c.expr.latex, live: c.expr.paramNames.length > 0 }
+  })
+  if (!cl) return null
+  const boundFn = (b: LiveClause['lo']): ((p: readonly number[]) => number) | null => {
+    if (!b) return null
+    const c = compiled.get(b.src)!
+    const idx = c.paramNames.map((nm) => {
+      let i = paramNames.indexOf(nm)
+      if (i < 0) { paramNames.push(nm); i = paramNames.length - 1 }
+      return i
+    })
+    const local = idx.map(() => 0)
+    return (p) => {
+      for (let k = 0; k < idx.length; k++) local[k] = p[idx[k]] ?? Number.NaN
+      return c.ev(local, Number.NaN, Number.NaN)
+    }
+  }
+  const lo = boundFn(cl.lo)
+  const hi = boundFn(cl.hi)
+  const live = (p: readonly number[]): Piece[] => {
+    const a = lo ? lo(p) : Number.NEGATIVE_INFINITY
+    const b = hi ? hi(p) : Number.POSITIVE_INFINITY
+    if (Number.isNaN(a) || Number.isNaN(b)) return []
+    const q: Piece = {
+      lo: a, hi: b, loC: cl.loC && Number.isFinite(a), hiC: cl.hiC && Number.isFinite(b),
+      loTex: cl.lo?.tex ?? null, hiTex: cl.hi?.tex ?? null,
+      loSrc: cl.lo?.src ?? null, hiSrc: cl.hi?.src ?? null,
+    }
+    if (a < b || (a === b && q.loC && q.hiC && Number.isFinite(a))) return [q]
+    return []
+  }
+  const tex = (v: string): string => {
+    if (cl.lo && cl.hi) {
+      return `${cl.lo.tex} ${cl.loC ? '\\leq' : '<'} ${v} ${cl.hiC ? '\\leq' : '<'} ${cl.hi.tex}`
+    }
+    if (cl.lo) return `${v} ${cl.loC ? '\\geq' : '>'} ${cl.lo.tex}`
+    return `${v} ${cl.hiC ? '\\leq' : '<'} ${cl.hi!.tex}`
+  }
+  // Interval notation, as setLatex prints a constant restriction.
+  const setTex = (v: string): string =>
+    `${v} \\in ${cl.loC ? '[' : '('}${cl.lo?.tex ?? '-\\infty'}, ` +
+    `${cl.hi?.tex ?? '\\infty'}${cl.hiC ? ']' : ')'}`
+  return { live, pieces: live(defaults(paramNames)), tex, setTex }
 }
 
 /** Which variable a curve is a function of, for checking against a condition. */
@@ -1968,9 +2144,32 @@ function parseRestricted(src: string, cut: Cut, env?: FunctionEnv | null): Parse
     )
   }
   const want = cls.kind === 'polar' ? 'theta' : independentVar(vars)
-  const ctx = newCtx(analyzeExpr)
-  const pieces = branchPieces(cut.cond, cut.condAt, want, ctx)
+  let ctx = newCtx(analyzeExpr)
+  let pieces: Piece[]
+  let live: ReturnType<typeof liveBranch> = null
+  try {
+    pieces = branchPieces(cut.cond, cut.condAt, want, ctx)
+  } catch (err) {
+    // `y = x^2 {0 <= x <= a}`: a slider bound. Only ever tried where the
+    // constant-bound parse has already failed, so nothing that parsed
+    // before changes.
+    if (cls.kind !== 'explicit') throw err
+    const lctx = newCtx(analyzeExpr)
+    live = liveBranch(cut.cond, want, lctx, paramNames, (names) => defaultsOf(names, logBases))
+    if (!live) throw err
+    ctx = lctx
+    pieces = live.pieces
+  }
   const vTex = varTexOf(ctx, want)
+  if (live) {
+    const branch: Branch = { ev: cls.ev, pieces, live: live.live, bodyTex: cls.latex, condTex: live.tex(vTex) }
+    const layout = planBranches(cls.kind, [branch])
+    const latex = `${cls.latex},\\ ${live.setTex(vTex)}`
+    return makePlot(
+      cls.kind, latex, paramNames, layout.domain, layout.ev, singPlanOf(cls.body), logBases,
+      pieceInfoOf(cls.kind, [branch]),
+    )
+  }
 
   // "1/x {x != 0}" removes a single point from an otherwise whole line. The
   // curve is not a piecewise and there is no gap to draw at sampling width —
@@ -1995,8 +2194,15 @@ function parseRestricted(src: string, cut: Cut, env?: FunctionEnv | null): Parse
   if (holes && holes.length > 0) latex += `,\\ ${exclusionLatex(holes, vTex)}`
   else if (!isWholeLine(pieces)) latex += `,\\ ${setLatex(pieces, vTex)}`
 
-  return makePlot(cls.kind, latex, paramNames, layout.domain, layout.ev, plan, logBases)
+  return makePlot(
+    cls.kind, latex, paramNames, layout.domain, layout.ev, plan, logBases,
+    pieceInfoOf(cls.kind, [branch]),
+  )
 }
+
+/** Slider defaults, exactly as makePlot assigns them. */
+const defaultsOf = (names: readonly string[], logBases: ReadonlySet<string>): number[] =>
+  names.map((nm) => (logBases.has(nm) ? LOG_BASE_DEFAULT : 1))
 
 /** The `y =` / `f(x) =` / `r =` head of a piecewise definition. */
 interface PieceHead {
@@ -2161,12 +2367,37 @@ function buildPiecewise(
   // Each branch owns its own singularities, and only inside the set it owns:
   // the 0 of `1/x if x < 0` is the branch's edge, not a pole of the piece.
   const plan = emptySingPlan()
+  const logBases = logBaseParams(bodies)
+  const lives: ReturnType<typeof liveBranch>[] = []
   const branches: Branch[] = raws.map((raw, i) => {
-    const ctx = newCtx(analyzeExpr)
+    let ctx = newCtx(analyzeExpr)
+    let pieces: Piece[]
+    let live: ReturnType<typeof liveBranch> = null
+    if (raw.otherwise) pieces = WHOLE_LINE()
+    else {
+      try {
+        pieces = branchPieces(raw.cond, raw.condAt, want, ctx)
+      } catch (err) {
+        // `{ x^2 if x < a ; … }`: a slider bound — tried only where the
+        // constant-bound parse has already failed.
+        if (kind !== 'explicit') throw err
+        const lctx = newCtx(analyzeExpr)
+        live = liveBranch(raw.cond, want, lctx, paramNames, (names) => defaultsOf(names, logBases))
+        if (!live) throw err
+        ctx = lctx
+        pieces = live.pieces
+      }
+    }
     ctxs.push(ctx)
-    const pieces = raw.otherwise
-      ? WHOLE_LINE()
-      : branchPieces(raw.cond, raw.condAt, want, ctx)
+    lives.push(live)
+    if (live) {
+      // the set moves with the slider: the body's singularities count anywhere
+      collectSingSources(bodies[i], null, plan.sources)
+      return {
+        ev: compile(bodies[i]), pieces, bodyTex: toLatex(bodies[i]), condTex: '',
+        live: live.live, otherwise: false,
+      }
+    }
     {
       // `{ x^2 if x != 2 }` removes a point rather than cutting the branch in
       // two; the excluded x is an exact singularity of that branch. A polar
@@ -2183,17 +2414,24 @@ function buildPiecewise(
       pieces,
       bodyTex: toLatex(bodies[i]),
       condTex: '',
+      otherwise: raw.otherwise,
     }
   })
   const vTex = ctxs.find((c) => c.tex !== null)?.tex ?? VAR_LATEX[want]
-  for (const b of branches) b.condTex = compactLatex(b.pieces, vTex)
+  branches.forEach((b, i) => {
+    const lv = lives[i]
+    b.condTex = lv ? lv.tex(vTex) : compactLatex(b.pieces, vTex)
+  })
 
   const layout = planBranches(kind, branches)
 
   // One branch IS a restriction — print it as one, so the two spellings of the
   // same curve produce the same card.
   let latex: string
-  if (branches.length === 1) {
+  const live0 = lives[0]
+  if (branches.length === 1 && live0) {
+    latex = `${head.tex} = ${branches[0].bodyTex},\\ ${live0.setTex(vTex)}`
+  } else if (branches.length === 1) {
     latex = `${head.tex} = ${branches[0].bodyTex}`
     if (!isWholeLine(branches[0].pieces)) {
       latex += `,\\ ${setLatex(branches[0].pieces, vTex)}`
@@ -2204,7 +2442,7 @@ function buildPiecewise(
     const rows = branches.map((b) => `${b.bodyTex} & ${b.condTex}`)
     latex = `${head.tex} = \\begin{cases} ${rows.join(' \\\\ ')} \\end{cases}`
   }
-  return makePlot(kind, latex, paramNames, layout.domain, layout.ev, plan, logBaseParams(bodies))
+  return makePlot(kind, latex, paramNames, layout.domain, layout.ev, plan, logBases, pieceInfoOf(kind, branches))
 }
 
 /** `piecewise(e1, c1, e2, c2, ...)` with an optional final default value. */
@@ -2234,6 +2472,30 @@ function piecewiseCall(inner: string, at: number): RawBranch[] {
 }
 
 const PIECEWISE_RE = /^(\s*)piecewise\s*\(/i
+
+/**
+ * The branches of a `{ … }` body. `;` separates them — and so may `,`, the
+ * way a textbook lists cases: `{ x^2 if x < 0, 3 if 0 <= x <= 2, -x + 5 if
+ * x > 2 }`. A comma only separates when there is no `;` at all and EVERY
+ * comma-separated segment carries its own `if` / `for` / `otherwise`; the
+ * `x^2, x < 0` spelling (a comma between formula and condition) keeps its
+ * meaning, and every body that parsed before splits exactly as it did.
+ */
+function bodySegments(text: string, at: number): { text: string; at: number }[] {
+  const segs = splitTop(text, at, ';')
+  if (segs.length !== 1) return segs
+  const commas = splitTop(text, at, ',')
+  if (commas.length < 2) return segs
+  const worded = commas.every((c) => {
+    try {
+      const k = findCut(c.text, BRANCH_WORDS, c.at)
+      return k !== null && k.kind === 'word'
+    } catch {
+      return false
+    }
+  })
+  return worded ? commas : segs
+}
 
 /**
  * The front door for both new shapes. Returns null when `src` is an ordinary
@@ -2277,13 +2539,67 @@ function parsePieced(src: string, env?: FunctionEnv | null): ParsedPlot | null {
       if (cut.cond.trim() === '') {
         throw new ParseError('Empty condition — write something like {0 < x < 3}', cut.at)
       }
-      const segs = splitTop(cut.cond, cut.condAt, ';')
-      const raws = segs.map(splitBranch)
+      const raws = bodySegments(cut.cond, cut.condAt).map(splitBranch)
       return buildPiecewise(head.slice(0, -1), 0, raws, env)
     }
   }
 
   return parseRestricted(src, cut, env)
+}
+
+/** A piecewise or restricted line, split into text (see piecewiseParts). */
+export interface PiecewiseParts {
+  /** the text before '=', trimmed ('' when there is none): 'y', 'f(x)' */
+  head: string
+  /** each branch as typed, trimmed; `cond` is '' for piecewise()'s default */
+  branches: { expr: string; cond: string; otherwise: boolean }[]
+  /** `expr {cond}`, `expr, cond`, `expr for cond` — one restricted formula */
+  restricted: boolean
+}
+
+/**
+ * The same split parsePieced makes, as TEXT — for src/core/piecewise.ts,
+ * which reads a line back into a table and must keep what the teacher typed.
+ * Null for a line that is neither piecewise nor restricted, or that the
+ * splitter refuses (parseExpression then has the error to report).
+ */
+export function piecewiseParts(src: string): PiecewiseParts | null {
+  try {
+    const out = (head: string, raws: RawBranch[], restricted: boolean): PiecewiseParts => ({
+      head: head.trim(),
+      branches: raws.map((r) => ({ expr: r.expr.trim(), cond: r.cond.trim(), otherwise: r.otherwise })),
+      restricted,
+    })
+    const cut = findCut(src, COND_WORDS)
+    if (cut === null) {
+      const eqAt = topLevelEq(src)
+      const m = PIECEWISE_RE.exec(src.slice(eqAt + 1))
+      if (!m) return null
+      const open = eqAt + 1 + m[0].length - 1
+      const close = matchParen(src, open)
+      if (close < 0 || src.slice(close + 1).trim() !== '') return null
+      return out(eqAt < 0 ? '' : src.slice(0, eqAt), piecewiseCall(src.slice(open + 1, close), open + 1), false)
+    }
+    if (cut.kind === 'brace') {
+      const head = src.slice(0, cut.at).trim()
+      const isBody =
+        head === '' ||
+        (head.endsWith('=') && (head.length === 1 || !'<>=!'.includes(head.slice(-2, -1))))
+      if (isBody) {
+        if (src.slice(cut.end).trim() !== '' || cut.cond.trim() === '') return null
+        return out(head.slice(0, -1), bodySegments(cut.cond, cut.condAt).map(splitBranch), false)
+      }
+      if (src.slice(cut.end).trim() !== '') return null
+    }
+    const base = src.slice(0, cut.at)
+    const eqAt = topLevelEq(base)
+    const raw: RawBranch = {
+      expr: base.slice(eqAt + 1), exprAt: eqAt + 1, cond: cut.cond, condAt: cut.condAt, otherwise: false,
+    }
+    return out(eqAt < 0 ? '' : base.slice(0, eqAt), [raw], true)
+  } catch {
+    return null
+  }
 }
 
 /** Index of the ')' closing the '(' at `i`; -1 when it never closes. */

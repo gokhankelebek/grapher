@@ -1172,6 +1172,79 @@ describe('latex round-trip fuzz', () => {
     })
   }
 
+  // ModelSpec.pieces (src/core/types.ts) — the piece ends the renderer marks.
+  it('ordinary generated inputs carry no pieces at all (seed 41)', () => {
+    const rng = makeRng(41)
+    let seen = 0
+    for (let i = 0; i < 3000; i++) {
+      const r = parseExpression(genInput(rng))
+      if (!r.ok || r.plot.kind !== 'explicit') continue
+      seen++
+      expect(r.plot.makeModel('m').pieces).toBeUndefined()
+    }
+    expect(seen).toBeGreaterThan(500)
+  })
+
+  it('generated restricted and piecewise inputs: a value only ever inside a reported piece (seed 42)', () => {
+    const rng = makeRng(42)
+    const bad: string[] = []
+    let checked = 0
+    for (let i = 0; i < 1500; i++) {
+      const src = rng() < 0.5 ? genRestricted(rng) : genPiecewise(rng)
+      const r = parseExpression(src)
+      if (!r.ok || r.plot.kind !== 'explicit') continue
+      const m = r.plot.makeModel('m')
+      const params = r.plot.paramNames.map((_, k) => 0.7 + k * 0.4)
+      const ps = m.pieces?.(params)
+      if (!ps) {
+        // only a whole-line branch (a bare exclusion) goes unreported
+        if (!/!=/.test(src)) bad.push(`${src}: no pieces`)
+        continue
+      }
+      checked++
+      for (let k = 1; k < ps.length; k++) {
+        if (ps[k].lo < ps[k - 1].lo) bad.push(`${src}: pieces out of order`)
+      }
+      const inside = (u: number) =>
+        ps.some((q) => (u > q.lo || (u === q.lo && q.loClosed)) && (u < q.hi || (u === q.hi && q.hiClosed)))
+      for (const u of [...PROBES, ...ps.flatMap((q) => [q.lo, q.hi]).filter(Number.isFinite)]) {
+        // a plain bounded restriction leaves the evaluator ungated — the domain
+        // clips it, and its open / closed ends are what `pieces` adds
+        const dom = r.plot.domain
+        if (dom && ps.length === 1 && (u <= dom[0] || u >= dom[1])) continue
+        const v = m.evalExplicit!(params, u)
+        if (!Number.isNaN(v) && !inside(u)) bad.push(`${src}: f(${u}) = ${v} outside every piece`)
+      }
+    }
+    expect(bad.slice(0, 5).join('\n')).toBe('')
+    expect(checked).toBeGreaterThan(500)
+  })
+
+  it('a comma between the cases reads exactly as a semicolon does (seed 43)', () => {
+    const rng = makeRng(43)
+    const bad: string[] = []
+    let checked = 0
+    for (let i = 0; i < 1500; i++) {
+      const src = genPiecewise(rng)
+      if (!src.includes(' ; ')) continue
+      const a = parseExpression(src)
+      if (!a.ok) continue
+      const comma = src.split(' ; ').join(', ')
+      const b = parseExpression(comma)
+      if (!b.ok) { bad.push(`${comma}: ${b.error}`); continue }
+      checked++
+      if (a.plot.latex !== b.plot.latex) bad.push(`${comma}: ${b.plot.latex} vs ${a.plot.latex}`)
+      const ea = a.plot.makeModel('a').evalExplicit!
+      const eb = b.plot.makeModel('b').evalExplicit!
+      const params = a.plot.paramNames.map((_, k) => 0.7 + k * 0.4)
+      for (const u of PROBES) {
+        if (!sameNum(ea(params, u), eb(params, u))) bad.push(`${comma} at ${u}`)
+      }
+    }
+    expect(bad.slice(0, 5).join('\n')).toBe('')
+    expect(checked).toBeGreaterThan(500)
+  })
+
   it('restricted and piecewise inputs with log_B round-trip (seed 23)', () => {
     const rng = makeRng(23)
     const bad: string[] = []

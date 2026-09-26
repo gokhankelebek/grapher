@@ -104,6 +104,13 @@ export interface Piece {
   hiC: boolean
   loTex: string | null
   hiTex: string | null
+  /**
+   * The bound as the teacher TYPED it ("1/2", "sqrt(2)"), for callers that
+   * write the condition back out as input text (src/core/piecewise.ts).
+   * Optional and purely descriptive: nothing here reads it.
+   */
+  loSrc?: string | null
+  hiSrc?: string | null
 }
 
 const NEG_INF = Number.NEGATIVE_INFINITY
@@ -148,6 +155,7 @@ function union(pieces: Piece[]): Piece[] {
       last.hi = p.hi
       last.hiC = p.hiC
       last.hiTex = p.hiTex
+      last.hiSrc = p.hiSrc
     }
   }
   return out
@@ -158,17 +166,17 @@ function intersect(as: Piece[], bs: Piece[]): Piece[] {
   const out: Piece[] = []
   for (const a of as) {
     for (const b of bs) {
-      let lo: number, loC: boolean, loTex: string | null
-      if (lt(a.lo, b.lo)) ({ lo, loC, loTex } = { lo: b.lo, loC: b.loC, loTex: b.loTex })
-      else if (lt(b.lo, a.lo)) ({ lo, loC, loTex } = { lo: a.lo, loC: a.loC, loTex: a.loTex })
-      else ({ lo, loC, loTex } = { lo: a.lo, loC: a.loC && b.loC, loTex: a.loTex ?? b.loTex })
+      let lo: number, loC: boolean, loTex: string | null, loSrc: string | null | undefined
+      if (lt(a.lo, b.lo)) ({ lo, loC, loTex, loSrc } = { lo: b.lo, loC: b.loC, loTex: b.loTex, loSrc: b.loSrc })
+      else if (lt(b.lo, a.lo)) ({ lo, loC, loTex, loSrc } = { lo: a.lo, loC: a.loC, loTex: a.loTex, loSrc: a.loSrc })
+      else ({ lo, loC, loTex, loSrc } = { lo: a.lo, loC: a.loC && b.loC, loTex: a.loTex ?? b.loTex, loSrc: a.loSrc ?? b.loSrc })
 
-      let hi: number, hiC: boolean, hiTex: string | null
-      if (lt(b.hi, a.hi)) ({ hi, hiC, hiTex } = { hi: b.hi, hiC: b.hiC, hiTex: b.hiTex })
-      else if (lt(a.hi, b.hi)) ({ hi, hiC, hiTex } = { hi: a.hi, hiC: a.hiC, hiTex: a.hiTex })
-      else ({ hi, hiC, hiTex } = { hi: a.hi, hiC: a.hiC && b.hiC, hiTex: a.hiTex ?? b.hiTex })
+      let hi: number, hiC: boolean, hiTex: string | null, hiSrc: string | null | undefined
+      if (lt(b.hi, a.hi)) ({ hi, hiC, hiTex, hiSrc } = { hi: b.hi, hiC: b.hiC, hiTex: b.hiTex, hiSrc: b.hiSrc })
+      else if (lt(a.hi, b.hi)) ({ hi, hiC, hiTex, hiSrc } = { hi: a.hi, hiC: a.hiC, hiTex: a.hiTex, hiSrc: a.hiSrc })
+      else ({ hi, hiC, hiTex, hiSrc } = { hi: a.hi, hiC: a.hiC && b.hiC, hiTex: a.hiTex ?? b.hiTex, hiSrc: a.hiSrc ?? b.hiSrc })
 
-      const p: Piece = { lo, hi, loC, hiC, loTex, hiTex }
+      const p: Piece = { lo, hi, loC, hiC, loTex, hiTex, loSrc, hiSrc }
       if (nonEmpty(p)) out.push(p)
     }
   }
@@ -291,6 +299,8 @@ function splitConnectives(src: string): { parts: Span[]; ops: Conn[] } {
 interface Bound {
   v: number
   tex: string | null
+  /** the operand as typed (trimmed); null for ±∞ */
+  src?: string | null
 }
 
 const INFINITY_RE = /^([+\-−]?)\s*(?:inf|infty|infinity|oo|∞|\\infty)$/i
@@ -345,7 +355,7 @@ function classifyOperand(raw: Span, ctx: CondCtx, missing: string): Operand {
   const inf = INFINITY_RE.exec(s.text)
   if (inf) {
     const neg = inf[1] === '-' || inf[1] === '−'
-    return { kind: 'bound', b: { v: neg ? NEG_INF : POS_INF, tex: null }, pos: s.start }
+    return { kind: 'bound', b: { v: neg ? NEG_INF : POS_INF, tex: null, src: null }, pos: s.start }
   }
   if (HAS_INFINITY_RE.test(s.text)) {
     fail(`'${s.text}' — infinity can only be used on its own as a bound`, s.start)
@@ -357,7 +367,7 @@ function classifyOperand(raw: Span, ctx: CondCtx, missing: string): Operand {
     if (!Number.isFinite(a.value)) {
       fail(`'${s.text}' is not a finite number, so it cannot be a bound`, s.start)
     }
-    return { kind: 'bound', b: { v: a.value, tex: a.latex }, pos: s.start }
+    return { kind: 'bound', b: { v: a.value, tex: a.latex, src: s.text }, pos: s.start }
   }
   // A bare variable: a single letter (x, n, θ), or a reserved name spelled out
   // — "theta" is how a polar domain gets typed on a keyboard.
@@ -446,23 +456,23 @@ function ray(rel: Rel, b: Bound): Piece[] {
   if (isLess(rel)) {
     if (b.v === POS_INF) return WHOLE_LINE()
     if (b.v === NEG_INF) return []
-    return [{ lo: NEG_INF, hi: b.v, loC: false, hiC: rel === '<=', loTex: null, hiTex: b.tex }]
+    return [{ lo: NEG_INF, hi: b.v, loC: false, hiC: rel === '<=', loTex: null, hiTex: b.tex, loSrc: null, hiSrc: b.src ?? null }]
   }
   if (b.v === NEG_INF) return WHOLE_LINE()
   if (b.v === POS_INF) return []
-  return [{ lo: b.v, hi: POS_INF, loC: rel === '>=', hiC: false, loTex: b.tex, hiTex: null }]
+  return [{ lo: b.v, hi: POS_INF, loC: rel === '>=', hiC: false, loTex: b.tex, hiTex: null, loSrc: b.src ?? null, hiSrc: null }]
 }
 
 function pointPiece(b: Bound): Piece {
-  return { lo: b.v, hi: b.v, loC: true, hiC: true, loTex: b.tex, hiTex: b.tex }
+  return { lo: b.v, hi: b.v, loC: true, hiC: true, loTex: b.tex, hiTex: b.tex, loSrc: b.src ?? null, hiSrc: b.src ?? null }
 }
 
 /** x != b: everything the point does not cover, i.e. two open rays. */
 function excludePoint(b: Bound): Piece[] {
   if (!Number.isFinite(b.v)) return WHOLE_LINE()
   return [
-    { lo: NEG_INF, hi: b.v, loC: false, hiC: false, loTex: null, hiTex: b.tex },
-    { lo: b.v, hi: POS_INF, loC: false, hiC: false, loTex: b.tex, hiTex: null },
+    { lo: NEG_INF, hi: b.v, loC: false, hiC: false, loTex: null, hiTex: b.tex, loSrc: null, hiSrc: b.src ?? null },
+    { lo: b.v, hi: POS_INF, loC: false, hiC: false, loTex: b.tex, hiTex: null, loSrc: b.src ?? null, hiSrc: null },
   ]
 }
 
@@ -558,6 +568,8 @@ function parseInterval(
     lo: lo.v, hi: hi.v, loC, hiC,
     loTex: Number.isFinite(lo.v) ? lo.tex : null,
     hiTex: Number.isFinite(hi.v) ? hi.tex : null,
+    loSrc: Number.isFinite(lo.v) ? lo.src ?? null : null,
+    hiSrc: Number.isFinite(hi.v) ? hi.src ?? null : null,
   }
   return nonEmpty(p) ? [p] : []
 }
@@ -730,6 +742,176 @@ export function excludedPoints(pieces: readonly Piece[]): Piece[] | null {
     holes.push(a)
   }
   return holes
+}
+
+/**
+ * Everything the pieces do NOT cover, left to right — what an `otherwise`
+ * branch owns. Bound text (tex / src) travels with each end, so the
+ * complement of x < 0 prints as x ≥ 0 with the teacher's own 0.
+ */
+export function complementOf(pieces: readonly Piece[]): Piece[] {
+  const u = union([...pieces])
+  const out: Piece[] = []
+  let lo = NEG_INF
+  let loC = false
+  let loTex: string | null = null
+  let loSrc: string | null = null
+  for (const p of u) {
+    const gap: Piece = {
+      lo, hi: p.lo, loC, hiC: Number.isFinite(p.lo) && !p.loC,
+      loTex, hiTex: p.loTex, loSrc, hiSrc: p.loSrc ?? null,
+    }
+    if (nonEmpty(gap)) out.push(gap)
+    lo = p.hi
+    loC = Number.isFinite(p.hi) && !p.hiC
+    loTex = p.hiTex
+    loSrc = p.hiSrc ?? null
+  }
+  if (lo !== POS_INF) {
+    const last: Piece = { lo, hi: POS_INF, loC, hiC: false, loTex, hiTex: null, loSrc, hiSrc: null }
+    if (nonEmpty(last)) out.push(last)
+  }
+  return out
+}
+
+// ----------------------------------------------------------------------------
+// Slider bounds — `0 <= x < a`, `x > b`, `[a, b)`.
+//
+// Everything above folds a bound to ONE number, which is what a number line
+// needs and what every condition typed so far has been. A piecewise branch may
+// also be bounded by a slider; its interval then moves with the slider, so it
+// cannot be normalised once. `liveClause` reads the one shape that stays
+// meaningful for every slider value — a single interval, written as a chain,
+// a ray or bracket notation — and hands back the bound TEXT for the caller
+// (./index.ts) to compile. It never throws: anything else is null, and the
+// caller reports the ordinary error it already had.
+// ----------------------------------------------------------------------------
+
+/** One end of a live interval: the text as typed and its LaTeX. */
+export interface LiveBound {
+  src: string
+  tex: string
+}
+
+export interface LiveClause {
+  /** null for −∞ */
+  lo: LiveBound | null
+  /** null for +∞ */
+  hi: LiveBound | null
+  loC: boolean
+  hiC: boolean
+}
+
+/**
+ * What the caller says about one operand: a bound (with its LaTeX, and
+ * whether it depends on a slider), or null when it is not a usable bound.
+ */
+export type LiveBoundCheck = (text: string) => { tex: string; live: boolean } | null
+
+export function liveClause(
+  src: string,
+  ctx: CondCtx,
+  want: string,
+  check: LiveBoundCheck,
+): LiveClause | null {
+  try {
+    const s = trimSpan({ text: src, start: 0 })
+    if (s.text === '') return null
+    if (splitConnectives(s.text).ops.length > 0) return null
+    let live = false
+
+    type Op = { kind: 'var' } | { kind: 'inf'; neg: boolean } | { kind: 'b'; b: LiveBound }
+    const operand = (raw: string): Op | null => {
+      const t = raw.trim()
+      if (t === '') return null
+      const inf = INFINITY_RE.exec(t)
+      if (inf) return { kind: 'inf', neg: inf[1] === '-' || inf[1] === '−' }
+      const a = ctx.an(t)
+      if (a.ok && a.free.length === 1 && a.free[0] === want && (SINGLE_LETTER_RE.test(t) || t === want)) {
+        ctx.name = want
+        ctx.tex = a.latex
+        return { kind: 'var' }
+      }
+      const c = check(t)
+      if (!c) return null
+      if (c.live) live = true
+      return { kind: 'b', b: { src: t, tex: c.tex } }
+    }
+
+    let out: LiveClause | null = null
+    const head = s.text[0]
+    if ((head === '[' || head === '(') && matchBracket(s.text, 0) === s.text.length - 1) {
+      const closer = s.text[s.text.length - 1]
+      const inner = s.text.slice(1, -1)
+      const commas = topLevelCommas(inner)
+      if (commas.length !== 1 || (closer !== ']' && closer !== ')')) return null
+      const lo = operand(inner.slice(0, commas[0]))
+      const hi = operand(inner.slice(commas[0] + 1))
+      if (!lo || !hi || lo.kind === 'var' || hi.kind === 'var') return null
+      if ((lo.kind === 'inf' && !lo.neg) || (hi.kind === 'inf' && hi.neg)) return null
+      out = {
+        lo: lo.kind === 'b' ? lo.b : null,
+        hi: hi.kind === 'b' ? hi.b : null,
+        loC: lo.kind === 'b' && head === '[',
+        hiC: hi.kind === 'b' && closer === ']',
+      }
+    } else {
+      if (topLevelCommas(s.text).length > 0) return null
+      const rels = scanRels(s.text, 0)
+      if (rels.length < 1 || rels.length > 2) return null
+      if (rels.some((r) => r.op === '=' || r.op === '!=')) return null
+      const spans: string[] = []
+      let from = 0
+      for (const r of rels) {
+        spans.push(s.text.slice(from, r.at))
+        from = r.at + r.len
+      }
+      spans.push(s.text.slice(from))
+      const ops = spans.map(operand)
+      if (ops.some((o) => o === null)) return null
+      const o = ops as Op[]
+      const varAt = o.map((x, i) => (x.kind === 'var' ? i : -1)).filter((i) => i >= 0)
+      if (varAt.length !== 1) return null
+      type End = { b: LiveBound | null; closed: boolean; empty: boolean }
+      // x rel bound, as a lower or an upper end (±∞ folded as ray() does)
+      const end = (rel: Rel, other: Op): { side: 'lo' | 'hi'; e: End } => {
+        const lower = isGreater(rel)
+        if (other.kind === 'inf') {
+          // x > −∞ is no bound; x > +∞ is nothing
+          const empty = lower ? !other.neg : other.neg
+          return { side: lower ? 'lo' : 'hi', e: { b: null, closed: false, empty } }
+        }
+        const b = (other as { b: LiveBound }).b
+        return { side: lower ? 'lo' : 'hi', e: { b, closed: rel === '>=' || rel === '<=', empty: false } }
+      }
+      let lo: End = { b: null, closed: false, empty: false }
+      let hi: End = { b: null, closed: false, empty: false }
+      if (rels.length === 1) {
+        const i = varAt[0]
+        const rel = i === 0 ? rels[0].op : flip(rels[0].op)
+        const r = end(rel, o[1 - i])
+        if (r.side === 'lo') lo = r.e
+        else hi = r.e
+      } else {
+        if (varAt[0] !== 1) return null
+        const [r1, r2] = rels
+        if (isLess(r1.op) !== isLess(r2.op)) return null
+        const a = end(flip(r1.op), o[0])
+        const b = end(r2.op, o[2])
+        for (const r of [a, b]) {
+          if (r.side === 'lo') lo = r.e
+          else hi = r.e
+        }
+        if (a.side === b.side) return null
+      }
+      if (lo.empty || hi.empty) return null
+      out = { lo: lo.b, hi: hi.b, loC: lo.b !== null && lo.closed, hiC: hi.b !== null && hi.closed }
+    }
+    if (!live || (out.lo === null && out.hi === null)) return null
+    return out
+  } catch {
+    return null
+  }
 }
 
 // ----------------------------------------------------------------------------
