@@ -21,6 +21,9 @@ import { FieldCard } from './FieldCard'
 import type { BoardField, FieldCardData } from './fieldLinks'
 import { ShapeCard } from './ShapeCard'
 import { DataCard } from './DataCard'
+import { SequenceCard } from './SequenceCard'
+import { SequenceEditor } from './SequenceEditor'
+import type { BoardSequence, SequenceCardData } from './seqLinks'
 import type { DataParse } from '../core/data'
 import type { BoardData, DataCardData, DataMarker, PasteMode, RegressionKind } from './dataLinks'
 import type { BoardShape, ShapeCardData } from './shapeLinks'
@@ -164,6 +167,31 @@ interface Props {
   onMotionToggle?(): void
   /** Put a built parametric or polar line on the board. Error, or null. */
   onMotionBuild?(src: string, tab: 'parametric' | 'polar'): string | null
+  /** "Build ▾ → Sequence" open at the top of the list. */
+  seqOpen?: boolean
+  onSeqToggle?(): void
+  /** Add a built sequence over n = n0 … n0 + count − 1. Error to show, or null. */
+  onSeqBuild?(src: string, n0: number, count: number): string | null
+  /** The letter the builder offers a new sequence. */
+  seqDefaultName?: string
+  /**
+   * The sequences on this board. In the SAME list once more: a sequence is an
+   * object a teacher typed, with a colour dot and a ⋯ menu — dots, not a curve.
+   */
+  sequences?: BoardSequence[]
+  seqCardFor?(id: string): SequenceCardData | undefined
+  onSeqDelete?(id: string): void
+  onSeqDuplicate?(id: string): void
+  onSeqToggleVisible?(id: string): void
+  onSeqCycleColor?(id: string): void
+  onSeqZoom?(id: string): void
+  onSeqParamChange?(id: string, index: number, value: number): void
+  onSeqParamSetExact?(id: string, index: number, value: number): void
+  /** Retype a sequence. Error message to show, or null. */
+  onSeqEquation?(id: string, src: string): string | null
+  onSeqWindow?(id: string, n0: number, count: number): string | null
+  onSeqTogglePartner?(id: string): void
+  onSeqToggleSums?(id: string): void
   /** The player's state for a parametric / polar curve (the selected one plays). */
   motionFor?(id: string): MotionPlayState | undefined
   /** The vectors' scales on this board for a curve. */
@@ -290,6 +318,7 @@ interface Props {
 }
 
 const NO_DATA: BoardData[] = []
+const NO_SEQS: BoardSequence[] = []
 const noop = (): void => {}
 
 /** Stable empty array for the cards that aren't selected. */
@@ -375,6 +404,23 @@ export function Sidebar({
   motionOpen = false,
   onMotionToggle,
   onMotionBuild,
+  seqOpen = false,
+  onSeqToggle,
+  onSeqBuild,
+  seqDefaultName,
+  sequences = NO_SEQS,
+  seqCardFor,
+  onSeqDelete = noop,
+  onSeqDuplicate = noop,
+  onSeqToggleVisible = noop,
+  onSeqCycleColor = noop,
+  onSeqZoom = noop,
+  onSeqParamChange = noop,
+  onSeqParamSetExact = noop,
+  onSeqEquation = () => null,
+  onSeqWindow = () => null,
+  onSeqTogglePartner = noop,
+  onSeqToggleSums = noop,
   motionFor,
   motionScalesFor,
   onMotionPlay,
@@ -458,7 +504,7 @@ export function Sidebar({
             <span className="sidebar-count">
               {numberLine
                 ? items.length
-                : curves.length + fields.length + shapes.length + data.length}
+                : curves.length + fields.length + shapes.length + data.length + sequences.length}
             </span>
             <button
               className={`add-btn${exprOpen ? ' add-open' : ''}`}
@@ -474,7 +520,7 @@ export function Sidebar({
             >
               +
             </button>
-            {!numberLine && (onFactorToggle || onExpToggle || onLogToggle || onSinToggle || onTransformToggle || onPiecewiseToggle || onConicToggle || onMotionToggle || onDataAdd) && (
+            {!numberLine && (onFactorToggle || onExpToggle || onLogToggle || onSinToggle || onTransformToggle || onPiecewiseToggle || onConicToggle || onMotionToggle || onSeqToggle || onDataAdd) && (
               <BuildMenu
                 factorOpen={factorOpen}
                 expOpen={expOpen}
@@ -492,6 +538,8 @@ export function Sidebar({
                 onConicToggle={onConicToggle}
                 motionOpen={motionOpen}
                 onMotionToggle={onMotionToggle}
+                seqOpen={seqOpen}
+                onSeqToggle={onSeqToggle}
                 onDataAdd={onDataAdd}
               />
             )}
@@ -527,6 +575,9 @@ export function Sidebar({
           )}
           {!numberLine && motionOpen && onMotionBuild && onMotionToggle && (
             <MotionEditor onBuild={onMotionBuild} onClose={onMotionToggle} />
+          )}
+          {!numberLine && seqOpen && onSeqBuild && onSeqToggle && (
+            <SequenceEditor onBuild={onSeqBuild} onClose={onSeqToggle} defaultName={seqDefaultName} />
           )}
           {exprOpen && (
             <ExprInput
@@ -739,6 +790,33 @@ export function Sidebar({
                   onDigits={(regId, d) => onRegressionDigits(table.id, regId, d)}
                   onResiduals={(regId) => onRegressionResiduals(table.id, regId)}
                   onRefit={(regId) => onRegressionRefit(table.id, regId)}
+                />
+              )
+            })}
+          {!numberLine &&
+            sequences.map((q) => {
+              const card = seqCardFor?.(q.id)
+              if (!card) return null
+              return (
+                <SequenceCard
+                  key={q.id}
+                  seq={q}
+                  card={card}
+                  selected={q.id === selectedId}
+                  onSelect={() => onSelect(q.id)}
+                  onDelete={() => onSeqDelete(q.id)}
+                  onDuplicate={() => onSeqDuplicate(q.id)}
+                  onToggleVisible={() => onSeqToggleVisible(q.id)}
+                  onCycleColor={() => onSeqCycleColor(q.id)}
+                  onZoom={() => onSeqZoom(q.id)}
+                  onParamChange={(i, v) => onSeqParamChange(q.id, i, v)}
+                  onParamEditStart={onParamEditStart}
+                  onParamEditEnd={onParamEditEnd}
+                  onParamSetExact={(i, v) => onSeqParamSetExact(q.id, i, v)}
+                  onEquationCommit={(src) => onSeqEquation(q.id, src)}
+                  onWindow={(n0, count) => onSeqWindow(q.id, n0, count)}
+                  onTogglePartner={() => onSeqTogglePartner(q.id)}
+                  onToggleSums={() => onSeqToggleSums(q.id)}
                 />
               )
             })}

@@ -108,6 +108,30 @@ import type {
   RegressionKind,
 } from './ui/dataLinks'
 import type { DataParse } from './core/data'
+import {
+  compileSequences,
+  curveNameClash,
+  defaultWindow,
+  isListLine,
+  looksLikeSequence,
+  nextSequenceLetter,
+  partnerPolylines,
+  readSequence,
+  reconcileParams,
+  renameSequenceSrc,
+  sequenceBox,
+  sequenceCard,
+  sequenceError,
+  sequenceLegend,
+  sequenceLetters,
+  sequenceNameClash,
+  sequenceScatter,
+  seqName,
+  carryParams as carrySeqParams,
+  clampSeqCount,
+  clampSeqN0,
+} from './ui/seqLinks'
+import type { BoardSequence, CompiledSequence, SequenceCardData } from './ui/seqLinks'
 import { fitRegression, regressionSource } from './core/data'
 import { POLAR_OFFER, suggestPolarRuling } from './ui/boardGrid'
 import { defaultCaption, exportLook, screenLook } from './ui/figureStyle'
@@ -522,6 +546,11 @@ interface Snapshot {
    */
   data: BoardData[]
   /**
+   * The sequences, in the same history for the same reason: a sequence
+   * deleted, retyped or re-windowed comes back with one undo.
+   */
+  sequences: BoardSequence[]
+  /**
    * Curve names (f, g, h …), the letters each typed line calls, and the
    * "Show inverse" links. In the history because they are the document's:
    * a rename rewrites every line that calls the old letter, and one undo has
@@ -581,6 +610,7 @@ interface StatePatch {
   fields?: BoardField[]
   shapes?: BoardShape[]
   data?: BoardData[]
+  sequences?: BoardSequence[]
   names?: Record<string, string>
   calls?: Record<string, string[]>
   inverses?: InverseLink[]
@@ -778,6 +808,14 @@ export default function App() {
    * is what lets one edited y re-fit every regression in place.
    */
   const [dataSets, setDataSets] = useState<BoardData[]>([])
+  /**
+   * Sequences: the line as typed, its constants, its index window and two
+   * toggles. The dots, the partial sums, the classification and the dashed
+   * partner are all recomputed from those on every change (src/ui/seqLinks.ts).
+   */
+  const [sequences, setSequences] = useState<BoardSequence[]>([])
+  /** "Build ▾ → Sequence" open at the top of the list. */
+  const [seqOpen, setSeqOpen] = useState(false)
   /**
    * Which RULING this board is drawn on — the square lattice or the polar one.
    *
@@ -982,6 +1020,7 @@ export default function App() {
   const fieldsRef = useRef<BoardField[]>([])
   const shapesRef = useRef<BoardShape[]>([])
   const dataRef = useRef<BoardData[]>([])
+  const seqRef = useRef<BoardSequence[]>([])
   const namesRef = useRef<Record<string, string>>({})
   const callsRef = useRef<Record<string, string[]>>({})
   const inversesRef = useRef<InverseLink[]>([])
@@ -1302,6 +1341,7 @@ export default function App() {
       fields: fieldsRef.current,
       shapes: shapesRef.current,
       data: dataRef.current,
+      sequences: seqRef.current,
       names: namesRef.current,
       calls: callsRef.current,
       inverses: inversesRef.current,
@@ -1362,6 +1402,10 @@ export default function App() {
       dataRef.current = s.data
       setDataSets(s.data)
     }
+    if (s.sequences) {
+      seqRef.current = s.sequences
+      setSequences(s.sequences)
+    }
     if (s.inverses) {
       inversesRef.current = s.inverses
       setInverses(s.inverses)
@@ -1389,7 +1433,7 @@ export default function App() {
           inverses: inversesRef.current,
           calls: callsRef.current,
         },
-        () => sliderLetters(curvesRef.current, exprSourcesRef.current, modelsRef.current),
+        () => [...sliderLetters(curvesRef.current, exprSourcesRef.current, modelsRef.current), ...sequenceLetters(seqRef.current)],
       )
       if (nextNames !== namesRef.current) {
         namesRef.current = nextNames
@@ -1443,7 +1487,8 @@ export default function App() {
         prev.items.some((i) => i.id === sel) ||
         prev.fields.some((f) => f.id === sel) ||
         prev.shapes.some((sh) => sh.id === sel) ||
-        prev.data.some((d) => d.id === sel))
+        prev.data.some((d) => d.id === sel) ||
+        prev.sequences.some((q) => q.id === sel))
         ? sel
         : null,
     )
@@ -1468,7 +1513,8 @@ export default function App() {
         next.items.some((i) => i.id === sel) ||
         next.fields.some((f) => f.id === sel) ||
         next.shapes.some((sh) => sh.id === sel) ||
-        next.data.some((d) => d.id === sel))
+        next.data.some((d) => d.id === sel) ||
+        next.sequences.some((q) => q.id === sel))
         ? sel
         : null,
     )
@@ -1509,7 +1555,9 @@ export default function App() {
         // no curve at all.
         pre.shapes !== shapesRef.current ||
         // And a table: a dragged regression handle can detach its link.
-        pre.data !== dataRef.current)
+        pre.data !== dataRef.current ||
+        // And a sequence's slider: it moves dots, never a curve.
+        pre.sequences !== seqRef.current)
     ) {
       undoRef.current = [...undoRef.current.slice(-(HISTORY_LIMIT - 1)), pre]
       redoRef.current = []
@@ -1626,6 +1674,7 @@ export default function App() {
       fields: [],
       shapes: [],
       data: [],
+      sequences: [],
       grid: 'cartesian',
       figure: 'screen',
       caption: '',
@@ -1657,6 +1706,7 @@ export default function App() {
       fields: fieldsRef.current,
       shapes: shapesRef.current,
       data: dataRef.current,
+      sequences: seqRef.current,
       grid: boardGridRef.current,
       figure: figureStyleRef.current,
       // The DERIVED caption is not the document's: it is re-derived from the
@@ -1780,6 +1830,8 @@ export default function App() {
     shapesRef.current = board.shapes
     // And the tables: the cells come back, every fit is re-asked of them.
     dataRef.current = board.data
+    // And the sequences: the lines come back, every term is evaluated again.
+    seqRef.current = board.sequences
     // The inverse links come back; their models are registered below, reading
     // the parent live exactly as they did before the document was closed.
     inversesRef.current = board.inverses
@@ -1805,7 +1857,10 @@ export default function App() {
               nameBoard,
             )
       namesRef.current = ensureNames(seed, nameBoard, () =>
-        sliderLetters(board.curves, board.exprSources, { ...MODELS, ...board.extraModels }),
+        [
+          ...sliderLetters(board.curves, board.exprSources, { ...MODELS, ...board.extraModels }),
+          ...sequenceLetters(board.sequences),
+        ],
       )
     }
     regWrittenRef.current = new Map()
@@ -1841,6 +1896,7 @@ export default function App() {
     setFields(board.fields)
     setShapes(board.shapes)
     setDataSets(board.data)
+    setSequences(board.sequences)
     setInverses(board.inverses)
     setCalls(callsRef.current)
     setNames(namesRef.current)
@@ -1977,6 +2033,8 @@ export default function App() {
     shapes,
     // And a data table: a typed cell changes no curve until the fit re-runs.
     dataSets,
+    // And a sequence: its line, window and toggles touch no curve.
+    sequences,
     // And a rename, which may change nothing but a letter.
     names,
     calls,
@@ -2289,6 +2347,7 @@ export default function App() {
             // And a shape, for the same reason again: one list, one palette.
             ...shapesRef.current.map((sh) => sh.color),
             ...dataRef.current.map((d) => d.color),
+            ...seqRef.current.map((q) => q.color),
           ]
     const used = new Set(onBoard)
     for (const color of CURVE_COLORS) {
@@ -2441,7 +2500,8 @@ export default function App() {
       curvesRef.current.length === 0 &&
       fieldsRef.current.length === 0 &&
       shapesRef.current.length === 0 &&
-      dataRef.current.length === 0
+      dataRef.current.length === 0 &&
+      seqRef.current.length === 0
     ) {
       return
     }
@@ -2457,6 +2517,7 @@ export default function App() {
         fields: [],
         shapes: [],
         data: [],
+        sequences: [],
         styles,
         exprSources: {},
         brokenExpr: {},
@@ -2894,6 +2955,7 @@ export default function App() {
           new Set([
             ...awaitedLetters(callsRef.current),
             ...sliderLetters(curvesRef.current, exprSourcesRef.current, modelsRef.current),
+            ...sequenceLetters(seqRef.current),
           ]),
         )
         if (copyName) {
@@ -4338,9 +4400,284 @@ export default function App() {
     [envFor],
   )
 
+  // ============================================================== sequences
+  //
+  // A sequence is its own object on the board — dots (n, aₙ), not a curve —
+  // held as the line the teacher typed plus its constants, its index window
+  // and two toggles (src/ui/seqLinks.ts). It names itself by its head letter
+  // (a of aₙ) and holds no curve letter: a sequence refuses a letter a curve
+  // holds, a typed curve refuses one a sequence holds, and the automatic
+  // letters (f, g, h …) skip every sequence letter.
+
+  /** One sequence, replaced in place. */
+  const mapSeq = useCallback(
+    (id: string, fn: (q: BoardSequence) => BoardSequence): BoardSequence[] =>
+      seqRef.current.map((q) => (q.id === id ? fn(q) : q)),
+    [],
+  )
+
+  /**
+   * Put a sequence on the board — typed in the equation box, or built.
+   * Returns the parser's own complaint (with its position) or the name clash,
+   * so the equation box shows it where it shows an equation's.
+   */
+  const addSequence = useCallback(
+    (src: string, opts: { n0?: number; count?: number; label?: string } = {}): string | null => {
+      const parse = readSequence(src)
+      if (!parse.ok) return sequenceError(parse)
+      const seq = parse.seq
+      // A typed list names no letter: it takes the next free one, and keeps it.
+      const list = seq.kind === 'list'
+      const taken = [...Object.values(namesRef.current), ...sequenceLetters(seqRef.current)]
+      if (!list) {
+        const clash = sequenceNameClash(
+          seq.name,
+          Object.values(namesRef.current),
+          sequenceLetters(seqRef.current),
+        )
+        if (clash) return clash
+      }
+      const params = seq.defaultParams.slice()
+      const win = defaultWindow(seq, params)
+      const q: BoardSequence = {
+        id: nextId(),
+        src,
+        color: pickColor(),
+        visible: true,
+        n0: opts.n0 !== undefined ? clampSeqN0(opts.n0) : win.n0,
+        count: opts.count !== undefined ? clampSeqCount(opts.count) : win.count,
+        showPartner: false,
+        showSums: false,
+        params,
+        ...(list ? { name: nextSequenceLetter(taken) } : {}),
+      }
+      commitState({ sequences: [...seqRef.current, q] }, opts.label ?? 'add sequence')
+      setSelectedId(q.id)
+      return null
+    },
+    [commitState, pickColor],
+  )
+
+  /** "Build ▾ → Sequence → Add": the same path, one undo "build sequence". */
+  const buildSequence = useCallback(
+    (src: string, n0: number, count: number): string | null => {
+      const err = addSequence(src, { n0, count, label: 'build sequence' })
+      if (!err) setSeqOpen(false)
+      return err
+    },
+    [addSequence],
+  )
+
+  /**
+   * Retype a sequence on its card. The constants that survive keep their
+   * values BY NAME; the window stays unless the new line states its own range.
+   */
+  const setSequenceSource = useCallback(
+    (id: string, src: string): string | null => {
+      const q = seqRef.current.find((s) => s.id === id)
+      if (!q) return null
+      if (q.src === src) return null
+      const parse = readSequence(src)
+      if (!parse.ok) return sequenceError(parse)
+      const seq = parse.seq
+      const others = sequenceLetters(seqRef.current.filter((s) => s.id !== id))
+      const list = seq.kind === 'list'
+      if (!list) {
+        const clash = sequenceNameClash(seq.name, Object.values(namesRef.current), others)
+        if (clash) return clash
+      }
+      // A list keeps the letter it had (or the one this sequence answered to).
+      const listName = list
+        ? q.name ?? (others.has(seqName(q)) ? nextSequenceLetter([...Object.values(namesRef.current), ...others]) : seqName(q))
+        : undefined
+      const was = readSequence(q.src)
+      const params = carrySeqParams(
+        was.ok ? was.seq.paramNames : [],
+        q.params,
+        seq.paramNames,
+        seq.defaultParams,
+      )
+      const win = seq.range ? defaultWindow(seq, params) : { n0: q.n0, count: q.count }
+      commitState(
+        {
+          sequences: mapSeq(id, (s) => {
+            const { name: _old, ...rest } = s
+            void _old
+            return {
+              ...rest,
+              src,
+              params,
+              n0: win.n0,
+              count: win.count,
+              ...(listName !== undefined ? { name: listName } : {}),
+            }
+          }),
+        },
+        'edit sequence',
+      )
+      setSelectedId(id)
+      return null
+    },
+    [commitState, mapSeq],
+  )
+
+  /** A constant in flight, inside the bracket the slider's press opened. */
+  const setSeqParam = useCallback(
+    (id: string, index: number, value: number): void => {
+      if (!Number.isFinite(value)) return
+      relabelEdit('move slider')
+      applyState({
+        sequences: mapSeq(id, (q) => {
+          const p = readSequence(q.src)
+          const params = (p.ok ? reconcileParams(p.seq, q.params) : q.params).slice()
+          params[index] = value
+          return { ...q, params }
+        }),
+      })
+    },
+    [applyState, mapSeq, relabelEdit],
+  )
+
+  /** A typed exact constant: one commit, one undo entry. */
+  const setSeqParamExact = useCallback(
+    (id: string, index: number, value: number): void => {
+      if (!Number.isFinite(value)) return
+      commitState(
+        {
+          sequences: mapSeq(id, (q) => {
+            const p = readSequence(q.src)
+            const params = (p.ok ? reconcileParams(p.seq, q.params) : q.params).slice()
+            params[index] = value
+            return { ...q, params }
+          }),
+        },
+        'set value',
+      )
+      setSelectedId(id)
+    },
+    [commitState, mapSeq],
+  )
+
+  /** n from … to …: one undo entry. */
+  const setSeqWindow = useCallback(
+    (id: string, n0: number, count: number): string | null => {
+      const q = seqRef.current.find((s) => s.id === id)
+      if (!q) return null
+      if (!Number.isFinite(n0) || !Number.isFinite(count) || count < 1) return 'n has to end after it starts.'
+      const a = clampSeqN0(n0)
+      const c = clampSeqCount(count)
+      if (a === q.n0 && c === q.count) return null
+      commitState({ sequences: mapSeq(id, (s) => ({ ...s, n0: a, count: c })) }, 'change n range')
+      return c !== Math.round(count) ? `At most ${c} terms are shown.` : null
+    },
+    [commitState, mapSeq],
+  )
+
+  const toggleSeqVisible = useCallback(
+    (id: string): void => {
+      const now = seqRef.current.find((q) => q.id === id)
+      commitState(
+        { sequences: mapSeq(id, (q) => ({ ...q, visible: !q.visible })) },
+        now && now.visible ? 'hide sequence' : 'show sequence',
+      )
+    },
+    [commitState, mapSeq],
+  )
+
+  const toggleSeqPartner = useCallback(
+    (id: string): void => {
+      const now = seqRef.current.find((q) => q.id === id)
+      commitState(
+        { sequences: mapSeq(id, (q) => ({ ...q, showPartner: !q.showPartner })) },
+        now && now.showPartner ? 'hide continuous partner' : 'show continuous partner',
+      )
+    },
+    [commitState, mapSeq],
+  )
+
+  const toggleSeqSums = useCallback(
+    (id: string): void => {
+      const now = seqRef.current.find((q) => q.id === id)
+      commitState(
+        { sequences: mapSeq(id, (q) => ({ ...q, showSums: !q.showSums })) },
+        now && now.showSums ? 'hide partial sums' : 'show partial sums',
+      )
+    },
+    [commitState, mapSeq],
+  )
+
+  const cycleSeqColor = useCallback(
+    (id: string): void => {
+      const now = seqRef.current.find((q) => q.id === id)
+      if (!now) return
+      const i = CURVE_COLORS.indexOf(now.color)
+      const next = CURVE_COLORS[(i + 1) % CURVE_COLORS.length]
+      commitState({ sequences: mapSeq(id, (q) => ({ ...q, color: next })) }, 'change colour')
+    },
+    [commitState, mapSeq],
+  )
+
+  /** Take a sequence off the board: one commit, one toast, one undo. */
+  const deleteSequence = useCallback(
+    (id: string): void => {
+      const q = seqRef.current.find((s) => s.id === id)
+      if (!q) return
+      commitState({ sequences: seqRef.current.filter((s) => s.id !== id) }, 'delete sequence')
+      showToast('Deleted the sequence. Undo brings it back.', {
+        action: { label: 'Undo', run: () => undo() },
+      })
+      setSelectedId((sel) => (sel === id ? null : sel))
+    },
+    [commitState, showToast, undo],
+  )
+
+  /**
+   * The same sequence again under the next free letter — a copy called a
+   * would be refused, and two dots-in-a-row answering to one name is the
+   * clash the letters exist to prevent.
+   */
+  const duplicateSequence = useCallback(
+    (id: string): void => {
+      const q = seqRef.current.find((s) => s.id === id)
+      if (!q) return
+      const to = nextSequenceLetter([
+        ...Object.values(namesRef.current),
+        ...sequenceLetters(seqRef.current),
+      ])
+      const copy: BoardSequence = { ...q, id: nextId(), color: pickColor(), params: q.params.slice() }
+      if (isListLine(q.src)) {
+        // A typed list says no letter: the copy is simply given the next one.
+        copy.name = to
+      } else {
+        const renamed = renameSequenceSrc(q.src, seqName(q), to)
+        if (renamed === q.src) {
+          showToast('This sequence could not be renamed for a copy — retype it with another letter.', { ms: 4000 })
+          return
+        }
+        copy.src = renamed
+      }
+      commitState({ sequences: [...seqRef.current, copy] }, 'duplicate sequence')
+      setSelectedId(copy.id)
+    },
+    [commitState, pickColor, showToast],
+  )
+
   /** Parse and add a typed expression. Returns an error message, or null on success. */
   const addExpression = useCallback(
     (src: string, label = 'add equation'): string | null => {
+      // A SEQUENCE first: `a_n = 3 + 4(n - 1)`, `a(n) = …`, a recursion or a
+      // bare list of three or more numbers. None of them is a curve, and the
+      // curve parser would either refuse them or — worse — read `a_n` as a
+      // product. Anything that starts like one stays on this branch, with the
+      // sequence parser's own positioned complaint. A line that opens with
+      // `y =` or `f(x) =` never comes here (looksLikeSequence).
+      // The sequence parser itself may say "Not a sequence —": then, and only
+      // then, the line goes on to the curve parsers below.
+      if (looksLikeSequence(src)) {
+        const asSeq = readSequence(src)
+        if (asSeq.ok || !/^Not a sequence/i.test(asSeq.error)) return addSequence(src)
+      }
+
       // A differential equation is not an equation: "dy/dx = x - y" would be
       // read by parseExpression as a product of d, y and x set equal to
       // another, and the board would quietly draw an implicit curve nobody
@@ -4408,11 +4745,15 @@ export default function App() {
       let rewritten: string[] = []
       let displaced: { id: string; from: string; to: string } | undefined
       if (head) {
+        // A sequence's letter is not a curve's: aₙ and a(x) on one board is
+        // two things answering to one name.
+        const clash = curveNameClash(head, sequenceLetters(seqRef.current))
+        if (clash) return clash
         const claim = planClaim(
           nameState,
           curveId,
           head,
-          sliderLetters(curvesRef.current, exprSourcesRef.current, modelsRef.current),
+          new Set([...sliderLetters(curvesRef.current, exprSourcesRef.current, modelsRef.current), ...sequenceLetters(seqRef.current)]),
         )
         if ('error' in claim) return claim.error
         nameState = claim.state
@@ -4465,7 +4806,7 @@ export default function App() {
       }
       return null
     },
-    [addField, addShape, commitState, envFor, pickColor, registerModels, reparseLines, showFeatureNote],
+    [addField, addShape, addSequence, commitState, envFor, pickColor, registerModels, reparseLines, showFeatureNote],
   )
 
   /**
@@ -4534,11 +4875,13 @@ export default function App() {
       }
       let rewritten: string[] = []
       if (head && head !== own && !live) {
+        const clash = curveNameClash(head, sequenceLetters(seqRef.current))
+        if (clash) return clash
         const claim = planClaim(
           nameState,
           id,
           head,
-          sliderLetters(curvesRef.current, exprSourcesRef.current, modelsRef.current),
+          new Set([...sliderLetters(curvesRef.current, exprSourcesRef.current, modelsRef.current), ...sequenceLetters(seqRef.current)]),
         )
         if ('error' in claim) return claim.error
         nameState = claim.state
@@ -4678,11 +5021,13 @@ export default function App() {
         const head = typedName(src)
         let re: Exclude<ReturnType<typeof reparseLines>, { error: string }> | null = null
         if (head && head !== namesRef.current[id]) {
+          const clash = curveNameClash(head, sequenceLetters(seqRef.current))
+          if (clash) return clash
           const claim = planClaim(
             nameState,
             id,
             head,
-            sliderLetters(curvesRef.current, exprSourcesRef.current, modelsRef.current),
+            new Set([...sliderLetters(curvesRef.current, exprSourcesRef.current, modelsRef.current), ...sequenceLetters(seqRef.current)]),
           )
           if ('error' in claim) return claim.error
           nameState = claim.state
@@ -5187,10 +5532,20 @@ export default function App() {
   // ------------------------------------------------------- what the tables draw
   const curveIdSet = useMemo(() => new Set(curves.map((c) => c.id)), [curves])
 
-  const scatterScene = useMemo<ScatterSet[]>(
-    () => (kind === 'cartesian' ? scatterSets(dataSets, curveIdSet) : []),
-    [kind, dataSets, curveIdSet],
-  )
+  /** Every sequence, worked out once per change: terms, sums, class, partner. */
+  const seqCompiled = useMemo<Map<string, CompiledSequence>>(() => compileSequences(sequences), [sequences])
+  const seqCompiledRef = useRef(seqCompiled)
+  seqCompiledRef.current = seqCompiled
+
+  // The tables' points, then every sequence's dots (n, aₙ) and — when its
+  // card says so — its partial sums (n, Sₙ) as rings. One field for both, on
+  // screen and in the export (BoardScene.scatter).
+  const scatterScene = useMemo<ScatterSet[]>(() => {
+    if (kind !== 'cartesian') return []
+    const tables = scatterSets(dataSets, curveIdSet)
+    if (sequences.length === 0) return tables
+    return [...tables, ...sequenceScatter(sequences, seqCompiled)]
+  }, [kind, dataSets, curveIdSet, sequences, seqCompiled])
   const scatterSceneRef = useRef<ScatterSet[]>(scatterScene)
   scatterSceneRef.current = scatterScene
 
@@ -5203,6 +5558,56 @@ export default function App() {
   const dataCardFor = useCallback(
     (id: string): DataCardData | undefined => dataCards[id],
     [dataCards],
+  )
+
+  const seqCards = useMemo<Record<string, SequenceCardData>>(() => {
+    const out: Record<string, SequenceCardData> = {}
+    for (const q of sequences) {
+      const c = seqCompiled.get(q.id)
+      if (c) out[q.id] = sequenceCard(q, c)
+    }
+    return out
+  }, [sequences, seqCompiled])
+
+  const seqCardFor = useCallback(
+    (id: string): SequenceCardData | undefined => seqCards[id],
+    [seqCards],
+  )
+
+  /** The letter "Build ▾ → Sequence" offers: the first one nothing holds. */
+  const seqDefaultName = useMemo(
+    () => nextSequenceLetter([...Object.values(names), ...sequenceLetters(sequences)]),
+    [names, sequences],
+  )
+
+  /**
+   * Where a sequence's dashed partner is sampled: the window, padded, grown
+   * only when the view leaves it — the solved-span rule the slope fields use,
+   * so a pan inside the margin costs two comparisons and no render.
+   */
+  const [partnerSpan, setPartnerSpan] = useState<[number, number]>(() => [-10, 10])
+  const partnerSpanRef = useRef<[number, number]>(partnerSpan)
+  partnerSpanRef.current = partnerSpan
+  const hasPartnerRef = useRef(false)
+  hasPartnerRef.current = sequences.some((q) => q.visible && q.showPartner)
+  const refreshPartnerSpan = useCallback((): void => {
+    if (!hasPartnerRef.current) return
+    const vp = vpRef.current
+    const half = vp.widthPx / 2 / vp.pxPerUnit
+    const window: [number, number] = [vp.center.x - half, vp.center.x + half]
+    if (spanCovers(partnerSpanRef.current, window)) return
+    const next = solveSpan(window)
+    partnerSpanRef.current = next
+    setPartnerSpan(next)
+  }, [])
+  useEffect(() => {
+    refreshPartnerSpan()
+  }, [sequences, refreshPartnerSpan])
+
+  /** The dashed partners on screen: figure content, like a solution curve. */
+  const partnerLines = useMemo<Polyline[]>(
+    () => (kind === 'cartesian' ? partnerPolylines(sequences, seqCompiled, partnerSpan) : []),
+    [kind, sequences, seqCompiled, partnerSpan],
   )
 
   // ======================================================= built from roots
@@ -5918,6 +6323,10 @@ export default function App() {
   const renameCurve = useCallback(
     (id: string, letter: string): string | null => {
       const from = namesRef.current[id]
+      {
+        const clash = curveNameClash(letter.trim(), sequenceLetters(seqRef.current))
+        if (clash) return clash
+      }
       const st: NameState = {
         names: namesRef.current,
         exprSources: exprSourcesRef.current,
@@ -6217,6 +6626,8 @@ export default function App() {
     // hot path — it fires on every frame of a pan — and refreshSolveSpan does
     // nothing at all unless the window has genuinely left the solved span.
     refreshSolveSpan()
+    // The same for a sequence's dashed continuous partner.
+    refreshPartnerSpan()
     // The same for a selected transformation's ghost and arrowheads.
     refreshGhostFrame()
     // And for a selected parametric / polar curve's vectors and arrowheads.
@@ -6226,7 +6637,7 @@ export default function App() {
     setAxesMode(axesModeOf(vpRef.current))
     viewSubsRef.current.forEach((fn) => fn())
     scheduleSave()
-  }, [refreshCrossSpan, refreshSolveSpan, refreshGhostFrame, refreshMotionFrame, scheduleSave])
+  }, [refreshCrossSpan, refreshSolveSpan, refreshPartnerSpan, refreshGhostFrame, refreshMotionFrame, scheduleSave])
 
   /** The view was changed from outside the stage: redraw everything that rides it. */
   const viewMoved = useCallback((): void => {
@@ -6446,6 +6857,14 @@ export default function App() {
         const b = dataBox(d)
         if (b) boxes.push(b)
       }
+      // And a sequence's dots (and rings): a board of sequences is a board of
+      // points with nothing else on it.
+      for (const q of seqRef.current) {
+        if (!q.visible) continue
+        const c = seqCompiledRef.current.get(q.id)
+        const b = c ? sequenceBox(q, c) : null
+        if (b) boxes.push(b)
+      }
       box = unionBoxes(boxes)
     }
     if (!box) {
@@ -6464,6 +6883,26 @@ export default function App() {
       const box = d ? dataBox(d) : null
       if (!box) {
         showToast('This table has no points to frame yet.', { ms: 2000 })
+        return
+      }
+      frameData(box)
+    },
+    [frameData, showToast],
+  )
+
+  /**
+   * "Zoom to terms" on a sequence's menu: frame its dots (and its partial
+   * sums when shown). Like a table, this may turn Independent axes on by
+   * itself — 2, 6, 18, 54 against n = 1…4 is unreadable on equal axes — and
+   * says so, with the way back.
+   */
+  const zoomToSequence = useCallback(
+    (id: string): void => {
+      const q = seqRef.current.find((s) => s.id === id)
+      const c = q ? seqCompiledRef.current.get(id) : undefined
+      const box = q && c ? sequenceBox(q, c) : null
+      if (!box) {
+        showToast('This sequence has no terms to frame.', { ms: 2000 })
         return
       }
       frameData(box)
@@ -7182,8 +7621,10 @@ export default function App() {
     }
     // a polar particle's ray from the pole
     if (motionScene) out.push(...motionScene.polylines)
+    // a sequence's continuous partner, dashed through its dots
+    if (partnerLines.length > 0) out.push(...partnerLines)
     return out.length === fieldPolylines.length ? fieldPolylines : out
-  }, [fieldPolylines, selectedSin, selectedTransform, ghostFrame, canvasTheme, constructionScene, selectedConic, construction, motionScene])
+  }, [fieldPolylines, selectedSin, selectedTransform, ghostFrame, canvasTheme, constructionScene, selectedConic, construction, motionScene, partnerLines])
 
   /** The on-screen shapes: the board's own, then a conic's named foci (F₁, F₂). */
   const screenShapes = useMemo<Shape[]>(() => {
@@ -7243,9 +7684,13 @@ export default function App() {
     () =>
       nextFreeLetter(
         new Set(Object.values(names)),
-        new Set([...awaitedLetters(calls), ...sliderLetters(curves, exprSources, models)]),
+        new Set([
+          ...awaitedLetters(calls),
+          ...sliderLetters(curves, exprSources, models),
+          ...sequenceLetters(sequences),
+        ]),
       ) ?? '',
-    [names, calls, curves, exprSources, models],
+    [names, calls, curves, exprSources, models, sequences],
   )
   /** The letters the equation box offers as chips. */
   const exprNames = useMemo(
@@ -7459,7 +7904,13 @@ export default function App() {
         max: { x: Math.max(...xs), y: Math.max(...ys) },
       }
     })
-    return unionBoxes([box, ...dataRef.current.filter((d) => d.visible).map(dataBox), ...construction])
+    const seqBoxes = seqRef.current
+      .filter((q) => q.visible)
+      .map((q) => {
+        const c = seqCompiledRef.current.get(q.id)
+        return c ? sequenceBox(q, c) : null
+      })
+    return unionBoxes([box, ...dataRef.current.filter((d) => d.visible).map(dataBox), ...construction, ...seqBoxes])
   }, [])
 
   const buildExportScene = useCallback(
@@ -7474,20 +7925,34 @@ export default function App() {
       caption: captionTextRef.current,
       cartesian: kindRef.current === 'cartesian',
     })
+    // Not the window — the FIGURE. A number line exported as the window was
+    // a 40px strip in a 2206x1826 image; a graph was whatever happened to be
+    // on screen when Download was pressed.
+    const evp = exportViewport(
+      vp,
+      settings,
+      settings.fit ? exportContent() : null,
+      kindRef.current,
+      itemsRef.current,
+      // A caption is drawn inside this rect, so a frame fitted to the curves
+      // has to be told to leave room for it.
+      caption !== '' ? captionHeight() : 0,
+    )
+    // A sequence's dashed partner is part of the figure: sampled across THIS
+    // frame, which is not the screen's window when the export is fitted.
+    const partners =
+      kindRef.current === 'cartesian'
+        ? partnerPolylines(
+            seqRef.current,
+            seqCompiledRef.current,
+            solveSpan([
+              evp.center.x - evp.widthPx / 2 / ppuX(evp),
+              evp.center.x + evp.widthPx / 2 / ppuX(evp),
+            ]),
+          )
+        : []
     return {
-      // Not the window — the FIGURE. A number line exported as the window was
-      // a 40px strip in a 2206x1826 image; a graph was whatever happened to be
-      // on screen when Download was pressed.
-      vp: exportViewport(
-        vp,
-        settings,
-        settings.fit ? exportContent() : null,
-        kindRef.current,
-        itemsRef.current,
-        // A caption is drawn inside this rect, so a frame fitted to the curves
-        // has to be told to leave room for it.
-        caption !== '' ? captionHeight() : 0,
-      ),
+      vp: evp,
       // A figure style owns the ground; the Background control is disabled and
       // says so while one is on. Without a style this is exactly what it was.
       theme: figure
@@ -7538,12 +8003,15 @@ export default function App() {
       // A particle is exported only when its card says "show particle in
       // export" — then it, its vectors and a polar curve's ray are figure
       // content by the same fields the screen draws them with.
+      // A sequence's continuous partner, when its card says "show continuous
+      // partner", is figure content by the same field again.
       polylines:
-        constructionSceneRef.current.polylines.length > 0 || motionExportRef.current
+        constructionSceneRef.current.polylines.length > 0 || motionExportRef.current || partners.length > 0
           ? [
               ...fieldPolylinesRef.current,
               ...constructionSceneRef.current.polylines,
               ...(motionExportRef.current?.polylines ?? []),
+              ...partners,
             ]
           : fieldPolylinesRef.current,
       // A triangle, a vector, a labelled point ARE the figure on a geometry
@@ -8028,6 +8496,8 @@ export default function App() {
           deleteShape(selectedRef.current)
         } else if (dataRef.current.some((d) => d.id === selectedRef.current)) {
           deleteData(selectedRef.current)
+        } else if (seqRef.current.some((q) => q.id === selectedRef.current)) {
+          deleteSequence(selectedRef.current)
         } else deleteCurve(selectedRef.current)
       } else if (NUDGE[e.key]) {
         const [ux, uy] = NUDGE[e.key]
@@ -8084,6 +8554,7 @@ export default function App() {
     deleteField,
     deleteShape,
     deleteData,
+    deleteSequence,
     deleteItem,
     nudgeSelected,
     commitWithSnap,
@@ -8125,6 +8596,8 @@ export default function App() {
               // And a table, by name, in its colour: the dots on the wall
               // are "Table 1", and its fit is the curve chip beside it.
               ...dataLegend(dataSets),
+              // And a sequence, by its definition: the dots on the wall are aₙ.
+              ...sequenceLegend(sequences, seqCompiled),
             ],
     [
       presentMode,
@@ -8139,6 +8612,8 @@ export default function App() {
       shapes,
       shapeCompiled,
       dataSets,
+      sequences,
+      seqCompiled,
     ],
   )
 
@@ -8151,7 +8626,11 @@ export default function App() {
   const hasBoardContent =
     kind === 'number-line'
       ? items.length > 0
-      : curves.length > 0 || fields.length > 0 || shapes.length > 0 || dataSets.length > 0
+      : curves.length > 0 ||
+        fields.length > 0 ||
+        shapes.length > 0 ||
+        dataSets.length > 0 ||
+        sequences.length > 0
 
   /** What every number-line card needs to speak for its whole answer. */
   const answerBoard = useMemo(() => ({ items, styles }), [items, styles])
@@ -8217,6 +8696,7 @@ export default function App() {
           setPiecewiseOpen(false)
           setConicOpen(false)
           setMotionOpen(false)
+          setSeqOpen(false)
           setExprOpen((o) => !o)
         }}
         factorOpen={factorOpen}
@@ -8229,6 +8709,7 @@ export default function App() {
           setPiecewiseOpen(false)
           setConicOpen(false)
           setMotionOpen(false)
+          setSeqOpen(false)
           setFactorOpen((o) => !o)
         }}
         expOpen={expOpen}
@@ -8241,6 +8722,7 @@ export default function App() {
           setPiecewiseOpen(false)
           setConicOpen(false)
           setMotionOpen(false)
+          setSeqOpen(false)
           setExpOpen((o) => !o)
         }}
         logOpen={logOpen}
@@ -8253,6 +8735,7 @@ export default function App() {
           setPiecewiseOpen(false)
           setConicOpen(false)
           setMotionOpen(false)
+          setSeqOpen(false)
           setLogOpen((o) => !o)
         }}
         sinOpen={sinOpen}
@@ -8265,6 +8748,7 @@ export default function App() {
           setPiecewiseOpen(false)
           setConicOpen(false)
           setMotionOpen(false)
+          setSeqOpen(false)
           setSinOpen((o) => !o)
         }}
         onSinBuild={buildSinusoid}
@@ -8279,6 +8763,7 @@ export default function App() {
           setPiecewiseOpen(false)
           setConicOpen(false)
           setMotionOpen(false)
+          setSeqOpen(false)
           setTransformOpen((o) => !o)
         }}
         onTransformBuild={buildTransformation}
@@ -8293,6 +8778,7 @@ export default function App() {
           setTransformOpen(false)
           setConicOpen(false)
           setMotionOpen(false)
+          setSeqOpen(false)
           setPiecewiseOpen((o) => !o)
         }}
         onPiecewiseBuild={buildPiecewise}
@@ -8306,6 +8792,7 @@ export default function App() {
           setTransformOpen(false)
           setPiecewiseOpen(false)
           setMotionOpen(false)
+          setSeqOpen(false)
           setConicOpen((o) => !o)
         }}
         onConicBuild={buildConic}
@@ -8322,9 +8809,38 @@ export default function App() {
           setTransformOpen(false)
           setPiecewiseOpen(false)
           setConicOpen(false)
+          setSeqOpen(false)
           setMotionOpen((o) => !o)
         }}
         onMotionBuild={buildMotion}
+        seqOpen={seqOpen}
+        onSeqToggle={() => {
+          setExprOpen(false)
+          setFactorOpen(false)
+          setExpOpen(false)
+          setLogOpen(false)
+          setSinOpen(false)
+          setTransformOpen(false)
+          setPiecewiseOpen(false)
+          setConicOpen(false)
+          setMotionOpen(false)
+          setSeqOpen((o) => !o)
+        }}
+        onSeqBuild={buildSequence}
+        seqDefaultName={seqDefaultName}
+        sequences={sequences}
+        seqCardFor={seqCardFor}
+        onSeqDelete={deleteSequence}
+        onSeqDuplicate={duplicateSequence}
+        onSeqToggleVisible={toggleSeqVisible}
+        onSeqCycleColor={cycleSeqColor}
+        onSeqZoom={zoomToSequence}
+        onSeqParamChange={setSeqParam}
+        onSeqParamSetExact={setSeqParamExact}
+        onSeqEquation={setSequenceSource}
+        onSeqWindow={setSeqWindow}
+        onSeqTogglePartner={toggleSeqPartner}
+        onSeqToggleSums={toggleSeqSums}
         motionFor={motionFor}
         motionScalesFor={motionScalesFor}
         onMotionPlay={patchMotion}
@@ -8396,6 +8912,7 @@ export default function App() {
           setPiecewiseOpen(false)
           setConicOpen(false)
           setMotionOpen(false)
+          setSeqOpen(false)
           addDataTable()
         }}
         data={dataSets}
@@ -8821,6 +9338,7 @@ export default function App() {
           fields.length === 0 &&
           shapes.length === 0 &&
           dataSets.length === 0 &&
+          sequences.length === 0 &&
           !drawingActive &&
           !loadNotice?.fatal && (
           <div className="empty-hint" aria-hidden="true">

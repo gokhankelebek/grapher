@@ -14,6 +14,8 @@ import { useEffect, useRef, useState } from 'react'
 // parametric or polar curve (a named family or x(t), y(t) / r(θ)). One small menu instead
 // of a button per builder. Each item opens
 // its editor at the top of the list; choosing the one already open closes it.
+// "Sequence" builds an arithmetic, geometric, explicit, recursive or listed
+// sequence — dots (n, aₙ), not a curve.
 // "Data table" is the one action: it adds a table to the list and selects it.
 // ============================================================================
 
@@ -26,6 +28,7 @@ interface Props {
   piecewiseOpen?: boolean
   conicOpen?: boolean
   motionOpen?: boolean
+  seqOpen?: boolean
   onFactorToggle?(): void
   onExpToggle?(): void
   onLogToggle?(): void
@@ -34,6 +37,8 @@ interface Props {
   onPiecewiseToggle?(): void
   onConicToggle?(): void
   onMotionToggle?(): void
+  /** "Sequence": the builder for arithmetic, geometric, explicit, recursive and listed sequences. */
+  onSeqToggle?(): void
   /** Add a data table to the list (an action, not an editor that stays open). */
   onDataAdd?(): void
 }
@@ -47,6 +52,7 @@ export function BuildMenu({
   piecewiseOpen = false,
   conicOpen = false,
   motionOpen = false,
+  seqOpen = false,
   onFactorToggle,
   onExpToggle,
   onLogToggle,
@@ -55,6 +61,7 @@ export function BuildMenu({
   onPiecewiseToggle,
   onConicToggle,
   onMotionToggle,
+  onSeqToggle,
   onDataAdd,
 }: Props) {
   const [open, setOpen] = useState(false)
@@ -80,7 +87,7 @@ export function BuildMenu({
     }
   }, [open])
 
-  const anyOpen = factorOpen || expOpen || logOpen || sinOpen || transformOpen || piecewiseOpen || conicOpen || motionOpen
+  const anyOpen = factorOpen || expOpen || logOpen || sinOpen || transformOpen || piecewiseOpen || conicOpen || motionOpen || seqOpen
   const item = (
     label: string,
     on: boolean,
@@ -132,6 +139,7 @@ export function BuildMenu({
           {item('Piecewise / step', piecewiseOpen, onPiecewiseToggle, 'build-piecewise')}
           {item('Conic section', conicOpen, onConicToggle, 'build-conic')}
           {item('Parametric / polar', motionOpen, onMotionToggle, 'build-motion')}
+          {item('Sequence', seqOpen, onSeqToggle, 'build-seq')}
           {onDataAdd && (
             <>
               <div className="card-menu-sep" role="separator" />

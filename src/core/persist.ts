@@ -375,6 +375,63 @@ export interface BoardData {
   regressions: DataRegression[]
 }
 
+// --- sequences ----------------------------------------------------------------
+//
+// A sequence (src/core/sequences.ts) — a_n = 3 + 4(n − 1), a recursion, or a
+// typed list of terms — drawn as the dots (n, aₙ). Same rule as everything
+// else here: what is stored is the LINE THE TEACHER TYPED, the constants its
+// sliders are at, the index window and two toggles. The terms, the partial
+// sums, the classification and the continuous partner are all recomputed from
+// the line on every change, so none of them can go stale.
+//
+// Unlike a field or a shape, a sequence whose line no longer parses is KEPT:
+// it is one line of text and nothing else, so keeping it loses nothing and the
+// card can say what is wrong and let the teacher retype it.
+
+/** The index window: how many terms a sequence shows, at most. */
+export const SEQ_COUNT_MIN = 1
+export const SEQ_COUNT_MAX = 200
+export const SEQ_COUNT_DEFAULT = 10
+/** The first index shown is an integer inside ±SEQ_N0_LIMIT. */
+export const SEQ_N0_LIMIT = 100000
+
+/** A term count as the card and the store accept it. */
+export function clampSeqCount(v: unknown): number {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return SEQ_COUNT_DEFAULT
+  return Math.min(SEQ_COUNT_MAX, Math.max(SEQ_COUNT_MIN, Math.round(v)))
+}
+
+/** A first index as the card and the store accept it. */
+export function clampSeqN0(v: unknown): number {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return 1
+  return Math.min(SEQ_N0_LIMIT, Math.max(-SEQ_N0_LIMIT, Math.round(v)))
+}
+
+/** A sequence as the board holds it. `src` is the only source of truth. */
+export interface BoardSequence {
+  id: string
+  /** The line as typed: "a_n = 3 + 4(n - 1)", "b_1 = 10, b_(n+1) = 0.5b_n", "2, 6, 18, 54". */
+  src: string
+  color: string
+  visible: boolean
+  /** The first index shown. */
+  n0: number
+  /** How many terms are shown: n = n0 … n0 + count − 1. */
+  count: number
+  /** Draw the continuous partner (y = 4x − 1 behind an arithmetic sequence), dashed. */
+  showPartner: boolean
+  /** Draw the partial sums (n, Sₙ) as rings. */
+  showSums: boolean
+  /** The free constants, in the parser's own order. */
+  params: number[]
+  /**
+   * A typed LIST ("2, 6, 18, 54") says no letter, so the board gives it one
+   * when it arrives — the next free sequence letter — and keeps it here.
+   * Absent for every other sequence: its letter is the one its line names.
+   */
+  name?: string
+}
+
 // --- board ruling -----------------------------------------------------------
 //
 // Which LATTICE a cartesian board is drawn on: the square grid, or the
@@ -546,6 +603,9 @@ const MAX_DATA = 50
 const MAX_DATA_ROWS = 10000
 const MAX_REGRESSIONS = 20
 const MAX_CELL_CHARS = 64
+/** And for sequences, and one sequence's typed line. */
+const MAX_SEQUENCES = 100
+const MAX_SEQ_SRC_CHARS = 2000
 /** Stored stroke resolution. Keeps boards small; plenty for refit and hit tests. */
 export const MAX_STORED_STROKE = 120
 const MAX_STROKE_IN = 20000
@@ -694,6 +754,15 @@ export interface StoredBoard {
    */
   data?: StoredData[]
   /**
+   * The sequences on this board — each as the line that was typed, its index
+   * window and its two toggles. Never the terms: they are recomputed.
+   *
+   * Omitted entirely when there are none, which is every document written
+   * before this field existed: such a board serialises byte-for-byte as it did
+   * then, and an older reader drops a key it does not know.
+   */
+  sequences?: StoredSequence[]
+  /**
    * The ruling: 'polar' when the board is drawn on circles and spokes.
    *
    * Written ONLY for a polar board. The square ruling is the default and what
@@ -743,6 +812,27 @@ export interface StoredShape {
  * One data table as JSON. Defaults are omitted, by the rule every other
  * record here follows: a control nobody touched must not change the bytes.
  */
+export interface StoredSequence {
+  id: string
+  /** The line as typed — the only thing that rebuilds the terms. */
+  src: string
+  color: string
+  /** The first index shown. Always written: it is what the teacher set. */
+  n0: number
+  /** How many terms are shown. Always written. */
+  count: number
+  /** Free constants. Omitted when the sequence has none. */
+  params?: number[]
+  /** Written only when the continuous partner is drawn. */
+  partner?: true
+  /** Written only when the partial sums are drawn. */
+  sums?: true
+  /** Written only when the sequence is hidden. */
+  hidden?: true
+  /** A listed sequence's letter (see BoardSequence.name). */
+  name?: string
+}
+
 export interface StoredData {
   id: string
   name: string
@@ -890,6 +980,8 @@ export interface BoardInput {
   shapes?: readonly BoardShape[]
   /** Data tables. Absent or empty writes nothing at all, by the same rule. */
   data?: readonly BoardData[]
+  /** Sequences. Absent or empty writes nothing at all, by the same rule. */
+  sequences?: readonly BoardSequence[]
   /** The ruling. Absent means 'cartesian', which writes nothing at all. */
   grid?: BoardGrid
   /** The figure style. Absent means 'screen', which writes nothing at all. */
@@ -973,6 +1065,11 @@ export interface HydratedBoard {
    * dropped and REPORTED; so is a regression whose curve is gone.
    */
   data: BoardData[]
+  /**
+   * The sequences, as typed. A record that is not readable at all is dropped
+   * and REPORTED; one whose line no longer parses is kept (its card says so).
+   */
+  sequences: BoardSequence[]
   /** The ruling this document states. 'cartesian' when it is silent. */
   grid: BoardGrid
   /** The figure style this document states. 'screen' when it is silent. */
@@ -1214,6 +1311,10 @@ export function boardToStored(input: BoardInput): StoredBoard {
   const data = input.data ?? []
   if (data.length > 0) board.data = data.slice(0, MAX_DATA).map(dataToStored)
 
+  // And for the sequences.
+  const sequences = input.sequences ?? []
+  if (sequences.length > 0) board.sequences = sequences.slice(0, MAX_SEQUENCES).map(sequenceToStored)
+
   // The ruling, only when it is not the square one every document has always
   // been drawn on.
   if (input.grid === 'polar') board.grid = 'polar'
@@ -1383,6 +1484,58 @@ export function storedToData(
     data.marker = raw.marker as DataMarker
   }
   return { data, droppedRegressions }
+}
+
+/**
+ * One sequence as JSON: the line, the window, the toggles only when on.
+ *
+ * The params are NOT rounded, for the reason a shape's are not: a slider at
+ * r = 0.5 that came back 0.4999999 would change "Σ = 20" into a decimal.
+ */
+export function sequenceToStored(q: BoardSequence): StoredSequence {
+  const out: StoredSequence = {
+    id: q.id,
+    src: q.src,
+    color: q.color,
+    n0: clampSeqN0(q.n0),
+    count: clampSeqCount(q.count),
+  }
+  if (q.params.length > 0) out.params = q.params.slice()
+  if (q.showPartner) out.partner = true
+  if (q.showSums) out.sums = true
+  if (q.visible === false) out.hidden = true
+  if (typeof q.name === 'string' && /^[A-Za-z]$/.test(q.name)) out.name = q.name
+  return out
+}
+
+/**
+ * One sequence out of an untrusted blob. NOT re-parsed here: the line is kept
+ * even when it no longer reads (the card says why), and the App reconciles
+ * the constants against the parser's list by position.
+ */
+export function storedToSequence(raw: unknown): { sequence: BoardSequence } | { error: string } {
+  if (!isObj(raw)) return { error: 'it was not readable' }
+  const { id, src, color } = raw
+  if (!isStr(id) || !id) return { error: 'it had no id' }
+  if (!isStr(src) || src.trim() === '') return { error: 'it had nothing typed in it' }
+  const params = Array.isArray(raw.params)
+    ? raw.params.slice(0, MAX_PARAMS).map((v) => (isNum(v) ? v : 1))
+    : []
+  const name = isStr(raw.name) && /^[A-Za-z]$/.test(raw.name) ? raw.name : undefined
+  return {
+    sequence: {
+      id,
+      src: src.slice(0, MAX_SEQ_SRC_CHARS),
+      color: isStr(color) && color ? color : '#4f9cf9',
+      visible: raw.hidden !== true,
+      n0: clampSeqN0(raw.n0),
+      count: clampSeqCount(raw.count),
+      showPartner: raw.partner === true,
+      showSums: raw.sums === true,
+      params,
+      ...(name !== undefined ? { name } : {}),
+    },
+  }
 }
 
 /**
@@ -2374,6 +2527,36 @@ export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResu
     }
   }
 
+  // ---- sequences
+  //
+  // One typed line each. A record with no line is dropped and reported; a
+  // line that no longer parses is kept — the card says what is wrong with it.
+  const sequences: BoardSequence[] = []
+  const rawSeqs = Array.isArray(rawBoard.sequences) ? rawBoard.sequences : []
+  if (rawBoard.sequences !== undefined && !Array.isArray(rawBoard.sequences)) {
+    problems.push('The list of sequences was unreadable.')
+    degraded = true
+  }
+  if (rawSeqs.length > MAX_SEQUENCES) {
+    problems.push(`Only the first ${MAX_SEQUENCES} sequences were loaded.`)
+    degraded = true
+  }
+  for (const raw of rawSeqs.slice(0, MAX_SEQUENCES)) {
+    const built = storedToSequence(raw)
+    if ('error' in built) {
+      problems.push(`A sequence could not be restored: ${built.error}.`)
+      degraded = true
+      continue
+    }
+    if (seen.has(built.sequence.id)) {
+      problems.push('A sequence was dropped: two objects claimed the same id.')
+      degraded = true
+      continue
+    }
+    seen.add(built.sequence.id)
+    sequences.push(built.sequence)
+  }
+
   // ---- the ruling. Unreadable or absent is not a repair: it is the default.
   const grid = storedGrid(rawBoard.grid)
 
@@ -2409,6 +2592,7 @@ export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResu
     ...fields.map((f) => f.id),
     ...shapes.map((s) => s.id),
     ...data.map((d) => d.id),
+    ...sequences.map((q) => q.id),
   ])
   const selectedId =
     isStr(rawBoard.selectedId) && selectable.has(rawBoard.selectedId)
@@ -2436,6 +2620,7 @@ export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResu
       fields,
       shapes,
       data,
+      sequences,
       grid,
       figure,
       caption,
@@ -2528,6 +2713,7 @@ function blankHydrated(): HydratedBoard {
     fields: [],
     shapes: [],
     data: [],
+    sequences: [],
     grid: 'cartesian',
     figure: 'screen',
     caption: '',

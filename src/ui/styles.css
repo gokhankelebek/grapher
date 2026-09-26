@@ -5803,3 +5803,118 @@ button.calc-field-btn {
     min-width: 44px;
   }
 }
+
+/* -------------------------------------------------------------- sequences */
+/*
+ * A sequence's card is a field's card — the same dot, menu, click-to-edit
+ * definition and body — plus what only a sequence has: what kind it is (d or
+ * r, and both formulas), its series line, an index window and a compact
+ * table of n | aₙ | Sₙ.
+ */
+
+.seq-class,
+.seq-series {
+  margin-top: var(--sp-1);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.seq-class-kind {
+  color: var(--curve, var(--accent));
+  font-weight: 600;
+}
+
+.seq-formula {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.seq-sep {
+  color: var(--faint);
+}
+
+.seq-series {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.seq-window {
+  margin-top: var(--sp-2);
+}
+
+.seq-n-input {
+  width: 6ch;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.seq-table-wrap {
+  margin-top: var(--sp-2);
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+}
+
+.seq-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.seq-table th,
+.seq-table td {
+  padding: 2px 6px;
+  border-bottom: 1px solid var(--border-soft);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.seq-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-family: var(--font);
+  font-weight: 600;
+}
+
+.seq-table .seq-n {
+  color: var(--faint);
+}
+
+.seq-table .seq-s {
+  color: var(--muted);
+}
+
+.seq-table-preview {
+  margin-top: var(--sp-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+}
+
+.seq-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+  margin-top: var(--sp-2);
+}
+
+.seq-note,
+.seq-partner-src {
+  margin-top: var(--sp-1);
+}
+
+.seq-tabs {
+  flex-wrap: wrap;
+}
+
+.seq-form .seg-btn {
+  padding: 2px var(--sp-2);
+  font-size: var(--fs-sm);
+}
