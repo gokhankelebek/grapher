@@ -33,6 +33,8 @@ import { SinEditor } from './SinEditor'
 import { TransformEditor } from './TransformEditor'
 import { PiecewiseEditor } from './PiecewiseEditor'
 import { ConicEditor } from './ConicEditor'
+import { MotionEditor } from './MotionEditor'
+import type { MotionPlayState, MotionScales } from './motionLinks'
 import type { FunctionEnv } from '../core/functionEnv'
 import type { TransformSpec } from '../core/transform'
 import type { Theme } from '../core/types'
@@ -157,6 +159,18 @@ interface Props {
   /** Whether a conic's construction is figure content (drawn always, exported). */
   conicConstructionFor?(id: string): boolean
   onConicConstruction?(id: string, on: boolean): void
+  /** "Build ▾ → Parametric / polar" is open at the top of the list. */
+  motionOpen?: boolean
+  onMotionToggle?(): void
+  /** Put a built parametric or polar line on the board. Error, or null. */
+  onMotionBuild?(src: string, tab: 'parametric' | 'polar'): string | null
+  /** The player's state for a parametric / polar curve (the selected one plays). */
+  motionFor?(id: string): MotionPlayState | undefined
+  /** The vectors' scales on this board for a curve. */
+  motionScalesFor?(id: string): MotionScales | undefined
+  onMotionPlay?(id: string, patch: Partial<MotionPlayState>): void
+  /** Commit a new parameter interval from a card's Motion section. Error, or null. */
+  onMotionInterval?(id: string, lo: string, hi: string): string | null
   /** "Build ▾ → Piecewise" is open at the top of the list. */
   piecewiseOpen?: boolean
   onPiecewiseToggle?(): void
@@ -358,6 +372,13 @@ export function Sidebar({
   onConicRestate,
   conicConstructionFor,
   onConicConstruction,
+  motionOpen = false,
+  onMotionToggle,
+  onMotionBuild,
+  motionFor,
+  motionScalesFor,
+  onMotionPlay,
+  onMotionInterval,
   piecewiseOpen = false,
   onPiecewiseToggle,
   onPiecewiseBuild,
@@ -453,7 +474,7 @@ export function Sidebar({
             >
               +
             </button>
-            {!numberLine && (onFactorToggle || onExpToggle || onLogToggle || onSinToggle || onTransformToggle || onPiecewiseToggle || onConicToggle || onDataAdd) && (
+            {!numberLine && (onFactorToggle || onExpToggle || onLogToggle || onSinToggle || onTransformToggle || onPiecewiseToggle || onConicToggle || onMotionToggle || onDataAdd) && (
               <BuildMenu
                 factorOpen={factorOpen}
                 expOpen={expOpen}
@@ -469,6 +490,8 @@ export function Sidebar({
                 onPiecewiseToggle={onPiecewiseToggle}
                 conicOpen={conicOpen}
                 onConicToggle={onConicToggle}
+                motionOpen={motionOpen}
+                onMotionToggle={onMotionToggle}
                 onDataAdd={onDataAdd}
               />
             )}
@@ -501,6 +524,9 @@ export function Sidebar({
           )}
           {!numberLine && conicOpen && onConicBuild && onConicToggle && (
             <ConicEditor onBuild={onConicBuild} onClose={onConicToggle} />
+          )}
+          {!numberLine && motionOpen && onMotionBuild && onMotionToggle && (
+            <MotionEditor onBuild={onMotionBuild} onClose={onMotionToggle} />
           )}
           {exprOpen && (
             <ExprInput
@@ -614,6 +640,12 @@ export function Sidebar({
                 onConicRestate ? (src, label) => onConicRestate(curve.id, src, label) : undefined
               }
               conicConstruction={conicConstructionFor?.(curve.id)}
+              motion={motionFor?.(curve.id)}
+              motionScales={motionScalesFor?.(curve.id)}
+              onMotionPlay={onMotionPlay ? (patch) => onMotionPlay(curve.id, patch) : undefined}
+              onMotionInterval={
+                onMotionInterval ? (lo, hi) => onMotionInterval(curve.id, lo, hi) : undefined
+              }
               onConicConstruction={
                 onConicConstruction ? (on) => onConicConstruction(curve.id, on) : undefined
               }

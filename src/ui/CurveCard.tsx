@@ -24,6 +24,9 @@ import { TransformSection } from './TransformEditor'
 import { safeReadTransform, transformOpenByDefault, transformOwnsHandles } from './transformLinks'
 import { PiecewiseSection } from './PiecewiseEditor'
 import { ConicSection } from './ConicEditor'
+import { MotionSection } from './MotionEditor'
+import { motionKindOf } from './motionLinks'
+import type { MotionPlayState, MotionScales } from './motionLinks'
 import { conicSectionInfo, fittedCircle, fittedEllipse } from './conicLinks'
 import { piecewiseOpenByDefault, piecewiseSectionSpec } from './piecewiseLinks'
 import type { FunctionEnv } from '../core/functionEnv'
@@ -187,6 +190,17 @@ interface Props {
   conicConstruction?: boolean
   /** The "show construction" switch. Absent = no switch. */
   onConicConstruction?(on: boolean): void
+  /**
+   * A parametric or polar curve's player (the Motion section): t, play /
+   * pause, speed, the vectors, the shaded polar area. Absent = the section
+   * reads at the interval's start and is read-only.
+   */
+  motion?: MotionPlayState
+  /** The vectors' drawn scales on this board. */
+  motionScales?: MotionScales
+  onMotionPlay?(patch: Partial<MotionPlayState>): void
+  /** Commit a new parameter interval (a typed line is restated). Error, or null. */
+  onMotionInterval?(lo: string, hi: string): string | null
   /**
    * Whether the board shows the parent's ghost and the key-point arrows for
    * this curve. Absent = the section's own default (open ⇒ shown).
@@ -729,6 +743,10 @@ export function CurveCard({
   onConicRestate,
   conicConstruction,
   onConicConstruction,
+  motion,
+  motionScales,
+  onMotionPlay,
+  onMotionInterval,
   transformShowParent,
   onTransformShowParent,
   name,
@@ -838,6 +856,14 @@ export function CurveCard({
   const conic = useMemo(
     () => (isExpression && readable ? conicSectionInfo(exprSource, curve.kind) : null),
     [isExpression, readable, exprSource, curve.kind],
+  )
+  /**
+   * A particle's path: any parametric or polar curve — typed, built, or a
+   * sketched polar family — gets the Motion section. Never a broken line.
+   */
+  const motionKind = useMemo(
+    () => (broken ? null : motionKindOf(curve, models)),
+    [broken, curve, models],
   )
   const transformOthers = {
     factored,
@@ -1889,6 +1915,19 @@ export function CurveCard({
               onRestate={onConicRestate}
               construction={conicConstruction ?? false}
               onConstruction={onConicConstruction}
+            />
+          )}
+          {motionKind && (
+            <MotionSection
+              curve={curve}
+              models={models}
+              kind={motionKind}
+              src={isExpression ? exprSource : undefined}
+              depKey={depKey}
+              play={motion}
+              scales={motionScales}
+              onPlay={onMotionPlay}
+              onInterval={onMotionInterval}
             />
           )}
           {fittedCon && (

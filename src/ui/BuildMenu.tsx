@@ -10,7 +10,8 @@ import { useEffect, useRef, useState } from 'react'
 // sinusoid (amplitude, period, phase shift, midline) and as a transformed
 // parent (a·f(b(x − h)) + k, from a gallery of sixteen), as a piecewise or
 // step function, piece by piece in a table, and as a conic section (from its
-// center, vertices, foci or directrix, or a pasted general form). One small menu instead
+// center, vertices, foci or directrix, or a pasted general form), and as a
+// parametric or polar curve (a named family or x(t), y(t) / r(θ)). One small menu instead
 // of a button per builder. Each item opens
 // its editor at the top of the list; choosing the one already open closes it.
 // "Data table" is the one action: it adds a table to the list and selects it.
@@ -24,6 +25,7 @@ interface Props {
   transformOpen?: boolean
   piecewiseOpen?: boolean
   conicOpen?: boolean
+  motionOpen?: boolean
   onFactorToggle?(): void
   onExpToggle?(): void
   onLogToggle?(): void
@@ -31,6 +33,7 @@ interface Props {
   onTransformToggle?(): void
   onPiecewiseToggle?(): void
   onConicToggle?(): void
+  onMotionToggle?(): void
   /** Add a data table to the list (an action, not an editor that stays open). */
   onDataAdd?(): void
 }
@@ -43,6 +46,7 @@ export function BuildMenu({
   transformOpen = false,
   piecewiseOpen = false,
   conicOpen = false,
+  motionOpen = false,
   onFactorToggle,
   onExpToggle,
   onLogToggle,
@@ -50,6 +54,7 @@ export function BuildMenu({
   onTransformToggle,
   onPiecewiseToggle,
   onConicToggle,
+  onMotionToggle,
   onDataAdd,
 }: Props) {
   const [open, setOpen] = useState(false)
@@ -75,7 +80,7 @@ export function BuildMenu({
     }
   }, [open])
 
-  const anyOpen = factorOpen || expOpen || logOpen || sinOpen || transformOpen || piecewiseOpen || conicOpen
+  const anyOpen = factorOpen || expOpen || logOpen || sinOpen || transformOpen || piecewiseOpen || conicOpen || motionOpen
   const item = (
     label: string,
     on: boolean,
@@ -105,7 +110,7 @@ export function BuildMenu({
         ref={btnRef}
         type="button"
         className={`add-btn factor-btn build-btn${anyOpen ? ' factor-open' : ''}`}
-        title="Build a function from what you state: its roots, a starting value and a rate, a logarithm's base and asymptote, a sinusoid's amplitude and period, a parent function transformed, a piecewise / step function piece by piece, or a conic section from its center, vertices and foci"
+        title="Build a function from what you state: its roots, a starting value and a rate, a logarithm's base and asymptote, a sinusoid's amplitude and period, a parent function transformed, a piecewise / step function piece by piece, a conic section from its center, vertices and foci, or a parametric or polar curve"
         aria-label="Build"
         aria-haspopup="menu"
         aria-expanded={open}
@@ -126,6 +131,7 @@ export function BuildMenu({
           {item('Transformation', transformOpen, onTransformToggle, 'build-transform')}
           {item('Piecewise / step', piecewiseOpen, onPiecewiseToggle, 'build-piecewise')}
           {item('Conic section', conicOpen, onConicToggle, 'build-conic')}
+          {item('Parametric / polar', motionOpen, onMotionToggle, 'build-motion')}
           {onDataAdd && (
             <>
               <div className="card-menu-sep" role="separator" />

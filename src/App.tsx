@@ -216,6 +216,27 @@ import {
   safeReadConic,
 } from './ui/conicLinks'
 import type { ConicHandleKind } from './ui/conicLinks'
+import {
+  VAR_OF,
+  areaOverlayFor,
+  advanceT,
+  clampT,
+  defaultPlay,
+  directionArrows,
+  isParametricPair,
+  motionInterval,
+  motionKindOf,
+  motionMarks,
+  motionScales,
+  nearestT,
+  particleShapes,
+  poleRay,
+  readIntervalEdit,
+  safeFeatures,
+  safeState,
+  withInterval,
+} from './ui/motionLinks'
+import type { MotionPlayState, MotionScales, PxFrame } from './ui/motionLinks'
 import { transformSource } from './core/transform'
 import type { TransformSpec } from './core/transform'
 import {
@@ -682,6 +703,17 @@ export default function App() {
   const [construction, setConstruction] = useState<Record<string, boolean>>({})
   const constructionRef = useRef(construction)
   constructionRef.current = construction
+  /** "Build ▾ → Parametric / polar" open at the top of the list (src/ui/MotionEditor.tsx). */
+  const [motionOpen, setMotionOpen] = useState(false)
+  /**
+   * The Motion section's player, per parametric / polar curve: t, play /
+   * pause, speed, the acceleration switch, "show particle in export", and a
+   * polar curve's shaded area. A way of looking at the board kept for the
+   * session, never saved with the document (as "show construction").
+   */
+  const [motionPlay, setMotionPlay] = useState<Record<string, MotionPlayState>>({})
+  const motionPlayRef = useRef(motionPlay)
+  motionPlayRef.current = motionPlay
   /** The transformation handle being dragged, the spec at the press and the handle's place then. */
   const transformDragRef = useRef<{
     handleId: string
@@ -3908,6 +3940,32 @@ export default function App() {
     setGhostFrame(next)
   }, [])
 
+  /**
+   * The px per unit and the board size a selected parametric / polar curve's
+   * vectors and direction arrowheads are sized against. Like the ghost frame,
+   * refreshed only when the zoom moves by a tenth or the board is resized —
+   * a pan costs two comparisons and no render.
+   */
+  const [motionFrame, setMotionFrame] = useState<PxFrame>(() => ({ ppx: 60, ppy: 60, widthPx: 800, heightPx: 600 }))
+  const motionFrameRef = useRef(motionFrame)
+  motionFrameRef.current = motionFrame
+  /** True while a parametric / polar curve is selected (its particle is on the board). */
+  const motionActiveRef = useRef(false)
+  const refreshMotionFrame = useCallback((force = false): void => {
+    if (!motionActiveRef.current && !force) return
+    const vp = vpRef.current
+    const px = ppuX(vp)
+    const py = ppuY(vp)
+    if (!(px > 0) || !(py > 0) || !(vp.widthPx > 0) || !(vp.heightPx > 0)) return
+    const cur = motionFrameRef.current
+    const zoomed = (a: number, b: number): boolean => Math.abs(Math.log(a / b)) > Math.log(1.1)
+    const resized = Math.abs(cur.widthPx - vp.widthPx) > 32 || Math.abs(cur.heightPx - vp.heightPx) > 32
+    if (!zoomed(cur.ppx, px) && !zoomed(cur.ppy, py) && !resized) return
+    const next = { ppx: px, ppy: py, widthPx: vp.widthPx, heightPx: vp.heightPx }
+    motionFrameRef.current = next
+    setMotionFrame(next)
+  }, [])
+
   const fieldPolylines = useMemo<Polyline[]>(
     () => solutionPolylines(fields, fieldCompiled, solvedSpan),
     [fields, fieldCompiled, solvedSpan],
@@ -4297,8 +4355,11 @@ export default function App() {
       // Then a shape. "(1, 2)" is a point and "ABC = (0,0) (4,0) (4,3)" is a
       // triangle; both are things the expression parser would either refuse or
       // — worse — quietly read as something else.
+      // A pair of formulas in t — (2cos(t), 3sin(t)) — is a parametric CURVE
+      // (src/core/motion.ts), not a point with a slider t: it goes on to the
+      // expression parser. (t, 1) is still the point it always was.
       const asShape = readShape(src)
-      if (asShape.ok) return addShape(src)
+      if (asShape.ok && !isParametricPair(src)) return addShape(src)
 
       // Which letters this line CALLS — f of `2f(x − 1)` — decided now, once
       // (src/ui/nameLinks.ts). A call of a curve that is not a function of x
@@ -4330,7 +4391,7 @@ export default function App() {
         // a curve needs to read. So its message surfaces only when the line
         // clearly IS a shape — a shape word, a name and a bracket, or a line
         // that opens with one.
-        if (looksLikeShape(src)) return asShape.error
+        if (looksLikeShape(src) && !asShape.ok) return asShape.error
         // The parser's message already embeds the position where relevant.
         return outcome.error
       }
@@ -5552,6 +5613,60 @@ export default function App() {
   }, [])
   const conicConstructionFor = useCallback((id: string): boolean => construction[id] === true, [construction])
 
+  // ======================================================= parametric / polar motion
+  //
+  // A parametric or polar curve is one more ordinary TYPED line: "Build ▾ →
+  // Parametric / polar" writes it (src/core/motion.ts familySource, or the
+  // Custom x(t), y(t) / r(θ)) and hands it to addExpression. The card's
+  // Motion section edits its interval — a typed line is restated with the
+  // new {a <= t <= b} in place, a sketch's domain changes — and plays a
+  // particle along it; the player is session state (motionPlay), never saved.
+
+  /** "Add to graph": the normal typed-equation path, one undo entry. */
+  const buildMotion = useCallback(
+    (src: string, tab: 'parametric' | 'polar'): string | null => {
+      const err = addExpression(src, tab === 'parametric' ? 'build parametric' : 'build polar')
+      if (err) return err
+      setMotionOpen(false)
+      return null
+    },
+    [addExpression],
+  )
+
+  /** One committed interval edit from a Motion section. */
+  const commitMotionInterval = useCallback(
+    (id: string, lo: string, hi: string): string | null => {
+      const curve = curvesRef.current.find((c) => c.id === id)
+      if (!curve) return null
+      const mk = motionKindOf(curve, modelsRef.current)
+      if (!mk) return null
+      const iv = readIntervalEdit(lo, hi, mk)
+      if ('error' in iv) return iv.error
+      const label = `${VAR_OF[mk]}-interval`
+      if (curve.modelId.startsWith('expr_')) {
+        const src = exprSourcesRef.current[id]
+        if (src === undefined) return null
+        return restateTypedCurve(id, withInterval(src, mk, iv.lo, iv.hi), label, false)
+      }
+      commitState(
+        { curves: curvesRef.current.map((c) => (c.id === id ? { ...c, domain: [iv.a, iv.b] } : c)) },
+        label,
+      )
+      return null
+    },
+    [restateTypedCurve, commitState],
+  )
+
+  /** One change to a curve's player (t, play / pause, speed, switches, area). */
+  const patchMotion = useCallback((id: string, patch: Partial<MotionPlayState>): void => {
+    setMotionPlay((m) => {
+      const curve = curvesRef.current.find((c) => c.id === id)
+      const base = m[id] ?? defaultPlay(curve ? motionInterval(curve) : [0, 2 * Math.PI])
+      return { ...m, [id]: { ...base, ...patch } }
+    })
+  }, [])
+  const motionFor = useCallback((id: string): MotionPlayState | undefined => motionPlay[id], [motionPlay])
+
   /**
    * Drag one transformation handle: the anchor (h and k together) or the
    * other key point (vertically a, sideways b, the anchor held). Every frame
@@ -6104,12 +6219,14 @@ export default function App() {
     refreshSolveSpan()
     // The same for a selected transformation's ghost and arrowheads.
     refreshGhostFrame()
+    // And for a selected parametric / polar curve's vectors and arrowheads.
+    refreshMotionFrame()
     // A stretch gesture on the stage turns Independent on by itself; the
     // settings panel's segment has to follow. Same value = no render.
     setAxesMode(axesModeOf(vpRef.current))
     viewSubsRef.current.forEach((fn) => fn())
     scheduleSave()
-  }, [refreshCrossSpan, refreshSolveSpan, refreshGhostFrame, scheduleSave])
+  }, [refreshCrossSpan, refreshSolveSpan, refreshGhostFrame, refreshMotionFrame, scheduleSave])
 
   /** The view was changed from outside the stage: redraw everything that rides it. */
   const viewMoved = useCallback((): void => {
@@ -6378,10 +6495,31 @@ export default function App() {
   // The shading and the rectangles are FIGURE, not chrome: they carry the
   // mathematics the lesson is about, so they go into the scene and reach the
   // exported PNG through exactly the same field the screen uses.
-  const overlays = useMemo<Overlay[]>(
-    () => (kind === 'cartesian' ? overlaysFor(calcLinks, curves, models) : []),
-    [kind, calcLinks, curves, models],
-  )
+  /**
+   * A polar curve's "shade area from θ = a to b": a region fanned from the
+   * pole — the pole, r(θ) from a to b, back to the pole. FIGURE content (the
+   * AP polar-area picture), drawn selected or not and exported. Keyed on the
+   * area settings alone, so a playing particle does not re-sample it.
+   */
+  const motionAreaKey = Object.entries(motionPlay)
+    .filter(([, p]) => p.area?.on)
+    .map(([id, p]) => `${id}:${p.area!.a}:${p.area!.b}`)
+    .join('|')
+  const motionAreaOverlays = useMemo<Overlay[]>(() => {
+    if (kind !== 'cartesian' || motionAreaKey === '') return []
+    const out: Overlay[] = []
+    for (const c of curves) {
+      const p = motionPlayRef.current[c.id]
+      if (!p?.area?.on || !c.visible || motionKindOf(c, models) !== 'polar') continue
+      const r = areaOverlayFor(c, models, p.area)
+      if (r) out.push({ kind: 'region', boundary: r.boundary, color: c.color, alpha: 0.28 })
+    }
+    return out
+  }, [kind, curves, models, motionAreaKey])
+  const overlays = useMemo<Overlay[]>(() => {
+    const base = kind === 'cartesian' ? overlaysFor(calcLinks, curves, models) : []
+    return motionAreaOverlays.length > 0 ? [...base, ...motionAreaOverlays] : base
+  }, [kind, calcLinks, curves, models, motionAreaOverlays])
   const overlaysRef = useRef<Overlay[]>(overlays)
   overlaysRef.current = overlays
 
@@ -6848,13 +6986,176 @@ export default function App() {
     [selectedTransform],
   )
 
+  // ------------------------------------- a selected parametric / polar curve
+  //
+  // While a parametric or polar curve is selected the board shows it MOVING:
+  // the particle at t (a filled dot), its velocity vector (and, switched on,
+  // its acceleration) at a stated scale no longer than a quarter of the
+  // board, for polar the dashed ray from the pole, and 3–5 arrowheads along
+  // the curve in the direction of motion. Its features (horizontal and
+  // vertical tangents, singular points, the pole, the start) are marked
+  // through the analysis path. Screen only — the particle joins the export
+  // only when the card's "show particle in export" is on.
+  const selectedMotion = useMemo(() => {
+    if (kind !== 'cartesian' || !selectedCurve || !selectedCurve.visible) return null
+    const mk = motionKindOf(selectedCurve, models)
+    return mk ? { curve: selectedCurve, kind: mk, interval: motionInterval(selectedCurve) } : null
+  }, [kind, selectedCurve, models])
+  motionActiveRef.current = selectedMotion !== null
+  useEffect(() => {
+    if (selectedMotion) refreshMotionFrame(true)
+  }, [selectedMotion, refreshMotionFrame])
+
+  // Leaving a curve pauses its particle: only the selected curve plays.
+  useEffect(() => {
+    setMotionPlay((m) => {
+      let changed = false
+      const next: Record<string, MotionPlayState> = {}
+      for (const [id, p] of Object.entries(m)) {
+        if (p.playing && id !== selectedId) {
+          next[id] = { ...p, playing: false }
+          changed = true
+        } else next[id] = p
+      }
+      return changed ? next : m
+    })
+  }, [selectedId])
+
+  const playingId =
+    selectedMotion && motionPlay[selectedMotion.curve.id]?.playing ? selectedMotion.curve.id : null
+  // The animation: requestAnimationFrame only while playing, paused when the
+  // window loses focus or the tab is hidden.
+  useEffect(() => {
+    if (!playingId) return
+    let raf = 0
+    let last = performance.now()
+    const tick = (now: number): void => {
+      const dt = Math.min(0.1, Math.max(0, (now - last) / 1000))
+      last = now
+      const curve = curvesRef.current.find((c) => c.id === playingId)
+      if (!curve) return
+      const interval = motionInterval(curve)
+      setMotionPlay((m) => {
+        const cur = m[playingId]
+        if (!cur || !cur.playing) return m
+        return { ...m, [playingId]: { ...cur, t: advanceT(clampT(cur.t, interval), dt, cur.speed, interval) } }
+      })
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    const pause = (): void => {
+      setMotionPlay((m) => {
+        const cur = m[playingId]
+        return cur?.playing ? { ...m, [playingId]: { ...cur, playing: false } } : m
+      })
+    }
+    const onVisibility = (): void => {
+      if (document.hidden) pause()
+    }
+    window.addEventListener('blur', pause)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      cancelAnimationFrame(raf)
+      window.removeEventListener('blur', pause)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [playingId])
+
+  /** The vectors' scales for the selected curve on this board (stated on its card). */
+  const selectedMotionScales = useMemo<MotionScales | null>(
+    () =>
+      selectedMotion
+        ? motionScales(selectedMotion.curve, models, selectedMotion.interval, motionFrame)
+        : null,
+    // depKeys: a line that calls f moves with f while its own params stand still.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selectedMotion, models, motionFrame, depKeys],
+  )
+  const motionScalesFor = useCallback(
+    (id: string): MotionScales | undefined =>
+      selectedMotion && selectedMotion.curve.id === id && selectedMotionScales ? selectedMotionScales : undefined,
+    [selectedMotion, selectedMotionScales],
+  )
+
+  const selectedMotionPlay = selectedMotion ? motionPlay[selectedMotion.curve.id] : undefined
+  /** The particle, its vectors and (polar) the ray from the pole. */
+  const motionScene = useMemo(() => {
+    if (!selectedMotion || !selectedMotionScales) return null
+    const { curve, kind: mk, interval } = selectedMotion
+    const play = selectedMotionPlay ?? defaultPlay(interval)
+    const s = safeState(curve, models, clampT(play.t, interval))
+    if (!s) return null
+    const shapes = particleShapes(s, {
+      color: curve.color,
+      idBase: `motion:${curve.id}`,
+      fr: motionFrame,
+      scales: selectedMotionScales,
+      accel: play.accel,
+    })
+    const polylines: Polyline[] = []
+    if (mk === 'polar') {
+      const ray = poleRay(s, curve.color, `motion:${curve.id}:ray`)
+      if (ray) polylines.push(ray)
+    }
+    return { shapes, polylines, pos: s.pos, exportParticle: play.exportParticle, playing: play.playing }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedMotion, selectedMotionPlay, selectedMotionScales, models, motionFrame, depKeys])
+  /** The particle as figure content, when its card says so (read by the export). */
+  const motionExportRef = useRef<{ shapes: Shape[]; polylines: Polyline[] } | null>(null)
+  motionExportRef.current = motionScene?.exportParticle ? motionScene : null
+
+  /** Direction-of-motion arrowheads along the selected curve. */
+  const motionArrows = useMemo<Shape[]>(
+    () =>
+      selectedMotion
+        ? directionArrows(selectedMotion.curve, models, {
+            interval: selectedMotion.interval,
+            fr: motionFrame,
+            color: selectedMotion.curve.color,
+            idBase: `motion-arrow:${selectedMotion.curve.id}`,
+          })
+        : [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selectedMotion, models, motionFrame, depKeys],
+  )
+
+  /** Its features as marks: the analysis path's rings and exact chips. */
+  const motionFeatureMarks = useMemo<SpecialPoint[]>(() => {
+    if (!selectedMotion) return []
+    const f = safeFeatures(selectedMotion.curve, models)
+    return f ? motionMarks(f, selectedMotion.kind) : []
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedMotion, models, depKeys])
+
+  /** The particle can be dragged along the curve while paused: t follows the nearest point. */
+  const motionHandle = useMemo<ExtraHandle | null>(() => {
+    if (!selectedMotion || !motionScene || motionScene.playing) return null
+    const { curve, interval } = selectedMotion
+    const id = `motion:${curve.id}:particle-handle`
+    return {
+      id,
+      pos: motionScene.pos,
+      label: selectedMotion.kind === 'polar' ? 'θ' : 't',
+      color: curve.color,
+      onDrag: (p: Vec2) => {
+        const live = curvesRef.current.find((c) => c.id === curve.id) ?? curve
+        patchMotion(curve.id, { t: nearestT(live, modelsRef.current, interval, p), playing: false })
+      },
+    }
+  }, [selectedMotion, motionScene, patchMotion])
+  const boardHandles = useMemo<ExtraHandle[]>(
+    () => (motionHandle ? [...extraHandles, motionHandle] : extraHandles),
+    [extraHandles, motionHandle],
+  )
+
   /** What the board marks for the selected curve. */
   const boardAnalysis = useMemo<SpecialPoint[]>(() => {
     const base = showAnalysis ? analysis : EMPTY_ANALYSIS
     const withSin = sinMarks.length > 0 ? withKeyMarks(base, sinMarks) : base
     const withConic = conicMarks.length > 0 ? withKeyMarks(withSin, conicMarks) : withSin
-    return transformMarks.length > 0 ? withKeyMarks(withConic, transformMarks) : withConic
-  }, [showAnalysis, analysis, sinMarks, conicMarks, transformMarks])
+    const withMotion = motionFeatureMarks.length > 0 ? withKeyMarks(withConic, motionFeatureMarks) : withConic
+    return transformMarks.length > 0 ? withKeyMarks(withMotion, transformMarks) : withMotion
+  }, [showAnalysis, analysis, sinMarks, conicMarks, motionFeatureMarks, transformMarks])
 
   /**
    * The on-screen polylines: the fields' solutions, a sinusoid's midline, and
@@ -6879,8 +7180,10 @@ export default function App() {
         ...keyPointArrows(selectedTransform.spec, ghostFrame, inkFor.arrow, `arrow:${selectedTransform.id}`),
       )
     }
+    // a polar particle's ray from the pole
+    if (motionScene) out.push(...motionScene.polylines)
     return out.length === fieldPolylines.length ? fieldPolylines : out
-  }, [fieldPolylines, selectedSin, selectedTransform, ghostFrame, canvasTheme, constructionScene, selectedConic, construction])
+  }, [fieldPolylines, selectedSin, selectedTransform, ghostFrame, canvasTheme, constructionScene, selectedConic, construction, motionScene])
 
   /** The on-screen shapes: the board's own, then a conic's named foci (F₁, F₂). */
   const screenShapes = useMemo<Shape[]>(() => {
@@ -6888,8 +7191,12 @@ export default function App() {
     if (selectedConic && !construction[selectedConic.id]) {
       extra.push(...constructionShapes(selectedConic.spec, selectedConic.color, `construction:${selectedConic.id}`))
     }
+    // a selected parametric / polar curve: its direction arrowheads, then the
+    // particle and its vectors on top
+    extra.push(...motionArrows)
+    if (motionScene) extra.push(...motionScene.shapes)
     return extra.length === 0 ? shapeScene : [...shapeScene, ...extra]
-  }, [shapeScene, constructionScene, selectedConic, construction])
+  }, [shapeScene, constructionScene, selectedConic, construction, motionArrows, motionScene])
 
   const copyTimerRef = useRef(0)
 
@@ -7228,17 +7535,28 @@ export default function App() {
       // construction" — then it is figure content, by the same two fields
       // the screen draws it with (polylines: directrix, asymptotes, box;
       // shapes: the foci F₁, F₂ and the vertices as points).
+      // A particle is exported only when its card says "show particle in
+      // export" — then it, its vectors and a polar curve's ray are figure
+      // content by the same fields the screen draws them with.
       polylines:
-        constructionSceneRef.current.polylines.length > 0
-          ? [...fieldPolylinesRef.current, ...constructionSceneRef.current.polylines]
+        constructionSceneRef.current.polylines.length > 0 || motionExportRef.current
+          ? [
+              ...fieldPolylinesRef.current,
+              ...constructionSceneRef.current.polylines,
+              ...(motionExportRef.current?.polylines ?? []),
+            ]
           : fieldPolylinesRef.current,
       // A triangle, a vector, a labelled point ARE the figure on a geometry
       // board — often the only thing on it — so they go into the exported
       // scene by the same field the screen uses rather than by a second code
       // path that could forget them.
       shapes:
-        constructionSceneRef.current.shapes.length > 0
-          ? [...shapeSceneRef.current, ...constructionSceneRef.current.shapes]
+        constructionSceneRef.current.shapes.length > 0 || motionExportRef.current
+          ? [
+              ...shapeSceneRef.current,
+              ...constructionSceneRef.current.shapes,
+              ...(motionExportRef.current?.shapes ?? []),
+            ]
           : shapeSceneRef.current,
       // And the data: a scatter plot and its residuals are the lesson on a
       // regression board, so the PNG gets the same sets the screen drew.
@@ -7898,6 +8216,7 @@ export default function App() {
           setTransformOpen(false)
           setPiecewiseOpen(false)
           setConicOpen(false)
+          setMotionOpen(false)
           setExprOpen((o) => !o)
         }}
         factorOpen={factorOpen}
@@ -7909,6 +8228,7 @@ export default function App() {
           setTransformOpen(false)
           setPiecewiseOpen(false)
           setConicOpen(false)
+          setMotionOpen(false)
           setFactorOpen((o) => !o)
         }}
         expOpen={expOpen}
@@ -7920,6 +8240,7 @@ export default function App() {
           setTransformOpen(false)
           setPiecewiseOpen(false)
           setConicOpen(false)
+          setMotionOpen(false)
           setExpOpen((o) => !o)
         }}
         logOpen={logOpen}
@@ -7931,6 +8252,7 @@ export default function App() {
           setTransformOpen(false)
           setPiecewiseOpen(false)
           setConicOpen(false)
+          setMotionOpen(false)
           setLogOpen((o) => !o)
         }}
         sinOpen={sinOpen}
@@ -7942,6 +8264,7 @@ export default function App() {
           setTransformOpen(false)
           setPiecewiseOpen(false)
           setConicOpen(false)
+          setMotionOpen(false)
           setSinOpen((o) => !o)
         }}
         onSinBuild={buildSinusoid}
@@ -7955,6 +8278,7 @@ export default function App() {
           setSinOpen(false)
           setPiecewiseOpen(false)
           setConicOpen(false)
+          setMotionOpen(false)
           setTransformOpen((o) => !o)
         }}
         onTransformBuild={buildTransformation}
@@ -7968,6 +8292,7 @@ export default function App() {
           setSinOpen(false)
           setTransformOpen(false)
           setConicOpen(false)
+          setMotionOpen(false)
           setPiecewiseOpen((o) => !o)
         }}
         onPiecewiseBuild={buildPiecewise}
@@ -7980,12 +8305,30 @@ export default function App() {
           setSinOpen(false)
           setTransformOpen(false)
           setPiecewiseOpen(false)
+          setMotionOpen(false)
           setConicOpen((o) => !o)
         }}
         onConicBuild={buildConic}
         onConicRestate={restateFactors}
         conicConstructionFor={conicConstructionFor}
         onConicConstruction={setConicConstruction}
+        motionOpen={motionOpen}
+        onMotionToggle={() => {
+          setExprOpen(false)
+          setFactorOpen(false)
+          setExpOpen(false)
+          setLogOpen(false)
+          setSinOpen(false)
+          setTransformOpen(false)
+          setPiecewiseOpen(false)
+          setConicOpen(false)
+          setMotionOpen((o) => !o)
+        }}
+        onMotionBuild={buildMotion}
+        motionFor={motionFor}
+        motionScalesFor={motionScalesFor}
+        onMotionPlay={patchMotion}
+        onMotionInterval={commitMotionInterval}
         onPiecewiseRestate={restateFactors}
         piecewiseEnvFor={piecewiseEnvFor}
         piecewiseBuildEnv={piecewiseBuildEnv}
@@ -8052,6 +8395,7 @@ export default function App() {
           setTransformOpen(false)
           setPiecewiseOpen(false)
           setConicOpen(false)
+          setMotionOpen(false)
           addDataTable()
         }}
         data={dataSets}
@@ -8157,7 +8501,7 @@ export default function App() {
           figure={boardFigure}
           caption={boardCaption}
           curveNames={boardCurveNames}
-          extraHandles={extraHandles}
+          extraHandles={boardHandles}
           pointPick={pointPick}
         />
         )}
