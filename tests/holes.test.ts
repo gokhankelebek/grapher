@@ -467,6 +467,67 @@ describe('findPoles', () => {
 })
 
 // ---------------------------------------------------------------------------
+// sec, csc, cot — poles solved from cos / sin, exactly like tan
+// ---------------------------------------------------------------------------
+
+describe('reciprocal trig poles', () => {
+  it('sec x: vertical asymptotes at ±π/2 on [−2, 2], and nothing else', () => {
+    const xs = singOf('y = sec(x)', [-2, 2])
+    expect(xs).toHaveLength(2)
+    expect(xs[0]).toBeCloseTo(-Math.PI / 2, 12)
+    expect(xs[1]).toBeCloseTo(Math.PI / 2, 12)
+    const poles = polesOf('y = sec(x)', [-2, 2])
+    expect(poles).toHaveLength(2)
+    expect(poles[0]).toBeCloseTo(-Math.PI / 2, 12)
+    expect(poles[1]).toBeCloseTo(Math.PI / 2, 12)
+    expect(holesOf('y = sec(x)', [-2, 2])).toEqual([])
+    const asy = asymptotesOf('y = sec(x)', [-2, 2])
+    expect(asy.map((a) => a.kind)).toEqual(['vertical', 'vertical'])
+    expect((asy[0] as { x: number }).x).toBeCloseTo(-Math.PI / 2, 12)
+    expect((asy[1] as { x: number }).x).toBeCloseTo(Math.PI / 2, 12)
+  })
+
+  it('csc x and cot x: poles at the multiples of π', () => {
+    for (const src of ['y = csc(x)', 'y = cot(x)']) {
+      const poles = polesOf(src, [-4, 4])
+      expect(poles, src).toHaveLength(3)
+      const want = [-Math.PI, 0, Math.PI]
+      for (let i = 0; i < 3; i++) expect(poles[i], src).toBeCloseTo(want[i], 12)
+      expect(holesOf(src, [-4, 4]), src).toEqual([])
+    }
+  })
+
+  it('a transformed secant: 2sec(2(x − π/4)) + 1 has poles every π/2 from 0', () => {
+    // 2(x − π/4) = ±π/2  ⇔  x = 0, π/2, and every π/2 from there
+    const poles = polesOf('y = 2sec(2(x - pi/4)) + 1', [-1, 3.5])
+    expect(poles).toHaveLength(3)
+    const want = [0, Math.PI / 2, Math.PI]
+    for (let i = 0; i < 3; i++) expect(poles[i]).toBeCloseTo(want[i], 12)
+  })
+
+  it('the textbook power keeps the poles: sec^2 x, csc^2 x', () => {
+    const poles = polesOf('y = sec^2 x', [-2, 2])
+    expect(poles).toHaveLength(2)
+    expect(poles[1]).toBeCloseTo(Math.PI / 2, 12)
+    expect(polesOf('y = csc^2(x)', [-1, 1])).toEqual([0])
+  })
+
+  it('sin x · csc x is a HOLE at 0 (it is 1 everywhere else), not a pole', () => {
+    const holes = holesOf('y = sin(x) csc(x)', [-1, 1])
+    expect(holes).toHaveLength(1)
+    expect(holes[0].x).toBe(0)
+    expect(holes[0].y).toBeCloseTo(1, 6)
+    expect(polesOf('y = sin(x) csc(x)', [-1, 1])).toEqual([])
+  })
+
+  it('the arc names and sin^-1 have no singularities at all', () => {
+    for (const src of ['y = arcsin(x)', 'y = arctan(x)', 'y = sin^-1(x)', 'y = cos^-1(x)']) {
+      expect(singOf(src, [-5, 5]), src).toEqual([])
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
 // polar
 // ---------------------------------------------------------------------------
 

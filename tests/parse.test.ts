@@ -562,6 +562,111 @@ describe('parse — log_B in any base', () => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// sec, csc, cot; arcsin, arccos, arctan; textbook powers sin^2(x), sin^-1(x)
+// ---------------------------------------------------------------------------
+
+describe('parse — sec, csc, cot and the arc names', () => {
+  it('evaluate as 1/cos, 1/sin, cos/sin', () => {
+    for (const x of SAMPLE_XS) {
+      expect(f('sec(x)', x)).toBeCloseTo(1 / Math.cos(x), 9)
+      expect(f('csc(x)', x)).toBeCloseTo(1 / Math.sin(x), 9)
+      expect(f('cot(x)', x)).toBeCloseTo(Math.cos(x) / Math.sin(x), 9)
+      expect(f('2sec(3x) - 1', x)).toBeCloseTo(2 / Math.cos(3 * x) - 1, 9)
+    }
+    // cot is cos/sin, not 1/tan: exactly 0 where cos is
+    expect(f('cot(x)', Math.PI / 2)).toBeCloseTo(0, 15)
+  })
+
+  it('render as \\sec, \\csc, \\cot, and apply paren-less like sin', () => {
+    expect(plot('sec(x)').latex).toBe('y = \\sec\\left(x\\right)')
+    expect(plot('csc 2x').latex).toBe('y = \\csc\\left(2x\\right)')
+    expect(plot('cot x + 1').latex).toBe('y = \\cot\\left(x\\right)+1')
+    expect(plot('y = 3sec(x - pi/4)').latex).toBe('y = 3\\sec\\left(x-\\pi/4\\right)')
+  })
+
+  it('arcsin, arccos, arctan are asin, acos, atan — same value, same card', () => {
+    for (const [alias, name, fn] of [
+      ['arcsin', 'asin', Math.asin], ['arccos', 'acos', Math.acos], ['arctan', 'atan', Math.atan],
+    ] as const) {
+      for (const x of [-0.9, -0.3, 0, 0.4, 0.95]) {
+        expect(f(`${alias}(x)`, x)).toBe(fn(x))
+        expect(f(`${alias} x`, x)).toBe(fn(x))
+      }
+      expect(plot(`${alias}(x)`).latex).toBe(plot(`${name}(x)`).latex)
+      expect(plot(`${alias}(2x) + 1`).latex).toBe(plot(`${name}(2x) + 1`).latex)
+    }
+    // asin keeps rendering exactly as it always did
+    expect(plot('asin(x)').latex).toBe('y = \\arcsin\\left(x\\right)')
+    expect(plot('arctan(x)').latex).toBe('y = \\arctan\\left(x\\right)')
+  })
+
+  it('messages use the name as typed, and suggest the new names', () => {
+    expect(err('arcsin').error).toMatch(/'arcsin' needs an argument/)
+    expect(err('arcsn(x)').error).toMatch(/did you mean 'arcsin'\?/)
+    expect(err('secc(x)').error).toMatch(/did you mean 'sec'\?/)
+    expect(err('arcsin(x, 2)').error).toMatch(/'arcsin' takes one argument/)
+  })
+
+  it('a digit after the name splits off, exactly as sin2x does', () => {
+    for (const x of SAMPLE_XS) {
+      expect(f('sec2x', x)).toBeCloseTo(1 / Math.cos(2 * x), 9)
+      expect(f('arctan3x', x)).toBeCloseTo(Math.atan(3 * x), 12)
+    }
+  })
+
+  it('does not change anything that already parsed', () => {
+    expect(plot('sin(x)^2').latex).toBe('y = \\sin\\left(x\\right)^{2}')
+    expect(plot('a sin(b x + c) + d').paramNames).toEqual(['a', 'b', 'c', 'd'])
+    expect(plot('s e c').paramNames).toEqual(['s', 'c'])
+    expect(plot('c o t').paramNames).toEqual(['c', 'o'])
+    expect(err('sin').error).toMatch(/needs an argument/)
+  })
+})
+
+describe('parse — textbook powers: sin^2(x), sin^-1(x)', () => {
+  it('sin^2(x) is (sin x)², the same curve and card as sin(x)^2', () => {
+    for (const x of SAMPLE_XS) {
+      expect(f('sin^2(x)', x)).toBeCloseTo(Math.sin(x) ** 2, 12)
+      expect(f('sin^2 x + cos^2 x', x)).toBeCloseTo(1, 12)
+      expect(f('cos^3(2x)', x)).toBeCloseTo(Math.cos(2 * x) ** 3, 12)
+      expect(f('tan^(2)(x)', x)).toBeCloseTo(Math.tan(x) ** 2, 6)
+      expect(f('sec^2 x - tan^2 x', x)).toBeCloseTo(1, 6)
+      expect(f('3sin^2(x) + 1', x)).toBeCloseTo(3 * Math.sin(x) ** 2 + 1, 12)
+      expect(f('-sin^2 x', x)).toBeCloseTo(-(Math.sin(x) ** 2), 12)
+    }
+    expect(plot('sin^2(x)').latex).toBe(plot('sin(x)^2').latex)
+    expect(plot('sin^2 x + 1').latex).toBe('y = \\sin\\left(x\\right)^{2}+1')
+    expect(plot('sin^1(x)').latex).toBe('y = \\sin\\left(x\\right)')
+  })
+
+  it('sin^-1(x) is arcsin — never 1/sin x', () => {
+    for (const x of [-0.9, -0.3, 0, 0.4, 0.95]) {
+      expect(f('sin^-1(x)', x)).toBe(Math.asin(x))
+      expect(f('sin^(-1)(x)', x)).toBe(Math.asin(x))
+      expect(f('cos^-1 x', x)).toBe(Math.acos(x))
+      expect(f('tan^-1(x) + 1', x)).toBe(Math.atan(x) + 1)
+    }
+    expect(plot('sin^-1(x)').latex).toBe('y = \\arcsin\\left(x\\right)')
+  })
+
+  it('every other power there is a positioned error saying how to write it', () => {
+    const e1 = err('sin^2.5(x)')
+    expect(e1.error).toMatch(/whole-number power/)
+    expect(e1.error).toMatch(/\(sin\(x\)\)\^2/)
+    expect(e1.pos).toBe(3)
+    expect(err('y = sin^x').pos).toBe(7)
+    expect(err('sin^-2(x)').error).toMatch(/\(sin\(x\)\)\^\(-2\)/)
+    expect(err('sec^-1(x)').error).toMatch(/not available/)
+    expect(err('sin^0(x)').error).toMatch(/just 1/)
+    expect(err('sin^2').error).toMatch(/'sin\^2' needs an argument/)
+    expect(err('sin^(2(x)').error).toBeTruthy()
+    // other functions are untouched: still "needs an argument"
+    expect(err('ln^2(x)').error).toMatch(/needs an argument/)
+    expect(err('sqrt^2(x)').error).toMatch(/needs an argument/)
+  })
+})
+
 // ===========================================================================
 // Regressions for the two P0 correctness bugs found in the parser audit.
 // ===========================================================================
@@ -731,6 +836,10 @@ describe('latex round-trip fuzz', () => {
   const PARAMS = ['a', 'b', 'c', 'k', 'w']
   /** Bases for log_B: literals, fractions, constants, a slider, log_e (= ln). */
   const LOG_BASES = ['2', '3', '10', '2.5', '0.5', '(1/2)', '(sqrt(2))', '(2/3)', 'b', 'e', 'pi', '(a)']
+  /** trig: the reciprocal functions, the arc names and the textbook powers. */
+  const TRIG_NEW = ['sec', 'csc', 'cot', 'arcsin', 'arccos', 'arctan']
+  const POWERED = ['sin', 'cos', 'tan', 'sec', 'csc', 'cot']
+  const TRIG_RE = /\b(sec|csc|cot|arcsin|arccos|arctan)\b|(sin|cos|tan|sec|csc|cot)\^/
 
   function num(r: Rng): string {
     const roll = r()
@@ -743,10 +852,18 @@ describe('latex round-trip fuzz', () => {
 
   // logB: also generate log_B(…) in any base. Off by default, so the seeds
   // below keep generating exactly the inputs they always have.
-  function genExpr(r: Rng, vars: string[], depth: number, logB = false): string {
+  // trig: likewise off by default (the same seeds, the same inputs).
+  function genExpr(r: Rng, vars: string[], depth: number, logB = false, trig = false): string {
     if (depth <= 0) return r() < 0.45 ? pick(r, vars) : (r() < 0.75 ? num(r) : pick(r, PARAMS))
     const roll = r()
-    const sub = (d = depth - 1) => genExpr(r, vars, d, logB)
+    const sub = (d = depth - 1) => genExpr(r, vars, d, logB, trig)
+    if (trig && roll >= 0.38 && roll < 0.52) {
+      if (roll < 0.42) return `${pick(r, TRIG_NEW)}(${sub()})`
+      if (roll < 0.45) return `${pick(r, TRIG_NEW)} ${sub(0)}`       // paren-less
+      if (roll < 0.49) return `${pick(r, POWERED)}^${pick(r, ['2', '3', '(2)'])}(${sub()})`
+      if (roll < 0.51) return `${pick(r, POWERED)}^${pick(r, ['2', '3'])} ${sub(0)}`
+      return `${pick(r, ['sin', 'cos', 'tan'])}^${pick(r, ['-1', '(-1)'])}(${sub()})`
+    }
     if (logB && roll >= 0.38 && roll < 0.52) {
       const base = pick(r, LOG_BASES)
       if (roll < 0.44) return `log_${base}(${sub()})`
@@ -767,17 +884,17 @@ describe('latex round-trip fuzz', () => {
     return `${sub()} ${pick(r, ['+', '-', '*'])} ${sub()}`
   }
 
-  function genInput(r: Rng, logB = false): string {
+  function genInput(r: Rng, logB = false, trig = false): string {
     const roll = r()
     if (roll < 0.2) {
-      const e = genExpr(r, ['theta'], 3, logB)
+      const e = genExpr(r, ['theta'], 3, logB, trig)
       return r() < 0.5 ? `r = ${e}` : e
     }
-    if (roll < 0.35) return `${genExpr(r, ['x', 'y'], 3, logB)} = ${genExpr(r, ['x', 'y'], 2, logB)}`
-    if (roll < 0.45) return `${pick(r, ['f', 'g', 'h'])}(x) = ${genExpr(r, ['x'], 3, logB)}`
-    if (roll < 0.5) return `${pick(r, ['f', 'g'])}(t) = ${genExpr(r, ['t'], 3, logB)}`
-    if (roll < 0.7) return `y = ${genExpr(r, ['x'], 3, logB)}`
-    return genExpr(r, ['x'], 3, logB)
+    if (roll < 0.35) return `${genExpr(r, ['x', 'y'], 3, logB, trig)} = ${genExpr(r, ['x', 'y'], 2, logB, trig)}`
+    if (roll < 0.45) return `${pick(r, ['f', 'g', 'h'])}(x) = ${genExpr(r, ['x'], 3, logB, trig)}`
+    if (roll < 0.5) return `${pick(r, ['f', 'g'])}(t) = ${genExpr(r, ['t'], 3, logB, trig)}`
+    if (roll < 0.7) return `y = ${genExpr(r, ['x'], 3, logB, trig)}`
+    return genExpr(r, ['x'], 3, logB, trig)
   }
 
   // Tolerance is deliberately loose. The bug class this guards against (a curve
@@ -792,8 +909,23 @@ describe('latex round-trip fuzz', () => {
     (Number.isNaN(a) && Number.isNaN(b)) || a === b ||
     Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(a), Math.abs(b))
 
+  /**
+   * sec, csc and cot have poles on the real line, so a probe can land a few
+   * ulps from one: there the value swings by orders of magnitude between two
+   * neighbouring doubles, and the re-association described above flips it
+   * (csc³ of 9000πx² at x = −2.5 came back as −2.7e32 vs +3.9e32). The trig
+   * seeds skip such a probe — one where nudging x by 1e-12 relative already
+   * moves f by more than the comparison tolerance. A wrong LaTeX is wrong
+   * everywhere, not only at ill-conditioned points, so nothing is hidden.
+   */
+  function illConditioned(ev: (p: number[], x: number) => number, params: number[], u: number): boolean {
+    const v = ev(params, u)
+    const w = ev(params, u * (1 + 1e-12) + 1e-12)
+    return !sameNum(v, w)
+  }
+
   /** Returns a description of the first discrepancy, or null when it round-trips. */
-  function roundTrip(src: string): string | null {
+  function roundTrip(src: string, skipIllConditioned = false): string | null {
     const first = parseExpression(src)
     if (!first.ok) return null // only valid inputs are round-trip candidates
     const latex = first.plot.latex
@@ -813,11 +945,17 @@ describe('latex round-trip fuzz', () => {
       if (A.kind === 'explicit' || A.kind === 'polar') {
         const ea = A.kind === 'explicit' ? ma.evalExplicit! : ma.evalPolar!
         const eb = A.kind === 'explicit' ? mb.evalExplicit! : mb.evalPolar!
+        if (skipIllConditioned && illConditioned(ea, params, u)) continue
         if (!sameNum(ea(params, u), eb(params, u))) {
           return bad(`at ${u}: ${ea(params, u)} vs ${eb(params, u)}`)
         }
       } else {
         for (const v of probes) {
+          if (skipIllConditioned) {
+            const ei = ma.evalImplicit!
+            if (illConditioned((p, x) => ei(p, x, v), params, u)) continue
+            if (illConditioned((p, y) => ei(p, u, y), params, v)) continue
+          }
           if (!sameNum(ma.evalImplicit!(params, u, v), mb.evalImplicit!(params, u, v))) {
             return bad(`at (${u},${v}): ${ma.evalImplicit!(params, u, v)} vs ${mb.evalImplicit!(params, u, v)}`)
           }
@@ -860,6 +998,27 @@ describe('latex round-trip fuzz', () => {
     })
   }
 
+  for (const seed of [31, 32]) {
+    it(`4000 generated inputs with sec/csc/cot, arc names and sin^2 round-trip through latex (seed ${seed})`, () => {
+      const rng = makeRng(seed)
+      const bad: string[] = []
+      let parsed = 0
+      let withTrig = 0
+      for (let i = 0; i < 4000; i++) {
+        const src = genInput(rng, false, true)
+        if (parseExpression(src).ok) {
+          parsed++
+          if (TRIG_RE.test(src)) withTrig++
+        }
+        const found = roundTrip(src, true)
+        if (found) bad.push(found)
+      }
+      expect(bad.slice(0, 5).join('\n---\n')).toBe('')
+      // the generator really does exercise the new syntax
+      expect(withTrig).toBeGreaterThan(parsed / 5)
+    })
+  }
+
   it('round-trips the step functions and other fixed shapes', () => {
     const fixed = [
       'floor(x)', 'ceil(2x)', 'sign(x-1)', 'floor(x)+ceil(x)', 'sign(x) * floor(|x|)',
@@ -869,6 +1028,10 @@ describe('latex round-trip fuzz', () => {
       'a sin(b x + c) + d', 'log2(x+1)', 'cbrt(x)', 'x*y = 1', 'exp(-x^2)', '2^3^2',
       'log_3(x)', 'log_(1/2)(x - 1)', 'f(x) = log_b(a x)', 'log_2 x + 1', 'log_(sqrt(2))(x)',
       '2log_10(x) - 1', 'log_e(x)', 'log_(2, x)', 'r = log_3(theta)', '-log_(1/3)(2(x + 3)) - 1',
+      'sec(x)', 'csc 2x', 'cot(x - pi/4) + 1', 'arcsin(x)', 'arccos x', 'arctan(2x) + 1',
+      'sin^2(x)', 'sin^2 x + cos^2 x', 'cos^3(2x)', 'sin^-1(x)', 'tan^(-1)(x)', 'r = sec(theta)',
+      'y = 3sin(2(x - pi/4)) + 1', 'f(x) = 2sin(pi/6 x) - 4', 'y = sqrt(2)sin(x + pi/4)',
+      'y = (1/2)cos((1/2)(x - 1)) - 1/2', 'y = -40cos(pi/6 x) + 50',
     ]
     const bad = fixed.map(roundTrip).filter(Boolean)
     expect(bad.join('\n---\n')).toBe('')
@@ -919,8 +1082,8 @@ describe('latex round-trip fuzz', () => {
 
   const rel = (r: Rng): string => (r() < 0.5 ? '<=' : '<')
 
-  function genRestricted(r: Rng, logB = false): string {
-    const e = genExpr(r, ['x'], 3, logB)
+  function genRestricted(r: Rng, logB = false, trig = false): string {
+    const e = genExpr(r, ['x'], 3, logB, trig)
     const lo = Math.floor(r() * 7) - 3
     const hi = lo + 1 + Math.floor(r() * 5)
     return pick(r, [
@@ -934,14 +1097,14 @@ describe('latex round-trip fuzz', () => {
     ])
   }
 
-  function genPiecewise(r: Rng, logB = false): string {
+  function genPiecewise(r: Rng, logB = false, trig = false): string {
     const n = 2 + Math.floor(r() * 2)
     const cuts: number[] = []
     let c = Math.floor(r() * 5) - 4
     for (let i = 0; i < n - 1; i++) { cuts.push(c); c += 1 + Math.floor(r() * 3) }
     const rows: string[] = []
     for (let i = 0; i < n; i++) {
-      const body = genExpr(r, ['x'], 2, logB)
+      const body = genExpr(r, ['x'], 2, logB, trig)
       if (i === 0) rows.push(`${body} if x ${rel(r)} ${cuts[0]}`)
       else if (i === n - 1) {
         rows.push(r() < 0.4 ? `${body} otherwise` : `${body} if x >${r() < 0.5 ? '=' : ''} ${cuts[i - 1]}`)
@@ -961,7 +1124,7 @@ describe('latex round-trip fuzz', () => {
 
   const PROBES = [-4.25, -3, -2.5, -1, -0.5, 0, 0.5, 1, 1.5, 2, 3, 4.75]
 
-  function roundTripPieced(src: string): string | null {
+  function roundTripPieced(src: string, skipIllConditioned = false): string | null {
     const first = parseExpression(src)
     if (!first.ok) return null // only valid inputs are round-trip candidates
     const latex = first.plot.latex
@@ -986,6 +1149,7 @@ describe('latex round-trip fuzz', () => {
     const eb = B.makeModel('b').evalExplicit!
     const params = A.paramNames.map((_, i) => 0.7 + i * 0.4)
     for (const u of PROBES) {
+      if (skipIllConditioned && illConditioned(ea, params, u)) continue
       // NaN counts as a value here: a gap has to come back as the same gap.
       if (!sameNum(ea(params, u), eb(params, u))) {
         return bad(`at ${u}: ${ea(params, u)} vs ${eb(params, u)}`)
@@ -1018,6 +1182,17 @@ describe('latex round-trip fuzz', () => {
     expect(bad.slice(0, 5).join('\n---\n')).toBe('')
   })
 
+  it('restricted and piecewise inputs with the new trig syntax round-trip (seed 33)', () => {
+    const rng = makeRng(33)
+    const bad: string[] = []
+    for (let i = 0; i < 2000; i++) {
+      const src = rng() < 0.5 ? genRestricted(rng, false, true) : genPiecewise(rng, false, true)
+      const found = roundTripPieced(src, true)
+      if (found) bad.push(found)
+    }
+    expect(bad.slice(0, 5).join('\n---\n')).toBe('')
+  })
+
   it('round-trips the fixed restricted and piecewise shapes', () => {
     const fixed = [
       'y = x^2 {0 <= x < 3}',
@@ -1039,5 +1214,15 @@ describe('latex round-trip fuzz', () => {
     ]
     const bad = fixed.map(roundTripPieced).filter(Boolean)
     expect(bad.join('\n---\n')).toBe('')
+  })
+})
+
+describe('names that live on Object.prototype are not functions', () => {
+  it('toString, constructor, hasOwnProperty read as unknown names, never crash', () => {
+    for (const src of ['y = toString(x)', 'y = constructor(x)', 'y = hasOwnProperty(x)', 'y = valueOf']) {
+      const r = parseExpression(src)
+      expect(r.ok, src).toBe(false)
+      if (!r.ok) expect(r.error, src).not.toMatch(/is not a function|undefined/)
+    }
   })
 })

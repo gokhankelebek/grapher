@@ -56,11 +56,23 @@ interface FuncDef {
 
 const wrap = (s: string) => `\\left(${s}\\right)`
 
+/**
+ * Own-property membership. `w in FUNCS` also answers yes for "toString" and
+ * "constructor", which came off Object.prototype, not off the table.
+ */
+const has = (table: object, key: string): boolean =>
+  Object.prototype.hasOwnProperty.call(table, key)
+
 const FUNCS: Record<string, FuncDef> = {
   sin:   { arity: 1, fn: (a) => Math.sin(a),   latex: (x) => `\\sin${wrap(x[0])}` },
   cos:   { arity: 1, fn: (a) => Math.cos(a),   latex: (x) => `\\cos${wrap(x[0])}` },
   tan:   { arity: 1, fn: (a) => Math.tan(a),   latex: (x) => `\\tan${wrap(x[0])}` },
-  asin:  { arity: 1, fn: (a) => Math.asin(a),  latex: (x) => `\\arcsin${wrap(x[0])}` },
+  // the reciprocal functions: poles where cos (sec) or sin (csc, cot) is 0 —
+  // see TRIG_POLE, which is what makes them singular sources like tan
+  sec:   { arity: 1, fn: (a) => 1 / Math.cos(a), latex: (x) => `\\sec${wrap(x[0])}` },
+  csc:   { arity: 1, fn: (a) => 1 / Math.sin(a), latex: (x) => `\\csc${wrap(x[0])}` },
+  cot:   { arity: 1, fn: (a) => Math.cos(a) / Math.sin(a), latex: (x) => `\\cot${wrap(x[0])}` },
+  asin: { arity: 1, fn: (a) => Math.asin(a),  latex: (x) => `\\arcsin${wrap(x[0])}` },
   acos:  { arity: 1, fn: (a) => Math.acos(a),  latex: (x) => `\\arccos${wrap(x[0])}` },
   atan:  { arity: 1, fn: (a) => Math.atan(a),  latex: (x) => `\\arctan${wrap(x[0])}` },
   sinh:  { arity: 1, fn: (a) => Math.sinh(a),  latex: (x) => `\\sinh${wrap(x[0])}` },
@@ -84,6 +96,33 @@ const FUNCS: Record<string, FuncDef> = {
   // produces the name `log_` from a plain word. See LOG_BASE below.
   log_:  { arity: 2, fn: (b, u) => logBase(b, u), latex: (x) => `\\log_{${x[0]}}${wrap(x[1])}` },
 }
+
+/**
+ * Other spellings of a function in FUNCS. The alias is resolved in the
+ * parser, so the AST — and everything downstream of it — only ever sees the
+ * one name: arcsin(x) IS asin(x), and renders \arcsin exactly as asin does.
+ * (A Map, not an object: `'constructor' in {}` is true.)
+ */
+const FUNC_ALIASES: ReadonlyMap<string, string> = new Map([
+  ['arcsin', 'asin'],
+  ['arccos', 'acos'],
+  ['arctan', 'atan'],
+])
+
+/**
+ * Functions that take a textbook power written between the name and the
+ * argument: sin^2(x) = (sin x)², cos^3 x = (cos x)³. Only a whole-number
+ * power is accepted, or −1 — and sin^-1 means arcsin, as every textbook and
+ * calculator writes it (never 1/sin, which is csc).
+ */
+const POWERED: ReadonlySet<string> = new Set(['sin', 'cos', 'tan', 'sec', 'csc', 'cot'])
+
+/** f^-1: the inverse function, for the three that have one here. */
+const INVERSE_FN: ReadonlyMap<string, string> = new Map([
+  ['sin', 'asin'],
+  ['cos', 'acos'],
+  ['tan', 'atan'],
+])
 
 /**
  * log_b(u) = ln(u)/ln(b). A base that is not positive, or is 1, has no
@@ -153,7 +192,12 @@ function levenshtein(a: string, b: string): number {
 function suggest(word: string): string | null {
   const lower = word.toLowerCase()
   // `log_` is reached only through the subscript syntax, never suggested as a word
-  const candidates = [...Object.keys(FUNCS).filter((w) => !w.includes('_')), ...Object.keys(CONSTS), 'theta']
+  const candidates = [
+    ...Object.keys(FUNCS).filter((w) => !w.includes('_')),
+    ...FUNC_ALIASES.keys(),
+    ...Object.keys(CONSTS),
+    'theta',
+  ]
   if (lower !== word && candidates.includes(lower)) return lower
   let best: string | null = null
   let bestD = 2
@@ -169,7 +213,7 @@ function suggest(word: string): string | null {
 // ----------------------------------------------------------------------------
 
 function isKnownName(w: string): boolean {
-  return w in FUNCS || w in CONSTS || VAR_NAMES.has(w)
+  return has(FUNCS, w) || FUNC_ALIASES.has(w) || has(CONSTS, w) || VAR_NAMES.has(w)
 }
 
 type TokType = 'num' | 'ident' | 'op' | 'lparen' | 'rparen' | 'comma' | 'eq' | 'bar' | 'end'
@@ -381,10 +425,10 @@ class Parser {
         if (VAR_NAMES.has(w)) {
           this.next()
           base = { t: 'var', name: w as VarName }
-        } else if (w in CONSTS) {
+        } else if (has(CONSTS, w)) {
           this.next()
           base = { t: 'const', name: w as keyof typeof CONSTS }
-        } else if (w.length === 1 && !(w in FUNCS)) {
+        } else if (w.length === 1 && !(has(FUNCS, w))) {
           this.next()
           base = this.registerParam(w)
         } else {
@@ -450,44 +494,114 @@ class Parser {
     return { t: 'call', fn: 'log_', args }
   }
 
-  private identNud(tok: Token): Node {
-    const w = tok.text
-    if (w === 'log_') return this.logBaseNud(tok)
+  /**
+   * `name(args)` or paren-less `name u`, after the function's name. `typed` is
+   * the name as written (for messages: arcsin, not asin), `w` the FUNCS key.
+   */
+  private applyFunc(tok: Token, typed: string, w: string): Node {
     const fdef = FUNCS[w]
-    if (fdef) {
-      if (this.peek().type === 'lparen') {
-        this.next()
-        const args: Node[] = [this.parseExpr(0)]
-        if (fdef.arity === 2) {
-          const comma = this.peek()
-          if (comma.type !== 'comma') this.fail(comma, `',' ('${w}' takes two arguments)`)
-          this.next()
-          args.push(this.parseExpr(0))
-        }
-        const close = this.peek()
-        if (close.type === 'comma') {
-          throw new ParseError(
-            `'${w}' takes ${fdef.arity === 1 ? 'one argument' : 'two arguments'} — unexpected ',' at position ${close.pos}`,
-            close.pos,
-          )
-        }
-        if (close.type !== 'rparen') this.fail(close, "')'")
-        this.next()
-        return { t: 'call', fn: w, args }
-      }
+    if (this.peek().type === 'lparen') {
+      this.next()
+      const args: Node[] = [this.parseExpr(0)]
       if (fdef.arity === 2) {
-        throw new ParseError(`'${w}' needs parentheses, e.g. ${w}(a, b)`, tok.pos)
+        const comma = this.peek()
+        if (comma.type !== 'comma') this.fail(comma, `',' ('${typed}' takes two arguments)`)
+        this.next()
+        args.push(this.parseExpr(0))
       }
-      // paren-less application: binds a full product, stops at + / -
+      const close = this.peek()
+      if (close.type === 'comma') {
+        throw new ParseError(
+          `'${typed}' takes ${fdef.arity === 1 ? 'one argument' : 'two arguments'} — unexpected ',' at position ${close.pos}`,
+          close.pos,
+        )
+      }
+      if (close.type !== 'rparen') this.fail(close, "')'")
+      this.next()
+      return { t: 'call', fn: w, args }
+    }
+    if (fdef.arity === 2) {
+      throw new ParseError(`'${typed}' needs parentheses, e.g. ${typed}(a, b)`, tok.pos)
+    }
+    // paren-less application: binds a full product, stops at + / -
+    const nxt = this.peek()
+    if (!this.startsExpr(nxt) && !(nxt.type === 'op' && (nxt.text === '-' || nxt.text === '+'))) {
+      throw new ParseError(`'${typed}' needs an argument, e.g. ${typed}(x)`, tok.pos)
+    }
+    const arg = this.parseExpr(BP_ADD)
+    return { t: 'call', fn: w, args: [arg] }
+  }
+
+  /**
+   * The textbook power of a trig function, after its name: `sin^2(x)`,
+   * `cos^3 x`, `tan^(2)(x)` are (sin x)², (cos x)³, (tan x)² — the same AST
+   * as sin(x)^2, so the card prints it that way. `sin^-1(x)` and
+   * `sin^(-1)(x)` are arcsin, as a textbook and a calculator mean it (never
+   * 1/sin x, which is csc x). The power must be a whole number ≥ 1, or −1 for
+   * sin, cos and tan; anything else is refused with a message saying how to
+   * write it instead. Before this, `sin^2(x)` was an error ("'sin' needs an
+   * argument"), so nothing that parsed changes meaning.
+   */
+  private poweredNud(tok: Token, w: string): Node {
+    const caret = this.next() // '^'
+    const name = tok.text
+    const asPower = `(${name}(x))^2`
+    let t = this.peek()
+    const paren = t.type === 'lparen'
+    if (paren) { this.next(); t = this.peek() }
+    let negative = false
+    if (t.type === 'op' && t.text === '-') { negative = true; this.next(); t = this.peek() }
+    if (t.type !== 'num' || !/^\d+$/.test(t.text)) {
+      throw new ParseError(
+        `Only a whole-number power can go between '${name}' and its argument, as in ${name}^2(x) — ` +
+          `otherwise put the power after the argument, e.g. ${asPower}`,
+        caret.pos,
+      )
+    }
+    this.next()
+    if (paren) {
+      const close = this.peek()
+      if (close.type !== 'rparen') this.fail(close, "')'")
+      this.next()
+    }
+    const n = Number(t.text)
+    if (negative) {
+      const inv = INVERSE_FN.get(w)
+      if (n !== 1) {
+        throw new ParseError(
+          `${name}^-${t.text} is ambiguous — write the power after the argument, e.g. (${name}(x))^(-${t.text})`,
+          caret.pos,
+        )
+      }
+      if (!inv) {
+        throw new ParseError(
+          `${name}^-1 (the inverse of ${name}) is not available — write e.g. ${w === 'sec' ? 'acos(1/x)' : w === 'csc' ? 'asin(1/x)' : 'atan(1/x)'}, ` +
+            `or (${name}(x))^(-1) for 1/${name}(x)`,
+          caret.pos,
+        )
+      }
+      return this.applyFunc(tok, `${name}^-1`, inv)
+    }
+    if (n === 0) {
+      throw new ParseError(`${name}^0 is just 1 — write the power after the argument if you mean it: (${name}(x))^0`, caret.pos)
+    }
+    const call = this.applyFunc(tok, `${name}^${t.text}`, w)
+    if (n === 1) return call
+    return { t: 'bin', op: '^', a: call, b: { t: 'num', v: n, raw: t.text } }
+  }
+
+  private identNud(tok: Token): Node {
+    if (tok.text === 'log_') return this.logBaseNud(tok)
+    // arcsin → asin: the AST only ever carries the one name
+    const w = FUNC_ALIASES.get(tok.text) ?? tok.text
+    const fdef = has(FUNCS, w) ? FUNCS[w] : undefined
+    if (fdef) {
       const nxt = this.peek()
-      if (!this.startsExpr(nxt) && !(nxt.type === 'op' && (nxt.text === '-' || nxt.text === '+'))) {
-        throw new ParseError(`'${w}' needs an argument, e.g. ${w}(x)`, tok.pos)
-      }
-      const arg = this.parseExpr(BP_ADD)
-      return { t: 'call', fn: w, args: [arg] }
+      if (POWERED.has(w) && nxt.type === 'op' && nxt.text === '^') return this.poweredNud(tok, w)
+      return this.applyFunc(tok, tok.text, w)
     }
     if (VAR_NAMES.has(w)) return { t: 'var', name: w as VarName }
-    if (w in CONSTS) return { t: 'const', name: w as keyof typeof CONSTS }
+    if (has(CONSTS, w)) return { t: 'const', name: w as keyof typeof CONSTS }
     if (w.length === 1) return this.registerParam(w)
     const s = suggest(w)
     if (s) {
@@ -1671,7 +1785,7 @@ function parseHead(raw: string, at: number): PieceHead {
   if (m) {
     const name = m[1]
     const argRaw = m[2] === 'θ' ? 'theta' : m[2]
-    if (!(name in FUNCS) && !(name in CONSTS) && !VAR_NAMES.has(name) && HEAD_ARGS.has(argRaw)) {
+    if (!(has(FUNCS, name)) && !(has(CONSTS, name)) && !VAR_NAMES.has(name) && HEAD_ARGS.has(argRaw)) {
       const arg = argRaw as VarName
       return {
         tex: `${name}${wrap(VAR_LATEX[arg])}`,
