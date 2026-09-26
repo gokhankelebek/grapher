@@ -56,6 +56,8 @@ import { drawScatter } from '../render/scatter'
 import { drawNLItem, drawNumberLineAxis, nlLanes } from '../render/numberline'
 import type { NLPart } from '../render/numberline'
 import { pointText } from './numeric'
+import { readSinusoid } from '../core/sinusoidal'
+import { evalAst, parseAst } from '../core/parse'
 
 const TWO_PI = Math.PI * 2
 
@@ -387,6 +389,28 @@ const TRIG_SOURCE = /(?:^|[^A-Za-z])(sin|cos|tan|sec|csc|cot)(?![A-Za-z])/i
  * `expr_N` and the text the teacher wrote lives in the App's source map, so it
  * is passed in — keyed by curve id, the same shape `curveLegend` takes.
  */
+/**
+ * sin(π/6·x) — a Ferris wheel with a period of 12 — has its features at
+ * whole numbers, not at multiples of π, and a π axis would label them
+ * 3.82π. For a line that reads as one sinusoid, the FREQUENCY decides: b a
+ * rational multiple of π (π/6, 2π/3) means a rational period and a decimal
+ * axis; a phase shift carrying π (2(x − π/4)) says nothing about the axis.
+ */
+function periodIsRational(src: string): boolean {
+  const spec = readSinusoid(src)
+  if (!spec) return false
+  const ast = parseAst(spec.b)
+  if (!ast.ok) return false
+  const b = Math.abs(evalAst(ast.lhs, 0))
+  if (!Number.isFinite(b) || b === 0) return false
+  const r = b / Math.PI
+  for (let q = 1; q <= 24; q++) {
+    const p = Math.round(r * q)
+    if (p !== 0 && Math.abs(r * q - p) < 1e-9 * Math.max(1, p)) return true
+  }
+  return false
+}
+
 export function suggestAxisUnits(
   curves: readonly FittedCurve[],
   sources?: Record<string, string>,
@@ -396,7 +420,7 @@ export function suggestAxisUnits(
     if (curve.modelId === 'sine') return { x: 'pi' }
     if (curve.modelId.startsWith('expr_')) {
       const src = sources?.[curve.id]
-      if (typeof src === 'string' && TRIG_SOURCE.test(src)) return { x: 'pi' }
+      if (typeof src === 'string' && TRIG_SOURCE.test(src) && !periodIsRational(src)) return { x: 'pi' }
     }
   }
   return {}

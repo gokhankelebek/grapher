@@ -482,3 +482,13 @@ describe('suggestAxisUnits — a recommendation, not a decision', () => {
     expect(Object.keys(out)).toEqual(['x'])
   })
 })
+
+describe('suggestAxisUnits — a rational period keeps a decimal axis', () => {
+  const typed = (id: string) => ({ id, modelId: `expr_${id}`, visible: true }) as unknown as FittedCurve
+  it('π units for sin(2x), decimal for a Ferris wheel with period 12', () => {
+    expect(suggestAxisUnits([typed('a')], { a: 'y = 3sin(2(x - pi/4)) + 1' })).toEqual({ x: 'pi' })
+    expect(suggestAxisUnits([typed('b')], { b: 'y = -20cos(pi/6 x) + 50' })).toEqual({})
+    expect(suggestAxisUnits([typed('c')], { c: 'y = sin(pi x) + cos(x)' })).toEqual({ x: 'pi' })
+    expect(suggestAxisUnits([typed('d')], { d: 'y = 4sin((pi/6)(x - 2)) + 50' })).toEqual({})
+  })
+})
