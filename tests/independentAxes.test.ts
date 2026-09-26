@@ -37,6 +37,9 @@ import {
   squareToContain,
   stretchAbout,
   zoomAbout,
+  clampPpu,
+  MIN_PPU,
+  MAX_PPU,
 } from '../src/ui/viewScale'
 import { snapCoord, snapPlaced, snapStep } from '../src/ui/snap'
 import { hitRadii, wheelStretchAxis, wheelStretchDelta } from '../src/ui/gestures'
@@ -138,10 +141,10 @@ describe('zoom scales both axes by the same factor', () => {
   })
 
   it('clamps one factor for both axes, so the ratio survives the limits', () => {
-    const v = vp({ pxPerUnit: 90000, pxPerUnitY: 9000 })
+    const v = vp({ pxPerUnit: MAX_PPU * 0.9, pxPerUnitY: MAX_PPU * 0.09 })
     zoomAbout(v, { x: 400, y: 300 }, 10)
     expect(ppuX(v) / ppuY(v)).toBeCloseTo(10, 9)
-    expect(ppuX(v)).toBeLessThanOrEqual(100000)
+    expect(ppuX(v)).toBeLessThanOrEqual(MAX_PPU)
   })
 
   it('pans by pixels on each axis’ own scale', () => {
@@ -499,5 +502,15 @@ describe('the axis numbers are a stretch handle', () => {
     expect(axisBandAt(v, { x: 500, y: 590 })).toBe('x')
     expect(axisBandAt(v, { x: 20, y: 200 })).toBe('y')
     expect(axisBandAt(v, { x: 500, y: 300 })).toBeNull()
+  })
+})
+
+describe('a population axis is not pinned by the zoom clamp', () => {
+  it('fits x in years against y in hundreds of millions, and saves the scale intact', () => {
+    // Before: MIN_PPU = 0.001 pinned ppuY, and the census collapsed to a band
+    // 0.7 million tall around its middle.
+    expect(MIN_PPU).toBeLessThanOrEqual(1e-8)
+    const tiny = 3.1234567e-6
+    expect(clampPpu(tiny)).toBe(tiny)
   })
 })

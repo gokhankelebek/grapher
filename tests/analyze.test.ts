@@ -769,11 +769,17 @@ describe('analyzeCurve — robustness', () => {
     cases.push(curve('expr', [], [-8, 8]))
     for (const c of cases) for (let i = 0; i < 20; i++) analyzeCurve(c, models) // warm up
 
+    // Best of five batches: the budget is about the code, not about what
+    // else the machine is running — one batch under a loaded parallel test
+    // run once measured 206 ms while the same test alone takes well under 2.
     for (const c of cases) {
       const REPS = 50
-      const t0 = performance.now()
-      for (let i = 0; i < REPS; i++) analyzeCurve(c, models)
-      const ms = (performance.now() - t0) / REPS
+      let ms = Infinity
+      for (let round = 0; round < 5; round++) {
+        const t0 = performance.now()
+        for (let i = 0; i < REPS; i++) analyzeCurve(c, models)
+        ms = Math.min(ms, (performance.now() - t0) / REPS)
+      }
       expect(ms, `${c.modelId} took ${ms.toFixed(3)}ms`).toBeLessThan(2)
     }
   })

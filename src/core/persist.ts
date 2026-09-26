@@ -913,6 +913,13 @@ const round = (v: number, dp: number): number => {
   return Math.round(v * f) / f
 }
 
+/**
+ * Rounding to significant digits, for a scale that may be 3·10⁻⁶: six
+ * decimal places would keep one digit of it.
+ */
+const roundSig = (v: number, sig: number): number =>
+  v === 0 || !Number.isFinite(v) ? v : Number(v.toPrecision(sig))
+
 function numArray(v: unknown, max: number, dp?: number): number[] | null {
   if (!Array.isArray(v) || v.length > max) return null
   const out: number[] = []
@@ -1027,13 +1034,18 @@ export function boardToStored(input: BoardInput): StoredBoard {
     viewport: {
       cx: round(input.viewport.center.x, 6),
       cy: round(input.viewport.center.y, 6),
-      ppu: round(input.viewport.pxPerUnit, 6),
+      // Six places for every scale a square board ever had (byte-identical);
+      // significant digits below that, where six places would erase it.
+      ppu:
+        input.viewport.pxPerUnit >= 1e-3
+          ? round(input.viewport.pxPerUnit, 6)
+          : roundSig(input.viewport.pxPerUnit, 9),
       // Independent axes only. Equal writes nothing, so an equal board is
       // byte-identical to what it was before this key existed.
       ...(typeof input.viewport.pxPerUnitY === 'number' &&
       Number.isFinite(input.viewport.pxPerUnitY) &&
       input.viewport.pxPerUnitY > 0
-        ? { ppuY: round(input.viewport.pxPerUnitY, 6) }
+        ? { ppuY: roundSig(input.viewport.pxPerUnitY, 9) }
         : {}),
     },
     selectedId: input.selectedId,
@@ -1718,13 +1730,13 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
   const ppuRaw = isNum(rawVp.ppu) ? rawVp.ppu : 60
   const viewport: HydratedBoard['viewport'] = {
     center: { x: isNum(rawVp.cx) ? rawVp.cx : 0, y: isNum(rawVp.cy) ? rawVp.cy : 0 },
-    pxPerUnit: Math.min(100000, Math.max(0.001, ppuRaw)),
+    pxPerUnit: Math.min(1e9, Math.max(1e-9, ppuRaw)),
   }
   // Independent axes. A y scale that is not a positive number is not a view
   // anybody chose: the board opens with equal axes and says so.
   if ('ppuY' in rawVp) {
     if (isNum(rawVp.ppuY) && rawVp.ppuY > 0) {
-      viewport.pxPerUnitY = Math.min(100000, Math.max(0.001, rawVp.ppuY))
+      viewport.pxPerUnitY = Math.min(1e9, Math.max(1e-9, rawVp.ppuY))
     } else {
       problems.push('The saved y scale was unreadable; the axes were made equal.')
       degraded = true

@@ -484,7 +484,7 @@ describe('persist — hostile input never throws', () => {
       version: SCHEMA_VERSION,
       board: { curves: [], viewport: { cx: 0, cy: 0, ppu: 1e300 } },
     })
-    expect(res.board!.viewport.pxPerUnit).toBeLessThanOrEqual(100000)
+    expect(res.board!.viewport.pxPerUnit).toBeLessThanOrEqual(1e9)
     expect(res.board!.viewport.pxPerUnit).toBeGreaterThan(0)
   })
 

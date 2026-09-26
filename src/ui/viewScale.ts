@@ -28,8 +28,13 @@
 import type { Vec2, Viewport } from '../core/types'
 import { ppuX, ppuY, toMath } from '../core/types'
 
-export const MIN_PPU = 0.001
-export const MAX_PPU = 100000
+/**
+ * Pixels per unit, either axis. Wide on purpose: a population axis needs
+ * ~3·10⁻⁶ px per person, and a 0.001 floor pinned it so a census table
+ * collapsed into a sliver 0.7 million tall.
+ */
+export const MIN_PPU = 1e-9
+export const MAX_PPU = 1e9
 
 export const clampPpu = (v: number): number => Math.min(MAX_PPU, Math.max(MIN_PPU, v))
 
