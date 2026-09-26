@@ -13,7 +13,7 @@
 // ============================================================================
 
 import { describe, it, expect } from 'vitest'
-import type { FittedCurve, ModelSpec, ParsedPlot } from '../src/core/types'
+import type { FittedCurve, ModelSpec, ParsedPlot, SpecialPoint } from '../src/core/types'
 import { compileExpr, parseExpression } from '../src/core/parse'
 import {
   breakpoints,
@@ -23,7 +23,7 @@ import {
   type PiecewiseSpec,
 } from '../src/core/piecewise'
 import { makeRng } from './helpers'
-import { analyzeCurve } from '../src/core/analyze'
+import { analyzeCurve, zeroIntervals } from '../src/core/analyze'
 import { compileLatex } from './latexEval'
 
 // ---------------------------------------------------------------------------
@@ -1283,5 +1283,66 @@ describe('analysis on a piecewise curve reports only points the curve reaches', 
     expect(atOpenEnd).toEqual([])
     expect(pts.some((p) => p.kind === 'zero' && Math.abs(p.pos.x - 5) < 1e-9)).toBe(true)
     expect(pts.some((p) => p.kind === 'y-intercept' && Math.abs(p.pos.y - 3) < 1e-9)).toBe(true)
+  })
+})
+
+describe('analysis never reads a jump as a feature', () => {
+  function analyze(src: string) {
+    const { curve, models } = curveOf(plot(src))
+    return { pts: analyzeCurve(curve, models), zi: zeroIntervals(curve, models), f: fn(src) }
+  }
+  const kinds = (pts: SpecialPoint[], k: SpecialPoint['kind']) => pts.filter((p) => p.kind === k)
+
+  for (const src of [
+    'f(x) = {x^2 + 1 if x <= 0, 3 if 0 < x <= 2, -x + 5 if x > 2}',
+    'f(x) = {x^2 + 1 if x <= 0, 3 if 0 < x < 2, -x + 5 if x > 2}',
+  ]) {
+    it(`no inflection just right of the jump at 0: ${src}`, () => {
+      const { pts } = analyze(src)
+      // the reported bug: "Inflection (0.008333, 3.000)"
+      expect(kinds(pts, 'inflection')).toEqual([])
+      // nothing within a sampling step of the jump except points AT it
+      for (const p of pts) {
+        const d = Math.abs(p.pos.x)
+        expect(d === 0 || d > 20 / 1200, `${p.kind} at ${p.pos.x}`).toBe(true)
+      }
+      // f(0) = 1 is below both sides (x² + 1 on the left, 3 on the right): a
+      // genuine minimum, reported AT the seam
+      const mins = kinds(pts, 'minimum')
+      expect(mins.map((p) => [p.pos.x, p.pos.y])).toEqual([[0, 1]])
+      expect(kinds(pts, 'zero').map((p) => p.pos.x)).toEqual([5])
+    })
+  }
+
+  it('a jump between two parabola-ish pieces is not an inflection', () => {
+    const { pts } = analyze('y = {x^2 - 4 if x < 1, x + 2 if x >= 1}')
+    expect(kinds(pts, 'inflection')).toEqual([])
+  })
+
+  it('a continuous seam where concavity flips IS an inflection, exactly at the seam', () => {
+    const { pts } = analyze('y = {x^2 if x < 0, -x^2 if x >= 0}')
+    const infl = kinds(pts, 'inflection')
+    expect(infl.map((p) => [p.pos.x, p.pos.y])).toEqual([[0, 0]])
+  })
+
+  it('a kink between two concave-up pieces is not an inflection', () => {
+    const { pts } = analyze('y = {x^2 if x < 0, x^2 - x if x >= 0}')
+    expect(kinds(pts, 'inflection')).toEqual([])
+  })
+
+  it('a zero piece is one zero interval; the isolated zero elsewhere stays', () => {
+    const { pts, zi } = analyze('y = {x + 2 if x < -1, 0 if -1 <= x < 1, (x-1)^2 if x >= 1}')
+    expect(zi).toEqual([{ lo: -1, hi: 1, loClosed: true, hiClosed: true }])
+    expect(kinds(pts, 'zero').map((p) => p.pos.x)).toEqual([-2])
+    // the flat bottom is not a run of minima
+    for (const p of pts) {
+      if (p.kind === 'y-intercept') continue
+      expect(p.pos.x >= -1 && p.pos.x <= 1, `${p.kind} at ${p.pos.x}`).toBe(false)
+    }
+  })
+
+  it('an excluded end is not a zero, whatever the evaluator hands back there', () => {
+    const { pts } = analyze('y = x {0 < x < 3}')
+    expect(kinds(pts, 'zero')).toEqual([])
   })
 })

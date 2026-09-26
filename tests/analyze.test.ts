@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest'
 import type { FittedCurve, ModelSpec, SpecialPoint, SpecialPointKind } from '../src/core/types'
 import { MODELS } from '../src/core/fit/models'
-import { analyzeCurve, intersectionPoints } from '../src/core/analyze'
+import { analyzeCurve, intersectionPoints, zeroIntervals } from '../src/core/analyze'
 import { centerFormToConic, conicToCenterForm } from '../src/core/fit/optimize'
 import { parseExpression } from '../src/core/parse'
 
@@ -1506,5 +1506,149 @@ describe('analyzeCurve — intersections', () => {
       best = Math.min(best, performance.now() - t0)
     }
     expect(best, `took ${best.toFixed(3)}ms`).toBeLessThan(2)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Steps, jumps and flat stretches.
+//
+// floor(x) is zero on the whole of [0, 1): the zero SET is an interval, and it
+// used to come back as sixty "zeros" 1/60 apart, plus a "minimum" at the foot
+// of every stair. A constant stretch is reported once, as an interval
+// (zeroIntervals), and carries no zeros, extrema or inflections inside it; a
+// jump cuts the scans like a pole does, so nothing is bracketed across it.
+// ---------------------------------------------------------------------------
+
+describe('analyzeCurve — steps, jumps and flat stretches', () => {
+  function typed(src: string, domain?: [number, number] | null) {
+    const r = parseExpression(src)
+    if (!r.ok) throw new Error(`expected "${src}" to parse, got: ${r.error}`)
+    const spec = r.plot.makeModel('expr_step')
+    const c: FittedCurve = {
+      ...curve('expr_step', r.plot.defaultParams, domain === undefined ? r.plot.domain : domain),
+      kind: r.plot.kind,
+    }
+    const models = { expr_step: spec }
+    return { c, models, pts: analyzeCurve(c, models), zi: zeroIntervals(c, models) }
+  }
+
+  it('floor(x): one zero interval [0, 1), no point zeros, no extrema, no inflections', () => {
+    const { pts, zi } = typed('y = floor(x)')
+    expect(zi).toEqual([{ lo: 0, hi: 1, loClosed: true, hiClosed: false }])
+    expect(of(pts, 'zero')).toEqual([])
+    expect(of(pts, 'minimum')).toEqual([])
+    expect(of(pts, 'maximum')).toEqual([])
+    expect(of(pts, 'inflection')).toEqual([])
+  })
+
+  it('a zero constant on a restricted domain is one open interval', () => {
+    const { pts, zi } = typed('y = 0 {0 < x < 3}')
+    expect(zi).toEqual([{ lo: 0, hi: 3, loClosed: false, hiClosed: false }])
+    expect(of(pts, 'zero')).toEqual([])
+  })
+
+  it('floor(x/2) is zero on [0, 2)', () => {
+    const { pts, zi } = typed('y = floor(x/2)')
+    expect(zi).toEqual([{ lo: 0, hi: 2, loClosed: true, hiClosed: false }])
+    expect(of(pts, 'zero')).toEqual([])
+    expect(of(pts, 'inflection')).toEqual([])
+  })
+
+  it('ceil(x) is zero on (−1, 0]', () => {
+    const { pts, zi } = typed('y = ceil(x)')
+    expect(zi).toEqual([{ lo: -1, hi: 0, loClosed: false, hiClosed: true }])
+    expect(of(pts, 'zero')).toEqual([])
+    expect(of(pts, 'minimum')).toEqual([])
+    expect(of(pts, 'maximum')).toEqual([])
+    expect(of(pts, 'inflection')).toEqual([])
+  })
+
+  it('floor(3x) ends its zero interval at exactly 1/3', () => {
+    const { zi } = typed('y = floor(3x)')
+    expect(zi).toEqual([{ lo: 0, hi: 1 / 3, loClosed: true, hiClosed: false }])
+  })
+
+  it('floor(x)² − 4 is zero on two intervals', () => {
+    const { pts, zi } = typed('y = floor(x)^2 - 4')
+    expect(zi).toEqual([
+      { lo: -2, hi: -1, loClosed: true, hiClosed: false },
+      { lo: 2, hi: 3, loClosed: true, hiClosed: false },
+    ])
+    expect(of(pts, 'zero')).toEqual([])
+    expect(of(pts, 'inflection')).toEqual([])
+  })
+
+  it('sign(x): the single zero 0, no extremum at the jump, no inflection', () => {
+    const { pts, zi } = typed('y = sign(x)')
+    expect(zi).toEqual([])
+    expect(xsOf(pts, 'zero')).toEqual([0])
+    expect(of(pts, 'minimum')).toEqual([])
+    expect(of(pts, 'maximum')).toEqual([])
+    expect(of(pts, 'inflection')).toEqual([])
+  })
+
+  it('sign(x − 0.3): the zero AT a jump between samples is still found', () => {
+    const { pts } = typed('y = sign(x - 0.3)')
+    expect(xsOf(pts, 'zero')).toEqual([0.3])
+    expect(of(pts, 'minimum')).toEqual([])
+  })
+
+  it('x − floor(x): isolated zeros at the integers, each a genuine minimum; no maxima', () => {
+    const { pts, zi } = typed('y = x - floor(x)')
+    expect(zi).toEqual([])
+    const ints = Array.from({ length: 21 }, (_, k) => k - 10)
+    expect(xsOf(pts, 'zero')).toEqual(ints)
+    // f(k) = 0 below both sides; the window's own edges are not extrema
+    expect(xsOf(pts, 'minimum')).toEqual(ints.slice(1, -1))
+    expect(of(pts, 'maximum')).toEqual([]) // the sup 1 is never attained
+    expect(of(pts, 'inflection')).toEqual([])
+  })
+
+  it('a jump riding on a steep stretch is still a jump: tan(x) + floor(x)', () => {
+    const { pts } = typed('y = tan(x) + floor(x)')
+    const infl = xsOf(pts, 'inflection')
+    expect(infl.length).toBeGreaterThan(0)
+    for (const x of infl) {
+      // tan's own inflections at kπ, never a riser of floor
+      expect(Math.abs(x / Math.PI - Math.round(x / Math.PI)), `inflection at ${x}`).toBeLessThan(1e-6)
+    }
+  })
+
+  it('exactly zero, not merely small: x¹⁰ keeps its single tangent zero', () => {
+    const { pts, zi } = typed('y = x^10', [-2, 2])
+    expect(zi).toEqual([])
+    const z = of(pts, 'zero')
+    expect(z.length).toBe(1)
+    expect(z[0].pos.x).toBeCloseTo(0, 6)
+  })
+
+  it('underflow is not a zero interval: e^(−1/x²)', () => {
+    expect(typed('y = e^(-1/x^2)').zi).toEqual([])
+  })
+
+  it('zeroIntervals clips to the range it is given', () => {
+    const { c, models } = typed('y = floor(x)')
+    expect(zeroIntervals(c, models, [0.5, 5])).toEqual([{ lo: 0.5, hi: 1, loClosed: true, hiClosed: false }])
+    expect(zeroIntervals(c, models, [2, 5])).toEqual([])
+  })
+
+  it('zeroIntervals is [] for curves that are not y = f(x), and for smooth ones', () => {
+    expect(zeroIntervals(curve('circle', [0, 0, 2], null), MODELS)).toEqual([])
+    expect(zeroIntervals(curve('poly3', [6, -5, -2, 1], [-4, 5]), MODELS)).toEqual([])
+    expect(zeroIntervals(curve('sine', [1, 1, 0, 0], [-7, 7]), MODELS)).toEqual([])
+  })
+
+  it('a step function is analysed fast enough for every slider frame (< 2ms)', () => {
+    for (const src of ['y = floor(x)', 'y = x - floor(x)', 'y = sign(x)']) {
+      const { c, models } = typed(src)
+      for (let i = 0; i < 20; i++) analyzeCurve(c, models)
+      let ms = Infinity
+      for (let round = 0; round < 5; round++) {
+        const t0 = performance.now()
+        for (let i = 0; i < 20; i++) analyzeCurve(c, models)
+        ms = Math.min(ms, (performance.now() - t0) / 20)
+      }
+      expect(ms, `${src} took ${ms.toFixed(3)}ms`).toBeLessThan(2)
+    }
   })
 })

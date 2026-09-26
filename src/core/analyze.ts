@@ -3,6 +3,11 @@
 // curve crosses, turns, and changes concavity.
 //
 //   export function analyzeCurve(curve, models): SpecialPoint[]
+//   export function zeroIntervals(curve, models, range?): ZeroInterval[]
+//
+// A zero SET that is an interval — floor(x) on [0, 1) — is reported once by
+// zeroIntervals, never as a run of point zeros; jumps cut the scans the way
+// poles do, so nothing is ever bracketed across one (see "Jumps" below).
 //
 // Two layers:
 //   * closed form where it is easy AND exact (a line's root, a parabola's
@@ -18,7 +23,7 @@
 // ============================================================================
 
 import type {
-  FittedCurve, ModelSpec, SpecialPoint, SpecialPointKind, Vec2,
+  FittedCurve, ModelSpec, PieceInfo, SpecialPoint, SpecialPointKind, Vec2,
 } from './types'
 import { conicToCenterForm } from './fit/optimize'
 import { findHoles } from './holes'
@@ -75,7 +80,8 @@ function pt(
   tangent?: boolean,
 ): SpecialPoint | null {
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null
-  const p: SpecialPoint = { kind, pos: { x, y }, label, exact }
+  // `+ 0` turns −0 into 0: a card should never print "−0"
+  const p: SpecialPoint = { kind, pos: { x: x + 0, y: y + 0 }, label, exact }
   if (tangent) p.tangent = true
   return p
 }
@@ -190,45 +196,418 @@ function goldenMin(g: Fn, a: number, b: number): number {
 interface Run { i0: number; i1: number } // inclusive sample indices
 
 /**
- * Split the sampled domain into maximal runs that are finite AND free of a
- * blow-up. Undefined regions (sqrt left of its branch point) and poles both
- * end a run, so no candidate ever straddles one.
+ * Sample steps that pass through a pole: the step dwarfs a typical step AND
+ * the values themselves are far outside the curve's usual magnitude.
+ * `pole[i]` flags the step from sample i to i + 1.
  */
-function findRuns(xs: number[], ys: number[], scale: number): Run[] {
+function poleSteps(ys: number[], scale: number): Uint8Array {
+  const n = ys.length - 1
+  const pole = new Uint8Array(Math.max(0, n))
   const steps: number[] = []
-  for (let i = 0; i + 1 < ys.length; i++) {
+  for (let i = 0; i < n; i++) {
     if (Number.isFinite(ys[i]) && Number.isFinite(ys[i + 1])) {
       steps.push(Math.abs(ys[i + 1] - ys[i]))
     }
   }
   const medStep = median(steps)
+  if (!(medStep > 0)) return pole
+  for (let i = 0; i < n; i++) {
+    const a = ys[i]
+    const b = ys[i + 1]
+    if (!Number.isFinite(a) || !Number.isFinite(b)) continue
+    if (Math.abs(b - a) > 100 * medStep && Math.max(Math.abs(a), Math.abs(b)) > 20 * scale) {
+      pole[i] = 1
+    }
+  }
+  return pole
+}
+
+/**
+ * Split the sampled domain into maximal runs that are finite AND free of a
+ * break. Undefined regions (sqrt left of its branch point), poles and jumps
+ * all end a run, so no candidate — a sign change, a turn, a change of
+ * concavity — is ever bracketed across one. `cut[i]` flags the step i → i + 1.
+ */
+function findRuns(ys: number[], cut: Uint8Array): Run[] {
   const runs: Run[] = []
   let start = -1
   for (let i = 0; i < ys.length; i++) {
     const ok = Number.isFinite(ys[i])
-    if (ok && start < 0) start = i
-    let breakHere = !ok
-    if (!breakHere && i + 1 < ys.length && Number.isFinite(ys[i + 1])) {
-      const jump = Math.abs(ys[i + 1] - ys[i])
-      // a pole: the step dwarfs a typical step AND the values themselves are
-      // far outside the curve's usual magnitude
-      if (
-        medStep > 0 && jump > 100 * medStep &&
-        Math.max(Math.abs(ys[i]), Math.abs(ys[i + 1])) > 20 * scale
-      ) {
-        if (start >= 0) { runs.push({ i0: start, i1: i }); start = -1 }
-        continue
-      }
-    }
-    if (breakHere) {
+    if (!ok) {
       if (start >= 0 && i - 1 >= start) runs.push({ i0: start, i1: i - 1 })
       start = -1
-    } else if (i === ys.length - 1 && start >= 0) {
+      continue
+    }
+    if (start < 0) start = i
+    if (i === ys.length - 1 || cut[i]) {
       runs.push({ i0: start, i1: i })
+      start = -1
     }
   }
-  void xs
   return runs.filter(r => r.i1 > r.i0)
+}
+
+// ---------------------------------------------------------------------------
+// Jumps
+//
+// The step of floor(x), the riser of sign(x), the seam between two pieces of a
+// piecewise function that do not meet. Every scan below pairs neighbouring
+// samples, and a pair that straddles a jump lies to each of them:
+//
+//   * the first difference reads a flat step followed by a riser as a turn,
+//     so floor(x) reported a "minimum" at the foot of every stair;
+//   * the second difference reads the riser as +curvature then −curvature, so
+//     f = {x² + 1, x ≤ 0 ; 3, 0 < x ≤ 2 ; …} reported an "inflection" one
+//     sample right of the jump at 0 — (0.008333, 3);
+//   * a sign change across a jump is not a root (the pole guard already knew).
+//
+// So jumps are found FIRST and cut the runs, exactly like poles. Whether a
+// suspicious step is a jump is the renderer's question too, and it is
+// answered the renderer's way (src/render/curves.ts, isDiscontinuity) — the
+// criterion is mirrored here in math units rather than imported, since core
+// must not depend on render: bisect the step, always descending into the half
+// that carries the larger |Δf|. A continuous curve's gap shrinks WITH the
+// interval (by ~256× over 8 halvings, however steep); a jump's gap HOLDS —
+// once the interval is ≤ 1e-9 of the span it is still ≥ 3/4 of what it was 8
+// halvings earlier — and a pole's GROWS. Only a jump carries points (the
+// value AT the jump can be a zero or a one-sided extremum); a pole or an
+// undefined gap only cuts.
+//
+// Which steps are probed: every step containing a stated piece end
+// (ModelSpec.pieces), and every step at least JUMP_GATE× taller than both of
+// its neighbours — a resolved smooth curve changes its step by a few percent
+// from one sample to the next, never by 3×, so the gate costs a smooth curve
+// nothing.
+// ---------------------------------------------------------------------------
+
+/** Mirrors render/curves.ts JUMP_REL_T: the probe's resolution, as a fraction of the span. */
+const JUMP_REL_T = 1e-9
+/** Mirrors render/curves.ts HOLD_STEPS / HOLD_RATIO. */
+const JUMP_HOLD_STEPS = 8
+const JUMP_HOLD_RATIO = 0.75
+/** A gap that has grown more than this over HOLD_STEPS halvings is a pole. */
+const POLE_GROWTH = 4
+const JUMP_PROBE_STEPS = 80
+/** A step this many times taller than both of its neighbours is probed. */
+const JUMP_GATE = 3
+/** …or one this far (× its neighbours' size) off the trend they extrapolate to. */
+const JUMP_TREND = 0.5
+/** At most this many suspicious steps are probed (piece ends always are). */
+const JUMP_MAX_GATED = 256
+const JUMP_SPANS = new Float64Array(JUMP_PROBE_STEPS + 1)
+/** The smallest positive normal double; below it lie the subnormals. */
+const MIN_NORMAL = 2.2250738585072014e-308
+
+type BreakKind = 'jump' | 'pole' | 'undefined'
+
+interface Break {
+  /** the sample step it sits in: xs[j] → xs[j + 1] */
+  j: number
+  kind: BreakKind
+  /** a bracket around it, [p, q], ~1e-15 wide for a jump */
+  p: number
+  q: number
+  /** where it is exactly — a piece end or a recognised closed form — or null */
+  at: number | null
+}
+
+/**
+ * The discontinuity criterion of render/curves.ts, in math units. Returns
+ * null when [a, b] is continuous, else the kind and a bracket around it; a
+ * jump's bracket is then tightened to double precision so its location can
+ * be recognised.
+ */
+function probeJump(
+  f: Fn,
+  a: number, fa: number,
+  b: number, fb: number,
+  tEps: number,
+  joinTol: number,
+): { kind: BreakKind; p: number; q: number } | null {
+  let aX = a, aY = fa, bX = b, bY = fb
+  JUMP_SPANS[0] = Math.abs(fb - fa)
+  if (!(JUMP_SPANS[0] > joinTol)) return null
+  let decided = false
+  for (let i = 1; i <= JUMP_PROBE_STEPS; i++) {
+    const m = 0.5 * (aX + bX)
+    // collapsed to adjacent doubles with the gap still open
+    if (m === aX || m === bX) return { kind: 'jump', p: aX, q: bX }
+    let y: number
+    try { y = f(m) } catch { y = Number.NaN }
+    if (!Number.isFinite(y)) return { kind: 'undefined', p: m, q: m }
+    const l = Math.abs(y - aY)
+    const r = Math.abs(bY - y)
+    let span: number
+    if (l >= r) { bX = m; bY = y; span = l } else { aX = m; aY = y; span = r }
+    if (span <= joinTol) return null // collapsed: continuous, just steep
+    JUMP_SPANS[i] = span
+    if (!decided && bX - aX <= tEps) {
+      const before = JUMP_SPANS[Math.max(0, i - JUMP_HOLD_STEPS)]
+      if (span < JUMP_HOLD_RATIO * before) return null
+      if (span > POLE_GROWTH * before) return { kind: 'pole', p: aX, q: bX }
+      decided = true
+    }
+    if (decided && bX - aX <= 1e-15 * Math.max(1, Math.abs(aX))) break
+  }
+  // out of steps with the gap open: the renderer lifts the pen here too
+  return { kind: decided ? 'jump' : 'undefined', p: aX, q: bX }
+}
+
+/** Is [p, q] (widened by a hair) around x? */
+function brackets(p: number, q: number, x: number): boolean {
+  const tol = 1e-12 * Math.max(1, Math.abs(p), Math.abs(q))
+  return x >= Math.min(p, q) - tol && x <= Math.max(p, q) + tol
+}
+
+/**
+ * Where exactly a boundary located to double precision inside [p, q] is: a
+ * stated piece end, else a closed form the bracket actually contains (the
+ * integers of floor(x), the 1/3 of floor(3x)), else null — "somewhere in
+ * [p, q]" is known, but nothing can be said about the point itself.
+ */
+function snapBoundary(p: number, q: number, ends: number[]): number | null {
+  for (const e of ends) if (brackets(p, q, e)) return e + 0
+  const form = exactForm(0.5 * (p + q), { tol: 1e-12 })
+  if (form && brackets(p, q, form.value)) return form.value + 0 // never −0
+  return null
+}
+
+/** Is x part of the curve's stated domain? True for a curve without pieces. */
+function coveredByPieces(pieces: PieceInfo[] | null, x: number): boolean {
+  if (!pieces || pieces.length === 0) return true
+  for (const q of pieces) {
+    if (x > q.lo && x < q.hi) return true
+    if (x === q.lo && q.loClosed) return true
+    if (x === q.hi && q.hiClosed) return true
+  }
+  return false
+}
+
+/** Finite piece ends, sorted and deduplicated. */
+function pieceEnds(pieces: PieceInfo[] | null): number[] {
+  if (!pieces) return []
+  const out: number[] = []
+  for (const q of pieces) {
+    if (Number.isFinite(q.lo)) out.push(q.lo)
+    if (Number.isFinite(q.hi)) out.push(q.hi)
+  }
+  out.sort((a, b) => a - b)
+  return out.filter((v, i) => i === 0 || v !== out[i - 1])
+}
+
+function findBreaks(
+  f: Fn,
+  xs: number[],
+  ys: number[],
+  pole: Uint8Array,
+  scale: number,
+  ends: number[],
+): Break[] {
+  const n = ys.length - 1
+  if (n < 1) return []
+  const span = xs[n] - xs[0]
+  const step = span / n
+  const tEps = JUMP_REL_T * span
+  const joinTol = 1e-13 * Math.max(1, scale)
+  const gateFloor = 1e-9 * Math.max(1, scale)
+  const probe = new Uint8Array(n)
+  const fin = (i: number) => i >= 0 && i <= n && Number.isFinite(ys[i])
+  // the signed step k → k + 1, NaN where it is not a step of the curve
+  const D = (k: number): number => (fin(k) && fin(k + 1) ? ys[k + 1] - ys[k] : Number.NaN)
+  let gated = 0
+  for (let j = 0; j < n && gated < JUMP_MAX_GATED; j++) {
+    if (pole[j]) continue
+    const dj = D(j)
+    if (!(Math.abs(dj) > gateFloor)) continue
+    const l1 = D(j - 1)
+    const r1 = D(j + 1)
+    const nb = Math.max(Number.isFinite(l1) ? Math.abs(l1) : 0, Number.isFinite(r1) ? Math.abs(r1) : 0)
+    let suspicious = Math.abs(dj) > JUMP_GATE * nb
+    if (!suspicious) {
+      // A jump riding on a steep stretch — floor(x) + tan(x) near a pole —
+      // hides from the ratio test. It cannot hide from the TREND: a smooth
+      // curve's step is its neighbours' step extrapolated to within a third
+      // difference (h³·f‴), while a jump adds its whole height.
+      const l2 = D(j - 2)
+      const r2 = D(j + 2)
+      let dev = Infinity
+      if (Number.isFinite(l1) && Number.isFinite(l2)) dev = Math.min(dev, Math.abs(dj - (2 * l1 - l2)))
+      if (Number.isFinite(r1) && Number.isFinite(r2)) dev = Math.min(dev, Math.abs(dj - (2 * r1 - r2)))
+      suspicious = Number.isFinite(dev) && dev > JUMP_TREND * nb
+    }
+    if (suspicious) { probe[j] = 1; gated++ }
+  }
+  for (const e of ends) {
+    if (!(e > xs[0] && e < xs[n])) continue
+    let k = Math.min(n - 1, Math.max(0, Math.floor((e - xs[0]) / step)))
+    while (k > 0 && xs[k] > e) k--
+    while (k < n - 1 && xs[k + 1] < e) k++
+    probe[k] = 1
+    // a piece end ON a sample: the seam may be on either side of it
+    if (xs[k] === e && k > 0) probe[k - 1] = 1
+    if (xs[k + 1] === e && k + 1 < n) probe[k + 1] = 1
+  }
+  const out: Break[] = []
+  for (let j = 0; j < n; j++) {
+    if (!probe[j] || pole[j] || !fin(j) || !fin(j + 1)) continue
+    const r = probeJump(f, xs[j], ys[j], xs[j + 1], ys[j + 1], tEps, joinTol)
+    if (!r) continue
+    out.push({ j, kind: r.kind, p: r.p, q: r.q, at: r.kind === 'jump' ? snapBoundary(r.p, r.q, ends) : null })
+  }
+  return out
+}
+
+// ---------------------------------------------------------------------------
+// Flat stretches
+//
+// floor(x) is constant on [0, 1); y = 0 {0 < x < 3} is zero on all of it. A
+// constant stretch is not a run of zeros, maxima or minima, and textbooks do
+// not list them: where f is zero on an interval, the ZERO SET is that
+// interval, reported once by zeroIntervals() below, and analyzeCurve drops
+// every individual zero, extremum and inflection inside any flat stretch.
+//
+// Flat means BIT-FOR-BIT equal: consecutive samples with identical values and
+// the midpoint between each pair agreeing too. A tolerance would be wrong
+// here — x¹⁰ is below 1e-7 on a whole neighbourhood of 0 and is still zero at
+// exactly one point — and a typed constant, a floor, a ceil or a piecewise
+// constant evaluates to the same double every time.
+// ---------------------------------------------------------------------------
+
+interface Flat {
+  lo: number
+  hi: number
+  loClosed: boolean
+  hiClosed: boolean
+  /** the constant value */
+  y: number
+}
+
+/**
+ * The boundary of a flat stretch at value y between `inside` (f === y) and
+ * `outside` (f !== y, or undefined): bisected to double precision, then
+ * snapped to a piece end or a closed form the bracket contains. It is closed
+ * when f takes y AT the boundary and the pieces include it.
+ */
+function flatEdge(
+  f: Fn,
+  inside: number,
+  outside: number,
+  y: number,
+  ends: number[],
+  pieces: PieceInfo[] | null,
+): { x: number; closed: boolean } | null {
+  const eq = (x: number): boolean => {
+    try { return f(x) === y } catch { return false }
+  }
+  let a = inside
+  let b = outside
+  for (let i = 0; i < 80; i++) {
+    const m = 0.5 * (a + b)
+    if (m === a || m === b) break
+    if (eq(m)) a = m
+    else b = m
+  }
+  const c = snapBoundary(Math.min(a, b), Math.max(a, b), ends)
+  if (c === null && y === 0) {
+    // e^(−1/x²) is 0 in double precision for |x| < 0.0366 — by UNDERFLOW, not
+    // because the function is zero there. A curve that genuinely leaves zero
+    // at some x ≠ 0 is ~ulp(x)·slope just outside, far above the subnormals;
+    // one that fades through them into 0 was never zero on an interval.
+    let fb: number
+    try { fb = f(b) } catch { fb = Number.NaN }
+    if (fb !== 0 && Math.abs(fb) < MIN_NORMAL && Math.abs(b) > 1e-300) return null
+  }
+  if (c === null) {
+    // located to one ulp but not recognised: `a` is in the set and `b` is
+    // not, so "up to and including a" is true to double precision
+    return { x: a, closed: coveredByPieces(pieces, a) }
+  }
+  return { x: c, closed: eq(c) && coveredByPieces(pieces, c) }
+}
+
+function findFlats(
+  f: Fn,
+  xs: number[],
+  ys: number[],
+  cut: Uint8Array,
+  ends: number[],
+  pieces: PieceInfo[] | null,
+): Flat[] {
+  const n = ys.length - 1
+  const out: Flat[] = []
+  const at = (x: number): number => {
+    try { return f(x) } catch { return Number.NaN }
+  }
+  let i = 0
+  while (i < n) {
+    const y = ys[i]
+    if (!Number.isFinite(y) || cut[i] || ys[i + 1] !== y || at(0.5 * (xs[i] + xs[i + 1])) !== y) {
+      i++
+      continue
+    }
+    let j = i + 1
+    // where the run of equal samples stops — or where the midpoint check fails
+    let outsideR: number | null = null
+    while (j < n && !cut[j] && ys[j + 1] === y) {
+      const m = 0.5 * (xs[j] + xs[j + 1])
+      if (at(m) !== y) { outsideR = m; break }
+      j++
+    }
+    const left = i === 0
+      ? { x: xs[0], closed: coveredByPieces(pieces, xs[0]) }
+      : flatEdge(f, xs[i], xs[i - 1], y, ends, pieces)
+    const right = j === n
+      ? { x: xs[n], closed: coveredByPieces(pieces, xs[n]) }
+      : flatEdge(f, xs[j], outsideR ?? xs[j + 1], y, ends, pieces)
+    if (left && right && right.x > left.x) {
+      out.push({ lo: left.x, hi: right.x, loClosed: left.closed, hiClosed: right.closed, y })
+    }
+    i = j
+  }
+  return out
+}
+
+/** Everything the numeric core learns from one pass of sampling. */
+interface Grid {
+  f: Fn
+  xs: number[]
+  ys: number[]
+  step: number
+  scale: number
+  zeroTol: number
+  breaks: Break[]
+  runs: Run[]
+  flats: Flat[]
+  ends: number[]
+  pieces: PieceInfo[] | null
+}
+
+function scanGrid(f: Fn, lo: number, hi: number, pieces: PieceInfo[] | null): Grid {
+  const n = SAMPLES
+  const xs = new Array<number>(n + 1)
+  const ys = new Array<number>(n + 1)
+  const step = (hi - lo) / n
+  for (let i = 0; i <= n; i++) {
+    const x = i === n ? hi : lo + i * step
+    xs[i] = x
+    let y: number
+    try { y = f(x) } catch { y = Number.NaN }
+    ys[i] = y
+  }
+  const scale = robustScale(ys)
+  // The pole guard's "is |f| actually small here?" test has to be relative to
+  // the curve's OWN magnitude. An absolute floor of 1e-7 declares every value
+  // of 1e-8·cos(x) + 2e-8 to be zero, so a curve whose minimum |f| is 1e-8 and
+  // which never crosses the axis reports four roots drawn at y = 0.
+  const zeroTol = 1e-7 * scale
+  const ends = pieceEnds(pieces)
+  const pole = poleSteps(ys, scale)
+  const breaks = findBreaks(f, xs, ys, pole, scale, ends)
+  const cut = pole
+  for (const b of breaks) cut[b.j] = 1
+  const runs = findRuns(ys, cut)
+  const flats = findFlats(f, xs, ys, cut, ends, pieces)
+  return { f, xs, ys, step, scale, zeroTol, breaks, runs, flats, ends, pieces }
 }
 
 interface NumericOpts {
@@ -242,26 +621,12 @@ function analyzeExplicitNumeric(
   lo: number,
   hi: number,
   opts: NumericOpts,
+  pieces: PieceInfo[] | null,
 ): SpecialPoint[] {
   const out: SpecialPoint[] = []
-  const n = SAMPLES
-  const xs = new Array<number>(n + 1)
-  const ys = new Array<number>(n + 1)
-  const step = (hi - lo) / n
-  for (let i = 0; i <= n; i++) {
-    const x = lo + i * step
-    xs[i] = x
-    let y: number
-    try { y = f(x) } catch { y = Number.NaN }
-    ys[i] = y
-  }
-  const scale = robustScale(ys)
-  // The pole guard's "is |f| actually small here?" test has to be relative to
-  // the curve's OWN magnitude. An absolute floor of 1e-7 declares every value
-  // of 1e-8·cos(x) + 2e-8 to be zero, so a curve whose minimum |f| is 1e-8 and
-  // which never crosses the axis reports four roots drawn at y = 0.
-  const zeroTol = 1e-7 * scale
-  const runs = findRuns(xs, ys, scale)
+  const g = scanGrid(f, lo, hi, pieces)
+  const { xs, ys, step, scale, zeroTol, breaks, runs, flats, ends } = g
+  const n = xs.length - 1
 
   for (const run of runs) {
     const { i0, i1 } = run
@@ -335,8 +700,8 @@ function analyzeExplicitNumeric(
         const rising = dPrev > 0
         if (dNext === 0 || rising === dNext > 0) continue
         const isMax = rising
-        const g: Fn = isMax ? (x => -f(x)) : (x => f(x))
-        const xm = goldenMin(g, xs[i - 1], xs[i + 1])
+        const gm: Fn = isMax ? (x => -f(x)) : (x => f(x))
+        const xm = goldenMin(gm, xs[i - 1], xs[i + 1])
         const ym = f(xm)
         if (!Number.isFinite(ym)) continue
         // prominence: reject flat-line numerical noise
@@ -371,7 +736,13 @@ function analyzeExplicitNumeric(
         const s = ys[i + 1] - 2 * ys[i] + ys[i - 1]
         if (!Number.isFinite(s) || Math.abs(s) <= curvFloor) continue
         const sign = s > 0 ? 1 : -1
-        if (sPrevSign !== 0 && sign !== sPrevSign) {
+        // A sign change whose stencils straddle a piece end is the seam's
+        // kink talking, not the curve: the concavity on either side of a
+        // stated seam is judged directly, below.
+        if (
+          sPrevSign !== 0 && sign !== sPrevSign &&
+          !ends.some(e => e > xs[jPrev - 1] && e < xs[i + 1])
+        ) {
           const r = bisectSecond(f, xs[jPrev], xs[i])
           if (r !== null) {
             const y = f(r)
@@ -386,7 +757,103 @@ function analyzeExplicitNumeric(
       }
     }
   }
-  return out
+
+  // ---- inflections AT a continuous seam ------------------------------------
+  // {x² if x < 0 ; −x² if x ≥ 0} changes concavity exactly at its seam. The
+  // scan above declines every bracket that straddles a seam, so ask directly:
+  // one-sided second differences, stencils kept clear of the seam itself.
+  if (opts.inflections && ends.length > 0) {
+    const curvFloor = 1e-6 * Math.max(1, scale) * step * step
+    const at = (x: number): number => {
+      try { return f(x) } catch { return Number.NaN }
+    }
+    for (const e of ends) {
+      if (!(e > xs[0] + 3 * step && e < xs[n] - 3 * step)) continue
+      if (breaks.some(b => brackets(xs[b.j], xs[b.j + 1], e))) continue
+      const ye = at(e)
+      const sL = at(e - 3 * step) - 2 * at(e - 2 * step) + at(e - step)
+      const sR = at(e + step) - 2 * at(e + 2 * step) + at(e + 3 * step)
+      if (!Number.isFinite(ye) || !Number.isFinite(sL) || !Number.isFinite(sR)) continue
+      if (Math.abs(sL) <= curvFloor || Math.abs(sR) <= curvFloor) continue
+      if (sL > 0 === sR > 0) continue
+      const p = pt('inflection', e, ye, 'inflection', true)
+      if (p) out.push(p)
+    }
+  }
+
+  // ---- the value AT a jump -------------------------------------------------
+  // A jump is where the scans above stop, and it can still carry a point of
+  // its own: sign(x) is zero AT 0 and nowhere near it; x − floor(x) is zero
+  // at every integer; f = {x² + 1, x ≤ 0 ; 3, x > 0} has f(0) = 1 below both
+  // sides, a genuine minimum. Only a jump whose location is KNOWN exactly
+  // (a piece end, or a closed form its bracket contains) is asked: the value
+  // there is f at that x, and an extremum must be STRICT against both sides —
+  // the foot of a floor stair equals the step it starts, so it is not one.
+  const jumpXs: number[] = []
+  for (const b of breaks) {
+    jumpXs.push(b.at ?? 0.5 * (b.p + b.q))
+    if (b.kind !== 'jump') continue
+    // a root between the samples and the jump, on either side of it
+    if (opts.zeros) {
+      const fp = f(b.p)
+      const fq = f(b.q)
+      if (Number.isFinite(fp) && ys[b.j] !== 0 && fp !== 0 && ys[b.j] > 0 !== fp > 0) {
+        const r = refineRoot(f, xs[b.j], b.p, zeroTol)
+        if (r !== null) { const p = pt('zero', r, 0, 'zero', false); if (p) out.push(p) }
+      }
+      if (Number.isFinite(fq) && ys[b.j + 1] !== 0 && fq !== 0 && ys[b.j + 1] > 0 !== fq > 0) {
+        const r = refineRoot(f, b.q, xs[b.j + 1], zeroTol)
+        if (r !== null) { const p = pt('zero', r, 0, 'zero', false); if (p) out.push(p) }
+      }
+    }
+    const c = b.at
+    if (c === null) continue
+    let v: number
+    try { v = f(c) } catch { continue }
+    if (!Number.isFinite(v)) continue
+    if (opts.zeros && Math.abs(v) <= zeroTol) {
+      const p = pt('zero', c, 0, 'zero', true)
+      if (p) out.push(p)
+    }
+    // both sides must be in the window: at its edge, one side is not the curve's
+    const d = 1e-7 * Math.max(1, Math.abs(c))
+    if (opts.extrema && c - d >= xs[0] && c + d <= xs[n]) {
+      let L: number
+      let R: number
+      try { L = f(c - d); R = f(c + d) } catch { continue }
+      if (!Number.isFinite(L) || !Number.isFinite(R)) continue
+      const kind: SpecialPointKind | null =
+        v < L && v < R ? 'minimum' : v > L && v > R ? 'maximum' : null
+      if (kind) {
+        const p = pt(kind, c, v, kind === 'maximum' ? 'max' : 'min', true)
+        if (p) out.push(p)
+      }
+    }
+  }
+
+  // ---- what a jump or a flat stretch rules out -------------------------------
+  const zeroFlats = flats.filter(fl => fl.y === 0)
+  const nearJump = (x: number): boolean => jumpXs.some(
+    jx => Math.abs(x - jx) < Math.max(step, 2 * H2 * Math.max(1, Math.abs(x))) &&
+      Math.abs(x - jx) > 1e-12 * Math.max(1, Math.abs(x)),
+  )
+  const inFlat = (p: SpecialPoint): boolean => flats.some((fl) => {
+    const tol = 1e-9 * Math.max(1, Math.abs(p.pos.x))
+    if (p.pos.x > fl.lo + tol && p.pos.x < fl.hi - tol) return true
+    // at (or a step from) an end, the point IS the stretch when it has its value
+    const nearEnd = p.pos.x >= fl.lo - step && p.pos.x <= fl.hi + step
+    return nearEnd && Math.abs(p.pos.y - fl.y) <= 1e-9 * Math.max(1, Math.abs(fl.y))
+  })
+  return out.filter((p) => {
+    if (p.kind === 'zero') {
+      // one zero SET, reported once as an interval (zeroIntervals)
+      const tol = 1e-9 * Math.max(1, Math.abs(p.pos.x))
+      return !zeroFlats.some(fl => p.pos.x >= fl.lo - tol && p.pos.x <= fl.hi + tol)
+    }
+    // exact === true here means the point was placed AT the jump on purpose
+    if (!p.exact && nearJump(p.pos.x)) return false
+    return !inFlat(p)
+  })
 }
 
 /** Bisection on the numeric second derivative. */
@@ -910,7 +1377,7 @@ function attachY(p: SpecialPoint, y: number): void {
   const form = exactForm(y, { tol: EXACT_Y })
   if (!form) return
   p.exactY = form.text
-  p.pos = { x: p.pos.x, y: form.value }
+  p.pos = { x: p.pos.x, y: form.value + 0 }
 }
 
 /**
@@ -938,7 +1405,7 @@ function attachExactAt(p: SpecialPoint, f: Fn, check: (c: number) => boolean): v
   }
   let y: number
   try { y = f(form.value) } catch { y = Number.NaN }
-  p.pos = { x: form.value, y: Number.isFinite(y) ? y : p.pos.y }
+  p.pos = { x: form.value + 0, y: (Number.isFinite(y) ? y : p.pos.y) + 0 }
   attachY(p, p.pos.y)
 }
 
@@ -1010,7 +1477,7 @@ function analyzeExplicit(
     : { zeros: true, extrema: true, inflections: true }
 
   if (need.zeros || need.extrema || need.inflections) {
-    out.push(...analyzeExplicitNumeric(f, lo, hi, need))
+    out.push(...analyzeExplicitNumeric(f, lo, hi, need, piecesOf(curve, spec)))
   }
 
   // y-intercept: a direct evaluation, so it is exact when it exists at all
@@ -1301,14 +1768,8 @@ function analyzeParametric(curve: FittedCurve, spec: ModelSpec): SpecialPoint[] 
  * definition and are kept; curves without pieces are untouched.
  */
 function ownedPoints(points: SpecialPoint[], curve: FittedCurve, spec: ModelSpec): SpecialPoint[] {
-  if (!spec.pieces || !spec.evalExplicit) return points
-  let pieces: ReturnType<NonNullable<ModelSpec['pieces']>>
-  try {
-    pieces = spec.pieces(curve.params)
-  } catch {
-    return points
-  }
-  if (!pieces || pieces.length === 0) return points
+  const pieces = piecesOf(curve, spec)
+  if (!pieces || !spec.evalExplicit) return points
   const f = spec.evalExplicit
   const at = (x: number): number => {
     try {
@@ -1319,11 +1780,7 @@ function ownedPoints(points: SpecialPoint[], curve: FittedCurve, spec: ModelSpec
   }
   // Finite piece ends; a scan converging on one from inside lands a hair
   // away from it, so "at the end" is judged with a small tolerance.
-  const ends: number[] = []
-  for (const q of pieces) {
-    if (Number.isFinite(q.lo)) ends.push(q.lo)
-    if (Number.isFinite(q.hi)) ends.push(q.hi)
-  }
+  const ends = pieceEnds(pieces)
   const near = (x: number, e: number): boolean => Math.abs(x - e) <= 1e-6 * Math.max(1, Math.abs(e))
   return points.filter((p) => {
     if (p.kind === 'hole' || p.kind === 'intersection') return true
@@ -1331,10 +1788,26 @@ function ownedPoints(points: SpecialPoint[], curve: FittedCurve, spec: ModelSpec
     const same = (y: number): boolean =>
       Number.isFinite(y) && Math.abs(y - p.pos.y) <= 1e-6 * Math.max(1, Math.abs(y), Math.abs(p.pos.y))
     const end = ends.find((e) => near(x, e))
-    // At a piece end the point must be the value f takes AT the end.
-    if (end !== undefined) return same(at(end))
+    // At a piece end the point must be the value f takes AT the end — and the
+    // end must be one the pieces INCLUDE: y = x {0 < x < 3} is not zero at 0,
+    // whatever a lenient evaluator hands back there.
+    if (end !== undefined) return coveredByPieces(pieces, end) && same(at(end))
     return same(at(x))
   })
+}
+
+/** The model's stated pieces (ModelSpec.pieces), or null when it has none. */
+function piecesOf(curve: FittedCurve, spec: ModelSpec): PieceInfo[] | null {
+  if (typeof spec.pieces !== 'function') return null
+  let raw: PieceInfo[] | null | undefined
+  try {
+    raw = spec.pieces(curve.params)
+  } catch {
+    return null
+  }
+  if (!Array.isArray(raw) || raw.length === 0) return null
+  const ok = raw.filter(q => q && typeof q.lo === 'number' && typeof q.hi === 'number' && !(q.hi < q.lo))
+  return ok.length > 0 ? ok : null
 }
 
 // ---------------------------------------------------------------------------
@@ -1362,6 +1835,67 @@ export function analyzeCurve(
       return analyzeParametric(curve, spec)
     }
     return []
+  } catch {
+    return []
+  }
+}
+
+/** One stretch on which a curve is identically zero (see zeroIntervals). */
+export interface ZeroInterval {
+  lo: number
+  hi: number
+  /** f(lo) = 0 and lo is in the domain: "0 ≤ x" rather than "0 < x" */
+  loClosed: boolean
+  hiClosed: boolean
+}
+
+/**
+ * Where an explicit curve is zero on a whole INTERVAL rather than at points:
+ * floor(x) on [0, 1), ceil(x) on (−1, 0], y = 0 {0 < x < 3}, the zero piece of
+ * a piecewise function. A zero set like that is reported here, once, as an
+ * interval — analyzeCurve drops every individual zero inside one (and every
+ * extremum and inflection inside any constant stretch), keeping only the
+ * isolated zeros elsewhere. The card reads "zero on 0 ≤ x < 1".
+ *
+ *   * `lo`/`hi` are located to double precision and snapped onto a stated
+ *     piece end or a closed form the boundary bracket contains (the integers
+ *     of floor, the 1/3 of floor(3x)); `exactForm(lo)` recovers its text.
+ *   * `loClosed`/`hiClosed` say whether f is zero AT that end and the
+ *     pieces include it — floor(x): [0, 1) → true/false; ceil(x): false/true.
+ *   * The search is clipped to `range` ∩ curve.domain, so an interval that
+ *     runs off the window ends at the window's edge (closed there when f is
+ *     zero at the edge). `range` defaults to what analyzeCurve analyses —
+ *     curve.domain, or [−10, 10] without one — so the two always agree on
+ *     which zeros were folded into an interval.
+ *   * Zero means EXACTLY zero, on every sample and between them: x¹⁰ is tiny
+ *     near 0 but zero only at 0, and stays an isolated (tangent) zero.
+ *     Resolution is one sample step (1/1200 of the span): a zero stretch
+ *     narrower than that is reported by analyzeCurve as a point.
+ *
+ * Sorted left to right. [] for anything that is not an explicit y = f(x), and
+ * never throws.
+ */
+export function zeroIntervals(
+  curve: FittedCurve,
+  models: Record<string, ModelSpec>,
+  range?: readonly [number, number],
+): ZeroInterval[] {
+  try {
+    const spec = models[curve.modelId]
+    if (!spec || !spec.evalExplicit || !curve.params.every(Number.isFinite)) return []
+    const evalF = spec.evalExplicit
+    const f: Fn = (x: number) => {
+      const v = evalF.call(spec, curve.params, x)
+      return typeof v === 'number' ? v : Number.NaN
+    }
+    const span = range
+      ? sharedSpan(curve.domain ?? null, null, range)
+      : sharedSpan(null, null, curve.domain ?? DEFAULT_DOMAIN)
+    if (!span) return []
+    const g = scanGrid(f, span[0], span[1], piecesOf(curve, spec))
+    return g.flats
+      .filter(fl => fl.y === 0)
+      .map(fl => ({ lo: fl.lo, hi: fl.hi, loClosed: fl.loClosed, hiClosed: fl.hiClosed }))
   } catch {
     return []
   }
