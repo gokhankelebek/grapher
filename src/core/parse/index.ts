@@ -781,6 +781,17 @@ class Parser {
     if (VAR_NAMES.has(w)) return { t: 'var', name: w as VarName }
     if (has(CONSTS, w)) return { t: 'const', name: w as keyof typeof CONSTS }
     if (w.length === 1) return this.registerParam(w)
+    // "xy" (and "yx", "x2y" won't reach here) in a conic such as
+    // x² + xy + y² = 3 is the product x·y, as every textbook writes it.
+    // Only words made of the variables x and y are split; anything else
+    // stays the error it was, so no name that parsed before changes.
+    if (/^[xy]{2,4}$/.test(w)) {
+      let node: Node = { t: 'var', name: w[0] as VarName }
+      for (let i = 1; i < w.length; i++) {
+        node = { t: 'bin', op: '*', a: node, b: { t: 'var', name: w[i] as VarName } }
+      }
+      return node
+    }
     const s = suggest(w)
     if (s) {
       throw new ParseError(`Unknown function '${w}' — did you mean '${s}'?`, tok.pos)

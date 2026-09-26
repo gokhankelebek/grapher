@@ -1428,3 +1428,14 @@ describe('names that live on Object.prototype are not functions', () => {
     }
   })
 })
+
+describe('xy is the product x·y', () => {
+  it('reads xy, yx and xxy as products of the variables; other words stay errors', () => {
+    const r = parseExpression('x^2 + xy + y^2 = 3')
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.plot.kind).toBe('implicit')
+    expect(parseExpression('xy = 1').ok).toBe(true)
+    expect(parseExpression('y = xyz').ok).toBe(false)
+    expect(parseExpression('y = ab').ok).toBe(false)
+  })
+})
