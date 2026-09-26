@@ -125,6 +125,7 @@ export interface WheelLike {
   ctrlKey: boolean
   metaKey: boolean
   shiftKey?: boolean
+  altKey?: boolean
   deltaX?: number
   deltaY?: number
   deltaMode?: number
@@ -160,6 +161,38 @@ export const classifyWheel = (e: WheelLike, pref: WheelPref = 'auto'): 'zoom' | 
   if (pref === 'zoom') return 'zoom'
   if (pref === 'pan') return 'pan'
   return looksLikeMouseWheel(e) ? 'zoom' : 'pan'
+}
+
+/**
+ * Does this wheel event STRETCH one axis rather than zoom or scroll the board?
+ *
+ * ⇧-wheel stretches x, ⌥-wheel stretches y (the board's independent scales,
+ * anchored on the cursor by the caller). A pinch or ⌘-wheel is still a zoom of
+ * both axes together — ctrl/meta win — so a trackpad pinch with a finger
+ * resting on ⌥ never tears the board apart. The number line has no y to
+ * stretch and keeps shift-wheel as a scroll: it never asks.
+ */
+export function wheelStretchAxis(e: WheelLike): 'x' | 'y' | null {
+  if (e.ctrlKey || e.metaKey) return null
+  if (e.shiftKey) return 'x'
+  if (e.altKey) return 'y'
+  return null
+}
+
+/**
+ * The one delta a stretching wheel event carries. Browsers turn ⇧-wheel into a
+ * HORIZONTAL scroll (deltaX) on a mouse, so the dominant axis is the notch.
+ */
+export function wheelStretchDelta(e: WheelLike): WheelLike {
+  const dx = Number.isFinite(e.deltaX ?? 0) ? (e.deltaX ?? 0) : 0
+  const dy = Number.isFinite(e.deltaY ?? 0) ? (e.deltaY ?? 0) : 0
+  return {
+    ctrlKey: false,
+    metaKey: false,
+    deltaX: 0,
+    deltaY: Math.abs(dx) > Math.abs(dy) ? dx : dy,
+    deltaMode: e.deltaMode,
+  }
 }
 
 /**

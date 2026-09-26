@@ -532,7 +532,13 @@ export type StoredNLItem = NLItem & { style?: CurveStyle }
 
 export interface StoredBoard {
   curves: StoredCurve[]
-  viewport: { cx: number; cy: number; ppu: number }
+  /**
+   * `ppuY` is the y scale of a board whose axes are scaled independently
+   * (Settings → Axes: Independent). Omitted on an equal-axes board — every
+   * document written before the field existed, and every one since that never
+   * left Equal — so those serialise byte-for-byte as they always did.
+   */
+  viewport: { cx: number; cy: number; ppu: number; ppuY?: number }
   selectedId: string | null
   mode: BoardMode
   /**
@@ -810,7 +816,8 @@ export interface BoardInput {
    * did: blank writes nothing.
    */
   captionAuto?: boolean
-  viewport: { center: Vec2; pxPerUnit: number }
+  /** pxPerUnitY present = Independent axes (see StoredBoard.viewport.ppuY). */
+  viewport: { center: Vec2; pxPerUnit: number; pxPerUnitY?: number }
   selectedId: string | null
   mode: BoardMode
 }
@@ -869,7 +876,8 @@ export interface HydratedBoard {
    * blank they deliberately left.
    */
   captionAuto: boolean
-  viewport: { center: Vec2; pxPerUnit: number }
+  /** pxPerUnitY present = Independent axes; absent = equal. */
+  viewport: { center: Vec2; pxPerUnit: number; pxPerUnitY?: number }
   selectedId: string | null
   mode: BoardMode
   /** Highest expr_N seen, so new equations don't collide with restored ones. */
@@ -1020,6 +1028,13 @@ export function boardToStored(input: BoardInput): StoredBoard {
       cx: round(input.viewport.center.x, 6),
       cy: round(input.viewport.center.y, 6),
       ppu: round(input.viewport.pxPerUnit, 6),
+      // Independent axes only. Equal writes nothing, so an equal board is
+      // byte-identical to what it was before this key existed.
+      ...(typeof input.viewport.pxPerUnitY === 'number' &&
+      Number.isFinite(input.viewport.pxPerUnitY) &&
+      input.viewport.pxPerUnitY > 0
+        ? { ppuY: round(input.viewport.pxPerUnitY, 6) }
+        : {}),
     },
     selectedId: input.selectedId,
     mode: input.mode,
@@ -1701,9 +1716,19 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
     }
   }
   const ppuRaw = isNum(rawVp.ppu) ? rawVp.ppu : 60
-  const viewport = {
+  const viewport: HydratedBoard['viewport'] = {
     center: { x: isNum(rawVp.cx) ? rawVp.cx : 0, y: isNum(rawVp.cy) ? rawVp.cy : 0 },
     pxPerUnit: Math.min(100000, Math.max(0.001, ppuRaw)),
+  }
+  // Independent axes. A y scale that is not a positive number is not a view
+  // anybody chose: the board opens with equal axes and says so.
+  if ('ppuY' in rawVp) {
+    if (isNum(rawVp.ppuY) && rawVp.ppuY > 0) {
+      viewport.pxPerUnitY = Math.min(100000, Math.max(0.001, rawVp.ppuY))
+    } else {
+      problems.push('The saved y scale was unreadable; the axes were made equal.')
+      degraded = true
+    }
   }
 
   // curves

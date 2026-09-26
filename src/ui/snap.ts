@@ -18,6 +18,7 @@
 // ============================================================================
 
 import type { Vec2, Viewport } from '../core/types'
+import { ppuX, ppuY } from '../core/types'
 import { pickTickStep } from '../render/grid'
 
 /**
@@ -27,9 +28,14 @@ import { pickTickStep } from '../render/grid'
  * 0.2 and at a screen zoomed in on the unit square is 0.05 — always a round
  * number in the units the axis is currently labelled in, because it comes off
  * the same 1–2–5 ladder the labels do.
+ *
+ * PER AXIS: on a stretched board (years along x, millions up y) each axis is
+ * labelled off its own ladder, so each snaps to its own rung. x is the
+ * default, which is also what every equal-axes board gets for y.
  */
-export function snapStep(vp: Viewport): number {
-  const ppu = vp && Number.isFinite(vp.pxPerUnit) && vp.pxPerUnit > 0 ? vp.pxPerUnit : 60
+export function snapStep(vp: Viewport, axis: 'x' | 'y' = 'x'): number {
+  const raw = vp ? (axis === 'y' ? ppuY(vp) : ppuX(vp)) : NaN
+  const ppu = Number.isFinite(raw) && raw > 0 ? raw : 60
   const step = pickTickStep(ppu).major / 10
   return Number.isFinite(step) && step > 0 ? step : 0.1
 }
@@ -41,9 +47,9 @@ export function snapStep(vp: Viewport): number {
  * is 2.0000000000000004, and a card that prints that has lost the entire
  * point of snapping.
  */
-export function snapCoord(v: number, vp: Viewport): number {
+export function snapCoord(v: number, vp: Viewport, axis: 'x' | 'y' = 'x'): number {
   if (!Number.isFinite(v)) return v
-  const step = snapStep(vp)
+  const step = snapStep(vp, axis)
   const snapped = Math.round(v / step) * step
   if (!Number.isFinite(snapped)) return v
   const clean = Math.round(snapped * 1e9) / 1e9
@@ -58,5 +64,5 @@ export function snapCoord(v: number, vp: Viewport): number {
  * rather than one per object.
  */
 export function snapPlaced(p: Vec2, vp: Viewport): Vec2 {
-  return { x: snapCoord(p.x, vp), y: snapCoord(p.y, vp) }
+  return { x: snapCoord(p.x, vp, 'x'), y: snapCoord(p.y, vp, 'y') }
 }

@@ -2486,6 +2486,52 @@ button.an-value {
   color: var(--muted);
 }
 
+/* WINDOW (TI style): x min / x max over y min / y max. */
+.win-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-2) var(--sp-2);
+  margin: 0;
+}
+
+.win-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.win-label {
+  letter-spacing: 0.02em;
+}
+
+.exp-num.win-num {
+  width: 100%;
+  box-sizing: border-box;
+  font-variant-numeric: tabular-nums;
+}
+
+.win-num[aria-invalid='true'] {
+  border-color: rgba(255, 120, 120, 0.7);
+}
+
+.win-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.win-btn {
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.win-error {
+  color: #ff9d9d;
+}
+
 /* ------------------------------------------------------------ number lines */
 
 /* The card for one point or interval. Its job is to make the ONE thing the

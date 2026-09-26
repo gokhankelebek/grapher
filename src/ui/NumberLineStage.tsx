@@ -282,7 +282,11 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
         } else {
           const factor = Math.exp(-e.deltaY * (e.ctrlKey ? 0.012 : 0.0018))
           const anchor = nlToMathX(px, vp)
+          const before = vp.pxPerUnit
           vp.pxPerUnit = clampPpu(vp.pxPerUnit * factor)
+          // The line ignores y, but a document switched back to its graph
+          // should find its axes in the same ratio it left them in.
+          if (vp.pxPerUnitY !== undefined) vp.pxPerUnitY *= vp.pxPerUnit / before
           // Zoom about the pointer, in x only — a number line has no other axis.
           vp.center = { x: anchor - (px - vp.widthPx / 2) / vp.pxPerUnit, y: 0 }
         }
@@ -497,6 +501,7 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
         if (!a || !b) return
         const dist = Math.max(1, Math.abs(b.x - a.x))
         const ppu = clampPpu((g.startPpu * dist) / g.startDist)
+        if (vp.pxPerUnitY !== undefined) vp.pxPerUnitY *= ppu / vp.pxPerUnit
         vp.pxPerUnit = ppu
         vp.center = { x: g.startMid - ((a.x + b.x) / 2 - vp.widthPx / 2) / ppu, y: 0 }
         viewportChangeRef.current?.()

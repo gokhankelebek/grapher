@@ -1,10 +1,19 @@
 // ============================================================================
 // Stroke preprocessing: dedupe -> uniform arc-length resample -> light
 // Gaussian smoothing. Also computes closedness, bbox, arc length, and a
-// vertical-line-test flag. Pure functions, math coordinates throughout.
+// vertical-line-test flag. Pure functions, math coordinates in and out.
+//
+// SQUARE PIXELS ARE NOT ASSUMED. Dedupe gaps, arc-length resampling, the
+// smoothing kernel and the closed-stroke test all measure LENGTH, and a length
+// on a stretched board (years along x, millions up y) is only meaningful on
+// screen. So the work is done in a space where one unit is the same number of
+// pixels in x and in y — math x, and math y scaled by ppuY/ppuX — and mapped
+// back at the end. On an equal-axes board that scale is exactly 1 and every
+// number is the one this file always produced.
 // ============================================================================
 
 import type { Vec2, Viewport, ProcessedStroke } from './types'
+import { ppuX, ppuY } from './types'
 
 const TARGET_POINTS = 200
 const CLOSED_FRAC = 0.08     // endpoints within 8% of bbox diagonal
@@ -219,10 +228,27 @@ function gaussianSmooth(pts: Vec2[], closed: boolean): Vec2[] {
 }
 
 export function processStroke(raw: Vec2[], vp: Viewport): ProcessedStroke {
+  // Screen-isotropic working space: y is scaled so a pixel is a pixel both ways.
+  const px = ppuX(vp)
+  const k = ppuY(vp) / px
+  const ky = Number.isFinite(k) && k > 0 ? k : 1
+  if (ky !== 1) {
+    const scaled = raw.map(p => ({ x: p.x, y: p.y * ky }))
+    const out = processStroke(scaled, { ...vp, pxPerUnitY: undefined })
+    const points = out.points.map(p => ({ x: p.x, y: p.y / ky }))
+    return {
+      points,
+      closed: out.closed,
+      arcLength: polylineLength(points),
+      bbox: bboxOf(points),
+      multiValuedX: out.multiValuedX,
+    }
+  }
+
   const finite = raw.filter(p => Number.isFinite(p.x) && Number.isFinite(p.y))
 
   // --- dedupe near-duplicate points (~half a pixel in math units) ---
-  const minGap = 0.5 / Math.max(vp.pxPerUnit, 1e-9)
+  const minGap = 0.5 / Math.max(px, 1e-9)
   const deduped: Vec2[] = []
   for (const p of finite) {
     if (deduped.length === 0 || dist(deduped[deduped.length - 1], p) > minGap) {

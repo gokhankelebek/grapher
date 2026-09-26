@@ -17,7 +17,7 @@ import type {
   Vec2,
   Viewport,
 } from '../core/types'
-import { toMath, toScreen } from '../core/types'
+import { isStretched, ppuX, ppuY, toMath, toScreen } from '../core/types'
 import type { FigureStyle, Theme } from '../core/types'
 import { processStroke } from '../core/stroke'
 import { recognize } from '../core/fit/recognize'
@@ -52,6 +52,8 @@ import {
   strokeLeftBand,
   tipPlacement,
   wheelPanDelta,
+  wheelStretchAxis,
+  wheelStretchDelta,
 } from './gestures'
 import type { DrawIntent, HitRadii, PointerKind, WheelPref } from './gestures'
 import { sampleCurveScreen, distToPolyline } from './sample'
@@ -63,6 +65,18 @@ import type { HandleField } from './HandleInput'
 import { paintScale } from '../render/grid'
 import type { PaintScale } from '../render/grid'
 import type { Mode, StyleMap } from '../App'
+import {
+  MAX_PPU,
+  MIN_PPU,
+  axisBandAt,
+  dragStretchFactor,
+  nearestOnPolyline,
+  panBy,
+  setAxisScale,
+  stretchAbout,
+  zoomAbout,
+} from './viewScale'
+import type { Axis } from './viewScale'
 
 export type { DrawIntent } from './gestures'
 
@@ -248,8 +262,6 @@ interface Props {
   onFeatureEdit(curveId: string, point: SpecialPoint, to: { x?: number; y?: number }): boolean
 }
 
-const MIN_PPU = 0.001
-const MAX_PPU = 100000
 const FADE_MS = 250
 const OVERSKETCH_RADIUS = 12
 /** dragPoint → ink conversion threshold (stroke ran away from the curve). */
@@ -372,7 +384,22 @@ type Gesture =
       p2: number
       startDist: number
       startPpu: number
+      /** The y scale at the start, when the axes are Independent. */
+      startPpuY: number | undefined
       startMathMid: Vec2
+    }
+  | {
+      /**
+       * A drag along one axis' NUMBERS: stretches that axis about the board
+       * centre, the grabbed number staying under the pointer.
+       */
+      type: 'stretch'
+      pointerId: number
+      kind: PointerKind
+      axis: Axis
+      start: Vec2
+      startPpu: number
+      moved: number
     }
 
 interface Fade {
@@ -421,8 +448,6 @@ interface HandleEdit {
 /** Max delay/slop for the touch/pen double-tap fallback. */
 const DOUBLE_TAP_MS = 450
 const DOUBLE_TAP_PX = 12
-
-const clampPpu = (v: number): number => Math.min(MAX_PPU, Math.max(MIN_PPU, v))
 
 // ---------------------------------------------------------------------------
 // Analysis markers.
@@ -558,6 +583,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   const [panning, setPanning] = useState(false)
   const [drawing, setDrawing] = useState(false)
   const [draggingCurve, setDraggingCurve] = useState(false)
+  /** Which axis a drag on its numbers is stretching, for the cursor. */
+  const [stretching, setStretching] = useState<Axis | null>(null)
   const [hoverInfo, setHoverInfo] = useState<HoverInfo | null>(null)
   const [dragTip, setDragTip] = useState<{ x: number; y: number; label: string } | null>(null)
   const [intent, setIntentState] = useState<{ x: number; y: number; kind: DrawIntent } | null>(
@@ -945,25 +972,23 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       const vp = vpRef.current
       const rect = canvas.getBoundingClientRect()
       const pos = { x: e.clientX - rect.left, y: e.clientY - rect.top }
-      if (classifyWheel(e, wheelPrefRef.current) === 'pan') {
+      // ⇧-wheel stretches x, ⌥-wheel stretches y, anchored on the cursor —
+      // except on the polar ruling, which is only drawn on equal axes: there
+      // the modifiers keep the meaning they always had.
+      const stretch = gridRef.current === 'polar' ? null : wheelStretchAxis(e)
+      if (stretch) {
+        stretchAbout(vp, stretch, pos, wheelZoomFactor(wheelStretchDelta(e)))
+      } else if (classifyWheel(e, wheelPrefRef.current) === 'pan') {
         // A two-finger scroll is a SCROLL. Treating it as zoom meant a Mac
         // trackpad rescaled the whole board while the teacher thought they
         // were moving along the x-axis — and rescaling is not undoable.
         const { dx, dy } = wheelPanDelta(e, vp.heightPx)
-        vp.center = {
-          x: vp.center.x + dx / vp.pxPerUnit,
-          y: vp.center.y - dy / vp.pxPerUnit,
-        }
+        panBy(vp, -dx, -dy)
       } else {
         // Zoom: trackpad pinch (which browsers deliver as a ctrlKey wheel) and
-        // the explicit modifier. Still anchored on the cursor.
-        const factor = wheelZoomFactor(e)
-        const anchor = toMath(pos, vp)
-        vp.pxPerUnit = clampPpu(vp.pxPerUnit * factor)
-        vp.center = {
-          x: anchor.x - (pos.x - vp.widthPx / 2) / vp.pxPerUnit,
-          y: anchor.y + (pos.y - vp.heightPx / 2) / vp.pxPerUnit,
-        }
+        // the explicit modifier. Still anchored on the cursor, and both axes
+        // by the same factor, so a stretched board keeps its stretch.
+        zoomAbout(vp, pos, wheelZoomFactor(e))
       }
       reanchorEditor()
       viewportChangeRef.current?.()
@@ -1114,6 +1139,22 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       if (!sel) return null
       const vp = vpRef.current
       const mp = toMath(pos, vp)
+      if (isStretched(vp)) {
+        // On a stretched board the nearest point in MATH units is not the
+        // nearest on screen, and a math distance times one ppu is no pixel
+        // count at all. Measure on screen, then pin the grab to the curve.
+        const poly = sampleCurveScreen(sel, modelsRef.current, vp)
+        const hit = nearestOnPolyline(pos, poly)
+        if (!hit) return null
+        let mathPos = toMath(hit.point, vp)
+        try {
+          const r = nearestOnCurve(sel, modelsRef.current, mathPos)
+          if (r && r.pos && Number.isFinite(r.pos.x) && Number.isFinite(r.pos.y)) mathPos = r.pos
+        } catch {
+          /* the sampled point is close enough to grab by */
+        }
+        return { curve: sel, distPx: hit.dist, mathPos }
+      }
       try {
         const r = nearestOnCurve(sel, modelsRef.current, mp)
         if (r && Number.isFinite(r.dist)) {
@@ -1129,6 +1170,37 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       return null
     },
     [selectedVisible, vpRef],
+  )
+
+  /**
+   * How far (screen px) a math point is from a curve. On an equal-axes board
+   * that is the exact math distance times the one scale; on a stretched board
+   * there is no one scale, so it is measured against the curve as drawn.
+   */
+  const curveDistPx = useCallback(
+    (curve: FittedCurve, mp: Vec2): number => {
+      const vp = vpRef.current
+      if (isStretched(vp)) {
+        const poly = sampleCurveScreen(curve, modelsRef.current, vp)
+        const hit = nearestOnPolyline(toScreen(mp, vp), poly)
+        return hit ? hit.dist : Infinity
+      }
+      const r = nearestOnCurve(curve, modelsRef.current, mp)
+      return r && Number.isFinite(r.dist) ? r.dist * vp.pxPerUnit : Infinity
+    },
+    [vpRef],
+  )
+
+  /**
+   * Is this press on an axis' numbers — the band a drag stretches that axis
+   * from? Never on the polar ruling, which only exists on equal axes.
+   */
+  const stretchBandAt = useCallback(
+    (pos: Vec2): Axis | null => {
+      if (gridRef.current === 'polar') return null
+      return axisBandAt(vpRef.current, pos, paintScale(presentRef.current).type)
+    },
+    [vpRef],
   )
 
   const setHover = useCallback(
@@ -1329,7 +1401,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
           if (p.x > maxX) maxX = p.x
           if (p.y > maxY) maxY = p.y
         }
-        extent = Math.max(maxX - minX, maxY - minY) * vp.pxPerUnit
+        extent = Math.max((maxX - minX) * ppuX(vp), (maxY - minY) * ppuY(vp))
       }
       // Extent-based tap test: even a 2-point flick spanning real distance is
       // intentional ink (recognize() handles sparse input; a flick fits a Line).
@@ -1437,6 +1509,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       p2,
       startDist: Math.max(1, Math.hypot(b.x - a.x, b.y - a.y)),
       startPpu: vp.pxPerUnit,
+      startPpuY: vp.pxPerUnitY,
       startMathMid: toMath(mid, vp),
     }
     gestureKindRef.current = 'touch'
@@ -1459,6 +1532,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       onCurveEditCancel()
     } else if (g.type === 'pan' || g.type === 'pinch') {
       setPanning(false)
+    } else if (g.type === 'stretch') {
+      setStretching(null)
     }
     gestureRef.current = null
     gestureKindRef.current = null
@@ -1672,6 +1747,27 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
         return
       }
 
+      // 2b. On an axis' numbers: stretch that axis. After the handles and the
+      //     selected curve (a curve crossing the labels is still grabbable),
+      //     before ink — the numbers are not somewhere anybody sketches.
+      const band = stretchBandAt(pos)
+      if (band) {
+        const vp = vpRef.current
+        gestureRef.current = {
+          type: 'stretch',
+          pointerId: e.pointerId,
+          kind,
+          axis: band,
+          start: pos,
+          startPpu: band === 'x' ? ppuX(vp) : ppuY(vp),
+          moved: 0,
+        }
+        gestureKindRef.current = kind
+        setStretching(band)
+        scheduleRender()
+        return
+      }
+
       // 3. Ink. Within 12px of the selected curve the stroke aims at that
       //    curve — and the chip says which of the two things that means
       //    BEFORE a single point is drawn, rather than leaving the teacher to
@@ -1758,10 +1854,18 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
           })
         } else {
           const near = nearestOnSelected(pos)
+          const band = near && near.distPx <= hitRef.current.body ? null : stretchBandAt(pos)
           setHover(
             near && near.distPx <= hitRef.current.body
               ? { handleId: null, markerIndex: null, cursor: 'move', tip: null }
-              : null,
+              : band
+                ? {
+                    handleId: null,
+                    markerIndex: null,
+                    cursor: band === 'x' ? 'ew-resize' : 'ns-resize',
+                    tip: null,
+                  }
+                : null,
           )
         }
       } else {
@@ -1787,8 +1891,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
         let distPx = Infinity
         if (curve) {
           try {
-            const r = nearestOnCurve(curve, modelsRef.current, mp)
-            if (r && Number.isFinite(r.dist)) distPx = r.dist * vp.pxPerUnit
+            distPx = curveDistPx(curve, mp)
           } catch {
             /* unmeasurable this tick — counts as away from the curve */
           }
@@ -1808,7 +1911,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       // A resting palm jitters by a pixel or two. A finger has to mean it
       // before the board moves under the figure.
       if (g.kind === 'touch' && g.moved < TOUCH_PAN_SLOP) return
-      vp.center = { x: vp.center.x - dx / vp.pxPerUnit, y: vp.center.y + dy / vp.pxPerUnit }
+      panBy(vp, dx, dy)
       reanchorEditor()
       viewportChangeRef.current?.()
       scheduleRender()
@@ -1879,8 +1982,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
             let distPx = Infinity
             try {
               const probe = freshParams ? { ...curve, params: freshParams } : curve
-              const r = nearestOnCurve(probe, modelsRef.current, target)
-              if (r && Number.isFinite(r.dist)) distPx = r.dist * vp.pxPerUnit
+              distPx = curveDistPx(probe, target)
             } catch {
               const near = nearestOnSelected(pos)
               if (near) distPx = near.distPx
@@ -1912,12 +2014,29 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       if (!a || !b) return
       const dist = Math.max(1, Math.hypot(b.x - a.x, b.y - a.y))
       const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
-      const ppu = clampPpu((g.startPpu * dist) / g.startDist)
-      vp.pxPerUnit = ppu
+      // Both axes by the same factor: a pinch zooms, it never stretches. The
+      // factor is clamped once, for both, so the ratio survives the limits.
+      let f = dist / g.startDist
+      const sy = g.startPpuY ?? g.startPpu
+      const lo = Math.max(MIN_PPU / g.startPpu, MIN_PPU / sy)
+      const hi = Math.min(MAX_PPU / g.startPpu, MAX_PPU / sy)
+      f = Math.min(hi, Math.max(lo, f))
+      vp.pxPerUnit = g.startPpu * f
+      if (g.startPpuY !== undefined) vp.pxPerUnitY = g.startPpuY * f
       vp.center = {
-        x: g.startMathMid.x - (mid.x - vp.widthPx / 2) / ppu,
-        y: g.startMathMid.y + (mid.y - vp.heightPx / 2) / ppu,
+        x: g.startMathMid.x - (mid.x - vp.widthPx / 2) / ppuX(vp),
+        y: g.startMathMid.y + (mid.y - vp.heightPx / 2) / ppuY(vp),
       }
+      reanchorEditor()
+      viewportChangeRef.current?.()
+      scheduleRender()
+    } else if (g.type === 'stretch' && g.pointerId === e.pointerId) {
+      const along = g.axis === 'x' ? pos.x : pos.y
+      const from = g.axis === 'x' ? g.start.x : g.start.y
+      g.moved = Math.max(g.moved, Math.abs(along - from))
+      const centre = { x: vp.widthPx / 2, y: vp.heightPx / 2 }
+      const f = dragStretchFactor(from, along, g.axis === 'x' ? centre.x : centre.y)
+      setAxisScale(vp, g.axis, g.startPpu * f, centre)
       reanchorEditor()
       viewportChangeRef.current?.()
       scheduleRender()
@@ -1992,6 +2111,16 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       return
     }
 
+    if (g?.type === 'stretch' && g.pointerId === e.pointerId) {
+      gestureRef.current = null
+      gestureKindRef.current = null
+      setStretching(null)
+      // A press on the numbers that never moved is a tap like any other.
+      if (!cancelled && g.moved < 3) tapAt(pos)
+      scheduleRender()
+      return
+    }
+
     if (g?.type === 'pan' && g.pointerId === e.pointerId) {
       gestureRef.current = null
       gestureKindRef.current = null
@@ -2034,7 +2163,11 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   // at once, and a mode error used to cost a teacher their last curve.
   const cursor = drawing
     ? 'crosshair'
-    : draggingCurve
+    : stretching
+      ? stretching === 'x'
+        ? 'ew-resize'
+        : 'ns-resize'
+      : draggingCurve
       ? 'grabbing'
       : panning
         ? 'grabbing'

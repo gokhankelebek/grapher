@@ -111,6 +111,23 @@ import {
 } from './ui/intersections'
 import type { BoardIntersection, CurveIntersections } from './ui/intersections'
 import { snapCoord, snapPlaced } from './ui/snap'
+import {
+  INDEPENDENT_NEEDS_SQUARE,
+  POLAR_NEEDS_EQUAL,
+  applyWindow,
+  axesModeOf,
+  axesModeRefused,
+  rulingRefused,
+  fitBox,
+  fitData,
+  makeIndependent,
+  readWindow,
+  squareAxes,
+  squareToContain,
+  zoomAbout,
+} from './ui/viewScale'
+import type { AxesMode, Box, ViewWindow } from './ui/viewScale'
+import type { ViewSettings } from './ui/WindowPanel'
 import { factoredSource } from './core/factored'
 import type { FactoredSpec } from './core/factored'
 import { moveRoot, rootHandles, safeReadFactored } from './ui/factorLinks'
@@ -458,8 +475,6 @@ interface StatePatch {
   candidates?: Map<string, FitResult[]>
 }
 
-const MIN_PPU = 0.001
-const MAX_PPU = 100000
 const HISTORY_LIMIT = 100
 
 /** The undo label a run of caption typing folds into. */
@@ -474,7 +489,6 @@ const END_CAP_WORDS: Record<EndCap, string> = {
   closed: 'closed dot',
 }
 
-const clampPpu = (v: number): number => Math.min(MAX_PPU, Math.max(MIN_PPU, v))
 
 export default function App() {
   const [curves, setCurves] = useState<FittedCurve[]>([])
@@ -598,6 +612,16 @@ export default function App() {
    * the board, not a thing on it.
    */
   const [boardGrid, setBoardGrid] = useState<BoardGrid>('cartesian')
+  /**
+   * Equal or Independent axes — a mirror of the viewport, never a second
+   * source of truth: the view carries pxPerUnitY exactly when the axes are
+   * Independent (see ui/viewScale.ts), and that is what persists. Mirrored
+   * here only so the settings panel re-renders when a gesture flips it. Like
+   * the view itself it is NOT in the undo history.
+   */
+  const [axesMode, setAxesMode] = useState<AxesMode>('equal')
+  /** The WINDOW panel listens here: the view moves without a React render. */
+  const viewSubsRef = useRef<Set<() => void>>(new Set())
   /**
    * WHICH LOOK this board is drawn in — the screen, a textbook page, an SAT
    * item, an AP Calculus figure (FIGURE_STYLES in core/types.ts).
@@ -1354,7 +1378,13 @@ export default function App() {
       // board that never had a caption.
       caption: figureCaptionRef.current ?? '',
       captionAuto: figureCaptionRef.current === null,
-      viewport: { center: vpRef.current.center, pxPerUnit: vpRef.current.pxPerUnit },
+      viewport: {
+        center: vpRef.current.center,
+        pxPerUnit: vpRef.current.pxPerUnit,
+        ...(vpRef.current.pxPerUnitY !== undefined
+          ? { pxPerUnitY: vpRef.current.pxPerUnitY }
+          : {}),
+      },
       selectedId: selectedRef.current,
       mode: MODE,
     }),
@@ -1517,6 +1547,15 @@ export default function App() {
       y: board.kind === 'number-line' ? 0 : board.viewport.center.y,
     }
     vpRef.current.pxPerUnit = board.viewport.pxPerUnit
+    // Independent axes travel with the view. A polar ruling is only drawn on
+    // equal axes, so a document that somehow says both opens square.
+    if (board.viewport.pxPerUnitY !== undefined && board.grid !== 'polar') {
+      vpRef.current.pxPerUnitY = board.viewport.pxPerUnitY
+    } else {
+      delete vpRef.current.pxPerUnitY
+    }
+    setAxesMode(axesModeOf(vpRef.current))
+    viewSubsRef.current.forEach((fn) => fn())
     stageRef.current?.redraw()
     nlStageRef.current?.redraw()
   }, [])
@@ -4526,7 +4565,7 @@ export default function App() {
         s = { handleId, curveId, bracket, spec }
         expDragRef.current = s
       }
-      const next = dragExpHandle(s.spec, which, snapCoord(to.y, vpRef.current))
+      const next = dragExpHandle(s.spec, which, snapCoord(to.y, vpRef.current, 'y'))
       if (!next) return
       let src: string
       try {
@@ -4581,8 +4620,8 @@ export default function App() {
         logDragRef.current = s
       }
       const snapped: Vec2 = {
-        x: snapCoord(to.x, vpRef.current),
-        y: snapCoord(to.y, vpRef.current),
+        x: snapCoord(to.x, vpRef.current, 'x'),
+        y: snapCoord(to.y, vpRef.current, 'y'),
       }
       const next = dragLogHandle(s.spec, which, snapped)
       if (!next) return
@@ -4915,54 +4954,191 @@ export default function App() {
   )
 
   // ---------------------------------------------------------------- viewport
+  //
+  // Every change to the view goes through ui/viewScale.ts, which knows the one
+  // rule that matters now that the axes may be scaled apart: a zoom scales both
+  // axes by the same factor, a stretch scales one, and pxPerUnitY present is
+  // what "Independent" means. None of it is in the undo history — the view is
+  // where the teacher is looking, not a thing on the board — and a window
+  // change or an Axes switch is no exception.
+
+  /** Pan/zoom happened: the marker layer rides the same viewport. */
+  const viewportChanged = useCallback((): void => {
+    overlayRef.current?.redraw()
+    // Where the curves cross is hunted over the window, so panning can bring a
+    // crossing into view that was never solved for. Hot path: this is a pair
+    // of comparisons unless the board has left the coarse span entirely.
+    refreshCrossSpan()
+    // A solution curve is integrated across a fixed x-range, so a board panned
+    // or zoomed past that range would show it stopping in mid-air. This is the
+    // hot path — it fires on every frame of a pan — and refreshSolveSpan does
+    // nothing at all unless the window has genuinely left the solved span.
+    refreshSolveSpan()
+    // A stretch gesture on the stage turns Independent on by itself; the
+    // settings panel's segment has to follow. Same value = no render.
+    setAxesMode(axesModeOf(vpRef.current))
+    viewSubsRef.current.forEach((fn) => fn())
+    scheduleSave()
+  }, [refreshCrossSpan, refreshSolveSpan, scheduleSave])
+
+  /** The view was changed from outside the stage: redraw everything that rides it. */
+  const viewMoved = useCallback((): void => {
+    stageRef.current?.redraw()
+    nlStageRef.current?.redraw()
+    viewportChanged()
+  }, [viewportChanged])
+
+  /** The WINDOW panel's subscription to view changes. */
+  const subscribeView = useCallback((fn: () => void): (() => void) => {
+    viewSubsRef.current.add(fn)
+    return () => {
+      viewSubsRef.current.delete(fn)
+    }
+  }, [])
+
   const zoomBy = useCallback(
     (factor: number): void => {
       const vp = vpRef.current
-      vp.pxPerUnit = clampPpu(vp.pxPerUnit * factor)
-      stageRef.current?.redraw()
-      nlStageRef.current?.redraw()
-      overlayRef.current?.redraw()
-      refreshSolveSpan()
-      scheduleSave()
+      // Both axes, by the same factor, about the centre: the ratio between a
+      // stretched board's axes survives the zoom buttons.
+      zoomAbout(vp, { x: vp.widthPx / 2, y: vp.heightPx / 2 }, factor)
+      viewMoved()
     },
-    [refreshSolveSpan, scheduleSave],
+    [viewMoved],
   )
 
   const resetView = useCallback((): void => {
     const vp = vpRef.current
     vp.center = { x: 0, y: 0 }
     vp.pxPerUnit = 60
-    stageRef.current?.redraw()
-    nlStageRef.current?.redraw()
-    overlayRef.current?.redraw()
-    refreshSolveSpan()
-    scheduleSave()
-  }, [refreshCrossSpan, refreshSolveSpan, scheduleSave])
+    // Home is square, but the teacher's Axes choice is theirs: Independent
+    // stays on (at an equal scale) until they choose Equal.
+    if (vp.pxPerUnitY !== undefined) vp.pxPerUnitY = 60
+    viewMoved()
+  }, [viewMoved])
 
-  /** Fraction of the frame left as breathing room around the figure. */
-  const FIT_MARGIN = 0.12
+  /** Only equal axes can carry the polar ruling (circles must be circles). */
+  const keepSquare = useCallback((): boolean => boardGridRef.current === 'polar', [])
 
-  /** Point the board at `box`, with the fit margin all round. */
+  /**
+   * Point the board at `box`, with the fit margin all round — per axis when
+   * the axes are Independent, square when they are Equal. "Fit to curves"
+   * never turns Independent on by itself.
+   */
   const frameBox = useCallback(
-    (box: { min: { x: number; y: number }; max: { x: number; y: number } }): void => {
-    const vp = vpRef.current
-    const w = Math.max(box.max.x - box.min.x, 1e-6)
-    const h = Math.max(box.max.y - box.min.y, 1e-6)
-    const usableW = vp.widthPx * (1 - 2 * FIT_MARGIN)
-    const usableH = vp.heightPx * (1 - 2 * FIT_MARGIN)
-    const ppu = clampPpu(Math.min(usableW / w, usableH / h))
-    vp.pxPerUnit = ppu
-    vp.center = {
-      x: (box.min.x + box.max.x) / 2,
-      y: kindRef.current === 'number-line' ? 0 : (box.min.y + box.max.y) / 2,
-    }
-    stageRef.current?.redraw()
-    nlStageRef.current?.redraw()
-    overlayRef.current?.redraw()
-    refreshSolveSpan()
-    scheduleSave()
+    (box: Box): void => {
+      const vp = vpRef.current
+      const nl = kindRef.current === 'number-line'
+      fitBox(vp, box, {
+        independent: !nl && !keepSquare() && vp.pxPerUnitY !== undefined,
+        centreY0: nl,
+      })
+      viewMoved()
     },
-    [refreshSolveSpan, scheduleSave],
+    [keepSquare, viewMoved],
+  )
+
+  /**
+   * Frame a data table's points. Unlike "Fit to curves", this one may turn
+   * Independent on by itself: data that is lopsided against the board (years
+   * along x, millions up y) is unreadable on equal axes, and the teacher asked
+   * for it to be made readable — out loud, with the way back named.
+   */
+  const frameData = useCallback(
+    (box: Box): void => {
+      const vp = vpRef.current
+      const { madeIndependent } = fitData(vp, box, { keepSquare: keepSquare() })
+      viewMoved()
+      if (madeIndependent) {
+        showToast('Axes scaled independently to fit the data — Settings → Axes: Equal to undo', {
+          ms: 7000,
+          action: {
+            label: 'Keep axes equal',
+            run: () => {
+              fitBox(vpRef.current, box, { independent: false })
+              viewMoved()
+            },
+          },
+        })
+      }
+    },
+    [keepSquare, showToast, viewMoved],
+  )
+
+  /**
+   * Settings → Axes. Equal re-squares about the centre keeping the x scale;
+   * Independent keeps whatever the view is and lets gestures stretch it. The
+   * polar ruling is only meaningful on equal axes, so Independent is refused
+   * there (the control is disabled with the reason; this is the backstop).
+   */
+  const chooseAxesMode = useCallback(
+    (next: AxesMode): void => {
+      const vp = vpRef.current
+      if (next === axesModeOf(vp)) return
+      if (next === 'independent') {
+        if (axesModeRefused(next, boardGridRef.current)) {
+          showToast(INDEPENDENT_NEEDS_SQUARE, { ms: 4000 })
+          return
+        }
+        makeIndependent(vp)
+      } else {
+        squareAxes(vp)
+      }
+      viewMoved()
+    },
+    [keepSquare, showToast, viewMoved],
+  )
+
+  /**
+   * The WINDOW panel's Apply. Returns an error to show beside the fields, or
+   * null once the view is set — and says so when the window needed the axes
+   * to become Independent (or, on a polar board, could not have them).
+   */
+  const applyViewWindow = useCallback(
+    (w: ViewWindow): string | null => {
+      const vp = vpRef.current
+      const probe = { ...vp, center: { ...vp.center } }
+      const res = applyWindow(probe, w, { keepSquare: keepSquare() })
+      if (!res.ok) return res.error
+      vp.center = probe.center
+      vp.pxPerUnit = probe.pxPerUnit
+      if (probe.pxPerUnitY !== undefined) vp.pxPerUnitY = probe.pxPerUnitY
+      else delete vp.pxPerUnitY
+      viewMoved()
+      if (res.madeIndependent) {
+        showToast('Axes scaled independently to show this window — Settings → Axes: Equal to undo', {
+          ms: 5000,
+        })
+      } else if (res.contained) {
+        showToast('The polar ruling keeps the axes equal, so the window was fitted inside a square view.', {
+          ms: 5000,
+        })
+      }
+      return null
+    },
+    [keepSquare, showToast, viewMoved],
+  )
+
+  /** WINDOW → Square it: equal axes, same centre, the whole window still in view. */
+  const squareView = useCallback((): void => {
+    squareToContain(vpRef.current)
+    viewMoved()
+  }, [viewMoved])
+
+  const readViewWindow = useCallback((): ViewWindow => readWindow(vpRef.current), [])
+
+  /** Everything the settings panel's Axes and WINDOW controls need. */
+  const viewSettings = useMemo<ViewSettings>(
+    () => ({
+      mode: axesMode,
+      polar: boardGrid === 'polar',
+      onMode: chooseAxesMode,
+      read: readViewWindow,
+      subscribe: subscribeView,
+      onApply: applyViewWindow,
+      onSquare: squareView,
+    }),
+    [axesMode, boardGrid, chooseAxesMode, readViewWindow, subscribeView, applyViewWindow, squareView],
   )
 
   /**
@@ -5032,7 +5208,7 @@ export default function App() {
     frameBox(box)
   }, [frameBox, showToast])
 
-  frameBoxRef.current = frameBox
+  frameBoxRef.current = frameData
 
   /** "Zoom to data" on a table's menu: frame its points, nothing else. */
   const zoomToData = useCallback(
@@ -5043,25 +5219,11 @@ export default function App() {
         showToast('This table has no points to frame yet.', { ms: 2000 })
         return
       }
-      frameBox(box)
+      frameData(box)
     },
-    [frameBox, showToast],
+    [frameData, showToast],
   )
 
-  /** Pan/zoom happened: the marker layer rides the same viewport. */
-  const viewportChanged = useCallback((): void => {
-    overlayRef.current?.redraw()
-    // Where the curves cross is hunted over the window, so panning can bring a
-    // crossing into view that was never solved for. Hot path: this is a pair
-    // of comparisons unless the board has left the coarse span entirely.
-    refreshCrossSpan()
-    // A solution curve is integrated across a fixed x-range, so a board panned
-    // or zoomed past that range would show it stopping in mid-air. This is the
-    // hot path — it fires on every frame of a pan — and refreshSolveSpan does
-    // nothing at all unless the window has genuinely left the solved span.
-    refreshSolveSpan()
-    scheduleSave()
-  }, [refreshSolveSpan, scheduleSave])
 
   // ------------------------------------------------------------------ export
   //
@@ -5808,10 +5970,30 @@ export default function App() {
    * board is MEASURED, not a thing on it. Choosing one also settles the
    * question for this document — the offer below never comes back.
    */
-  const setRuling = useCallback((next: BoardGrid): void => {
-    polarOfferedRef.current = true
-    setBoardGrid((prev) => (prev === next ? prev : next))
-  }, [])
+  const setRuling = useCallback(
+    (next: BoardGrid): void => {
+      polarOfferedRef.current = true
+      // Circles of constant r are only circles on equal axes. A stretched
+      // board is REFUSED rather than silently re-squared: re-squaring throws
+      // away a window the teacher set on purpose. One tap does both.
+      if (rulingRefused(next, vpRef.current)) {
+        showToast(POLAR_NEEDS_EQUAL, {
+          ms: 7000,
+          action: {
+            label: 'Make axes equal',
+            run: () => {
+              squareAxes(vpRef.current)
+              setBoardGrid('polar')
+              viewMoved()
+            },
+          },
+        })
+        return
+      }
+      setBoardGrid((prev) => (prev === next ? prev : next))
+    },
+    [showToast, viewMoved],
+  )
 
   /**
    * Put the board in a figure style.
@@ -5902,9 +6084,9 @@ export default function App() {
     polarOfferedRef.current = true
     showToast(POLAR_OFFER, {
       ms: 9000,
-      action: { label: 'Polar ruling', run: () => setBoardGrid('polar') },
+      action: { label: 'Polar ruling', run: () => setRuling('polar') },
     })
-  }, [wantsPolar, showToast])
+  }, [wantsPolar, showToast, setRuling])
 
   /**
    * Shift+P: the x-axis, round the three states, with the answer said out loud.
@@ -6473,6 +6655,7 @@ export default function App() {
                 onAxisUnit={setAxisUnit}
                 grid={kind === 'cartesian' ? boardGrid : null}
                 onGrid={setRuling}
+                view={kind === 'cartesian' ? viewSettings : null}
                 wheel={wheelPref}
                 onWheel={setWheelPref}
                 figure={kind === 'cartesian' ? figureStyle : null}

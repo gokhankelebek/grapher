@@ -30,6 +30,8 @@ const WHEEL_PREFS: { value: WheelPref; label: string; title: string }[] = [
   { value: 'pan', label: 'Scroll', title: 'A plain wheel always moves the board' },
 ]
 import { FigurePicker } from './FigurePicker'
+import { WindowPanel } from './WindowPanel'
+import type { ViewSettings } from './WindowPanel'
 import { backgroundLockedNote, fixesBackground } from './figureStyle'
 
 /** What the Copy button is currently saying. */
@@ -76,6 +78,12 @@ interface Props {
    */
   grid: BoardGrid | null
   onGrid(next: BoardGrid): void
+  /**
+   * Axes (Equal · Independent) and the TI WINDOW, or null on a board with no
+   * y to scale (a number line). Beside the ruling: both say how the board is
+   * MEASURED, and the polar ruling and Independent axes exclude each other.
+   */
+  view?: ViewSettings | null
   /** What a plain mouse wheel does on the board (a global preference). */
   wheel: WheelPref
   onWheel(next: WheelPref): void
@@ -136,6 +144,7 @@ export function ExportMenu({
   onAxisUnit,
   grid,
   onGrid,
+  view = null,
   wheel,
   onWheel,
   figure,
@@ -238,7 +247,7 @@ export function ExportMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label="Board and export settings"
-        title={`Figure style, copy to clipboard, axis units, ruling, export settings — ${size.w}×${size.h} px`}
+        title={`Figure style, copy to clipboard, axis units, ruling, axes and window, export settings — ${size.w}×${size.h} px`}
         data-testid="export-settings"
         onClick={() => setOpen((o) => !o)}
       >
@@ -364,6 +373,13 @@ export function ExportMenu({
             </>
           )}
 
+          {view && (
+            <>
+              <div className="exp-menu-sep" />
+              <WindowPanel view={view} />
+            </>
+          )}
+
           <div className="exp-menu-sep" />
           <div className="exp-title">Mouse wheel</div>
           <div
@@ -388,7 +404,8 @@ export function ExportMenu({
           </div>
           <div className="exp-note">
             Auto zooms for a mouse wheel and scrolls for a trackpad's two-finger swipe. A pinch
-            or ⌘-wheel always zooms, shift-wheel always scrolls.
+            or ⌘-wheel always zooms both axes. On the graph, ⇧-wheel stretches x and ⌥-wheel
+            stretches y; on a number line ⇧-wheel scrolls.
           </div>
 
           <div className="exp-menu-sep" />
