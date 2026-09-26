@@ -2879,7 +2879,9 @@ button.an-value {
   .doc-confirm-no,
   .nl-dot-toggle,
   .doc-name,
-  .doc-rename {
+  .doc-rename,
+  .pw-rel,
+  .pw-grip {
     min-height: 44px;
   }
 
@@ -2887,7 +2889,9 @@ button.an-value {
   .seg-btn,
   .dash-btn,
   .board-kind-btn,
-  .doc-kind-btn {
+  .doc-kind-btn,
+  .pw-rel,
+  .pw-grip {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -3145,6 +3149,21 @@ button.an-value {
   box-shadow:
     0 1px 3px rgba(23, 30, 54, 0.2),
     inset 0 0 0 1px var(--border);
+}
+
+/* The sidebar stays dark under a light canvas, so a builder's tabs there
+   (Build ▾ → Sinusoidal, Piecewise, …) keep the dark segment — the light one
+   put near-white text on a white pill. */
+.canvas-light .sidebar .seg {
+  background: rgba(15, 17, 23, 0.7);
+}
+
+.canvas-light .sidebar .seg-on,
+.canvas-light .sidebar .seg-on:hover {
+  background: var(--panel-3);
+  box-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.35),
+    inset 0 0 0 1px var(--border-strong);
 }
 
 /* The panels that hang OFF the light toolbar are on the same paper. They are
@@ -5466,5 +5485,114 @@ button.calc-field-btn {
   .expr-name-chip {
     min-width: 44px;
     height: 44px;
+  }
+}
+
+/* ------------------------------------------------ piecewise (PiecewiseEditor)
+   "Build ▾ → Piecewise" and the Piecewise section on a typed curve's card:
+   a function as a TABLE of pieces. Each piece is a small bordered block —
+   its formula on the first line with ↑ ↓ ×, its interval on the second:
+   [ −∞ ] <○ x ≤● [ 0 ]. The relation is a button (< ⇄ ≤) and the dot beside
+   it is the one the graph draws. Everything else is the fe-/xe- vocabulary. */
+.pw-table {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.pw-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-1);
+  border-radius: 4px;
+  border: 1px solid var(--border-soft);
+}
+
+.pw-row-drop {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.pw-line {
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.pw-cond {
+  flex-wrap: wrap;
+}
+
+.pw-grip {
+  flex: 0 0 auto;
+  color: var(--faint);
+  font-size: var(--fs-xs);
+  letter-spacing: -0.2em;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.pw-grip:active {
+  cursor: grabbing;
+}
+
+.pw-expr {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+}
+
+.pw-name {
+  width: 28px;
+  text-align: center;
+}
+
+.pw-rel {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 6px;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.pw-rel:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.pw-dot {
+  color: var(--curve, var(--accent));
+  font-size: var(--fs-xs);
+}
+
+.pw-moves {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-left: auto;
+}
+
+.pw-otherwise {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+/* An overlap is a mistake in the definition; a gap or an end is just a fact. */
+.pw-verdicts li[data-kind='overlap'] {
+  color: var(--danger);
+}
+
+.pw-verdicts li[data-kind='gap'],
+.pw-verdicts li[data-kind='end'] {
+  color: var(--muted);
+}
+
+@media (pointer: coarse) {
+  .pw-moves .fe-step {
+    min-width: 44px;
+    min-height: 44px;
   }
 }

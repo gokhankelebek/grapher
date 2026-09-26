@@ -31,6 +31,8 @@ import { ExpEditor } from './ExpEditor'
 import { LogEditor } from './LogEditor'
 import { SinEditor } from './SinEditor'
 import { TransformEditor } from './TransformEditor'
+import { PiecewiseEditor } from './PiecewiseEditor'
+import type { FunctionEnv } from '../core/functionEnv'
 import type { TransformSpec } from '../core/transform'
 import type { Theme } from '../core/types'
 import type { SinSpec } from '../core/sinusoidal'
@@ -144,6 +146,21 @@ interface Props {
   /** The "show parent" switch's state for a curve; undefined = the section's default. */
   transformShowParentFor?(id: string): boolean | undefined
   onTransformShowParent?(id: string, on: boolean): void
+  /** "Build ▾ → Piecewise" is open at the top of the list. */
+  piecewiseOpen?: boolean
+  onPiecewiseToggle?(): void
+  /** Put a piecewise (or step) line on the board. Error, or null. */
+  onPiecewiseBuild?(src: string): string | null
+  /** Rewrite a typed curve's line in place from its Piecewise section. */
+  onPiecewiseRestate?(id: string, src: string, label: string): string | null
+  /** The env a rewritten line of curve `id` is parsed against (its calls of named curves). */
+  piecewiseEnvFor?(id: string, src: string): FunctionEnv | undefined
+  /** The same for a new line from the builder. */
+  piecewiseBuildEnv?(src: string): FunctionEnv | undefined
+  /** The builder's first name: the next free letter. */
+  piecewiseName?: string
+  /** Letters curves already hold. */
+  takenNames?: readonly string[]
   /** The board's ground, for the transformation gallery's thumbnails. */
   boardTheme?: Theme
   /** What this curve's card says about calculus. Undefined = nothing to say. */
@@ -324,6 +341,14 @@ export function Sidebar({
   onTransformRestate,
   transformShowParentFor,
   onTransformShowParent,
+  piecewiseOpen = false,
+  onPiecewiseToggle,
+  onPiecewiseBuild,
+  onPiecewiseRestate,
+  piecewiseEnvFor,
+  piecewiseBuildEnv,
+  piecewiseName,
+  takenNames,
   boardTheme,
   onShowInverse,
   intersectionsFor,
@@ -411,7 +436,7 @@ export function Sidebar({
             >
               +
             </button>
-            {!numberLine && (onFactorToggle || onExpToggle || onLogToggle || onSinToggle || onTransformToggle || onDataAdd) && (
+            {!numberLine && (onFactorToggle || onExpToggle || onLogToggle || onSinToggle || onTransformToggle || onPiecewiseToggle || onDataAdd) && (
               <BuildMenu
                 factorOpen={factorOpen}
                 expOpen={expOpen}
@@ -423,6 +448,8 @@ export function Sidebar({
                 onSinToggle={onSinToggle}
                 transformOpen={transformOpen}
                 onTransformToggle={onTransformToggle}
+                piecewiseOpen={piecewiseOpen}
+                onPiecewiseToggle={onPiecewiseToggle}
                 onDataAdd={onDataAdd}
               />
             )}
@@ -443,6 +470,15 @@ export function Sidebar({
           )}
           {!numberLine && transformOpen && onTransformBuild && onTransformToggle && (
             <TransformEditor onBuild={onTransformBuild} onClose={onTransformToggle} theme={boardTheme} />
+          )}
+          {!numberLine && piecewiseOpen && onPiecewiseBuild && onPiecewiseToggle && (
+            <PiecewiseEditor
+              onAdd={onPiecewiseBuild}
+              onClose={onPiecewiseToggle}
+              envFor={piecewiseBuildEnv}
+              defaultName={piecewiseName}
+              takenNames={takenNames}
+            />
           )}
           {exprOpen && (
             <ExprInput
@@ -546,6 +582,12 @@ export function Sidebar({
                   ? (src, label) => onTransformRestate(curve.id, src, label)
                   : undefined
               }
+              onPiecewiseRestate={
+                onPiecewiseRestate
+                  ? (src, label) => onPiecewiseRestate(curve.id, src, label)
+                  : undefined
+              }
+              piecewiseEnvFor={piecewiseEnvFor ? (src) => piecewiseEnvFor(curve.id, src) : undefined}
               transformShowParent={transformShowParentFor?.(curve.id)}
               onTransformShowParent={
                 onTransformShowParent ? (on) => onTransformShowParent(curve.id, on) : undefined

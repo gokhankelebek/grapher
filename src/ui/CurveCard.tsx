@@ -22,6 +22,9 @@ import { SinSection } from './SinEditor'
 import { fittedSine, safeReadSinusoid } from './sinLinks'
 import { TransformSection } from './TransformEditor'
 import { safeReadTransform, transformOpenByDefault, transformOwnsHandles } from './transformLinks'
+import { PiecewiseSection } from './PiecewiseEditor'
+import { piecewiseOpenByDefault, piecewiseSectionSpec } from './piecewiseLinks'
+import type { FunctionEnv } from '../core/functionEnv'
 import { fitQuality } from '../core/fit/recognize'
 import { findAsymptotes } from '../core/holes'
 import { Latex } from './Latex'
@@ -162,6 +165,13 @@ interface Props {
    * — the same restate path again. Absent = no section.
    */
   onTransformRestate?(src: string, label: string): string | null
+  /**
+   * Rewrite this TYPED curve's piecewise line in place from its Piecewise
+   * section (a table of pieces) — the same restate path. Absent = no section.
+   */
+  onPiecewiseRestate?(src: string, label: string): string | null
+  /** The env a rewritten piecewise line is parsed against (its calls of named curves). */
+  piecewiseEnvFor?(src: string): FunctionEnv | undefined
   /**
    * Whether the board shows the parent's ghost and the key-point arrows for
    * this curve. Absent = the section's own default (open ⇒ shown).
@@ -676,6 +686,8 @@ export function CurveCard({
   onShowInverse,
   onSinRestate,
   onTransformRestate,
+  onPiecewiseRestate,
+  piecewiseEnvFor,
   transformShowParent,
   onTransformShowParent,
   name,
@@ -764,6 +776,16 @@ export function CurveCard({
    */
   const transform = useMemo(
     () => (isExpression && readable && curve.kind === 'explicit' ? safeReadTransform(exprSource) : null),
+    [isExpression, readable, curve.kind, exprSource],
+  )
+
+  /**
+   * The line read back as a TABLE of pieces (src/core/piecewise.ts) — any
+   * typed `{… if …, … if …}` line, or one restricted formula (collapsed:
+   * a teacher may want to add a piece to it) — or null.
+   */
+  const piecewise = useMemo(
+    () => (isExpression && readable && curve.kind === 'explicit' ? piecewiseSectionSpec(exprSource) : null),
     [isExpression, readable, curve.kind, exprSource],
   )
   const transformOthers = {
@@ -1723,6 +1745,16 @@ export function CurveCard({
 
       {selected && (
         <div className="card-body" onClick={(e) => e.stopPropagation()}>
+          {/* A function built piece by piece is edited BY its pieces. */}
+          {piecewise && onPiecewiseRestate && exprSource && (
+            <PiecewiseSection
+              src={exprSource}
+              params={curve.params}
+              defaultOpen={piecewiseOpenByDefault(exprSource)}
+              envFor={piecewiseEnvFor}
+              onRestate={onPiecewiseRestate}
+            />
+          )}
           {/* A function built from its roots is edited BY its roots: they
               are the numbers a teacher set, so they come first. */}
           {factored && onFactorRestate && (

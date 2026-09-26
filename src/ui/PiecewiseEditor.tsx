@@ -29,6 +29,7 @@ import {
 } from './piecewiseLinks'
 import type {
   BoundSide,
+  Env,
   CellProblem,
   PieceCell,
   PieceTable,
@@ -68,110 +69,18 @@ import type {
 // The logic is pure and lives in src/ui/piecewiseLinks.ts.
 //
 // ----------------------------------------------------------------------------
-// WIRING (phase 2) — mirrors Sinusoidal / Transformation exactly.
-// ----------------------------------------------------------------------------
-//
-// src/App.tsx
-//   1. State, next to `const [transformOpen, setTransformOpen] = useState(false)`:
-//        /** "Build ▾ → Piecewise" open at the top of the list (src/ui/PiecewiseEditor.tsx). */
-//        const [piecewiseOpen, setPiecewiseOpen] = useState(false)
-//   2. Handler, after buildTransformation:
-//        /** "Add to graph": the normal typed-equation path, one undo entry. */
-//        const buildPiecewise = useCallback(
-//          (src: string): string | null => {
-//            const err = addExpression(src, 'build piecewise')
-//            if (err) return err
-//            setPiecewiseOpen(false)
-//            return null
-//          },
-//          [addExpression],
-//        )
-//   3. <Sidebar …>: add `setPiecewiseOpen(false)` to EVERY other toggle
-//      (onExprToggle, onFactorToggle, onExpToggle, onLogToggle, onSinToggle,
-//      onTransformToggle, onDataAdd), and pass
-//        piecewiseOpen={piecewiseOpen}
-//        onPiecewiseToggle={() => {
-//          setExprOpen(false); setFactorOpen(false); setExpOpen(false)
-//          setLogOpen(false); setSinOpen(false); setTransformOpen(false)
-//          setPiecewiseOpen((o) => !o)
-//        }}
-//        onPiecewiseBuild={buildPiecewise}
-//        onPiecewiseRestate={restateFactors}
-//      (and `setPiecewiseOpen(false)` into onTransformToggle's list etc.)
-//
-// src/ui/BuildMenu.tsx
-//   4. Props `piecewiseOpen?: boolean` (default false) and
-//      `onPiecewiseToggle?(): void`; add `|| piecewiseOpen` to anyOpen; add
-//        {item('Piecewise / step', piecewiseOpen, onPiecewiseToggle, 'build-piecewise')}
-//      after the Transformation item; extend the button title with
-//      "…, or a piecewise / step function piece by piece".
-//
-// src/ui/Sidebar.tsx
-//   5. import { PiecewiseEditor } from './PiecewiseEditor'
-//   6. Props (next to the transform ones):
-//        /** "Build ▾ → Piecewise" is open at the top of the list. */
-//        piecewiseOpen?: boolean
-//        onPiecewiseToggle?(): void
-//        /** Put a piecewise line on the board. Error, or null. */
-//        onPiecewiseBuild?(src: string): string | null
-//        /** Rewrite a typed curve's line in place from its Piecewise section. */
-//        onPiecewiseRestate?(id: string, src: string, label: string): string | null
-//      destructure them (`piecewiseOpen = false`, …); add `|| onPiecewiseToggle`
-//      to the BuildMenu guard; pass piecewiseOpen / onPiecewiseToggle to <BuildMenu>.
-//   7. In .sidebar-list after the TransformEditor line:
-//        {!numberLine && piecewiseOpen && onPiecewiseBuild && onPiecewiseToggle && (
-//          <PiecewiseEditor onAdd={onPiecewiseBuild} onClose={onPiecewiseToggle} />
-//        )}
-//   8. On <CurveCard …> next to onTransformRestate:
-//        onPiecewiseRestate={
-//          onPiecewiseRestate ? (src, label) => onPiecewiseRestate(curve.id, src, label) : undefined
-//        }
-//
-// src/ui/CurveCard.tsx
-//   9. import { PiecewiseSection } from './PiecewiseEditor'
-//      import { piecewiseOpenByDefault, piecewiseSectionSpec } from './piecewiseLinks'
-//  10. Prop `onPiecewiseRestate?(src: string, label: string): string | null`
-//      (destructure it).
-//  11. After the `transform` memo:
-//        /** The line read back as a table of pieces (src/core/piecewise.ts), or null. */
-//        const piecewise = useMemo(
-//          () => (isExpression && !broken && curve.kind === 'explicit' ? piecewiseSectionSpec(exprSource) : null),
-//          [isExpression, broken, curve.kind, exprSource],
-//        )
-//  12. In .card-body after the TransformSection block:
-//        {piecewise && onPiecewiseRestate && exprSource && (
-//          <PiecewiseSection
-//            src={exprSource}
-//            params={curve.params}
-//            defaultOpen={piecewiseOpenByDefault(exprSource)}
-//            onRestate={onPiecewiseRestate}
-//          />
-//        )}
-//      (`params` = the curve's slider values in parseExpression(src).plot.paramNames
-//      order — what a typed curve's params are; omit it to judge at the defaults.)
-//
-// src/ui/styles.css — new rules (phase 1 reuses fe-/xe-/calc- classes; these
-// only refine the layout; every length on the 4/8/12/16/24 scale, font sizes
-// from the --fs-* tokens):
-//   .pw-table   { display: flex; flex-direction: column; gap: var(--sp-2); }
-//   .pw-row     { display: flex; flex-direction: column; gap: var(--sp-1);
-//                 padding: var(--sp-1); border-radius: 4px;
-//                 border: 1px solid var(--border-soft); }
-//   .pw-row-drop { border-color: var(--accent); }        /* a drag hovering */
-//   .pw-grip    { cursor: grab; color: var(--faint); user-select: none;
-//                 touch-action: none; }
-//   .pw-expr    { flex: 1 1 auto; min-width: 0; width: auto; }
-//   .pw-rel     { min-width: 44px; font-family: var(--font-mono); }  /* ≤● */
-//   .pw-rel:disabled { opacity: 0.45; cursor: default; }
-//   .pw-dot     { font-size: var(--fs-xs); color: var(--curve, var(--accent)); }
-//   .pw-moves   { margin-left: auto; display: inline-flex; gap: var(--sp-1); }
-//   .pw-otherwise { color: var(--muted); font-size: var(--fs-xs); }
-//   .pw-verdicts li[data-kind='overlap'] { color: var(--danger); }
-//   .pw-verdicts li[data-kind='gap'],
-//   .pw-verdicts li[data-kind='end'] { color: var(--muted); }
-//   @media (pointer: coarse) { .pw-rel, .pw-grip { min-height: 44px; } }
-//   (if tests/styles.test.ts's 44×44 control list is meant to cover every
-//   touch control, add .pw-rel and .pw-grip to it)
+// WIRING — mirrors Sinusoidal / Transformation:
+//   App.tsx       piecewiseOpen state; buildPiecewise → addExpression (a typed
+//                 head f(x) = {…} claims its letter as typing it would);
+//                 piecewiseEnvFor(id | null, src) → the line's calls of named
+//                 curves, decided as addExpression / a restate decides them;
+//                 the Name field starts at the next free letter.
+//   BuildMenu.tsx "Piecewise / step" item (data-testid build-piecewise).
+//   Sidebar.tsx   <PiecewiseEditor> at the top of the list; per-card env and
+//                 onPiecewiseRestate.
+//   CurveCard.tsx <PiecewiseSection> first in the card body when the line
+//                 reads back as a table (collapsed for a single restricted formula).
+//   styles.css    the .pw-* rules; .pw-rel / .pw-grip in the 44px touch layer.
 // ============================================================================
 
 type Mode = 'draft' | 'commit'
@@ -541,10 +450,21 @@ interface EditorProps {
   onClose(): void
   /** Start from this draft (tests). */
   initial?: PiecewiseDraft
+  /**
+   * The env a line is parsed against — its calls of the board's named curves
+   * (g of `g(x) + 1`), decided as addExpression decides them. Absent: none.
+   */
+  envFor?(src: string): Env
+  /** The Name field's first letter (the next free one on the board). */
+  defaultName?: string
+  /** Letters other curves already hold: taking one moves that curve's name. */
+  takenNames?: readonly string[]
 }
 
-export function PiecewiseEditor({ onAdd, onClose, initial }: EditorProps) {
-  const [draft, setDraft] = useState<PiecewiseDraft>(() => initial ?? blankPiecewiseDraft())
+export function PiecewiseEditor({ onAdd, onClose, initial, envFor, defaultName, takenNames }: EditorProps) {
+  const [draft, setDraft] = useState<PiecewiseDraft>(
+    () => initial ?? { ...blankPiecewiseDraft(), name: defaultName ?? 'f' },
+  )
   const [buildError, setBuildError] = useState<string | null>(null)
   const firstRef = useRef<HTMLInputElement | null>(null)
 
@@ -553,7 +473,8 @@ export function PiecewiseEditor({ onAdd, onClose, initial }: EditorProps) {
     firstRef.current?.select()
   }, [])
 
-  const result = useMemo(() => piecewiseResult(draft), [draft])
+  const result = useMemo(() => piecewiseResult(draft, envFor), [draft, envFor])
+  const nameTaken = !!takenNames?.includes(draft.name.trim())
   const canBuild = result.src !== null
   const blankFormula = result.problems.some((p) => p.cell === 'expr' && /^Type /.test(p.message))
 
@@ -628,6 +549,12 @@ export function PiecewiseEditor({ onAdd, onClose, initial }: EditorProps) {
         />
         <span className="calc-tag">{draft.name.trim() ? '(x) =' : '= (no name)'}</span>
       </div>
+      {nameTaken && (
+        <div className="field-hint" data-testid="pw-name-taken">
+          {draft.name.trim()} already names a curve — adding this takes {draft.name.trim()}, and that curve gets
+          the next free letter.
+        </div>
+      )}
 
       {draft.tab === 'pieces' && (
         <div className="xe-body" data-testid="pw-tab-pieces">
@@ -783,9 +710,11 @@ interface SectionProps {
   params?: readonly number[]
   /** Open at first (default: open). */
   defaultOpen?: boolean
+  /** The env a rewritten line is parsed against (its calls of named curves). */
+  envFor?(src: string): Env
 }
 
-export function PiecewiseSection({ src, onRestate, params, defaultOpen = true }: SectionProps) {
+export function PiecewiseSection({ src, onRestate, params, defaultOpen = true, envFor }: SectionProps) {
   const spec = useMemo(() => safeReadPiecewise(src), [src])
   const [open, setOpen] = useState(defaultOpen)
   const [table, setTable] = useState<PieceTable | null>(() => (spec ? tableFromSpec(spec) : null))
@@ -801,22 +730,23 @@ export function PiecewiseSection({ src, onRestate, params, defaultOpen = true }:
   }, [src, spec])
 
   const name = spec?.name
-  const problems = useMemo(() => (table ? tableProblems(table) : []), [table])
-  const sliders = useMemo(() => slidersOf(src, params), [src, params])
+  const env = useMemo(() => envFor?.(src), [envFor, src])
+  const problems = useMemo(() => (table ? tableProblems(table, env) : []), [table, env])
+  const sliders = useMemo(() => slidersOf(src, params, env), [src, params, env])
   const verdicts = useMemo(() => {
     if (!spec) return []
     const judged = table && problems.length === 0 ? tableToSpec(table, name) : spec
-    return verdictsFor(judged, sliders)
-  }, [spec, table, problems, name, sliders])
+    return verdictsFor(judged, sliders, env)
+  }, [spec, table, problems, name, sliders, env])
 
   if (!spec || !table) return null
 
   const change = (next: PieceTable, label: string): void => {
     setTable(next)
-    const c = commitTable(next, name)
+    const c = commitTable(next, name, envFor)
     if (c.error !== null) {
       // The row shows its own problem; anything else is said below the table.
-      setError(tableProblems(next).length > 0 ? null : c.error)
+      setError(c.cell ? null : c.error)
       return
     }
     if (c.src === src) {

@@ -297,6 +297,36 @@ describe('the card section', () => {
 })
 
 // ---------------------------------------------------------------------------
+// calls of the board's named curves
+// ---------------------------------------------------------------------------
+
+describe('a piece may call a named curve', () => {
+  // g(x) = x^2 on the board, as src/ui/nameLinks.ts's lineEnv hands it over
+  const env = { has: (n: string) => n === 'g' || n === 'f', eval: (n: string, x: number) => (n === 'g' ? x * x : NaN) }
+  const envFor = () => env
+  const t = table(['g(x) + 1', '', '0', false, false], ["g'(x)", '0', '', true, false])
+
+  it('the cells validate against the env, not as sliders', () => {
+    // g'(x) is a derivative call: only an env that has g reads it
+    expect(tableProblems(t).map((p) => p.row)).toEqual([1])
+    expect(tableProblems(t, env)).toEqual([])
+  })
+
+  it('the preview and the verdicts use g’s values', () => {
+    const r = piecewiseResult({ ...blankPiecewiseDraft(), pieces: t }, envFor)
+    expect(r.src).toBe("f(x) = {g(x) + 1 if x < 0, g'(x) if x >= 0}")
+    expect(r.error).toBeNull()
+    // left: g(0) + 1 = 1; right: g'(0) = 0
+    expect(r.verdicts[0].text).toMatch(/^jump of 1 at x = 0: left limit 1, right limit 0/)
+  })
+
+  it('the card commit parses with the env too', () => {
+    expect(commitTable(t, 'f').src).toBeNull()
+    expect(commitTable(t, 'f', envFor).src).toBe("f(x) = {g(x) + 1 if x < 0, g'(x) if x >= 0}")
+  })
+})
+
+// ---------------------------------------------------------------------------
 // markup
 // ---------------------------------------------------------------------------
 
@@ -320,6 +350,18 @@ describe('PiecewiseEditor markup', () => {
     expect(html).toContain('jump of 2 at x = 0')
     expect(html).toContain('continuous at x = 2')
     expect(html).not.toMatch(/<button[^>]*disabled[^>]*>Add to graph/)
+  })
+
+  it('the Name field starts at the board’s next free letter, and says when a letter is taken', () => {
+    const html = renderToStaticMarkup(
+      createElement(PiecewiseEditor, { defaultName: 'g', takenNames: ['f'], onAdd: () => null, onClose: NOOP }),
+    )
+    expect(html).toMatch(/data-testid="pw-name"[^>]*value="g"|value="g"[^>]*data-testid="pw-name"/)
+    expect(html).not.toContain('pw-name-taken')
+    const taken = renderToStaticMarkup(
+      createElement(PiecewiseEditor, { initial: exampleDraft(), takenNames: ['f'], onAdd: () => null, onClose: NOOP }),
+    )
+    expect(taken).toContain('data-testid="pw-name-taken"')
   })
 
   it('a bad cell is red and Add is disabled', () => {

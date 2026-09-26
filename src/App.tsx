@@ -649,6 +649,8 @@ export default function App() {
   } | null>(null)
   /** "Build ▾ → Transformation" open at the top of the list (src/ui/TransformEditor.tsx). */
   const [transformOpen, setTransformOpen] = useState(false)
+  /** "Build ▾ → Piecewise" open at the top of the list (src/ui/PiecewiseEditor.tsx). */
+  const [piecewiseOpen, setPiecewiseOpen] = useState(false)
   /** The transformation handle being dragged, the spec at the press and the handle's place then. */
   const transformDragRef = useRef<{
     handleId: string
@@ -5424,6 +5426,44 @@ export default function App() {
     [addExpression],
   )
 
+  // ======================================================= piecewise
+  //
+  // A piecewise or step function is one more ordinary TYPED line: "Build ▾ →
+  // Piecewise" writes it from a table of pieces (src/core/piecewise.ts) and
+  // hands it to addExpression — so a typed head `f(x) = {…}` claims its
+  // letter exactly as typing it would. The card's Piecewise section rewrites
+  // the line and restates it in place through restateTypedCurve.
+
+  /** "Add to graph": the normal typed-equation path, one undo entry. */
+  const buildPiecewise = useCallback(
+    (src: string): string | null => {
+      const err = addExpression(src, 'build piecewise')
+      if (err) return err
+      setPiecewiseOpen(false)
+      return null
+    },
+    [addExpression],
+  )
+
+  /**
+   * The env a piecewise line in the making is parsed against: the letters it
+   * calls decided as addExpression (id null) or a restate of curve `id` will
+   * decide them, so `g(x) + 1` in a piece is g's values, not a slider g.
+   */
+  const piecewiseEnvFor = useCallback(
+    (id: string | null, src: string): FunctionEnv | undefined => {
+      const head = typedName(src)
+      const own = id ? namesRef.current[id] : head ?? undefined
+      const lineCalls = boundCalls(src, {
+        letters: boardLetters(namesRef.current, callsRef.current, own ?? undefined),
+        prevCalls: id ? callsRef.current[id] : undefined,
+      })
+      return envFor(lineCalls, head)
+    },
+    [envFor],
+  )
+  const piecewiseBuildEnv = useCallback((src: string) => piecewiseEnvFor(null, src), [piecewiseEnvFor])
+
   /**
    * Drag one transformation handle: the anchor (h and k together) or the
    * other key point (vertically a, sideways b, the anchor held). Every frame
@@ -6709,6 +6749,17 @@ export default function App() {
     () => lineErrors({ curves, names, calls, models }),
     [curves, names, calls, models],
   )
+  /** Letters curves already hold — the piecewise builder says so when its name takes one. */
+  const takenNames = useMemo(() => Object.values(names), [names])
+  /** The piecewise builder's first name: the next free letter, as a new curve would get. */
+  const piecewiseName = useMemo(
+    () =>
+      nextFreeLetter(
+        new Set(Object.values(names)),
+        new Set([...awaitedLetters(calls), ...sliderLetters(curves, exprSources, models)]),
+      ) ?? '',
+    [names, calls, curves, exprSources, models],
+  )
   /** The letters the equation box offers as chips. */
   const exprNames = useMemo(
     () => (kind === 'cartesian' ? callableNames(curves, names) : []),
@@ -7644,6 +7695,7 @@ export default function App() {
           setLogOpen(false)
           setSinOpen(false)
           setTransformOpen(false)
+          setPiecewiseOpen(false)
           setExprOpen((o) => !o)
         }}
         factorOpen={factorOpen}
@@ -7653,6 +7705,7 @@ export default function App() {
           setLogOpen(false)
           setSinOpen(false)
           setTransformOpen(false)
+          setPiecewiseOpen(false)
           setFactorOpen((o) => !o)
         }}
         expOpen={expOpen}
@@ -7662,6 +7715,7 @@ export default function App() {
           setLogOpen(false)
           setSinOpen(false)
           setTransformOpen(false)
+          setPiecewiseOpen(false)
           setExpOpen((o) => !o)
         }}
         logOpen={logOpen}
@@ -7671,6 +7725,7 @@ export default function App() {
           setExpOpen(false)
           setSinOpen(false)
           setTransformOpen(false)
+          setPiecewiseOpen(false)
           setLogOpen((o) => !o)
         }}
         sinOpen={sinOpen}
@@ -7680,6 +7735,7 @@ export default function App() {
           setExpOpen(false)
           setLogOpen(false)
           setTransformOpen(false)
+          setPiecewiseOpen(false)
           setSinOpen((o) => !o)
         }}
         onSinBuild={buildSinusoid}
@@ -7691,10 +7747,27 @@ export default function App() {
           setExpOpen(false)
           setLogOpen(false)
           setSinOpen(false)
+          setPiecewiseOpen(false)
           setTransformOpen((o) => !o)
         }}
         onTransformBuild={buildTransformation}
         onTransformRestate={restateFactors}
+        piecewiseOpen={piecewiseOpen}
+        onPiecewiseToggle={() => {
+          setExprOpen(false)
+          setFactorOpen(false)
+          setExpOpen(false)
+          setLogOpen(false)
+          setSinOpen(false)
+          setTransformOpen(false)
+          setPiecewiseOpen((o) => !o)
+        }}
+        onPiecewiseBuild={buildPiecewise}
+        onPiecewiseRestate={restateFactors}
+        piecewiseEnvFor={piecewiseEnvFor}
+        piecewiseBuildEnv={piecewiseBuildEnv}
+        piecewiseName={piecewiseName}
+        takenNames={takenNames}
         transformShowParentFor={transformShowParentFor}
         onTransformShowParent={setTransformShowParent}
         boardTheme={screenTheme}
@@ -7754,6 +7827,7 @@ export default function App() {
           setLogOpen(false)
           setSinOpen(false)
           setTransformOpen(false)
+          setPiecewiseOpen(false)
           addDataTable()
         }}
         data={dataSets}

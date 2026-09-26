@@ -42,6 +42,10 @@ import {
   type PiecewiseSpec,
 } from '../core/piecewise'
 import { exactForm } from '../core/exact'
+import type { FunctionEnv } from '../core/functionEnv'
+
+/** What a line may call — the board's named curves (src/ui/nameLinks.ts); absent: none. */
+export type Env = FunctionEnv | null | undefined
 
 // ----------------------------------------------------------------------------
 // rows
@@ -246,10 +250,10 @@ export interface CellProblem {
 const NOT_X = new Set(['y', 'r', 'θ', 't'])
 
 /** One formula field: null when fine, else what is wrong with it. */
-export function exprProblem(text: string): string | null {
+export function exprProblem(text: string, env?: Env): string | null {
   const s = text.trim()
   if (s === '') return "Type this piece's formula"
-  const c = compileExpr(s)
+  const c = compileExpr(s, env)
   if (!c.ok) return c.error
   const bad = c.expr.vars.find((v) => NOT_X.has(v))
   if (bad) return `A piece is a formula in x — ${bad} cannot appear in it`
@@ -276,10 +280,10 @@ export function boundProblem(text: string): string | null {
 }
 
 /** Every bad cell of the table, in row order. */
-export function tableProblems(t: PieceTable): CellProblem[] {
+export function tableProblems(t: PieceTable, env?: Env): CellProblem[] {
   const out: CellProblem[] = []
   t.rows.forEach((r, i) => {
-    const e = exprProblem(r.expr)
+    const e = exprProblem(r.expr, env)
     if (e) out.push({ row: i, cell: 'expr', message: e })
     if (isOtherwiseRow(t, i)) return
     const lp = boundProblem(r.lo)
@@ -383,9 +387,10 @@ export function verdictSpec(spec: PiecewiseSpec): PiecewiseSpec {
 export function pieceEvaluator(
   spec: PiecewiseSpec,
   sliders: Readonly<Record<string, number>> = {},
+  env?: Env,
 ): (i: number, x: number) => number {
   const fs = (spec.pieces ?? []).map((p) => {
-    const c = compileExpr((p.expr ?? '').trim() || '0')
+    const c = compileExpr((p.expr ?? '').trim() || '0', env)
     if (!c.ok) return null
     const params = c.expr.paramNames.map((n) => (Number.isFinite(sliders[n]) ? sliders[n] : 1))
     const ev = c.expr.ev
@@ -398,10 +403,10 @@ export function pieceEvaluator(
 }
 
 /** The slider values of a line: the parser's defaults, or the curve's own. */
-export function slidersOf(src: string, values?: readonly number[]): Record<string, number> {
+export function slidersOf(src: string, values?: readonly number[], env?: Env): Record<string, number> {
   const out: Record<string, number> = {}
   try {
-    const o = parseExpression(src)
+    const o = parseExpression(src, env)
     if (!o.ok) return out
     o.plot.paramNames.forEach((n, i) => {
       const v = values?.[i] ?? o.plot.defaultParams[i]
@@ -420,10 +425,14 @@ export interface Verdict {
 }
 
 /** What happens at each breakpoint, left to right — the list under the table. */
-export function verdictsFor(spec: PiecewiseSpec, sliders: Readonly<Record<string, number>> = {}): Verdict[] {
+export function verdictsFor(
+  spec: PiecewiseSpec,
+  sliders: Readonly<Record<string, number>> = {},
+  env?: Env,
+): Verdict[] {
   try {
     const judged = verdictSpec(spec)
-    return breakpoints(judged, pieceEvaluator(judged, sliders)).map((b) => ({
+    return breakpoints(judged, pieceEvaluator(judged, sliders, env)).map((b) => ({
       kind: b.kind,
       x: b.x,
       text: b.sentence,
@@ -581,9 +590,9 @@ export interface PiecewiseResult {
   sentence: string | null
 }
 
-function parseLatex(src: string): { latex: string | null; error: string | null } {
+function parseLatex(src: string, env?: Env): { latex: string | null; error: string | null } {
   try {
-    const o = parseExpression(src)
+    const o = parseExpression(src, env)
     if (!o.ok) return { latex: null, error: o.error }
     if (o.plot.kind !== 'explicit') return { latex: null, error: 'This is not a function of x' }
     return { latex: o.plot.latex, error: null }
@@ -593,7 +602,10 @@ function parseLatex(src: string): { latex: string | null; error: string | null }
 }
 
 /** Everything the Build card shows, from its draft. */
-export function piecewiseResult(d: PiecewiseDraft): PiecewiseResult {
+export function piecewiseResult(
+  d: PiecewiseDraft,
+  envFor?: (src: string) => Env,
+): PiecewiseResult {
   const empty: PiecewiseResult = {
     src: null, previewSrc: null, latex: null, problems: [], error: null, verdicts: [], sentence: null,
   }
@@ -606,7 +618,7 @@ export function piecewiseResult(d: PiecewiseDraft): PiecewiseResult {
     const error = nameErr ?? bad
     if (bad) return { ...empty, error }
     const src = stepFamilySource(d.step, name)
-    const p = parseLatex(src)
+    const p = parseLatex(src, envFor?.(src))
     return {
       ...empty,
       src: error || p.error ? null : src,
@@ -619,18 +631,22 @@ export function piecewiseResult(d: PiecewiseDraft): PiecewiseResult {
 
   const table = d.tab === 'step' ? d.step.table : d.pieces
   const spec = d.tab === 'step' ? stepTableSpec(table, name) : tableToSpec(table, name)
-  const problems = tableProblems(table)
   const src = piecewiseSource(spec)
-  const p = parseLatex(src)
+  // The line's calls, decided as addExpression will decide them.
+  const env = envFor?.(src)
+  const problems = tableProblems(table, env)
+  const p = parseLatex(src, env)
   const bad = problems.length > 0
+  // Nothing typed yet: no preview, rather than a `f(x) = 0` nobody wrote.
+  const blank = table.rows.every((r) => r.expr.trim() === '')
   return {
     ...empty,
     src: bad || nameErr || p.error ? null : src,
-    previewSrc: src,
-    latex: p.latex,
+    previewSrc: blank ? null : src,
+    latex: blank ? null : p.latex,
     problems,
     error: nameErr ?? (bad ? null : p.error),
-    verdicts: bad || p.error ? [] : verdictsFor(spec, slidersOf(src)),
+    verdicts: bad || p.error ? [] : verdictsFor(spec, slidersOf(src, undefined, env), env),
   }
 }
 
@@ -646,12 +662,14 @@ export function piecewiseResult(d: PiecewiseDraft): PiecewiseResult {
 export function commitTable(
   t: PieceTable,
   name: string | undefined,
-): { src: string; error: null } | { src: null; error: string } {
-  const problems = tableProblems(t)
-  if (problems.length > 0) return { src: null, error: problems[0].message }
+  envFor?: (src: string) => Env,
+): { src: string; error: null } | { src: null; error: string; cell: boolean } {
   const src = piecewiseSource(tableToSpec(t, name))
-  const p = parseLatex(src)
-  if (p.error) return { src: null, error: p.error }
+  const env = envFor?.(src)
+  const problems = tableProblems(t, env)
+  if (problems.length > 0) return { src: null, error: problems[0].message, cell: true }
+  const p = parseLatex(src, env)
+  if (p.error) return { src: null, error: p.error, cell: false }
   return { src, error: null }
 }
 
