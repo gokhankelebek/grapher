@@ -5596,3 +5596,77 @@ button.calc-field-btn {
     min-height: 44px;
   }
 }
+
+/* ============================================================================
+   Conic sections — Build ▾ → Conic section, and a typed conic's card section.
+   ========================================================================= */
+
+/* Six tabs do not fit one row of a narrow sidebar: they wrap, never clip. */
+.co-tabs {
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+
+.co-tag {
+  min-width: 3.2em;
+}
+
+/* A point field holds "(2, -1)" or "(2 + sqrt(5), -1)". */
+.co-input-pt {
+  width: 104px;
+}
+
+.co-input-line {
+  width: 104px;
+}
+
+.co-input-eq {
+  width: 100%;
+  font-family: var(--font-mono);
+}
+
+.co-card .fe-preview {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.co-kind {
+  margin-left: auto;
+  padding: 1px var(--sp-2);
+  border-radius: 999px;
+  border: 1px solid var(--border-soft);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+/* The discriminant sentence: a statement about the equation, read-only. */
+.co-class {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.co-fields {
+  flex-wrap: wrap;
+  row-gap: var(--sp-1);
+}
+
+.co-field {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.co-convert {
+  margin-left: var(--sp-2);
+  font-family: var(--font-sans, inherit);
+}
+
+@media (pointer: coarse) {
+  .co-write,
+  .co-convert {
+    min-height: 44px;
+  }
+}

@@ -203,6 +203,19 @@ import {
   withKeyMarks,
 } from './ui/sinLinks'
 import type { SinHandleKind } from './ui/sinLinks'
+import { conicSource } from './core/conics'
+import type { ConicSpec } from './core/conics'
+import {
+  CONIC_HANDLE_LABEL,
+  conicHandles,
+  conicKeyMarks,
+  constructionPoints,
+  constructionPolylines,
+  constructionShapes,
+  dragConicHandle,
+  safeReadConic,
+} from './ui/conicLinks'
+import type { ConicHandleKind } from './ui/conicLinks'
 import { transformSource } from './core/transform'
 import type { TransformSpec } from './core/transform'
 import {
@@ -651,6 +664,24 @@ export default function App() {
   const [transformOpen, setTransformOpen] = useState(false)
   /** "Build ▾ → Piecewise" open at the top of the list (src/ui/PiecewiseEditor.tsx). */
   const [piecewiseOpen, setPiecewiseOpen] = useState(false)
+  /** "Build ▾ → Conic section" open at the top of the list (src/ui/ConicEditor.tsx). */
+  const [conicOpen, setConicOpen] = useState(false)
+  /** The conic handle being dragged and the spec at the press (as sinDragRef). */
+  const conicDragRef = useRef<{
+    handleId: string
+    curveId: string
+    bracket: unknown
+    spec: ConicSpec
+  } | null>(null)
+  /**
+   * The card's "show construction" switch, per curve: a conic whose foci,
+   * directrix, asymptotes and box are FIGURE content — drawn whether or not
+   * it is selected, and exported. Like "show parent", a way of looking at the
+   * board kept for the session, not saved with the document.
+   */
+  const [construction, setConstruction] = useState<Record<string, boolean>>({})
+  const constructionRef = useRef(construction)
+  constructionRef.current = construction
   /** The transformation handle being dragged, the spec at the press and the handle's place then. */
   const transformDragRef = useRef<{
     handleId: string
@@ -5464,6 +5495,63 @@ export default function App() {
   )
   const piecewiseBuildEnv = useCallback((src: string) => piecewiseEnvFor(null, src), [piecewiseEnvFor])
 
+  // ======================================================= conic sections
+  //
+  // A circle, ellipse, hyperbola or parabola is one more ordinary TYPED line —
+  // an implicit one: "Build ▾ → Conic section" writes its standard form
+  // (src/core/conics.ts) and hands it to addExpression. The card's Conic
+  // section (for any typed line the core reads as a conic, general form
+  // included), its "write in standard form" and the board handles rewrite
+  // that line and restate it in place through restateTypedCurve.
+
+  /** "Add to graph": the normal typed-equation path, one undo entry. */
+  const buildConic = useCallback(
+    (src: string): string | null => {
+      const err = addExpression(src, 'build conic')
+      if (err) return err
+      setConicOpen(false)
+      return null
+    },
+    [addExpression],
+  )
+
+  /**
+   * Drag one conic handle: the center (h and k), the end of either semi-axis
+   * (a, b; a circle's radius), a focus (c with the major / transverse
+   * semi-axis kept; a parabola's p). Every frame is computed from the spec at
+   * the press, each coordinate snapped to its own axis's ladder; one undo per
+   * drag.
+   */
+  const dragConic = useCallback(
+    (curveId: string, which: ConicHandleKind, handleId: string, to: Vec2): void => {
+      const bracket = preEditRef.current
+      let s = conicDragRef.current
+      if (!s || s.handleId !== handleId || s.curveId !== curveId || s.bracket !== bracket || !bracket) {
+        const spec = safeReadConic(exprSourcesRef.current[curveId])
+        if (!spec) return
+        s = { handleId, curveId, bracket, spec }
+        conicDragRef.current = s
+      }
+      const vp = vpRef.current
+      const snapped: Vec2 = { x: snapCoord(to.x, vp, 'x'), y: snapCoord(to.y, vp, 'y') }
+      const next = dragConicHandle(s.spec, which, snapped)
+      if (!next) return
+      let src: string
+      try {
+        src = conicSource(next)
+      } catch {
+        return
+      }
+      restateTypedCurve(curveId, src, CONIC_HANDLE_LABEL[which], true)
+    },
+    [restateTypedCurve],
+  )
+
+  const setConicConstruction = useCallback((id: string, on: boolean): void => {
+    setConstruction((m) => (Boolean(m[id]) === on ? m : { ...m, [id]: on }))
+  }, [])
+  const conicConstructionFor = useCallback((id: string): boolean => construction[id] === true, [construction])
+
   /**
    * Drag one transformation handle: the anchor (h and k together) or the
    * other key point (vertically a, sideways b, the anchor held). Every frame
@@ -6458,6 +6546,30 @@ export default function App() {
     // denominator's at its asymptote. Mid-drag the handles come from the spec
     // being dragged, so the one under the finger keeps its identity.
     const typed = curves.find((c) => c.id === selectedId)
+    // A typed CONIC (an implicit line): its center, the ends of its axes and a
+    // focus. Mid-drag the handles come from the line as it now reads — the
+    // handle under the finger keeps its id, and the drag computes from the
+    // spec at the press, so nothing compounds.
+    if (
+      typed &&
+      typed.visible &&
+      typed.kind === 'implicit' &&
+      typed.modelId.startsWith('expr_') &&
+      !(calls[typed.id]?.length)
+    ) {
+      const conic = safeReadConic(exprSources[typed.id])
+      if (conic) {
+        for (const h of conicHandles(conic)) {
+          const id = `conic:${typed.id}:${h.which}`
+          out.push({
+            id,
+            pos: h.pos,
+            label: h.label,
+            onDrag: (p) => dragConic(typed.id, h.which, id, p),
+          })
+        }
+      }
+    }
     if (
       typed &&
       typed.visible &&
@@ -6607,6 +6719,7 @@ export default function App() {
     dragLog,
     dragSin,
     dragTransform,
+    dragConic,
   ])
 
   // ----------------------------------------------- a selected sinusoid, marked
@@ -6634,6 +6747,57 @@ export default function App() {
     () => (selectedSin ? sinKeyMarks(selectedSin.spec) : []),
     [selectedSin],
   )
+
+  // ----------------------------------------------- a selected conic, marked
+  //
+  // While a typed conic is selected the board marks its center, vertices,
+  // co-vertices and foci through the analysis path (rings and exact chips,
+  // "(2 + √5, −1)"), names the foci F₁ and F₂ (labelled points), and draws
+  // the construction: a parabola's directrix dashed, a hyperbola's asymptotes
+  // dashed and its fundamental rectangle dotted. Screen only — unless the
+  // card's "show construction" is on, which makes the construction FIGURE
+  // content: drawn selected or not, and exported (see constructionConics).
+  const selectedConic = useMemo<{ spec: ConicSpec; color: string; id: string } | null>(() => {
+    if (kind !== 'cartesian' || !selectedCurve) return null
+    const c = selectedCurve
+    if (!c.visible || c.kind !== 'implicit' || !c.modelId.startsWith('expr_')) return null
+    if (calls[c.id]?.length) return null
+    const spec = safeReadConic(exprSources[c.id])
+    return spec ? { spec, color: c.color, id: c.id } : null
+  }, [kind, selectedCurve, exprSources, calls])
+
+  const conicMarks = useMemo<SpecialPoint[]>(
+    () => (selectedConic ? conicKeyMarks(selectedConic.spec) : []),
+    [selectedConic],
+  )
+
+  /** The conics whose construction is on: figure content, on screen and in the export. */
+  const constructionConics = useMemo<{ spec: ConicSpec; color: string; id: string }[]>(() => {
+    if (kind !== 'cartesian') return []
+    const out: { spec: ConicSpec; color: string; id: string }[] = []
+    for (const c of curves) {
+      if (!construction[c.id] || !c.visible || c.kind !== 'implicit' || !c.modelId.startsWith('expr_')) continue
+      if (calls[c.id]?.length) continue
+      const spec = safeReadConic(exprSources[c.id])
+      if (spec) out.push({ spec, color: c.color, id: c.id })
+    }
+    return out
+  }, [kind, curves, construction, exprSources, calls])
+
+  /** The construction as scene content: polylines and labelled points. */
+  const constructionScene = useMemo(() => {
+    const polylines: Polyline[] = []
+    const shapes: Shape[] = []
+    for (const c of constructionConics) {
+      polylines.push(...constructionPolylines(c.spec, c.color, `construction:${c.id}`))
+      shapes.push(...constructionShapes(c.spec, c.color, `construction:${c.id}`, true))
+    }
+    return { polylines, shapes }
+  }, [constructionConics])
+  const constructionSceneRef = useRef(constructionScene)
+  constructionSceneRef.current = constructionScene
+  const constructionConicsRef = useRef(constructionConics)
+  constructionConicsRef.current = constructionConics
 
   // ----------------------------------------- a selected transformation, marked
   //
@@ -6688,8 +6852,9 @@ export default function App() {
   const boardAnalysis = useMemo<SpecialPoint[]>(() => {
     const base = showAnalysis ? analysis : EMPTY_ANALYSIS
     const withSin = sinMarks.length > 0 ? withKeyMarks(base, sinMarks) : base
-    return transformMarks.length > 0 ? withKeyMarks(withSin, transformMarks) : withSin
-  }, [showAnalysis, analysis, sinMarks, transformMarks])
+    const withConic = conicMarks.length > 0 ? withKeyMarks(withSin, conicMarks) : withSin
+    return transformMarks.length > 0 ? withKeyMarks(withConic, transformMarks) : withConic
+  }, [showAnalysis, analysis, sinMarks, conicMarks, transformMarks])
 
   /**
    * The on-screen polylines: the fields' solutions, a sinusoid's midline, and
@@ -6701,6 +6866,12 @@ export default function App() {
       ? midlinePolyline(selectedSin.spec, selectedSin.color, `midline:${selectedSin.id}`)
       : null
     if (mid) out.push(mid)
+    // a conic's construction: every one that is figure content, and the
+    // selected one's while it is selected
+    out.push(...constructionScene.polylines)
+    if (selectedConic && !construction[selectedConic.id]) {
+      out.push(...constructionPolylines(selectedConic.spec, selectedConic.color, `construction:${selectedConic.id}`))
+    }
     if (selectedTransform?.ghost) {
       const inkFor = ghostInk(canvasTheme !== 'light')
       out.push(
@@ -6709,7 +6880,16 @@ export default function App() {
       )
     }
     return out.length === fieldPolylines.length ? fieldPolylines : out
-  }, [fieldPolylines, selectedSin, selectedTransform, ghostFrame, canvasTheme])
+  }, [fieldPolylines, selectedSin, selectedTransform, ghostFrame, canvasTheme, constructionScene, selectedConic, construction])
+
+  /** The on-screen shapes: the board's own, then a conic's named foci (F₁, F₂). */
+  const screenShapes = useMemo<Shape[]>(() => {
+    const extra: Shape[] = constructionScene.shapes.slice()
+    if (selectedConic && !construction[selectedConic.id]) {
+      extra.push(...constructionShapes(selectedConic.spec, selectedConic.color, `construction:${selectedConic.id}`))
+    }
+    return extra.length === 0 ? shapeScene : [...shapeScene, ...extra]
+  }, [shapeScene, constructionScene, selectedConic, construction])
 
   const copyTimerRef = useRef(0)
 
@@ -6961,7 +7141,18 @@ export default function App() {
     })
     if (kindRef.current !== 'cartesian') return box
     // A scatter plot is the figure too: a fitted export frames the points.
-    return unionBoxes([box, ...dataRef.current.filter((d) => d.visible).map(dataBox)])
+    // So is a conic's construction when it is on: its foci and box.
+    const construction = constructionConicsRef.current.map((c): Box | null => {
+      const pts = constructionPoints(c.spec)
+      if (pts.length === 0) return null
+      const xs = pts.map((p) => p.x)
+      const ys = pts.map((p) => p.y)
+      return {
+        min: { x: Math.min(...xs), y: Math.min(...ys) },
+        max: { x: Math.max(...xs), y: Math.max(...ys) },
+      }
+    })
+    return unionBoxes([box, ...dataRef.current.filter((d) => d.visible).map(dataBox), ...construction])
   }, [])
 
   const buildExportScene = useCallback(
@@ -7033,12 +7224,22 @@ export default function App() {
       // all — so they go into the exported scene by the same field the screen
       // uses rather than by a second code path that could forget them.
       fields: fieldSceneRef.current,
-      polylines: fieldPolylinesRef.current,
+      // A conic's construction is exported only when its card says "show
+      // construction" — then it is figure content, by the same two fields
+      // the screen draws it with (polylines: directrix, asymptotes, box;
+      // shapes: the foci F₁, F₂ and the vertices as points).
+      polylines:
+        constructionSceneRef.current.polylines.length > 0
+          ? [...fieldPolylinesRef.current, ...constructionSceneRef.current.polylines]
+          : fieldPolylinesRef.current,
       // A triangle, a vector, a labelled point ARE the figure on a geometry
       // board — often the only thing on it — so they go into the exported
       // scene by the same field the screen uses rather than by a second code
       // path that could forget them.
-      shapes: shapeSceneRef.current,
+      shapes:
+        constructionSceneRef.current.shapes.length > 0
+          ? [...shapeSceneRef.current, ...constructionSceneRef.current.shapes]
+          : shapeSceneRef.current,
       // And the data: a scatter plot and its residuals are the lesson on a
       // regression board, so the PNG gets the same sets the screen drew.
       ...(scatterSceneRef.current.length > 0 ? { scatter: scatterSceneRef.current } : {}),
@@ -7696,6 +7897,7 @@ export default function App() {
           setSinOpen(false)
           setTransformOpen(false)
           setPiecewiseOpen(false)
+          setConicOpen(false)
           setExprOpen((o) => !o)
         }}
         factorOpen={factorOpen}
@@ -7706,6 +7908,7 @@ export default function App() {
           setSinOpen(false)
           setTransformOpen(false)
           setPiecewiseOpen(false)
+          setConicOpen(false)
           setFactorOpen((o) => !o)
         }}
         expOpen={expOpen}
@@ -7716,6 +7919,7 @@ export default function App() {
           setSinOpen(false)
           setTransformOpen(false)
           setPiecewiseOpen(false)
+          setConicOpen(false)
           setExpOpen((o) => !o)
         }}
         logOpen={logOpen}
@@ -7726,6 +7930,7 @@ export default function App() {
           setSinOpen(false)
           setTransformOpen(false)
           setPiecewiseOpen(false)
+          setConicOpen(false)
           setLogOpen((o) => !o)
         }}
         sinOpen={sinOpen}
@@ -7736,6 +7941,7 @@ export default function App() {
           setLogOpen(false)
           setTransformOpen(false)
           setPiecewiseOpen(false)
+          setConicOpen(false)
           setSinOpen((o) => !o)
         }}
         onSinBuild={buildSinusoid}
@@ -7748,6 +7954,7 @@ export default function App() {
           setLogOpen(false)
           setSinOpen(false)
           setPiecewiseOpen(false)
+          setConicOpen(false)
           setTransformOpen((o) => !o)
         }}
         onTransformBuild={buildTransformation}
@@ -7760,9 +7967,25 @@ export default function App() {
           setLogOpen(false)
           setSinOpen(false)
           setTransformOpen(false)
+          setConicOpen(false)
           setPiecewiseOpen((o) => !o)
         }}
         onPiecewiseBuild={buildPiecewise}
+        conicOpen={conicOpen}
+        onConicToggle={() => {
+          setExprOpen(false)
+          setFactorOpen(false)
+          setExpOpen(false)
+          setLogOpen(false)
+          setSinOpen(false)
+          setTransformOpen(false)
+          setPiecewiseOpen(false)
+          setConicOpen((o) => !o)
+        }}
+        onConicBuild={buildConic}
+        onConicRestate={restateFactors}
+        conicConstructionFor={conicConstructionFor}
+        onConicConstruction={setConicConstruction}
         onPiecewiseRestate={restateFactors}
         piecewiseEnvFor={piecewiseEnvFor}
         piecewiseBuildEnv={piecewiseBuildEnv}
@@ -7828,6 +8051,7 @@ export default function App() {
           setSinOpen(false)
           setTransformOpen(false)
           setPiecewiseOpen(false)
+          setConicOpen(false)
           addDataTable()
         }}
         data={dataSets}
@@ -7927,7 +8151,7 @@ export default function App() {
           overlays={overlays}
           fields={fieldScene}
           polylines={screenPolylines}
-          shapes={shapeScene}
+          shapes={screenShapes}
           scatter={scatterScene}
           grid={boardGrid}
           figure={boardFigure}

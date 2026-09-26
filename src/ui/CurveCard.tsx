@@ -23,10 +23,15 @@ import { fittedSine, safeReadSinusoid } from './sinLinks'
 import { TransformSection } from './TransformEditor'
 import { safeReadTransform, transformOpenByDefault, transformOwnsHandles } from './transformLinks'
 import { PiecewiseSection } from './PiecewiseEditor'
+import { ConicSection } from './ConicEditor'
+import { conicSectionInfo, fittedCircle, fittedEllipse } from './conicLinks'
 import { piecewiseOpenByDefault, piecewiseSectionSpec } from './piecewiseLinks'
 import type { FunctionEnv } from '../core/functionEnv'
 import { fitQuality } from '../core/fit/recognize'
 import { findAsymptotes } from '../core/holes'
+import { zeroIntervals } from '../core/analyze'
+import type { ZeroInterval } from '../core/analyze'
+import { exactForm } from '../core/exact'
 import { Latex } from './Latex'
 import { APPROX, exactDetail, formatCoord, parseNumeric, pointParts } from './numeric'
 import { alignedValues, curveScale, curveXScale, derivesFromInk } from './curveState'
@@ -173,6 +178,16 @@ interface Props {
   /** The env a rewritten piecewise line is parsed against (its calls of named curves). */
   piecewiseEnvFor?(src: string): FunctionEnv | undefined
   /**
+   * Rewrite this TYPED curve's line in place from its Conic section (an
+   * implicit line read as a circle, ellipse, hyperbola or parabola) — the
+   * same restate path. Absent = the section is read-only.
+   */
+  onConicRestate?(src: string, label: string): string | null
+  /** Whether this conic's construction (foci, directrix, asymptotes, box) is figure content. */
+  conicConstruction?: boolean
+  /** The "show construction" switch. Absent = no switch. */
+  onConicConstruction?(on: boolean): void
+  /**
    * Whether the board shows the parent's ghost and the key-point arrows for
    * this curve. Absent = the section's own default (open ⇒ shown).
    */
@@ -306,6 +321,29 @@ const ANALYSIS_ROWS: {
  * here are the ones the rest of the table is talking about.
  */
 const CARD_RANGE: [number, number] = [-10, 10]
+
+/** One end of a zero interval: its closed form (0, 1/3, √2) when it has one, else four digits. */
+function zeroEndText(v: number): string {
+  if (Math.abs(v) < 1e-12) return '0'
+  const e = exactForm(v)
+  if (e) return e.text
+  const r = Number(v.toPrecision(4))
+  const t = String(r)
+  return t.startsWith('-') ? '−' + t.slice(1) : t
+}
+
+/**
+ * A stretch where f is identically zero, as a class writes it: "0 ≤ x < 1",
+ * "−1 < x ≤ 0". An end that is only where the analysis stopped looking (the
+ * edge of `span`) is not a bound of the zero set, so it is written "…".
+ */
+export function zeroIntervalText(z: ZeroInterval, span: readonly [number, number]): string {
+  const w = Math.max(1, Math.abs(span[1] - span[0]))
+  const atEdge = (v: number, edge: number) => Math.abs(v - edge) <= 1e-9 * w
+  const lo = atEdge(z.lo, span[0]) ? '… <' : `${zeroEndText(z.lo)} ${z.loClosed ? '≤' : '<'}`
+  const hi = atEdge(z.hi, span[1]) ? '< …' : `${z.hiClosed ? '≤' : '<'} ${zeroEndText(z.hi)}`
+  return `${lo} x ${hi}`
+}
 
 /** A direction this close to vertical has no slope to print. */
 const VERTICAL_DIR = 1e-12
@@ -688,6 +726,9 @@ export function CurveCard({
   onTransformRestate,
   onPiecewiseRestate,
   piecewiseEnvFor,
+  onConicRestate,
+  conicConstruction,
+  onConicConstruction,
   transformShowParent,
   onTransformShowParent,
   name,
@@ -788,6 +829,16 @@ export function CurveCard({
     () => (isExpression && readable && curve.kind === 'explicit' ? piecewiseSectionSpec(exprSource) : null),
     [isExpression, readable, curve.kind, exprSource],
   )
+  /**
+   * The line read as a CONIC — standard form, or general form the way a
+   * class types it (x^2 + y^2 - 4x + 6y - 3 = 0) — or, for a rotated or
+   * degenerate quadratic, the discriminant sentence. Implicit lines only:
+   * every section above is for a function, so nothing overlaps.
+   */
+  const conic = useMemo(
+    () => (isExpression && readable ? conicSectionInfo(exprSource, curve.kind) : null),
+    [isExpression, readable, exprSource, curve.kind],
+  )
   const transformOthers = {
     factored,
     exponential: exponential !== null,
@@ -808,6 +859,19 @@ export function CurveCard({
   /** The same for a sketch that fitted a·sin(bx + c) + d. */
   const fittedSin = useMemo(
     () => (!isExpression && !broken && curve.modelId === 'sine' ? fittedSine(curve.params) : null),
+    [isExpression, broken, curve.modelId, curve.params],
+  )
+
+  /** The same for a sketched circle [a, b, r] or ellipse [A … F]. */
+  const fittedCon = useMemo(
+    () =>
+      isExpression || broken
+        ? null
+        : curve.modelId === 'circle'
+          ? fittedCircle(curve.params)
+          : curve.modelId === 'ellipse'
+            ? fittedEllipse(curve.params)
+            : null,
     [isExpression, broken, curve.modelId, curve.params],
   )
 
@@ -1017,17 +1081,46 @@ export function CurveCard({
     [selected, curve, spec],
   )
 
+  /**
+   * Where an explicit f is zero on a whole INTERVAL (floor(x) on [0, 1)): the
+   * analyzer folds the zeros inside one into it, so the Zeros row lists the
+   * interval, sorted with the point zeros by x. Read over the analyzer's own
+   * span, so an end at its edge is written "…" rather than as a bound.
+   */
+  const zeroSpans = useMemo(() => {
+    if (!selected || curve.kind !== 'explicit') return []
+    const span: [number, number] = curve.domain
+      ? [Math.min(curve.domain[0], curve.domain[1]), Math.max(curve.domain[0], curve.domain[1])]
+      : [-10, 10]
+    try {
+      return zeroIntervals(curve, models).map((z) => ({ lo: z.lo, text: zeroIntervalText(z, span) }))
+    } catch {
+      return []
+    }
+    // depKey: a line that calls f moves with f while `curve` stands still.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, curve, models, depKey])
+
   // Group the special points by kind, keeping each point's original index so
-  // hovering a value can address the right marker on canvas.
+  // hovering a value can address the right marker on canvas. The Zeros row
+  // also carries the zero INTERVALS, merged with the point zeros by x.
   const analysisGroups = useMemo(() => {
-    if (analysis.length === 0) return []
-    return ANALYSIS_ROWS.map((row) => ({
-      ...row,
-      items: analysis
+    if (analysis.length === 0 && zeroSpans.length === 0) return []
+    return ANALYSIS_ROWS.map((row) => {
+      const items = analysis
         .map((point, index) => ({ point, index }))
-        .filter(({ point }) => point.kind === row.kind),
-    })).filter((g) => g.items.length > 0)
-  }, [analysis])
+        .filter(({ point }) => point.kind === row.kind)
+      const spans = row.kind === 'zero' ? zeroSpans : []
+      type Entry =
+        | { point: SpecialPoint; index: number; span?: undefined }
+        | { span: { lo: number; text: string }; point?: undefined; index?: undefined }
+      const seq: Entry[] = [...items, ...spans.map((span) => ({ span }))]
+      if (spans.length > 0) {
+        seq.sort((a, b) => (a.span ? a.span.lo : a.point.pos.x) - (b.span ? b.span.lo : b.point.pos.x))
+      }
+      return { ...row, items, seq }
+    }).filter((g) => g.seq.length > 0)
+  }, [analysis, zeroSpans])
 
   /**
    * The asymptotes of this curve, already in words.
@@ -1526,6 +1619,14 @@ export function CurveCard({
                   })}
                 </>
               )}
+              {fittedCon && onConvertTyped && (
+                <>
+                  <div className="card-menu-sep" />
+                  {menuItem('Convert to typed conic', () => {
+                    onConvertTyped(fittedCon.src, 'convert to typed conic')
+                  })}
+                </>
+              )}
               {calc?.canAdd && (
                 <>
                   <div className="card-menu-sep" />
@@ -1782,6 +1883,32 @@ export function CurveCard({
               onRestate={onTransformRestate}
             />
           )}
+          {conic && (
+            <ConicSection
+              info={conic}
+              onRestate={onConicRestate}
+              construction={conicConstruction ?? false}
+              onConstruction={onConicConstruction}
+            />
+          )}
+          {fittedCon && (
+            <div className="xe-fitted-note" data-testid="fitted-conic-note">
+              {fittedCon.note}
+              {onConvertTyped && (
+                <button
+                  type="button"
+                  className="calc-chip co-convert"
+                  data-testid="conic-convert"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onConvertTyped(fittedCon.src, 'convert to typed conic')
+                  }}
+                >
+                  Convert to typed conic
+                </button>
+              )}
+            </div>
+          )}
           {fitted && (
             <div className="xe-fitted-note" data-testid="fitted-exp-note">
               {fitted.note}
@@ -1839,13 +1966,27 @@ export function CurveCard({
                 {analysisGroups.map((g) => (
                   <div className="an-row" key={g.kind}>
                     <span className="an-label">
-                      {g.items.length > 1 ? (g.plural ?? g.label) : g.label}
+                      {g.seq.length > 1 ? (g.plural ?? g.label) : g.label}
                     </span>
                     <span className="an-values">
-                      {g.items.map(({ point, index }, n) => {
+                      {g.seq.map((entry, n) => {
+                        // A zero INTERVAL: stated, like a hole — there is no
+                        // one value an editor could move.
+                        if (entry.span) {
+                          return (
+                            <span
+                              className="an-value an-value-static"
+                              key={`span:${entry.span.lo}`}
+                              data-testid="zero-interval"
+                            >
+                              {n === g.seq.length - 1 ? entry.span.text : `${entry.span.text},`}
+                            </span>
+                          )
+                        }
+                        const { point, index } = entry
                         const keys = axisKeys(featureAxes(point.kind))
                         const pair = keys.length > 1
-                        const last = n === g.items.length - 1
+                        const last = n === g.seq.length - 1
                         // The separator is part of the value's own text: a
                         // comma that can wrap on its own ends a line with a
                         // dangling punctuation mark.
