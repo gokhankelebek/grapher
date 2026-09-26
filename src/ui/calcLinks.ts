@@ -24,8 +24,20 @@
 import type { FittedCurve, ModelSpec } from '../core/types'
 import type { Overlay, OverlayRect } from '../render/overlays'
 import type { RiemannMethod } from '../core/calculus'
-import { areaBetween, areaUnder, curveIntersections, riemann, tangentAt } from '../core/calculus'
+import {
+  accumulationModel,
+  areaBetween,
+  areaUnder,
+  curveIntersections,
+  isAccumulationOf,
+  polynomialOf,
+  riemann,
+  tangentAt,
+} from '../core/calculus'
+import { analyzeCurve } from '../core/analyze'
+import { exactForm } from '../core/exact'
 import type {
+  AccumulationLink,
   AreaLink,
   CalcKind,
   CalcLink,
@@ -35,6 +47,7 @@ import type {
   TangentLink,
 } from '../core/persist'
 import {
+  ACCUM_MODEL_PREFIX,
   RIEMANN_N_DEFAULT,
   RIEMANN_N_MAX,
   RIEMANN_N_MIN,
@@ -46,6 +59,7 @@ import {
 // and validates them (core may not import from src/ui). This module re-exports
 // them so the UI has one place to reach for both the data and its meaning.
 export type {
+  AccumulationLink,
   AreaLink,
   CalcKind,
   CalcLink,
@@ -129,6 +143,8 @@ export function linkNoun(kind: CalcKind): string {
       return 'shaded area'
     case 'riemann':
       return 'Riemann sum'
+    case 'accumulation':
+      return 'accumulation function'
   }
 }
 
@@ -173,6 +189,32 @@ export function overlaysFor(
     const other = curveById(curves, l.otherId)
     if (!other || !other.visible) continue
     out.push({ kind: 'area', curveId: parent.id, from: l.from, to: l.to, against: other.id })
+  }
+  // An accumulation's probe: the region from a to x, which IS g(x) − C. Split
+  // where f crosses the axis, so the part that ADDS to g and the part that
+  // takes away from it read as two different washes — with x left of a the
+  // roles swap, because ∫ₐˣ runs backwards there.
+  for (const l of links) {
+    if (l.kind !== 'accumulation' || l.x === undefined) continue
+    const parent = curveById(curves, l.parentId)
+    if (!parent || !parent.visible) continue
+    if (!Number.isFinite(l.x) || l.x === l.a) continue
+    let at: ReturnType<typeof accumAt> = null
+    try {
+      at = accumAt(l, parent, models, l.x)
+    } catch {
+      at = null
+    }
+    if (!at) continue
+    for (const piece of signedPieces(parent, models, l.a, l.x)) {
+      out.push({
+        kind: 'area',
+        curveId: parent.id,
+        from: piece.from,
+        to: piece.to,
+        alpha: piece.adds ? ACCUM_ADD_ALPHA : ACCUM_SUB_ALPHA,
+      })
+    }
   }
   for (const l of links) {
     if (l.kind !== 'riemann') continue
@@ -539,6 +581,519 @@ function whyNoTangent(
   return `no tangent line exists at x = ${fixed(x, 2)}`
 }
 
+
+// ---------------------------------------------------------------------------
+// Accumulation functions — g(x) = C + ∫ₐˣ f(t) dt
+// ---------------------------------------------------------------------------
+
+/** The wash for the part of [a, x] that ADDS to g, and for the part that takes away. */
+export const ACCUM_ADD_ALPHA = 0.26
+export const ACCUM_SUB_ALPHA = 0.09
+
+const SUB_MINUS = '₋'
+
+/** "₀", "₋₂" — a subscript for a small whole number; "ₐ" for anything else. */
+function subLimit(a: number): string {
+  if (Number.isInteger(a) && Math.abs(a) < 1000) {
+    return `${a < 0 ? SUB_MINUS : ''}${digits(a, SUB)}`
+  }
+  return 'ₐ'
+}
+
+/**
+ * A number the way a teacher writes it: "2", "−1.5", "2/3", "√3" — a closed
+ * form only when it is one to double precision, trimmed decimals otherwise.
+ */
+export function short(v: number): string {
+  if (!Number.isFinite(v)) return '—'
+  const r = round6(v)
+  if (Number.isInteger(r) && Math.abs(v - r) < 1e-9) return fixed(r, 0)
+  const three = Math.round(v * 1000) / 1000
+  if (Math.abs(v - three) < 1e-9 * Math.max(1, Math.abs(v))) {
+    return fixed(three, 3).replace(/0+$/, '').replace(/\.$/, '')
+  }
+  const ex = exactForm(v)
+  if (ex) return ex.text
+  return fixed(v, 3).replace(/0+$/, '').replace(/\.$/, '')
+}
+
+/**
+ * g at x, and whether that number came from a closed form. Null when g(x) does
+ * not exist: a outside f's domain, f undefined at a, x across a pole or a gap.
+ *
+ * The closure the board registered for this link is used when it is still the
+ * right one — it shares its table with the curve on screen — and is handed the
+ * parent's CURRENT params, so a readout never lags a slider by a frame.
+ */
+export function accumAt(
+  link: AccumulationLink,
+  parent: FittedCurve,
+  models: Record<string, ModelSpec>,
+  x: number,
+): { value: number; exact: boolean } | null {
+  const g = accumEvaluator(link, parent, models)
+  return g ? g(x) : null
+}
+
+/**
+ * accumAt for many x: the model (and, for a closure, its table) is built once.
+ * Null when g does not exist anywhere.
+ */
+export function accumEvaluator(
+  link: AccumulationLink,
+  parent: FittedCurve,
+  models: Record<string, ModelSpec>,
+): ((x: number) => { value: number; exact: boolean } | null) | null {
+  const id = `${ACCUM_MODEL_PREFIX}${link.id}`
+  let acc: ReturnType<typeof accumulationModel> = null
+  try {
+    acc = accumulationModel(parent, models, link.a, link.C, id)
+  } catch {
+    acc = null
+  }
+  if (!acc) return null
+  const reg = models[id]
+  const spec =
+    !acc.exact && isAccumulationOf(reg, models[parent.modelId], parent.params.length) ? reg : acc.spec
+  const ev = spec.evalExplicit
+  if (!ev) return null
+  const params = acc.params
+  const exact = acc.exact
+  const d = sorted(parent.domain)
+  return (x: number) => {
+    if (!Number.isFinite(x)) return null
+    if (d && (x < d[0] - 1e-9 * Math.max(1, Math.abs(d[0])) || x > d[1] + 1e-9 * Math.max(1, Math.abs(d[1])))) {
+      return null
+    }
+    let v: number
+    try {
+      v = ev.call(spec, params, x)
+    } catch {
+      v = Number.NaN
+    }
+    return Number.isFinite(v) ? { value: v, exact } : null
+  }
+}
+
+/**
+ * [a, x] cut where f crosses the axis, each piece marked by whether it adds to
+ * g (f > 0 going right, or f < 0 going left) or takes away.
+ */
+export function signedPieces(
+  parent: FittedCurve,
+  models: Record<string, ModelSpec>,
+  a: number,
+  x: number,
+): { from: number; to: number; adds: boolean }[] {
+  const spec = models[parent.modelId]
+  const ev = spec?.evalExplicit
+  const lo = Math.min(a, x)
+  const hi = Math.max(a, x)
+  if (!ev || !(hi > lo)) return []
+  const f = (t: number): number => {
+    try {
+      const v = ev.call(spec, parent.params, t)
+      return typeof v === 'number' ? v : Number.NaN
+    } catch {
+      return Number.NaN
+    }
+  }
+  const N = 160
+  const cuts: number[] = [lo]
+  // A zero landing exactly ON a sample (x² − 1 at 1) is a cut of its own; it
+  // would otherwise hide between two samples that each have a sign.
+  let px = lo
+  let py = f(lo)
+  for (let i = 1; i <= N; i++) {
+    const t = i === N ? hi : lo + ((hi - lo) * i) / N
+    const y = f(t)
+    if (!Number.isFinite(y)) {
+      py = Number.NaN
+      continue
+    }
+    if (y === 0) {
+      if (i < N) cuts.push(t)
+      px = t
+      py = 0
+      continue
+    }
+    if (Number.isFinite(py) && py !== 0 && Math.sign(y) !== Math.sign(py)) {
+      let l = px
+      let r = t
+      const sl = Math.sign(py)
+      for (let k = 0; k < 60; k++) {
+        const m = (l + r) / 2
+        if (m === l || m === r) break
+        if (Math.sign(f(m)) === sl) l = m
+        else r = m
+      }
+      const c = (l + r) / 2
+      if (c > cuts[cuts.length - 1]) cuts.push(c)
+    }
+    px = t
+    py = y
+  }
+  cuts.push(hi)
+  const forward = x > a
+  const out: { from: number; to: number; adds: boolean }[] = []
+  for (let i = 0; i + 1 < cuts.length; i++) {
+    const from = cuts[i]
+    const to = cuts[i + 1]
+    if (!(to > from)) continue
+    const y = f((from + to) / 2)
+    const adds = Number.isFinite(y) ? (y >= 0) === forward : true
+    const last = out[out.length - 1]
+    if (last && last.adds === adds && last.to === from) last.to = to
+    else out.push({ from, to, adds })
+  }
+  return out
+}
+
+export interface AccumReadout {
+  /** "g(2) = 2/3 (0.667)", "g(2) ≈ 1.605" — empty when there is no probe. */
+  text: string
+  problem: string | null
+  value: number | null
+  exact: boolean
+}
+
+/** What the parent's card says at the probe. */
+export function accumReadout(
+  link: AccumulationLink,
+  parent: FittedCurve | undefined,
+  models: Record<string, ModelSpec>,
+  gName = 'g',
+  fName = 'f',
+): AccumReadout {
+  const none = { text: '', problem: null, value: null, exact: false }
+  if (!parent) return { ...none, problem: 'the curve it came from is gone' }
+  const startProblem = accumStartProblem(link, parent, models, fName)
+  if (startProblem) return { ...none, text: `${gName}(x) = —`, problem: startProblem }
+  if (link.x === undefined) return none
+  const x = link.x
+  const lhs = `${gName}(${short(x)})`
+  let at: ReturnType<typeof accumAt> = null
+  try {
+    at = accumAt(link, parent, models, x)
+  } catch {
+    at = null
+  }
+  if (!at) {
+    const outside = limitOutsideDomain(parent, link.a, x, `${fName}`)
+    if (outside) {
+      return { ...none, text: `${lhs} = —`, problem: outside.replace(/^b = /, 'x = ') }
+    }
+    const pole = poleBetween(parent, models, link.a, x)
+    return {
+      ...none,
+      text: `${lhs} = —`,
+      problem:
+        pole === null
+          ? `${fName} is undefined between a and x, so ${lhs} does not exist`
+          : `the integral from a runs into the pole at x = ${fixed(pole, 2)}, so ${lhs} does not exist`,
+    }
+  }
+  const v = at.value
+  const dec = fixed(v, 3)
+  if (!at.exact) return { text: `${lhs} ≈ ${dec}`, problem: null, value: v, exact: false }
+  // A closed form the decimal cannot show ("2/3") is printed with the decimal
+  // beside it; a number the decimal already says exactly ("2.25") is not.
+  const s = short(v)
+  const text = /^[−-]?\d+(\.\d+)?$/.test(s) ? `${lhs} = ${s}` : `${lhs} = ${s} (${dec})`
+  return { text, problem: null, value: v, exact: true }
+}
+
+/** Why g does not exist at all (a is not a place to start), or null. */
+function accumStartProblem(
+  link: AccumulationLink,
+  parent: FittedCurve,
+  models: Record<string, ModelSpec>,
+  fName: string,
+): string | null {
+  const d = parent.domain
+  if (d && Number.isFinite(d[0]) && Number.isFinite(d[1])) {
+    const lo = Math.min(d[0], d[1])
+    const hi = Math.max(d[0], d[1])
+    const tol = 1e-9 * Math.max(1, Math.abs(lo), Math.abs(hi))
+    if (link.a < lo - tol || link.a > hi + tol) {
+      return `a = ${fixed(link.a, 2)} is outside ${fName}'s domain [${fixed(lo, 2)}, ${fixed(hi, 2)}]`
+    }
+  }
+  let acc: ReturnType<typeof accumulationModel> = null
+  try {
+    acc = accumulationModel(parent, models, link.a, link.C, `${ACCUM_MODEL_PREFIX}${link.id}`)
+  } catch {
+    acc = null
+  }
+  if (acc) return null
+  if (models[parent.modelId]?.kind !== 'explicit') {
+    return `${fName} is not a function of x`
+  }
+  return `${fName} is undefined at a = ${fixed(link.a, 2)}, so the integral cannot start there`
+}
+
+/** "g(x) = 2 + ∫₋₂ˣ f(t) dt" — the definition, with the link's own numbers. */
+export function accumHead(link: AccumulationLink, gName = 'g', fName = 'f'): string {
+  const c = link.C === 0 ? '' : `${short(link.C)} + `
+  return `${gName}(x) = ${c}∫${subLimit(link.a)}ˣ ${fName}(t) dt`
+}
+
+/**
+ * The AP connections, read off the PARENT's analysis: where g rises and falls
+ * (the sign of f), its relative extrema (where f changes sign), its concavity
+ * (whether f rises) and its inflection points (f's extrema).
+ *
+ * Only where g exists — the run of f's domain containing a, up to the first
+ * pole or gap — and over the whole line only for a polynomial, whose zeros and
+ * extrema the analysis finds all of. Anything else is read over a window, and
+ * the last sentence says which.
+ */
+export function accumFacts(
+  link: AccumulationLink,
+  parent: FittedCurve | undefined,
+  models: Record<string, ModelSpec>,
+  gName = 'g',
+  fName = 'f',
+): string[] {
+  const out: string[] = [`${gName}′(x) = ${fName}(x)`]
+  if (!parent) return out
+  const spec = models[parent.modelId]
+  const ev = spec?.evalExplicit
+  if (!ev) return out
+  const f = (t: number): number => {
+    try {
+      const v = ev.call(spec, parent.params, t)
+      return typeof v === 'number' ? v : Number.NaN
+    } catch {
+      return Number.NaN
+    }
+  }
+  const dom = sorted(parent.domain)
+  // Over the whole line only for a polynomial (a family, or typed text that is
+  // one): its zeros and extrema are all in the window the analysis reads.
+  const poly = !dom && polynomialOf(parent, models) !== null
+  const win: [number, number] = dom ?? [Math.min(-10, link.a - 10), Math.max(10, link.a + 10)]
+  const g = accumEvaluator(link, parent, models)
+  if (!g || !g(link.a)) return out
+
+  // Where g exists: walk out from a until g stops, and pin the edge down.
+  const edge = (dir: 1 | -1): number => {
+    const end = dir > 0 ? win[1] : win[0]
+    const N = 400
+    let good = link.a
+    for (let i = 1; i <= N; i++) {
+      const t = link.a + ((end - link.a) * i) / N
+      if (g(t)) {
+        good = t
+        continue
+      }
+      let l = good
+      let r = t
+      for (let k = 0; k < 50; k++) {
+        const m = (l + r) / 2
+        if (m === l || m === r) break
+        if (g(m)) l = m
+        else r = m
+      }
+      return snapEdge(l, r, spec, parent, win)
+    }
+    return end
+  }
+  const L = edge(-1)
+  const R = edge(1)
+  const infL = poly && L === win[0]
+  const infR = poly && R === win[1]
+  if (!(R > L)) return out
+
+  let pts: ReturnType<typeof analyzeCurve> = []
+  try {
+    pts = analyzeCurve({ ...parent, domain: [L, R] }, models)
+  } catch {
+    pts = []
+  }
+  const inside = (x: number): boolean => x > L + 1e-9 * (R - L) && x < R - 1e-9 * (R - L)
+  const label = new Map<number, string>()
+  const name = (x: number): string => label.get(x) ?? short(x)
+  const zeros: number[] = []
+  const turns: number[] = []
+  for (const p of pts) {
+    if (!inside(p.pos.x)) continue
+    if (p.kind === 'zero') zeros.push(p.pos.x)
+    else if (p.kind === 'maximum' || p.kind === 'minimum') turns.push(p.pos.x)
+    else continue
+    if (p.exactX) label.set(p.pos.x, p.exactX)
+  }
+  zeros.sort((p, q) => p - q)
+  turns.sort((p, q) => p - q)
+  const end = (x: number, inf: boolean, side: -1 | 1): string =>
+    inf ? (side < 0 ? '−∞' : '∞') : short(x)
+
+  /** Pieces between breakpoints, each with a sign from `probe`, merged. */
+  const pieces = (cuts: number[], probe: (m: number) => number) => {
+    const bs = [L, ...cuts, R]
+    const res: { lo: number; hi: number; sign: number }[] = []
+    for (let i = 0; i + 1 < bs.length; i++) {
+      const lo = bs[i]
+      const hi = bs[i + 1]
+      const m =
+        i === 0 && infL
+          ? hi - Math.max(1, Math.abs(hi) * 0.1)
+          : i === bs.length - 2 && infR
+            ? lo + Math.max(1, Math.abs(lo) * 0.1)
+            : (lo + hi) / 2
+      const v = probe(m)
+      const sign = Number.isFinite(v) ? Math.sign(v) : 0
+      const last = res[res.length - 1]
+      if (last && last.sign === sign) last.hi = hi
+      else res.push({ lo, hi, sign })
+    }
+    return res
+  }
+  const intervals = (ps: { lo: number; hi: number; sign: number }[], sign: number): string =>
+    ps
+      .filter((p) => p.sign === sign)
+      .map((p) => `(${end(p.lo, infL && p.lo === L, -1)}, ${end(p.hi, infR && p.hi === R, 1)})`)
+      .join(' ∪ ')
+  /** Where the sign flips between neighbouring merged pieces. */
+  const flips = (ps: { lo: number; hi: number; sign: number }[], from: number, to: number): number[] => {
+    const xs: number[] = []
+    for (let i = 0; i + 1 < ps.length; i++) {
+      if (ps[i].sign === from && ps[i + 1].sign === to) xs.push(ps[i].hi)
+    }
+    return xs
+  }
+
+  const sgn = pieces(zeros, f)
+  const up = intervals(sgn, 1)
+  const down = intervals(sgn, -1)
+  if (up) out.push(`${gName} increases where ${fName} > 0: ${up}`)
+  if (down) out.push(`${gName} decreases where ${fName} < 0: ${down}`)
+  const maxes = flips(sgn, 1, -1)
+  const mins = flips(sgn, -1, 1)
+  if (maxes.length) {
+    out.push(`relative max of ${gName} at x = ${maxes.map(name).join(', ')} (${fName} changes + to −)`)
+  }
+  if (mins.length) {
+    out.push(`relative min of ${gName} at x = ${mins.map(name).join(', ')} (${fName} changes − to +)`)
+  }
+
+  const slope = (m: number): number => {
+    const h = 1e-4 * Math.max(1, Math.abs(m), (R - L) / 100)
+    return f(m + h) - f(m - h)
+  }
+  const bend = pieces(turns, slope)
+  const cu = intervals(bend, 1)
+  const cd = intervals(bend, -1)
+  if (cu) out.push(`${gName} concave up where ${fName} is increasing: ${cu}`)
+  if (cd) out.push(`${gName} concave down where ${fName} is decreasing: ${cd}`)
+  const infl = [...flips(bend, 1, -1), ...flips(bend, -1, 1)].sort((p, q) => p - q)
+  if (infl.length) {
+    out.push(
+      `inflection point${infl.length === 1 ? '' : 's'} of ${gName} at x = ${infl
+        .map(name)
+        .join(', ')} (extrema of ${fName})`,
+    )
+  }
+  if (!dom && !poly && (L === win[0] || R === win[1])) {
+    out.push(`read over ${short(win[0])} ≤ x ≤ ${short(win[1])}`)
+  }
+  return out
+}
+
+const SPEC_SERIALS = new WeakMap<object, number>()
+let specSerialNext = 1
+
+/**
+ * A number per ModelSpec OBJECT, so "the same formula" can be part of a string
+ * signature: a retyped expression may keep its model id and swap the function.
+ */
+export function specSerial(spec: ModelSpec | undefined): number {
+  if (!spec) return 0
+  let n = SPEC_SERIALS.get(spec)
+  if (n === undefined) {
+    n = specSerialNext++
+    SPEC_SERIALS.set(spec, n)
+  }
+  return n
+}
+
+/**
+ * The accumulation curve's colour: the parent's, lightened toward white. A
+ * derivative is the parent's colour DASHED; g is solid and paler, so f, f′ and
+ * g on one board read as one family and still as three different curves.
+ */
+export function accumColor(color: string): string {
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim())
+  if (!m) return color
+  const hex = m[1].length === 3 ? m[1].replace(/./g, (c) => c + c) : m[1]
+  const mix = (i: number): string => {
+    const v = parseInt(hex.slice(i, i + 2), 16)
+    const w = Math.round(v + (255 - v) * 0.45)
+    return w.toString(16).padStart(2, '0')
+  }
+  return `#${mix(0)}${mix(2)}${mix(4)}`
+}
+
+/**
+ * Pin the end of g's existence onto the thing that ended it. The table walls
+ * off a pole to within one cell, so the raw edge is a hair short of it; the
+ * family's own singularity (x = b for a log or a reciprocal) or a whole or
+ * half number that close is where it really is.
+ */
+function snapEdge(
+  good: number,
+  bad: number,
+  spec: ModelSpec | undefined,
+  parent: FittedCurve,
+  win: [number, number],
+): number {
+  const reach = Math.max(Math.abs(bad - good), (win[1] - win[0]) / 400)
+  try {
+    const sing = spec?.singularities?.(parent.params, [good - 4 * reach, good + 4 * reach]) ?? []
+    for (const x of sing) if (Math.abs(x - good) <= 4 * reach) return x
+  } catch {
+    /* fall through */
+  }
+  const half = Math.round(good * 2) / 2
+  if (Math.abs(half - good) <= 4 * reach) return half
+  return good
+}
+
+/**
+ * a and the probe x for a fresh accumulation: 0 when the integral can start
+ * there (the AP default), and a probe two units to the right when g exists
+ * there — the numbers a teacher would have typed.
+ */
+export function defaultAccum(
+  curve: FittedCurve,
+  models: Record<string, ModelSpec>,
+  window: [number, number],
+): { a: number; x: number | undefined } | null {
+  const [lo, hi] = spanOf(curve, window)
+  const within = (v: number): boolean => v >= lo - 1e-9 && v <= hi + 1e-9
+  const tries = [0, 1, -1, nice((lo + hi) / 2), lo, lo + (hi - lo) / 4, (lo + hi) / 2]
+  let a: number | null = null
+  for (const t of tries) {
+    if (!within(t)) continue
+    try {
+      if (accumulationModel(curve, models, t, 0, 'intf:probe')) {
+        a = round6(t)
+        break
+      }
+    } catch {
+      /* next */
+    }
+  }
+  if (a === null) return null
+  const probe: AccumulationLink = { kind: 'accumulation', id: 'probe', parentId: curve.id, curveId: '', a, C: 0 }
+  const g = accumEvaluator(probe, curve, models)
+  for (const t of [a + 2, a + 1, a - 2, a - 1, nice((a + hi) / 2), (a + hi) / 2, (lo + a) / 2]) {
+    if (!within(t) || t === a) continue
+    if (g?.(t)) return { a, x: round6(t) }
+  }
+  return { a, x: undefined }
+}
+
 // ---------------------------------------------------------------------------
 // Defaults for a freshly added object
 // ---------------------------------------------------------------------------
@@ -829,6 +1384,14 @@ export function labelLegend<T extends LegendLike>(
     if (link.kind === 'derivative') {
       return { ...e, tex: `f'\\colon\\;${e.tex}`, text: `f′ — ${e.text}` }
     }
+    if (link.kind === 'accumulation') {
+      const a = short(link.a).replace(MINUS, '-')
+      return {
+        ...e,
+        tex: `\\int_{${a}}^{x} f\\colon\\;${e.tex}`,
+        text: `∫ from ${a} of f — ${e.text}`,
+      }
+    }
     const x = fixed(link.x, 2).replace(MINUS, '-')
     return {
       ...e,
@@ -856,11 +1419,13 @@ export interface CardCalc {
   origin: OriginRow | null
   areas: AreaRow[]
   riemanns: RiemannRow[]
+  /** The accumulation functions built FROM this curve, with their probes. */
+  accums: AccumRow[]
 }
 
 export interface OriginRow {
   linkId: string
-  kind: 'tangent' | 'derivative'
+  kind: 'tangent' | 'derivative' | 'accumulation'
   /** "tangent to Cubic at x = 2.00 · slope 9.00" / "f′ of Cubic". */
   text: string
   /**
@@ -873,6 +1438,27 @@ export interface OriginRow {
   problem: string | null
   /** Tangent only: the point, click-to-edit exactly. */
   x: number | null
+  /**
+   * Accumulation only: "g′(x) = f(x)" and the AP connections read off the
+   * parent's analysis — where g rises, its extrema, its concavity.
+   */
+  facts?: string[]
+}
+
+/** One accumulation function, as its PARENT's card shows it. */
+export interface AccumRow {
+  linkId: string
+  a: number
+  C: number
+  /** The probe, or null when there is none. */
+  x: number | null
+  /** "g(x) = ∫₀ˣ f(t) dt" */
+  head: string
+  /** "g(2) = 2/3 (0.667)" / "g(2) ≈ 1.605"; empty without a probe. */
+  text: string
+  problem: string | null
+  /** The letter the accumulation curve goes by, for the chips ("g"). */
+  gName: string
 }
 
 export interface AreaRow {
@@ -913,6 +1499,9 @@ export type CalcChange =
   | { kind: 'abs'; linkId: string; abs: boolean }
   | { kind: 'n'; linkId: string; n: number }
   | { kind: 'method'; linkId: string; method: RiemannMethod }
+  | { kind: 'accumA'; linkId: string; a: number }
+  | { kind: 'accumC'; linkId: string; C: number }
+  | { kind: 'accumX'; linkId: string; x: number | null }
 
 /** The undo entry each change deserves, in a teacher's words. */
 export function changeLabel(change: CalcChange): string {
@@ -927,6 +1516,12 @@ export function changeLabel(change: CalcChange): string {
       return 'change n'
     case 'method':
       return 'change Riemann method'
+    case 'accumA':
+      return 'move lower limit'
+    case 'accumC':
+      return 'change starting value'
+    case 'accumX':
+      return 'move probe'
   }
 }
 
@@ -943,6 +1538,11 @@ export function cardCalc(
   curves: readonly FittedCurve[],
   models: Record<string, ModelSpec>,
   nameOf: (curve: FittedCurve) => string,
+  /**
+   * The board's letters (f, g, h …) by curve id, so an accumulation reads
+   * "g(x) = ∫₀ˣ f(t) dt" with the names on the figure. Absent: f and g.
+   */
+  letters: Readonly<Record<string, string>> = {},
 ): Record<string, CardCalc> {
   const out: Record<string, CardCalc> = {}
   const blank = (curve: FittedCurve): CardCalc => ({
@@ -950,6 +1550,7 @@ export function cardCalc(
     origin: null,
     areas: [],
     riemanns: [],
+    accums: [],
   })
   const slot = (id: string): CardCalc | null => {
     const curve = curveById(curves, id)
@@ -1029,7 +1630,59 @@ export function cardCalc(
         })
         break
       }
+      case 'accumulation': {
+        const [fName, gName] = accumNames(link, letters)
+        const r = accumReadout(link, parent, models, gName, fName)
+        const head = accumHead(link, gName, fName)
+        const own = slot(link.parentId)
+        if (own) {
+          own.accums.push({
+            linkId: link.id,
+            a: link.a,
+            C: link.C,
+            x: link.x ?? null,
+            head,
+            text: r.text,
+            problem: r.problem,
+            gName,
+          })
+        }
+        const here = slot(link.curveId)
+        if (!here) break
+        const of = parent ? nameOf(parent) : 'that curve'
+        let facts: string[] = []
+        try {
+          facts = accumFacts(link, parent, models, gName, fName)
+        } catch {
+          facts = [`${gName}′(x) = ${fName}(x)`]
+        }
+        const problem = !parent
+          ? 'the curve it came from is gone'
+          : accumStartProblem(link, parent, models, fName)
+        here.origin = {
+          linkId: link.id,
+          kind: 'accumulation',
+          text: `${head} · ∫ from ${short(link.a)} of ${of}`,
+          lead: head,
+          tail: `∫ from ${short(link.a)} of ${of}`,
+          problem,
+          x: null,
+          facts,
+        }
+        break
+      }
     }
   }
   return out
+}
+
+/** [f, g]: the letters on the board, or f and g — never the same letter twice. */
+function accumNames(
+  link: AccumulationLink,
+  letters: Readonly<Record<string, string>>,
+): [string, string] {
+  const f = letters[link.parentId] ?? 'f'
+  let g = letters[link.curveId] ?? (f === 'g' ? 'G' : 'g')
+  if (g === f) g = 'G'
+  return [f, g]
 }

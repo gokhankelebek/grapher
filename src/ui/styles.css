@@ -4150,6 +4150,43 @@ button.card-eq {
   font-size: var(--fs-xs);
 }
 
+/* An accumulation's definition reads as the formula it is ("g(x) = ∫₀ˣ f(t) dt");
+   the "∫ from 0 of Parabola" gloss beside it stays quiet. */
+.calc-origin-of {
+  color: var(--faint);
+}
+
+/* The AP connections under an accumulation curve: g′ = f first, then what it
+   says about g. Sentences, not numbers — they wrap rather than widen the card. */
+.calc-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: var(--sp-1) 0 0;
+  padding: var(--sp-1) var(--sp-2);
+  border-left: 2px solid var(--border-strong);
+  list-style: none;
+}
+
+.calc-fact {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.calc-fact-lead {
+  color: var(--text);
+  font-family: var(--font-mono);
+}
+
+/* g(2) = 2/3 (0.667) — the probe's number may carry a fraction and its
+   decimal, so it wraps rather than push the card wide. */
+.calc-accum-read {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 /* A refusal is a shape as well as a colour: the same dashed-and-tinted
    treatment a card that cannot restore its equation wears. */
 .calc-origin-bad .calc-origin-text {

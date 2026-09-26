@@ -195,6 +195,7 @@ const CALC_ITEMS: { kind: CalcKind; label: string }[] = [
   { kind: 'derivative', label: 'Derivative f\u2032' },
   { kind: 'area', label: 'Area under curve' },
   { kind: 'riemann', label: 'Riemann sum' },
+  { kind: 'accumulation', label: 'Accumulation function \u222b\u2090\u02e3 f' },
 ]
 
 const METHOD_LABELS: Record<string, string> = {
@@ -1509,7 +1510,7 @@ export function CurveCard({
         ) : equationSeed === null ? (
           <div
             className="card-formula card-eq"
-            title={`A ${modelName.toLowerCase()} has no equation form to type — drag its handles or pick another reading`}
+            title={`${/^[aeiou]/i.test(modelName) ? 'An' : 'A'} ${modelName.toLowerCase()} has no equation form to type — drag its handles or pick another reading`}
           >
             <Latex tex={latexStr} className="card-latex" />
           </div>
@@ -1545,13 +1546,31 @@ export function CurveCard({
                 onCalcChange({ kind: 'tangentX', linkId: calc.origin!.linkId, x: v }),
               )}
             {calc.origin.tail && (
-              <span className="calc-origin-text">{calc.origin.tail}</span>
+              <span
+                className={`calc-origin-text${
+                  calc.origin.kind === 'accumulation' ? ' calc-origin-of' : ''
+                }`}
+              >
+                {calc.origin.tail}
+              </span>
             )}
           </div>
           {calc.origin.problem && (
             <div className="calc-why">
-              {`No line is drawn: ${calc.origin.problem}.`}
+              {`No ${calc.origin.kind === 'tangent' ? 'line' : 'curve'} is drawn: ${calc.origin.problem}.`}
             </div>
+          )}
+          {/* The AP connections — g′ = f, and everything that follows from it
+              about g, read off f's own analysis. Only on the open card: six
+              sentences under every accumulation curve would bury the list. */}
+          {selected && calc.origin.facts && calc.origin.facts.length > 0 && (
+            <ul className="calc-facts">
+              {calc.origin.facts.map((fact, i) => (
+                <li key={i} className={i === 0 ? 'calc-fact calc-fact-lead' : 'calc-fact'}>
+                  {fact}
+                </li>
+              ))}
+            </ul>
           )}
         </div>
       )}
@@ -1863,6 +1882,7 @@ export function CurveCard({
           {calc &&
             (calc.areas.length > 0 ||
               calc.riemanns.length > 0 ||
+              calc.accums.length > 0 ||
               betweenNotes.length > 0) && (
             <div className="calc-section">
               <div className="calc-title">Calculus</div>
@@ -1946,6 +1966,50 @@ export function CurveCard({
                   </div>
                   )
                 })}
+
+                {calc.accums.map((g) => (
+                  <div className="calc-row" key={g.linkId}>
+                    <div className="calc-line">
+                      <span className="calc-tag">Accum</span>
+                      <span className="calc-read">{g.head}</span>
+                      {dropBtn(g.linkId, 'accumulation function')}
+                    </div>
+                    <div className="calc-controls">
+                      {calcNumber(`${g.linkId}:a`, 'a', g.a, (v) =>
+                        onCalcChange({ kind: 'accumA', linkId: g.linkId, a: v }),
+                      )}
+                      {calcNumber(`${g.linkId}:C`, `${g.gName}(a)`, g.C, (v) =>
+                        onCalcChange({ kind: 'accumC', linkId: g.linkId, C: v }),
+                      )}
+                      {g.x !== null ? (
+                        calcNumber(`${g.linkId}:x`, 'x', g.x, (v) =>
+                          onCalcChange({ kind: 'accumX', linkId: g.linkId, x: v }),
+                        )
+                      ) : (
+                        <button
+                          type="button"
+                          className="calc-chip"
+                          title={`Read ${g.gName}(x) at a point, and shade from a to it`}
+                          onClick={() =>
+                            onCalcChange({
+                              kind: 'accumX',
+                              linkId: g.linkId,
+                              x: g.a + 1,
+                            })
+                          }
+                        >
+                          {`${g.gName}(x) at…`}
+                        </button>
+                      )}
+                    </div>
+                    {g.text && (
+                      <div className="calc-line calc-line-read">
+                        <span className="calc-read calc-accum-read">{g.text}</span>
+                      </div>
+                    )}
+                    {g.problem && <div className="calc-why">{g.problem}</div>}
+                  </div>
+                ))}
 
                 {calc.riemanns.map((r) => (
                   <div className="calc-row" key={r.linkId}>

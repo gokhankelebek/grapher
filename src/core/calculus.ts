@@ -1373,3 +1373,468 @@ export function riemann(
 export function hasExactDerivative(modelId: string): boolean {
   return hasSymbolic(modelId)
 }
+
+// ---------------------------------------------------------------------------
+// 6. Accumulation function  F(x) = C + ∫ₐˣ f(t) dt
+//
+// The AP free-response picture: "the graph of f is shown; g(x) = ∫₋₂ˣ f(t) dt".
+// F is a curve in its own right, so it is handed back exactly the way f′ is:
+//
+//   * a LIBRARY FAMILY when the antiderivative is exactly one —
+//       line, poly2, poly3 -> the polynomial one degree up (poly4 -> closure:
+//                              there is no poly5 in the library)
+//       a·sin(bx + c)      -> (a/b)·sin(bx + c − π/2) + K      (only when d = 0:
+//                              + d·x would make it a sinusoid PLUS a line)
+//       a·e^{bx}           -> (a/b)·e^{bx} + K                  (only when c = 0)
+//       a/(x − b), a > b   -> a·ln(x − b) + K                   (only when c = 0,
+//                              and only right of the pole, which is exactly
+//                              where the log family lives)
+//     Everything else leaves the library, and is not forced back into it.
+//   * otherwise a CLOSURE, registered under the caller's id, whose params are
+//     the parent's own params followed by [a, C] — so the spec is a pure
+//     function of its params and can be rebuilt from the link on load.
+//
+// The closure precomputes F on a uniform grid of cells walking outward from a
+// (adaptive Simpson per cell, the same guarded quadrature the area readout
+// uses) and evaluates between nodes by cubic Hermite interpolation with f
+// itself as the slope at each node, so F′ = f to O(h³) and F to O(h⁴). The
+// table is keyed by params (a slider tick rebuilds it) and grows lazily as x
+// leaves it. Each chunk is scanned with scanRuns before it is integrated: a
+// pole or a gap in f ends the table on that side — the integral from a does
+// not exist past it — and F is NaN there, never a finite number across it.
+// ---------------------------------------------------------------------------
+
+/** What `accumulationModel` hands back: a curve the board can register and draw. */
+export interface AccumulationCurve {
+  /** The family (from `models`) or the closure built for the requested id. */
+  spec: ModelSpec
+  params: number[]
+  kind: 'explicit'
+  /** The parent's domain: F exists only where f does. */
+  domain: [number, number] | null
+  latex: string
+  /** true when F is a library family, i.e. an exact antiderivative. */
+  exact: boolean
+  /** Closure only: table statistics, for tests and for the perf budget. */
+  stats?: () => { builds: number; cells: number }
+}
+
+/** Cells per unrestricted 16-unit window (h = 1/128) or per restricted domain. */
+const ACC_CELLS_PER_SPAN = 2048
+/** Cells integrated per scanned chunk: the scan's 256 samples land on the nodes. */
+const ACC_CHUNK = SCAN
+/** A chunk this small (one cell) that still scans dirty IS the wall. */
+const ACC_MIN_CHUNK = 1
+/**
+ * Most cells one side of a table may hold. An x further out than that rebuilds
+ * the table with a coarser cell (doubling until it fits): a board zoomed out to
+ * ±1000 needs F to the pixel, not to 1e-12, and must not wait for 250k cells.
+ */
+const ACC_MAX_CELLS = 1 << 14
+/** Relative accuracy asked of each cell. */
+const ACC_CELL_REL = 1e-13
+/** Tables kept per closure (undo/redo flips between two param sets). */
+const ACC_CACHE = 4
+
+interface AccSide {
+  /** ∫ₐ of f to node k (signed, in x), k = 0 … F.length − 1 */
+  F: number[]
+  /** f at node k */
+  f: number[]
+  /** true once a pole, a gap or a failed cell has ended this side */
+  wall: boolean
+}
+
+interface AccTable {
+  at(x: number): number
+  cells(): number
+  /** Cell width this table was built with. */
+  h: number
+  /** True when x is past the cell cap on a side that has not hit a wall. */
+  tooFar(x: number): boolean
+}
+
+/**
+ * f with its REMOVABLE holes filled by the two-sided limit. sin(t)/t is NaN at
+ * t = 0 and ∫₀ˣ sin(t)/t dt is the lesson; a gap (√t left of 0) stays NaN
+ * because its two sides do not agree, and a pole stays a pole because its
+ * neighbours are enormous — which the chunk scan then refuses.
+ */
+function holeFilled(f: Fn): Fn {
+  return (x: number): number => {
+    const v = f(x)
+    if (!Number.isNaN(v)) return v
+    const e = 1e-7 * Math.max(1, Math.abs(x))
+    const l = f(x - e)
+    const r = f(x + e)
+    if (!Number.isFinite(l) || !Number.isFinite(r)) return Number.NaN
+    if (Math.abs(l - r) > 1e-5 * Math.max(1, Math.abs(l), Math.abs(r))) return Number.NaN
+    return (l + r) / 2
+  }
+}
+
+function buildAccTable(f: Fn, a: number, h: number): AccTable | null {
+  if (!(h > 0) || !Number.isFinite(h)) return null
+  const fa = f(a)
+  if (!Number.isFinite(fa)) return null
+  const right: AccSide = { F: [0], f: [fa], wall: false }
+  const left: AccSide = { F: [0], f: [fa], wall: false }
+  const node = (dir: number, k: number): number => a + dir * k * h
+
+  /** Integrate cells [k0, k0 + n) on one side; false when a wall was met. */
+  const fill = (side: AccSide, dir: number, k0: number, n: number): boolean => {
+    const x0 = node(dir, k0)
+    const x1 = node(dir, k0 + n)
+    const lo = Math.min(x0, x1)
+    const hi = Math.max(x0, x1)
+    const scan = scanRuns(f, lo, hi)
+    if (scan.pole || scan.gaps || scan.runs.length !== 1) {
+      if (n <= ACC_MIN_CHUNK) {
+        side.wall = true
+        return false
+      }
+      const half = Math.floor(n / 2)
+      if (!fill(side, dir, k0, half)) return false
+      return fill(side, dir, k0 + half, n - half)
+    }
+    const tol = ACC_CELL_REL * Math.max(scan.scale, 1e-300) * h
+    for (let j = 0; j < n; j++) {
+      const k = k0 + j
+      const xa = node(dir, k)
+      const xb = node(dir, k + 1)
+      const q = adaptiveSimpson(f, Math.min(xa, xb), Math.max(xa, xb), tol)
+      const fb = f(xb)
+      if (!q || !Number.isFinite(fb)) {
+        side.wall = true
+        return false
+      }
+      side.F.push(side.F[k] + dir * q.value)
+      side.f.push(fb)
+    }
+    return true
+  }
+
+  /** Grow `side` until it holds node k + 1, a wall, or the cell cap. */
+  const reach = (side: AccSide, dir: number, k: number): void => {
+    while (!side.wall && side.F.length - 1 <= k && side.F.length - 1 < ACC_MAX_CELLS) {
+      const k0 = side.F.length - 1
+      const n = Math.min(ACC_CHUNK, ACC_MAX_CELLS - k0)
+      if (!fill(side, dir, k0, n)) break
+    }
+  }
+
+  return {
+    h,
+    tooFar(x: number): boolean {
+      const dir = x > a ? 1 : -1
+      const side = dir > 0 ? right : left
+      return !side.wall && Math.abs(x - a) / h >= ACC_MAX_CELLS
+    },
+    at(x: number): number {
+      if (!Number.isFinite(x)) return Number.NaN
+      if (x === a) return 0
+      const dir = x > a ? 1 : -1
+      const side = dir > 0 ? right : left
+      const u = Math.abs(x - a) / h
+      const k = Math.floor(u)
+      reach(side, dir, k)
+      const top = side.F.length - 1
+      if (k >= top) {
+        return u === top ? side.F[top] : Number.NaN
+      }
+      const t = u - k
+      if (t === 0) return side.F[k]
+      // Cubic Hermite in s = |x − a|, where dF/ds = dir·f.
+      const t2 = t * t
+      const t3 = t2 * t
+      const h00 = 2 * t3 - 3 * t2 + 1
+      const h10 = t3 - 2 * t2 + t
+      const h01 = -2 * t3 + 3 * t2
+      const h11 = t3 - t2
+      return (
+        h00 * side.F[k] +
+        h10 * h * dir * side.f[k] +
+        h01 * side.F[k + 1] +
+        h11 * h * dir * side.f[k + 1]
+      )
+    },
+    cells(): number {
+      return right.F.length + left.F.length - 2
+    },
+  }
+}
+
+/** F as a library family, or null when the antiderivative leaves the library. */
+function closedAccumulation(
+  modelId: string,
+  p: number[],
+  a: number,
+  C: number,
+  models: Record<string, ModelSpec>,
+): { spec: ModelSpec; params: number[] } | null {
+  const pick = (id: string): ModelSpec | null => models[id] ?? MODELS[id] ?? null
+  const done = (id: string, params: number[]): { spec: ModelSpec; params: number[] } | null => {
+    const spec = pick(id)
+    if (!spec || !params.every(Number.isFinite)) return null
+    return { spec, params }
+  }
+  switch (modelId) {
+    case 'line':
+    case 'poly2':
+    case 'poly3':
+    case 'poly4': {
+      const P = polyAnti(p)
+      P[0] = C - horner(P, a)
+      const fam = polyFamily(P)
+      return fam ? done(fam.modelId, fam.params) : null
+    }
+    case 'sine': {
+      const [A, b, c, d] = p
+      if (d !== 0 || b === 0) return null
+      // −(A/b)·cos(bx + c) = (A/b)·sin(bx + c − π/2)
+      return done('sine', [A / b, b, c - Math.PI / 2, C + (A / b) * Math.cos(b * a + c)])
+    }
+    case 'exp': {
+      const [A, b, c] = p
+      if (c !== 0 || b === 0) return null
+      return done('exp', [A / b, b, C - (A / b) * Math.exp(b * a)])
+    }
+    case 'recip': {
+      const [A, b, c] = p
+      if (c !== 0 || !(a > b)) return null
+      return done('log', [A, b, C - A * Math.log(a - b)])
+    }
+    default:
+      return null
+  }
+}
+
+/** A coefficient a hair from a small fraction IS that fraction (−1.0000000000000004 is −1). */
+function snapCoef(c: number): number {
+  if (Math.abs(c) < 1e-12) return 0
+  for (let q = 1; q <= 12; q++) {
+    const p = Math.round(c * q)
+    if (Math.abs(c - p / q) <= 1e-10 * Math.max(1, Math.abs(c))) return p / q
+  }
+  return c
+}
+
+/**
+ * Ascending coefficients when this curve IS a polynomial of degree ≤ 4 — a
+ * library polynomial, or a typed expression that happens to be one (y = x^2 − 1
+ * is typed text, and ∫ of it is still x³/3 − x exactly). Null otherwise.
+ *
+ * Found by interpolating five points and then VERIFYING at nine more spread far
+ * and wide (or across the curve's own domain): a formula that is not a
+ * polynomial of that degree — a sine, a pole, a piecewise break, a gap — fails
+ * the check, and anything that passes agrees with the polynomial to ~1e-10 at
+ * fourteen unrelated x's, which for a typed expression is what "is" means.
+ * Library families other than the polynomials are never asked: a sketch fitted
+ * as a Gaussian is a Gaussian.
+ */
+export function polynomialOf(
+  curve: FittedCurve,
+  models: Record<string, ModelSpec>,
+): number[] | null {
+  if (POLY_IDS.has(curve.modelId)) {
+    return curve.params.every(Number.isFinite) ? trimPoly(curve.params) : null
+  }
+  if (MODELS[curve.modelId]) return null
+  const ex = explicitOf(curve, models)
+  if (!ex) return null
+  const d = ex.domain
+  const c = d ? (d[0] + d[1]) / 2 : 0
+  const r = d ? (d[1] - d[0]) / 2 : 4
+  // Chebyshev nodes: the well-conditioned five
+  const xs: number[] = []
+  for (let k = 0; k < 5; k++) xs.push(c + r * Math.cos(((2 * k + 1) * Math.PI) / 10))
+  const ys = xs.map(ex.f)
+  if (!ys.every(Number.isFinite)) return null
+  // Newton divided differences, then expand to ascending monomial coefficients.
+  const dd = ys.slice()
+  for (let j = 1; j < 5; j++) {
+    for (let i = 4; i >= j; i--) dd[i] = (dd[i] - dd[i - 1]) / (xs[i] - xs[i - j])
+  }
+  let coef = [dd[4]]
+  for (let i = 3; i >= 0; i--) {
+    // coef·(x − xs[i]) + dd[i]
+    const next = new Array<number>(coef.length + 1).fill(0)
+    for (let k = 0; k < coef.length; k++) {
+      next[k + 1] += coef[k]
+      next[k] -= coef[k] * xs[i]
+    }
+    next[0] += dd[i]
+    coef = next
+  }
+  const tests = d
+    ? [0.037, 0.113, 0.271, 0.389, 0.5173, 0.641, 0.779, 0.883, 0.967].map((t) => d[0] + t * (d[1] - d[0]))
+    : [-311.9, -13.7, -6.1, -2.3, 0.37, 1.9, 5.3, 11.1, 97.3]
+  const holds = (cs: number[]): boolean =>
+    tests.every((x) => {
+      const y = ex.f(x)
+      if (!Number.isFinite(y)) return false
+      let mag = 0
+      let p = 1
+      for (const ck of cs) {
+        mag += Math.abs(ck * p)
+        p *= x
+      }
+      return Math.abs(horner(cs, x) - y) <= 1e-10 * Math.max(mag, Math.abs(y)) + 1e-12
+    })
+  const snapped = coef.map(snapCoef)
+  if (holds(snapped)) return trimPoly(snapped)
+  if (holds(coef)) return trimPoly(coef)
+  return null
+}
+
+/** "y = 2 + \int_{-1}^{x} f(t)\,dt" — the closure's honest equation. */
+function accumulationLatex(a: number, C: number): string {
+  const lead = C === 0 ? '' : `${fmt(C)} + `
+  return `y = ${lead}\\int_{${fmt(a)}}^{x} f(t)\\,dt`
+}
+
+/** closure spec -> the parent spec it integrates, and how many params that takes. */
+const ACCUM_PARENT = new WeakMap<ModelSpec, { parent: ModelSpec; n: number }>()
+
+/**
+ * True when `spec` is an accumulation closure built over exactly `parentSpec`
+ * with `n` parameters — i.e. it can be handed [...parent params, a, C] and mean
+ * what it says. A spec registered before the parent was retyped cannot, and
+ * the caller builds a fresh one instead of evaluating a stale formula.
+ */
+export function isAccumulationOf(
+  spec: ModelSpec | undefined,
+  parentSpec: ModelSpec | undefined,
+  n: number,
+): boolean {
+  if (!spec || !parentSpec) return false
+  const rec = ACCUM_PARENT.get(spec)
+  return !!rec && rec.parent === parentSpec && rec.n === n
+}
+
+/** The closure's table cell width: fine enough for 1e-10, coarse enough to be quick. */
+function accCellWidth(domain: [number, number] | null): number {
+  const W = domain ? domain[1] - domain[0] : 16
+  return W / ACC_CELLS_PER_SPAN
+}
+
+/**
+ * The closure spec: params = [...parent params, a, C]. Its tables are cached
+ * by params, so the renderer's thousand samples and the card's readout share
+ * one table, and a slider tick on the parent builds exactly one new one.
+ */
+function accumulationClosure(
+  id: string,
+  parent: ModelSpec,
+  n: number,
+  domain: [number, number] | null,
+): { spec: ModelSpec; stats: () => { builds: number; cells: number } } {
+  const ev = parent.evalExplicit
+  const tables = new Map<string, AccTable | null>()
+  let builds = 0
+  const h = accCellWidth(domain)
+
+  const tableFor = (params: number[], x: number): AccTable | null => {
+    const key = params.join(',')
+    let cellH = h
+    if (tables.has(key)) {
+      const t = tables.get(key) ?? null
+      // most-recently-used last
+      tables.delete(key)
+      tables.set(key, t)
+      if (!t || !t.tooFar(x)) return t
+      // Too far out for this table's cell: rebuild coarser, just enough to fit.
+      cellH = t.h
+    }
+    const a0 = params[n]
+    if (Number.isFinite(x) && Number.isFinite(a0)) {
+      while (Math.abs(x - a0) / cellH >= ACC_MAX_CELLS) cellH *= 2
+    }
+    let t: AccTable | null = null
+    const a = params[n]
+    const pp = params.slice(0, n)
+    if (ev && Number.isFinite(a) && pp.every(Number.isFinite)) {
+      const raw: Fn = (x: number) => {
+        let v: unknown
+        try { v = ev.call(parent, pp, x) } catch { return Number.NaN }
+        return typeof v === 'number' ? v : Number.NaN
+      }
+      t = buildAccTable(holeFilled(raw), a, cellH)
+    }
+    builds++
+    tables.set(key, t)
+    while (tables.size > ACC_CACHE) {
+      const oldest = tables.keys().next().value as string
+      tables.delete(oldest)
+    }
+    return t
+  }
+
+  const spec: ModelSpec = {
+    id,
+    kind: 'explicit',
+    name: 'Accumulation',
+    evalExplicit: (params: number[], x: number): number => {
+      const t = tableFor(params, x)
+      if (!t) return Number.NaN
+      const v = t.at(x)
+      const C = params[n + 1] ?? 0
+      return Number.isFinite(v) ? C + v : Number.NaN
+    },
+    latex: (params: number[]) => accumulationLatex(params[n] ?? 0, params[n + 1] ?? 0),
+    // No sliders of its own: F is decided by f, a and C, all of which live on
+    // the PARENT's card, and a slider here would be a number the link overrules.
+    paramMeta: () => [],
+  }
+  ACCUM_PARENT.set(spec, { parent, n })
+  const stats = (): { builds: number; cells: number } => {
+    let cells = 0
+    for (const t of tables.values()) cells += t ? t.cells() : 0
+    return { builds, cells }
+  }
+  return { spec, stats }
+}
+
+/**
+ * F(x) = C + ∫ₐˣ f(t) dt as a curve, registered under `modelId` when it needs
+ * a closure. Null when the parent is not a function of x, when a (or C) is not
+ * a number, when a is outside the parent's domain, or when f is undefined at a
+ * (a pole or a gap; a removable hole is filled by its limit).
+ */
+export function accumulationModel(
+  parent: FittedCurve,
+  models: Record<string, ModelSpec>,
+  a: number,
+  C: number,
+  modelId: string,
+): AccumulationCurve | null {
+  if (!Number.isFinite(a) || !Number.isFinite(C)) return null
+  const ex = explicitOf(parent, models)
+  if (!ex) return null
+  if (!inDomain(ex.domain, a)) return null
+  if (!Number.isFinite(holeFilled(ex.f)(a))) return null
+
+  // A typed polynomial integrates in closed form exactly as the family does.
+  const typedPoly = MODELS[parent.modelId] ? null : polynomialOf(parent, models)
+  const fam =
+    typedPoly && typedPoly.length <= 4
+      ? closedAccumulation('poly3', typedPoly, a, C, models)
+      : closedAccumulation(parent.modelId, ex.params, a, C, models)
+  if (fam) {
+    let latex: string
+    try { latex = fam.spec.latex(fam.params) } catch { latex = accumulationLatex(a, C) }
+    return { spec: fam.spec, params: fam.params, kind: 'explicit', domain: ex.domain, latex, exact: true }
+  }
+
+  const { spec, stats } = accumulationClosure(modelId, ex.spec, ex.params.length, ex.domain)
+  const params = [...ex.params, a, C]
+  return {
+    spec,
+    params,
+    kind: 'explicit',
+    domain: ex.domain,
+    latex: accumulationLatex(a, C),
+    exact: false,
+    stats,
+  }
+}

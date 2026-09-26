@@ -18,10 +18,19 @@ import { parseExpression } from './core/parse'
 import { parseInequality } from './core/parse/inequality'
 import { applyFeatureEdit, snapParams } from './core/fit/edit'
 import { analyzeCurve } from './core/analyze'
-import { curveIntersections, derivativeModel, tangentAt } from './core/calculus'
+import {
+  accumulationModel,
+  curveIntersections,
+  derivativeModel,
+  isAccumulationOf,
+  tangentAt,
+} from './core/calculus'
 import {
   N_DEFAULT,
+  accumColor,
+  specSerial,
   clampN,
+  defaultAccum,
   defaultBetweenBounds,
   defaultBounds,
   defaultTangentX,
@@ -225,7 +234,7 @@ import { PresentBar } from './ui/PresentBar'
 import { PresentLegend } from './ui/PresentLegend'
 import { DEFAULT_PRESENT_TYPE, curveLegend, itemLegend, presentScale } from './ui/present'
 import { copyDocName, nextDocName } from './ui/docName'
-import { DERIV_MODEL_PREFIX } from './core/persist'
+import { ACCUM_MODEL_PREFIX, DERIV_MODEL_PREFIX } from './core/persist'
 import {
   AUTO_AXIS_UNITS,
   createDoc,
@@ -2821,6 +2830,68 @@ export default function App() {
         return
       }
 
+      if (kind === 'accumulation') {
+        // g(x) = ∫ₐˣ f(t) dt, from a = 0 when the integral can start there,
+        // with a probe two units along so the shading and g(x) are on the
+        // board from the first frame — the AP picture, ready to be asked about.
+        let start: ReturnType<typeof defaultAccum> = null
+        try {
+          start = defaultAccum(parent, models, win)
+        } catch {
+          start = null
+        }
+        const wantId = `${ACCUM_MODEL_PREFIX}${linkId}`
+        let acc: ReturnType<typeof accumulationModel> = null
+        if (start) {
+          try {
+            acc = accumulationModel(parent, models, start.a, 0, wantId)
+          } catch {
+            acc = null
+          }
+        }
+        if (!start || !acc) {
+          showToast('This curve has no place an integral can start from.')
+          return
+        }
+        if (acc.spec.id === wantId) {
+          const built = acc.spec
+          setExtraModels((prev) => ({ ...prev, [wantId]: built }))
+        }
+        const curve: FittedCurve = {
+          id: nextId(),
+          modelId: acc.spec.id,
+          params: acc.params.slice(),
+          kind: 'explicit',
+          domain: acc.domain,
+          color: accumColor(parent.color),
+          strokeWidth: 2.5,
+          visible: true,
+          error: 0,
+        }
+        commitState(
+          {
+            curves: [...curvesRef.current, curve],
+            calc: [
+              ...calcRef.current,
+              {
+                kind: 'accumulation',
+                id: linkId,
+                parentId,
+                curveId: curve.id,
+                a: start.a,
+                C: 0,
+                ...(start.x !== undefined ? { x: start.x } : {}),
+              },
+            ],
+          },
+          'add accumulation function',
+        )
+        // The parent stays selected: its card holds a, C and the probe, and
+        // its handles are the ones to drag.
+        setSelectedId(parentId)
+        return
+      }
+
       const [from, to] = defaultBounds(parent, win)
       if (kind === 'area') {
         commitState(
@@ -3000,6 +3071,22 @@ export default function App() {
       } else if (change.kind === 'method' && l.kind === 'riemann') {
         if (l.method === change.method) return
         next = { ...l, method: change.method }
+      } else if (change.kind === 'accumA' && l.kind === 'accumulation') {
+        if (!Number.isFinite(change.a) || change.a === l.a) return
+        next = { ...l, a: change.a }
+      } else if (change.kind === 'accumC' && l.kind === 'accumulation') {
+        if (!Number.isFinite(change.C) || change.C === l.C) return
+        next = { ...l, C: change.C }
+      } else if (change.kind === 'accumX' && l.kind === 'accumulation') {
+        if (change.x === null) {
+          if (l.x === undefined) return
+          const { x: _gone, ...rest } = l
+          void _gone
+          next = rest
+        } else {
+          if (!Number.isFinite(change.x) || change.x === l.x) return
+          next = { ...l, x: change.x }
+        }
       }
       if (!next) return
       const list = links.slice()
@@ -3064,14 +3151,59 @@ export default function App() {
       const parent = byId.get(link.parentId)
       const child = byId.get(link.curveId)
       if (!parent || !child) continue
-      const sig = `${parent.modelId}|${parent.params.join(',')}|${
+      const parentSpec = models[parent.modelId]
+      // The parent's FORMULA is part of what the dependent was built from: a
+      // retyped expression can keep its id and its (empty) params and still be
+      // a different function. And a parent whose spec has not been registered
+      // yet (a curve and its model arrive in two state updates) is not a
+      // parent that has no derivative — it is one to come back to.
+      const sig = `${parent.modelId}#${specSerial(parentSpec)}|${parent.params.join(',')}|${
         parent.domain ? parent.domain.join(',') : ''
-      }|${parent.color}|${link.kind === 'tangent' ? link.x : ''}`
-      if (calcSigRef.current.get(link.id) === sig) continue
+      }|${parent.color}|${link.kind === 'tangent' ? link.x : ''}|${
+        link.kind === 'accumulation' ? `${link.a}|${link.C}` : ''
+      }`
+      if (!parentSpec) continue
+      const accStale =
+        link.kind === 'accumulation' &&
+        !MODELS[child.modelId] &&
+        !isAccumulationOf(models[child.modelId], parentSpec, parent.params.length)
+      if (calcSigRef.current.get(link.id) === sig && !accStale) continue
       calcSigRef.current.set(link.id, sig)
 
       let patch: Partial<FittedCurve> | null = null
-      if (link.kind === 'tangent') {
+      if (link.kind === 'accumulation') {
+        // F is a library family when its antiderivative is one (x³/3 − x IS a
+        // cubic) and otherwise a closure under intf_<link id>. The closure is a
+        // pure function of [...f's params, a, C], so it is only re-registered
+        // when f's FORMULA changed — a slider tick is new params, not a new
+        // closure.
+        const wantId = `${ACCUM_MODEL_PREFIX}${link.id}`
+        let acc: ReturnType<typeof accumulationModel> = null
+        try {
+          acc = accumulationModel(parent, models, link.a, link.C, wantId)
+        } catch {
+          acc = null
+        }
+        if (acc) {
+          // Registered over exactly this formula already? Then the same closure
+          // with new params is the same mathematics. isAccumulationOf compares
+          // the parent SPEC by identity, not the family id: retyping an
+          // expression keeps its expr_N id and swaps the formula under it.
+          if (
+            acc.spec.id === wantId &&
+            !isAccumulationOf(models[wantId], parentSpec, parent.params.length)
+          ) {
+            register[wantId] = acc.spec
+          }
+          patch = {
+            modelId: acc.spec.id,
+            params: acc.params.slice(),
+            domain: acc.domain,
+            kind: 'explicit',
+            color: accumColor(parent.color),
+          }
+        }
+      } else if (link.kind === 'tangent') {
         let t: ReturnType<typeof tangentAt> = null
         try {
           t = tangentAt(parent, models, link.x)
@@ -5489,10 +5621,15 @@ export default function App() {
   overlaysRef.current = overlays
 
   /** Everything the cards say about calculus, computed once for all of them. */
-  const calcCards = useMemo<Record<string, CardCalc>>(
-    () => (kind === 'cartesian' ? cardCalc(calcLinks, curves, models, curveLabel) : {}),
-    [kind, calcLinks, curves, models, curveLabel],
-  )
+  const calcCards = useMemo<Record<string, CardCalc>>(() => {
+    if (kind !== 'cartesian') return {}
+    // The board's own letters, so an accumulation reads "g(x) = ∫₀ˣ f(t) dt"
+    // with the names on the figure. Only asked for when there is one.
+    const letters = calcLinks.some((l) => l.kind === 'accumulation')
+      ? curveNames(curves, { ...displaySources, ...exprSources }, calcLinks)
+      : {}
+    return cardCalc(calcLinks, curves, models, curveLabel, letters)
+  }, [kind, calcLinks, curves, models, curveLabel, displaySources, exprSources])
   const calcFor = useCallback(
     (id: string): CardCalc | undefined => calcCards[id],
     [calcCards],
@@ -5561,6 +5698,28 @@ export default function App() {
           onDrag: (pos) =>
             changeCalc({ kind: 'tangentX', linkId: link.id, x: onCurve(parent, pos.x) }, true),
         })
+        continue
+      }
+      if (link.kind === 'accumulation') {
+        // a and the probe live ON the x-axis, where "from a to x" is pointed
+        // at; reachable from f's card (which owns the numbers) and from g's.
+        if (link.parentId !== selectedId && link.curveId !== selectedId) continue
+        out.push({
+          id: `calc:${link.id}:a`,
+          pos: { x: link.a, y: 0 },
+          label: 'a',
+          onDrag: (pos) =>
+            changeCalc({ kind: 'accumA', linkId: link.id, a: onCurve(parent, pos.x) }, true),
+        })
+        if (link.x !== undefined) {
+          out.push({
+            id: `calc:${link.id}:x`,
+            pos: { x: link.x, y: 0 },
+            label: 'x',
+            onDrag: (pos) =>
+              changeCalc({ kind: 'accumX', linkId: link.id, x: onCurve(parent, pos.x) }, true),
+          })
+        }
         continue
       }
       if (link.kind !== 'area' && link.kind !== 'riemann') continue

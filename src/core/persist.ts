@@ -28,7 +28,7 @@ import { parseExpression } from './parse'
 import { parseSlopeField } from './parse/slopeField'
 import { parseShape } from './parse/shapes'
 import { MODELS } from './fit/models'
-import { derivativeModel } from './calculus'
+import { accumulationModel, derivativeModel } from './calculus'
 import type { RiemannMethod } from './calculus'
 import type { RegressionKind } from './data'
 
@@ -87,8 +87,8 @@ export type StyleMap = Record<string, CurveStyle>
 // the format that stores them, because the loader has to validate them and
 // core may not reach into src/ui.
 
-/** Which of the four calculus objects a link describes. */
-export type CalcKind = 'tangent' | 'derivative' | 'area' | 'riemann'
+/** Which of the calculus objects a link describes. */
+export type CalcKind = 'tangent' | 'derivative' | 'area' | 'riemann' | 'accumulation'
 
 /** A tangent line at one point of `parentId`, drawn as the curve `curveId`. */
 export interface TangentLink {
@@ -144,13 +144,36 @@ export interface RiemannLink {
   method: RiemannMethod
 }
 
-export type CalcLink = TangentLink | DerivativeLink | AreaLink | RiemannLink
+/**
+ * The accumulation function g(x) = C + ∫ₐˣ f(t) dt of `parentId`, drawn as the
+ * curve `curveId` — the AP free-response "the graph of f is shown" picture.
+ *
+ * `x` is the probe: where the card reads g(x) out and the region from a to x
+ * is shaded. Absent means no probe. `C` absent means 0, and is not written
+ * when it is 0, so the common case stores four fields and a number.
+ *   src/core/calculus.ts  accumulationModel(parent, models, a, C, modelId)
+ *   src/ui/calcLinks.ts   accumReadout / accumFacts / overlaysFor / cardCalc
+ */
+export interface AccumulationLink {
+  kind: 'accumulation'
+  id: string
+  parentId: string
+  curveId: string
+  /** The lower limit. */
+  a: number
+  /** g(a). */
+  C: number
+  /** The probe x, when there is one. */
+  x?: number
+}
 
-/** The two links that own a curve of their own. */
-export type CurveLink = TangentLink | DerivativeLink
+export type CalcLink = TangentLink | DerivativeLink | AreaLink | RiemannLink | AccumulationLink
+
+/** The links that own a curve of their own. */
+export type CurveLink = TangentLink | DerivativeLink | AccumulationLink
 
 export const isCurveLink = (l: CalcLink): l is CurveLink =>
-  l.kind === 'tangent' || l.kind === 'derivative'
+  l.kind === 'tangent' || l.kind === 'derivative' || l.kind === 'accumulation'
 
 // --- slope fields -----------------------------------------------------------
 //
@@ -387,6 +410,13 @@ const isMethod = (v: unknown): v is RiemannMethod =>
 
 /** The model id a numerically-differentiated derivative registers under. */
 export const DERIV_MODEL_PREFIX = 'dfdx_'
+
+/**
+ * The model id an accumulation closure registers under: this prefix and the
+ * LINK's id, which is unique in its document by construction — so there is no
+ * counter to persist, and a reload rebuilds the same id from the link alone.
+ */
+export const ACCUM_MODEL_PREFIX = 'intf_'
 
 export type BoardMode = 'draw' | 'pan'
 
@@ -720,6 +750,9 @@ export interface StoredCalcLink {
   abs?: boolean
   n?: number
   method?: RiemannMethod
+  /** Accumulation only: the lower limit, and g(a) when it is not 0. */
+  a?: number
+  C?: number
 }
 
 export interface StoredDoc {
@@ -1375,6 +1408,17 @@ export function calcLinkToStored(l: CalcLink): StoredCalcLink {
         n: clampRiemannN(l.n),
         method: l.method,
       }
+    case 'accumulation':
+      return {
+        kind: 'accumulation',
+        id: l.id,
+        parentId: l.parentId,
+        curveId: l.curveId,
+        a: l.a,
+        // 0 is the default and is not written; neither is an absent probe.
+        ...(l.C !== 0 && Number.isFinite(l.C) ? { C: l.C } : {}),
+        ...(l.x !== undefined && Number.isFinite(l.x) ? { x: l.x } : {}),
+      }
   }
 }
 
@@ -1421,6 +1465,25 @@ export function storedToCalcLink(raw: unknown): CalcLink | null {
         n: clampRiemannN(raw.n),
         method: isMethod(raw.method) ? raw.method : 'left',
       }
+    case 'accumulation': {
+      if (!isStr(curveId) || !curveId) return null
+      // The lower limit is the whole definition: without it there is no g.
+      // C and the probe default (0, none) when absent; a C that is present
+      // but not a number is damage, and the link is refused rather than
+      // quietly moved up or down the page.
+      if (!isNum(raw.a)) return null
+      if (raw.C !== undefined && !isNum(raw.C)) return null
+      const C = isNum(raw.C) ? raw.C : 0
+      return {
+        kind: 'accumulation',
+        id,
+        parentId,
+        curveId,
+        a: raw.a,
+        C,
+        ...(isNum(raw.x) ? { x: raw.x } : {}),
+      }
+    }
     default:
       return null
   }
@@ -1437,6 +1500,8 @@ export function calcNoun(kind: CalcKind): string {
       return 'shaded area'
     case 'riemann':
       return 'Riemann sum'
+    case 'accumulation':
+      return 'accumulation function'
   }
 }
 
@@ -1935,6 +2000,54 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
       // link, so both go, and the report says so.
       problems.push(
         'A derivative curve could not be rebuilt from the curve it came from, so it was removed.',
+      )
+      degraded = true
+      lost.add(link.id)
+      lost.add(`curve:${child.id}`)
+    }
+    if (lost.size > 0) {
+      for (let i = calc.length - 1; i >= 0; i--) {
+        if (lost.has(calc[i].id)) calc.splice(i, 1)
+      }
+      for (let i = curves.length - 1; i >= 0; i--) {
+        if (lost.has(`curve:${curves[i].id}`)) curves.splice(i, 1)
+      }
+    }
+  }
+
+  // An accumulation function that had to be a closure is rebuilt the same way,
+  // from its parent and the link's own a and C. Its id is the link's, so there
+  // is no counter to restore. A closed-form one (x³/3 − x IS a cubic) needs
+  // nothing: its family is in the library.
+  {
+    const byId = new Map(curves.map((c) => [c.id, c]))
+    const lost = new Set<string>()
+    for (const link of calc) {
+      if (link.kind !== 'accumulation') continue
+      const child = byId.get(link.curveId)
+      const parent = byId.get(link.parentId)
+      if (!child || !parent) continue
+      if (MODELS[child.modelId] ?? extraModels[child.modelId]) continue
+      let built: ReturnType<typeof accumulationModel> = null
+      try {
+        built = accumulationModel(parent, { ...MODELS, ...extraModels }, link.a, link.C, child.modelId)
+      } catch {
+        built = null
+      }
+      if (built && built.spec.id === child.modelId) {
+        extraModels[child.modelId] = built.spec
+        continue
+      }
+      if (built) {
+        // The parent is now a family whose antiderivative IS in the library:
+        // the curve simply becomes that family, which is what the board would
+        // have made of it anyway.
+        child.modelId = built.spec.id
+        child.params = built.params.slice()
+        continue
+      }
+      problems.push(
+        'An accumulation function could not be rebuilt from the curve it came from, so it was removed.',
       )
       degraded = true
       lost.add(link.id)
