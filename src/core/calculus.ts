@@ -812,7 +812,7 @@ interface Quad { value: number; evals: number }
  * is defined, so a NaN down here means a gap too narrow for the scan to see,
  * and inventing a value across it would be a guess.
  */
-function adaptiveSimpson(f: Fn, a: number, b: number, tol: number): Quad | null {
+function adaptiveSimpson(f: Fn, a: number, b: number, tol: number, minDepth = MIN_QUAD_DEPTH): Quad | null {
   let evals = 0
   const ev = (x: number): number => { evals++; return f(x) }
 
@@ -850,7 +850,7 @@ function adaptiveSimpson(f: Fn, a: number, b: number, tol: number): Quad | null 
     // 0, ¼, ½, ¾, 1 of a period can make the whole and the halves agree by
     // coincidence — (1 + cos x)²/2 on [0, 2π] "converged" to 4π/3 instead
     // of 3π/2. Four levels (16 panels) sees any shape a board can draw.
-    if (depth >= MIN_QUAD_DEPTH && Math.abs(delta) <= 15 * eps) return left + right + delta / 15
+    if (depth >= minDepth && Math.abs(delta) <= 15 * eps) return left + right + delta / 15
     return (
       go(x0, mid, y0, ylm, ym, left, eps / 2, depth + 1) +
       go(mid, x1, ym, yrm, y1, right, eps / 2, depth + 1)
@@ -1509,7 +1509,10 @@ function buildAccTable(f: Fn, a: number, h: number): AccTable | null {
       const k = k0 + j
       const xa = node(dir, k)
       const xb = node(dir, k + 1)
-      const q = adaptiveSimpson(f, Math.min(xa, xb), Math.max(xa, xb), tol)
+      // One cell of the accumulation table: a small fraction of the span,
+      // far too narrow to hold a period that could fool the estimate, and
+      // there are hundreds of them — no forced subdivision here.
+      const q = adaptiveSimpson(f, Math.min(xa, xb), Math.max(xa, xb), tol, 0)
       const fb = f(xb)
       if (!q || !Number.isFinite(fb)) {
         side.wall = true
