@@ -26,6 +26,7 @@
 // ============================================================================
 
 import type { Viewport, Theme } from '../core/types'
+import { isStretched, ppuX, ppuY } from '../core/types'
 import type { AxisUnits, GridStep, GridStyle, PaintScale, PiStep } from './grid'
 import {
   ARROW_HALF,
@@ -39,6 +40,7 @@ import {
   formatTick,
   labelFont,
   SCREEN_GRID,
+  drawGrid,
   isPiStep,
   paintScale,
   pickPiTickStep,
@@ -162,9 +164,10 @@ interface PolarGeometry {
 export function polarGeometry(vp: Viewport): PolarGeometry {
   const W = vp.widthPx
   const H = vp.heightPx
-  const ppu = vp.pxPerUnit
-  const ox = W / 2 - vp.center.x * ppu
-  const oy = H / 2 + vp.center.y * ppu
+  // The pole is a POINT, so it goes through each axis' own scale (identical on
+  // the equal-axes board this geometry is ever drawn on).
+  const ox = W / 2 - vp.center.x * ppuX(vp)
+  const oy = H / 2 + vp.center.y * ppuY(vp)
   const corners: Array<[number, number]> = [
     [0, 0],
     [W, 0],
@@ -242,6 +245,15 @@ export function drawPolarGrid(
   units?: AxisUnits | null,
   style?: GridStyle | null,
 ): void {
+  // A circle of constant r is only a circle on screen when one pixel is the
+  // same length in x and y. On a stretched board every ring would be an
+  // ellipse and every spoke would sit at the wrong angle — a ruling that lies
+  // about the coordinate system it names. The App refuses polar ruling while
+  // stretched; if one ever arrives here anyway, the cartesian grid is drawn.
+  if (isStretched(vp)) {
+    drawGrid(ctx, vp, theme, opts, units, style)
+    return
+  }
   const { type, stroke } = paintScale(opts)
   const st = style ?? SCREEN_GRID
   /**

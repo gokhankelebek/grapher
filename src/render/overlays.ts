@@ -25,6 +25,7 @@
 // ============================================================================
 
 import type { FittedCurve, ModelSpec, Vec2, Viewport } from '../core/types'
+import { ppuX, ppuY } from '../core/types'
 import { sampleExplicitPolylines } from './curves'
 import { paintScale, type PaintScale } from './grid'
 
@@ -110,7 +111,9 @@ export interface OverlayPaintOpts {
 // ---------------------------------------------------------------------------
 
 interface Frame {
-  ppu: number
+  /** Pixels per unit along x and along y (equal on an equal-axes board). */
+  ppx: number
+  ppy: number
   cx: number
   cy: number
   hw: number
@@ -124,7 +127,8 @@ interface Frame {
 
 function frameOf(vp: Viewport): Frame {
   return {
-    ppu: vp.pxPerUnit,
+    ppx: ppuX(vp),
+    ppy: ppuY(vp),
     cx: vp.center.x,
     cy: vp.center.y,
     hw: vp.widthPx / 2,
@@ -136,9 +140,9 @@ function frameOf(vp: Viewport): Frame {
   }
 }
 
-const sx = (fr: Frame, x: number): number => fr.hw + (x - fr.cx) * fr.ppu
-const sy = (fr: Frame, y: number): number => fr.hh - (y - fr.cy) * fr.ppu
-const mathX = (fr: Frame, px: number): number => fr.cx + (px - fr.hw) / fr.ppu
+const sx = (fr: Frame, x: number): number => fr.hw + (x - fr.cx) * fr.ppx
+const sy = (fr: Frame, y: number): number => fr.hh - (y - fr.cy) * fr.ppy
+const mathX = (fr: Frame, px: number): number => fr.cx + (px - fr.hw) / fr.ppx
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v))
 
 /**
@@ -213,7 +217,7 @@ function drawArea(
 
   let a = Math.min(ov.from, ov.to)
   let b = Math.max(ov.from, ov.to)
-  const halfSpan = (1.5 * vp.widthPx) / fr.ppu
+  const halfSpan = (1.5 * vp.widthPx) / fr.ppx
   a = Math.max(a, fr.cx - halfSpan)
   b = Math.min(b, fr.cx + halfSpan)
   if (!(b > a)) return
@@ -259,8 +263,8 @@ function drawArea(
  * exactly where the stroke lifts it.
  */
 function boxed(f: (x: number) => number, fr: Frame): (x: number) => number {
-  const yTop = fr.cy + (fr.hh - fr.by0) / fr.ppu
-  const yBot = fr.cy + (fr.hh - fr.by1) / fr.ppu
+  const yTop = fr.cy + (fr.hh - fr.by0) / fr.ppy
+  const yBot = fr.cy + (fr.hh - fr.by1) / fr.ppy
   return (x: number): number => {
     const y = f(x)
     return Number.isFinite(y) ? clamp(y, yBot, yTop) : y

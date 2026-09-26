@@ -29,6 +29,7 @@
 // ============================================================================
 
 import type { Polyline, SlopeField, Viewport } from '../core/types'
+import { ppuX, ppuY } from '../core/types'
 import { paintScale, type PaintScale } from './grid'
 
 /** Re-exported so the board can name these without reaching into core/. */
@@ -89,23 +90,18 @@ interface Frame {
 }
 
 /**
- * The viewport as a screen frame.
+ * The viewport as a screen frame, one scale per axis.
  *
- * `pxPerUnit` is a single number today, so the pixels are square and ppx ===
- * ppy. The two are kept apart anyway: a slope is a RATIO of units, and the
- * screen angle of dy/dx = 1 is 45° only while the scales agree. If an
- * independent y zoom ever lands, the arithmetic below is already correct
- * rather than quietly off by the aspect ratio — a field whose segments are not
- * tangent to the solution curve is worse than no field.
+ * A slope is a RATIO of units, and the screen angle of dy/dx = 1 is 45° only
+ * while the two scales agree. On a stretched board (years against millions)
+ * the segment for slope m points along (ppx, −ppy·m) in pixels, so it stays
+ * tangent to the solution curve drawn on the same board — a field whose
+ * segments are not tangent to the solution curve is worse than no field.
  */
 function frameOf(vp: Viewport): Frame {
-  const aniso = vp as Viewport & { pxPerUnitX?: number; pxPerUnitY?: number }
-  const pos = (v: number | undefined): number | null =>
-    typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null
-  const base = vp.pxPerUnit
   return {
-    ppx: pos(aniso.pxPerUnitX) ?? base,
-    ppy: pos(aniso.pxPerUnitY) ?? base,
+    ppx: ppuX(vp),
+    ppy: ppuY(vp),
     cx: vp.center.x,
     cy: vp.center.y,
     hw: vp.widthPx / 2,

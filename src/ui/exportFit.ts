@@ -17,6 +17,7 @@
 // ============================================================================
 
 import type { BoardKind, FittedCurve, ModelSpec, NLItem, Viewport } from '../core/types'
+import { isStretched, ppuX, ppuY } from '../core/types'
 import type { ExportSettings } from './renderBoard'
 import { clampExportSettings } from './renderBoard'
 import type { Box } from './curveState'
@@ -110,6 +111,16 @@ const MIN_PPU = 0.001
 const MAX_PPU = 100000
 const clampPpu = (v: number): number =>
   Number.isFinite(v) && v > 0 ? Math.min(MAX_PPU, Math.max(MIN_PPU, v)) : 60
+/**
+ * The per-axis clamp of a STRETCHED fit. Much wider than the square one on
+ * purpose: a stretched board exists for data like populations in the hundreds
+ * of millions, where a unit of y is worth a millionth of a pixel — 0.001
+ * would pin that axis and frame a sliver of the data.
+ */
+const MIN_AXIS_PPU = 1e-12
+const MAX_AXIS_PPU = 1e12
+const clampAxisPpu = (v: number, fallback: number): number =>
+  Number.isFinite(v) && v > 0 ? Math.min(MAX_AXIS_PPU, Math.max(MIN_AXIS_PPU, v)) : fallback
 
 /** width / height the preset asks for, in the caller's terms. */
 export function aspectRatio(aspect: AspectKey, vp: Viewport): number {
@@ -168,6 +179,13 @@ export function contentBounds(input: {
  * A number line is scaled by width alone. Letting its (nominal, ±0.5) height
  * take part would shrink the line to nothing inside a tall frame — which is
  * the 40px strip this whole option exists to stop producing.
+ *
+ * A STRETCHED board (independent x and y scales) fits each axis to its own
+ * extent — years across the width, millions up the height — and the fitted
+ * viewport carries its own pxPerUnitY. An equal-axes board keeps one scale,
+ * the smaller of the two, exactly as before. An extent with no size along one
+ * axis (a horizontal line) keeps the live board's x:y ratio on that axis
+ * rather than zooming it to the clamp.
  */
 export function fitViewport(
   vp: Viewport,
@@ -189,17 +207,37 @@ export function fitViewport(
   const usableW = widthPx * (1 - 2 * FIT_PAD)
   const usableH = heightPx * (1 - 2 * FIT_PAD)
 
+  const center = {
+    x: (box.min.x + box.max.x) / 2,
+    // The line is drawn at the middle of the canvas by construction; a
+    // number-line board's saved y is always 0 and must stay 0.
+    y: kind === 'number-line' ? 0 : (box.min.y + box.max.y) / 2,
+  }
+
+  if (kind !== 'number-line' && isStretched(vp)) {
+    const ratio = ppuY(vp) / ppuX(vp) // live y:x pixels-per-unit
+    const flatX = !(box.max.x - box.min.x > 1e-6)
+    const flatY = !(box.max.y - box.min.y > 1e-6)
+    let px = usableW / w
+    let py = usableH / h
+    if (flatX && flatY) {
+      px = ppuX(vp)
+      py = ppuY(vp)
+    } else if (flatY) py = px * ratio
+    else if (flatX) px = py / ratio
+    const ppx = clampAxisPpu(px, ppuX(vp))
+    const ppy = clampAxisPpu(py, ppuY(vp))
+    const out: Viewport = { center, pxPerUnit: ppx, widthPx, heightPx }
+    if (ppy !== ppx) out.pxPerUnitY = ppy
+    return out
+  }
+
   const ppu = clampPpu(
     kind === 'number-line' ? usableW / w : Math.min(usableW / w, usableH / h),
   )
 
   return {
-    center: {
-      x: (box.min.x + box.max.x) / 2,
-      // The line is drawn at the middle of the canvas by construction; a
-      // number-line board's saved y is always 0 and must stay 0.
-      y: kind === 'number-line' ? 0 : (box.min.y + box.max.y) / 2,
-    },
+    center,
     pxPerUnit: ppu,
     widthPx,
     heightPx,
@@ -235,6 +273,9 @@ export function exportViewport(
     widthPx: Math.max(1, Math.round(vp.widthPx)),
     heightPx: Math.max(1, Math.round(vp.heightPx)),
   }
+  // The live board's own y scale travels with the copy — only when it differs,
+  // so an equal-axes export is the same object it always was.
+  if (isStretched(vp)) live.pxPerUnitY = ppuY(vp)
   if (!settings.fit || !content) return live
   // The lane layout depends on the horizontal scale, which for a number line
   // depends only on the width — so a first pass at the width alone answers it.
@@ -251,7 +292,7 @@ export function exportViewport(
   if (captionPx <= 0 || kind === 'number-line') return fitted
   // Two passes: the first says what a unit is worth, which is the only way to
   // state a band measured in pixels as the math room the frame has to give it.
-  const band = captionPx / fitted.pxPerUnit
+  const band = captionPx / ppuY(fitted)
   return fitViewport(
     vp,
     { min: { x: content.min.x, y: content.min.y - band }, max: content.max },

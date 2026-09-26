@@ -34,6 +34,7 @@
 // ============================================================================
 
 import type { Shape, Theme, Vec2, Viewport } from '../core/types'
+import { ppuX, ppuY } from '../core/types'
 import { LABEL_PX, gridFont, labelFont, paintScale, type PaintScale } from './grid'
 
 /** Re-exported so the board can name this without reaching into core/. */
@@ -84,7 +85,13 @@ const UP_RIGHT = { x: Math.SQRT1_2, y: -Math.SQRT1_2 }
 // ---------------------------------------------------------------------------
 
 interface Frame {
-  ppu: number
+  /**
+   * Pixels per unit along x and along y. Every head, normal and label offset
+   * below is computed from toPx'd points, so a stretched board only changes
+   * where the vertices land, never the shape of an arrowhead.
+   */
+  ppx: number
+  ppy: number
   cx: number
   cy: number
   hw: number
@@ -98,7 +105,8 @@ interface Frame {
 
 function frameOf(vp: Viewport): Frame {
   return {
-    ppu: vp.pxPerUnit,
+    ppx: ppuX(vp),
+    ppy: ppuY(vp),
     cx: vp.center.x,
     cy: vp.center.y,
     hw: vp.widthPx / 2,
@@ -113,8 +121,8 @@ function frameOf(vp: Viewport): Frame {
 interface Pt { x: number; y: number }
 
 const toPx = (fr: Frame, p: Vec2): Pt => ({
-  x: fr.hw + (p.x - fr.cx) * fr.ppu,
-  y: fr.hh - (p.y - fr.cy) * fr.ppu,
+  x: fr.hw + (p.x - fr.cx) * fr.ppx,
+  y: fr.hh - (p.y - fr.cy) * fr.ppy,
 })
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v))

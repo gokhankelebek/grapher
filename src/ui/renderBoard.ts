@@ -35,7 +35,7 @@ import type {
   Vec2,
   Viewport,
 } from '../core/types'
-import { FIGURE_STYLES, LIGHT_THEME, toPrintColor, toScreen } from '../core/types'
+import { FIGURE_STYLES, LIGHT_THEME, ppuX, ppuY, toPrintColor, toScreen } from '../core/types'
 import type { StyleMap } from '../core/persist'
 import type { AxisUnit, AxisUnits, PaintScale } from '../render/grid'
 import { SCREEN_GRID, drawGrid, labelFont as figureFont, paintScale } from '../render/grid'
@@ -678,12 +678,15 @@ function labelRank(p: SpecialPoint): number {
 function labelNormal(
   p: SpecialPoint,
   slopeAt?: ((x: number) => number) | null,
+  /** ppuY / ppuX: 1 on an equal-axes board, where a math slope IS the screen slope. */
+  aspect = 1,
 ): { x: number; y: number } {
   if (p.kind === 'minimum') return { x: 0, y: 1 }
   if (p.kind === 'maximum' || p.kind === 'petal-tip') return { x: 0, y: -1 }
-  const m = slopeAt ? slopeAt(p.pos.x) : 0
+  // The slope as DRAWN: a stretched board tilts every tangent by ppuY/ppuX.
+  const m = (slopeAt ? slopeAt(p.pos.x) : 0) * aspect
   if (!Number.isFinite(m) || m === 0) return { x: 0, y: -1 }
-  // screen tangent of math slope m is (1, -m); its normals are ±(-m, -1)
+  // screen tangent of screen slope m is (1, -m); its normals are ±(-m, -1)
   const L = Math.hypot(m, 1)
   return { x: -m / L, y: -1 / L }
 }
@@ -819,7 +822,7 @@ export function drawAnalysis(
     const mr = m.masked
       ? 7 * stroke
       : markerRadius(m.p, stroke, emph(m.i) ? 2.5 : 0, filled)
-    const n = labelNormal(m.p, o.slopeAt)
+    const n = labelNormal(m.p, o.slopeAt, ppuY(vp) / ppuX(vp))
     const box = placeLabel(vp, m.sx, m.sy, w, h, mr, n, type, placed, o.screenY ?? null)
     if (!box) continue
 
@@ -1251,12 +1254,12 @@ function explicitScreenY(
   const f = model?.evalExplicit
   if (!f) return null
   return (px: number): number | null => {
-    const x = vp.center.x + (px - vp.widthPx / 2) / vp.pxPerUnit
+    const x = vp.center.x + (px - vp.widthPx / 2) / ppuX(vp)
     if (curve.domain && (x < curve.domain[0] || x > curve.domain[1])) return null
     try {
       const y = f.call(model, curve.params, x)
       if (!Number.isFinite(y)) return null
-      return vp.heightPx / 2 - (y - vp.center.y) * vp.pxPerUnit
+      return vp.heightPx / 2 - (y - vp.center.y) * ppuY(vp)
     } catch {
       return null
     }

@@ -12,6 +12,7 @@
 // ============================================================================
 
 import type { Vec2, Viewport, FittedCurve, ModelSpec } from '../core/types'
+import { ppuX, ppuY } from '../core/types'
 
 const TWO_PI = Math.PI * 2
 const DEFAULT_STROKE = 2.5
@@ -375,15 +376,16 @@ interface CurveSpan {
 function explicitSpan(model: ModelSpec, curve: FittedCurve, vp: Viewport): CurveSpan | null {
   if (!model.evalExplicit) return null
   const params = curve.params
-  const ppu = vp.pxPerUnit
+  const ppx = ppuX(vp)
+  const ppy = ppuY(vp)
   const cx = vp.center.x
   const cy = vp.center.y
   const hw = vp.widthPx / 2
   const hh = vp.heightPx / 2
 
-  const pad = 8 / ppu // sample slightly past the edges so strokes exit cleanly
-  let x0 = cx - hw / ppu - pad
-  let x1 = cx + hw / ppu + pad
+  const pad = 8 / ppx // sample slightly past the edges so strokes exit cleanly
+  let x0 = cx - hw / ppx - pad
+  let x1 = cx + hw / ppx + pad
   let atDomain0 = false
   let atDomain1 = false
   if (curve.domain) {
@@ -397,8 +399,8 @@ function explicitSpan(model: ModelSpec, curve: FittedCurve, vp: Viewport): Curve
 
   const f: EvalToScreen = (x, out) => {
     const y = model.evalExplicit!(params, x)
-    out.x = hw + (x - cx) * ppu
-    out.y = hh - (y - cy) * ppu
+    out.x = hw + (x - cx) * ppx
+    out.y = hh - (y - cy) * ppy
     out.ok = Number.isFinite(y)
   }
   return { f, t0: x0, t1: x1, atDomain0, atDomain1 }
@@ -446,7 +448,7 @@ function inferParametricDomain(
     }
   }
   if (xConst && x0 !== null) {
-    const hh = vp.heightPx / 2 / vp.pxPerUnit
+    const hh = vp.heightPx / 2 / ppuY(vp)
     return [vp.center.y - hh * 1.05, vp.center.y + hh * 1.05]
   }
   return [0, TWO_PI]
@@ -455,7 +457,8 @@ function inferParametricDomain(
 function parametricSpan(model: ModelSpec, curve: FittedCurve, vp: Viewport): CurveSpan | null {
   if (!model.evalParametric) return null
   const params = curve.params
-  const ppu = vp.pxPerUnit
+  const ppx = ppuX(vp)
+  const ppy = ppuY(vp)
   const cx = vp.center.x
   const cy = vp.center.y
   const hw = vp.widthPx / 2
@@ -464,8 +467,8 @@ function parametricSpan(model: ModelSpec, curve: FittedCurve, vp: Viewport): Cur
   const dom = curve.domain ?? inferParametricDomain(model, params, vp)
   const f: EvalToScreen = (t, out) => {
     const p = model.evalParametric!(params, t)
-    out.x = hw + (p.x - cx) * ppu
-    out.y = hh - (p.y - cy) * ppu
+    out.x = hw + (p.x - cx) * ppx
+    out.y = hh - (p.y - cy) * ppy
     out.ok = Number.isFinite(p.x) && Number.isFinite(p.y)
   }
   // An INFERRED span is not a domain: [0, 2π] is where the sampler had to
@@ -488,7 +491,8 @@ function buildParametric(
 function polarSpan(model: ModelSpec, curve: FittedCurve, vp: Viewport): CurveSpan | null {
   if (!model.evalPolar) return null
   const params = curve.params
-  const ppu = vp.pxPerUnit
+  const ppx = ppuX(vp)
+  const ppy = ppuY(vp)
   const cx = vp.center.x
   const cy = vp.center.y
   const hw = vp.widthPx / 2
@@ -501,8 +505,8 @@ function polarSpan(model: ModelSpec, curve: FittedCurve, vp: Viewport): CurveSpa
     const r = model.evalPolar!(params, th)
     const x = r * Math.cos(th)
     const y = r * Math.sin(th)
-    out.x = hw + (x - cx) * ppu
-    out.y = hh - (y - cy) * ppu
+    out.x = hw + (x - cx) * ppx
+    out.y = hh - (y - cy) * ppy
     out.ok = Number.isFinite(r)
   }
   const declared = curve.domain != null
@@ -577,16 +581,30 @@ function edgeCrossing(
 function snapMidpoint(
   f: ImplicitFn, model: ModelSpec, params: number[],
   ax: number, ay: number, bx: number, by: number,
-  reach: number, out: Vec2,
+  reach: number, k: number, out: Vec2,
 ): boolean {
   const mx = (ax + bx) / 2
   const my = (ay + by) / 2
-  let nx = -(by - ay)
-  let ny = bx - ax
-  const nl = Math.hypot(nx, ny)
-  if (nl < 1e-30) return false
-  nx = (nx / nl) * reach
-  ny = (ny / nl) * reach
+  let nx: number
+  let ny: number
+  if (k === 1) {
+    nx = -(by - ay)
+    ny = bx - ax
+    const nl = Math.hypot(nx, ny)
+    if (nl < 1e-30) return false
+    nx = (nx / nl) * reach
+    ny = (ny / nl) * reach
+  } else {
+    // Stretched board: the normal is taken where the chord is DRAWN — y
+    // measured in x-units via k = ppuY/ppuX — and mapped back, so the search
+    // runs across the stroke on screen, not 300 000 years sideways.
+    nx = -(by - ay) * k
+    ny = bx - ax
+    const nl = Math.hypot(nx, ny)
+    if (nl < 1e-30) return false
+    nx = (nx / nl) * reach
+    ny = ((ny / nl) * reach) / k
+  }
   const vm = f.call(model, params, mx, my)
   if (!Number.isFinite(vm)) return false
   if (vm === 0) {
@@ -612,13 +630,13 @@ function snapMidpoint(
 function segTo(
   path: Path2D, f: ImplicitFn, model: ModelSpec, params: number[],
   a: Vec2, b: Vec2, reach: number,
-  cx: number, cy: number, ppu: number, hw: number, hh: number,
+  cx: number, cy: number, ppx: number, ppy: number, hw: number, hh: number,
 ): void {
-  path.moveTo(hw + (a.x - cx) * ppu, hh - (a.y - cy) * ppu)
-  if (snapMidpoint(f, model, params, a.x, a.y, b.x, b.y, reach, PM)) {
-    path.lineTo(hw + (PM.x - cx) * ppu, hh - (PM.y - cy) * ppu)
+  path.moveTo(hw + (a.x - cx) * ppx, hh - (a.y - cy) * ppy)
+  if (snapMidpoint(f, model, params, a.x, a.y, b.x, b.y, reach, ppy / ppx, PM)) {
+    path.lineTo(hw + (PM.x - cx) * ppx, hh - (PM.y - cy) * ppy)
   }
-  path.lineTo(hw + (b.x - cx) * ppu, hh - (b.y - cy) * ppu)
+  path.lineTo(hw + (b.x - cx) * ppx, hh - (b.y - cy) * ppy)
 }
 
 function buildImplicit(
@@ -632,7 +650,8 @@ function buildImplicit(
   const params = curve.params
   const W = vp.widthPx
   const H = vp.heightPx
-  const ppu = vp.pxPerUnit
+  const ppx = ppuX(vp)
+  const ppy = ppuY(vp)
   const cx = vp.center.x
   const cy = vp.center.y
   const hw = W / 2
@@ -642,10 +661,10 @@ function buildImplicit(
   const nx = Math.max(24, Math.min(160, Math.ceil(W / 10)))
   const ny = Math.max(16, Math.min(100, Math.ceil(H / 10)))
   const padPx = 6
-  const mx0 = cx - (hw + padPx) / ppu
-  const mx1 = cx + (hw + padPx) / ppu
-  const my0 = cy - (hh + padPx) / ppu
-  const my1 = cy + (hh + padPx) / ppu
+  const mx0 = cx - (hw + padPx) / ppx
+  const mx1 = cx + (hw + padPx) / ppx
+  const my0 = cy - (hh + padPx) / ppy
+  const my1 = cy + (hh + padPx) / ppy
   const dx = (mx1 - mx0) / nx
   const dy = (my1 - my0) / ny
   const cols = nx + 1
@@ -662,7 +681,10 @@ function buildImplicit(
     }
   }
 
-  const reach = Math.hypot(dx, dy) * 0.35 // midpoint-snap search distance
+  // midpoint-snap search distance, in x-units (y measured in x-units on a
+  // stretched board, so it is the cell's SCREEN diagonal either way)
+  const kY = ppy / ppx
+  const reach = (kY === 1 ? Math.hypot(dx, dy) : Math.hypot(dx, dy * kY)) * 0.35
   let drawn = false
 
   for (let j = 0; j < ny; j++) {
@@ -708,42 +730,42 @@ function buildImplicit(
 
       switch (code) {
         case 1: case 14:
-          segTo(path, f, model, params, PL, PB, reach, cx, cy, ppu, hw, hh)
+          segTo(path, f, model, params, PL, PB, reach, cx, cy, ppx, ppy, hw, hh)
           break
         case 2: case 13:
-          segTo(path, f, model, params, PB, PR, reach, cx, cy, ppu, hw, hh)
+          segTo(path, f, model, params, PB, PR, reach, cx, cy, ppx, ppy, hw, hh)
           break
         case 3: case 12:
-          segTo(path, f, model, params, PL, PR, reach, cx, cy, ppu, hw, hh)
+          segTo(path, f, model, params, PL, PR, reach, cx, cy, ppx, ppy, hw, hh)
           break
         case 4: case 11:
-          segTo(path, f, model, params, PT, PR, reach, cx, cy, ppu, hw, hh)
+          segTo(path, f, model, params, PT, PR, reach, cx, cy, ppx, ppy, hw, hh)
           break
         case 6: case 9:
-          segTo(path, f, model, params, PB, PT, reach, cx, cy, ppu, hw, hh)
+          segTo(path, f, model, params, PB, PT, reach, cx, cy, ppx, ppy, hw, hh)
           break
         case 7: case 8:
-          segTo(path, f, model, params, PL, PT, reach, cx, cy, ppu, hw, hh)
+          segTo(path, f, model, params, PL, PT, reach, cx, cy, ppx, ppy, hw, hh)
           break
         case 5: { // v00 & v11 positive — disambiguate with the cell center
           const vc = f.call(model, params, x0 + dx / 2, y0 + dy / 2)
           if (Number.isFinite(vc) && vc > 0) {
-            segTo(path, f, model, params, PL, PT, reach, cx, cy, ppu, hw, hh)
-            segTo(path, f, model, params, PB, PR, reach, cx, cy, ppu, hw, hh)
+            segTo(path, f, model, params, PL, PT, reach, cx, cy, ppx, ppy, hw, hh)
+            segTo(path, f, model, params, PB, PR, reach, cx, cy, ppx, ppy, hw, hh)
           } else {
-            segTo(path, f, model, params, PL, PB, reach, cx, cy, ppu, hw, hh)
-            segTo(path, f, model, params, PT, PR, reach, cx, cy, ppu, hw, hh)
+            segTo(path, f, model, params, PL, PB, reach, cx, cy, ppx, ppy, hw, hh)
+            segTo(path, f, model, params, PT, PR, reach, cx, cy, ppx, ppy, hw, hh)
           }
           break
         }
         case 10: { // v10 & v01 positive — disambiguate with the cell center
           const vc = f.call(model, params, x0 + dx / 2, y0 + dy / 2)
           if (Number.isFinite(vc) && vc > 0) {
-            segTo(path, f, model, params, PL, PB, reach, cx, cy, ppu, hw, hh)
-            segTo(path, f, model, params, PT, PR, reach, cx, cy, ppu, hw, hh)
+            segTo(path, f, model, params, PL, PB, reach, cx, cy, ppx, ppy, hw, hh)
+            segTo(path, f, model, params, PT, PR, reach, cx, cy, ppx, ppy, hw, hh)
           } else {
-            segTo(path, f, model, params, PL, PT, reach, cx, cy, ppu, hw, hh)
-            segTo(path, f, model, params, PB, PR, reach, cx, cy, ppu, hw, hh)
+            segTo(path, f, model, params, PL, PT, reach, cx, cy, ppx, ppy, hw, hh)
+            segTo(path, f, model, params, PB, PR, reach, cx, cy, ppx, ppy, hw, hh)
           }
           break
         }
@@ -782,8 +804,9 @@ export function sampleExplicitPolylines(
   x0: number,
   x1: number,
 ): Vec2[][] {
-  if (!(x1 > x0) || !(vp.pxPerUnit > 0) || vp.widthPx <= 0 || vp.heightPx <= 0) return []
-  const ppu = vp.pxPerUnit
+  if (!(x1 > x0) || !(ppuX(vp) > 0) || !(ppuY(vp) > 0) || vp.widthPx <= 0 || vp.heightPx <= 0) return []
+  const ppx = ppuX(vp)
+  const ppy = ppuY(vp)
   const cx = vp.center.x
   const cy = vp.center.y
   const hw = vp.widthPx / 2
@@ -796,8 +819,8 @@ export function sampleExplicitPolylines(
     } catch {
       y = Number.NaN
     }
-    out.x = hw + (x - cx) * ppu
-    out.y = hh - (y - cy) * ppu
+    out.x = hw + (x - cx) * ppx
+    out.y = hh - (y - cy) * ppy
     out.ok = Number.isFinite(y)
   }
 
@@ -999,7 +1022,7 @@ export function traceCurve(
   if (curve.kind === 'implicit') return null
   const model = models[curve.modelId]
   if (!model) return null
-  if (vp.widthPx <= 0 || vp.heightPx <= 0 || !(vp.pxPerUnit > 0)) return null
+  if (vp.widthPx <= 0 || vp.heightPx <= 0 || !(ppuX(vp) > 0) || !(ppuY(vp) > 0)) return null
 
   let span: CurveSpan | null = null
   try {
@@ -1133,7 +1156,7 @@ export function drawCurve(
   if (!curve.visible) return
   const model = models[curve.modelId]
   if (!model) return
-  if (vp.widthPx <= 0 || vp.heightPx <= 0 || !(vp.pxPerUnit > 0)) return
+  if (vp.widthPx <= 0 || vp.heightPx <= 0 || !(ppuX(vp) > 0) || !(ppuY(vp) > 0)) return
 
   const path = new Path2D()
   let drawn = false
@@ -1189,7 +1212,8 @@ export function drawInk(
 ): void {
   const n = pts.length
   if (n === 0) return
-  const ppu = vp.pxPerUnit
+  const ppx = ppuX(vp)
+  const ppy = ppuY(vp)
   const cx = vp.center.x
   const cy = vp.center.y
   const hw = vp.widthPx / 2
@@ -1206,8 +1230,8 @@ export function drawInk(
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
 
-  const x0 = hw + (pts[0].x - cx) * ppu
-  const y0 = hh - (pts[0].y - cy) * ppu
+  const x0 = hw + (pts[0].x - cx) * ppx
+  const y0 = hh - (pts[0].y - cy) * ppy
 
   if (n === 1) {
     ctx.beginPath()
@@ -1220,18 +1244,18 @@ export function drawInk(
   ctx.beginPath()
   ctx.moveTo(x0, y0)
   if (n === 2) {
-    ctx.lineTo(hw + (pts[1].x - cx) * ppu, hh - (pts[1].y - cy) * ppu)
+    ctx.lineTo(hw + (pts[1].x - cx) * ppx, hh - (pts[1].y - cy) * ppy)
   } else {
     for (let i = 1; i < n - 1; i++) {
-      const ax = hw + (pts[i].x - cx) * ppu
-      const ay = hh - (pts[i].y - cy) * ppu
-      const bx = hw + (pts[i + 1].x - cx) * ppu
-      const by = hh - (pts[i + 1].y - cy) * ppu
+      const ax = hw + (pts[i].x - cx) * ppx
+      const ay = hh - (pts[i].y - cy) * ppy
+      const bx = hw + (pts[i + 1].x - cx) * ppx
+      const by = hh - (pts[i + 1].y - cy) * ppy
       ctx.quadraticCurveTo(ax, ay, (ax + bx) / 2, (ay + by) / 2)
     }
     ctx.lineTo(
-      hw + (pts[n - 1].x - cx) * ppu,
-      hh - (pts[n - 1].y - cy) * ppu,
+      hw + (pts[n - 1].x - cx) * ppx,
+      hh - (pts[n - 1].y - cy) * ppy,
     )
   }
   ctx.stroke()

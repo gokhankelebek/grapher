@@ -38,7 +38,7 @@
 // ============================================================================
 
 import type { Asymptote, Vec2, Viewport } from '../core/types'
-import { toScreen } from '../core/types'
+import { ppuX, ppuY, toScreen } from '../core/types'
 import { END_DOT_R, END_OPEN_RING } from './endCaps'
 
 const TWO_PI = Math.PI * 2
@@ -256,8 +256,10 @@ export function drawAsymptotes(
     const s = toScreen(p, vp)
     if (!Number.isFinite(s.x) || !Number.isFinite(s.y)) continue
     // Math y grows UP and screen y grows DOWN, so the direction flips with it.
-    // The scale is uniform, so one ppu does both axes and the angle is kept.
-    const d = { x: dir.x * vp.pxPerUnit, y: -dir.y * vp.pxPerUnit }
+    // Each component takes its own axis' scale: on a stretched board a slope-1
+    // asymptote is NOT drawn at 45°, it is drawn through the screen images of
+    // a and a + dir — the same two points the curve approaches.
+    const d = { x: dir.x * ppuX(vp), y: -dir.y * ppuY(vp) }
     const seg = clipToBoard(s, d, vp.widthPx, vp.heightPx)
     if (seg) at.push(seg)
   }

@@ -4,6 +4,7 @@
 // ============================================================================
 
 import type { FigureStyle, Viewport, Theme } from '../core/types'
+import { ppuX, ppuY } from '../core/types'
 
 // ---------------------------------------------------------------------------
 // Nice step selection: 1–2–5 × 10^n ladder, major spacing targeting 70–120 px.
@@ -459,8 +460,11 @@ export function drawGrid(
   const fpx = LABEL_PX * type
   const W = vp.widthPx
   const H = vp.heightPx
-  const ppu = vp.pxPerUnit
-  if (W <= 0 || H <= 0 || !(ppu > 0)) {
+  // One scale per axis. On an equal-axes board ppx === ppy and every value
+  // below is the one the single-scale code computed, argument for argument.
+  const ppx = ppuX(vp)
+  const ppy = ppuY(vp)
+  if (W <= 0 || H <= 0 || !(ppx > 0) || !(ppy > 0)) {
     ctx.fillStyle = theme.bg
     ctx.fillRect(0, 0, Math.max(0, W), Math.max(0, H))
     return
@@ -470,30 +474,33 @@ export function drawGrid(
   ctx.fillStyle = theme.bg
   ctx.fillRect(0, 0, W, H)
 
-  // One ladder per axis. When neither axis is in π both sides hold the SAME
-  // object the old single-step code computed, so the emitted command stream is
-  // unchanged down to the argument.
-  const decimal = pickTickStep(ppu)
+  // One ladder per axis, each chosen from that axis' own pixels per unit: a
+  // stretched board (years against millions) labels every 5 years along x and
+  // every 100 000 along y. When the axes are equal and neither is in π both
+  // sides hold the SAME object the old single-step code computed, so the
+  // emitted command stream is unchanged down to the argument.
   const piMinPx = PI_LABEL_MIN_PX * type
   const unitMinPx = UNIT_MIN_PX * stroke
-  const stepFor = (u: AxisUnit | undefined): GridStep | PiStep => {
+  const decimalX = pickTickStep(ppx)
+  const decimalY = ppy === ppx ? decimalX : pickTickStep(ppy)
+  const stepFor = (u: AxisUnit | undefined, ppu: number, decimal: GridStep): GridStep | PiStep => {
     const pi = u === 'pi' ? pickPiTickStep(ppu, piMinPx) : null
     if (st.spacing === 'unit') return unitTickStep(ppu, unitMinPx, pi)
     return pi ?? decimal
   }
-  const xStep = stepFor(units?.x)
-  const yStep = stepFor(units?.y)
+  const xStep = stepFor(units?.x, ppx, decimalX)
+  const yStep = stepFor(units?.y, ppy, decimalY)
   const xMinor = xStep.major / xStep.minorDiv
   const yMinor = yStep.major / yStep.minorDiv
 
   // visible math range
-  const xMin = vp.center.x - W / 2 / ppu
-  const xMax = vp.center.x + W / 2 / ppu
-  const yMin = vp.center.y - H / 2 / ppu
-  const yMax = vp.center.y + H / 2 / ppu
+  const xMin = vp.center.x - W / 2 / ppx
+  const xMax = vp.center.x + W / 2 / ppx
+  const yMin = vp.center.y - H / 2 / ppy
+  const yMax = vp.center.y + H / 2 / ppy
 
-  const sx = (x: number): number => W / 2 + (x - vp.center.x) * ppu
-  const sy = (y: number): number => H / 2 - (y - vp.center.y) * ppu
+  const sx = (x: number): number => W / 2 + (x - vp.center.x) * ppx
+  const sy = (y: number): number => H / 2 - (y - vp.center.y) * ppy
 
   if (st.grid === 'lines') {
     // ---- minor gridlines (skip indices that land on majors) ---------------
@@ -658,7 +665,7 @@ export function drawGrid(
     ctx.textBaseline = 'top'
     const ticks =
       st.numbers === 'unit'
-        ? unitTicks(xStep, xMin, xMax, xMinor * ppu, (texts) => {
+        ? unitTicks(xStep, xMin, xMax, xMinor * ppx, (texts) => {
             let w = 0
             for (const t of texts) w = Math.max(w, ctx.measureText(t).width)
             return w + X_LABEL_GAP * type
@@ -677,7 +684,7 @@ export function drawGrid(
     ctx.textBaseline = 'middle'
     const ticks =
       st.numbers === 'unit'
-        ? unitTicks(yStep, yMin, yMax, yMinor * ppu, () => fpx * Y_LABEL_GAP)
+        ? unitTicks(yStep, yMin, yMax, yMinor * ppy, () => fpx * Y_LABEL_GAP)
         : majorTicks(yStep, yMin, yMax)
     for (const t of ticks) {
       const py = sy(t.v)

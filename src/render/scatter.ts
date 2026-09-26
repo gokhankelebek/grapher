@@ -43,6 +43,7 @@
 // ============================================================================
 
 import type { Theme, Viewport } from '../core/types'
+import { ppuX, ppuY } from '../core/types'
 import { paintScale, type PaintScale } from './grid'
 
 /** How one data set's points are drawn. */
@@ -216,7 +217,8 @@ function drawResiduals(
   const n = Math.min(s.xs.length, s.ys.length)
   const hw = vp.widthPx / 2
   const hh = vp.heightPx / 2
-  const ppu = vp.pxPerUnit
+  const ppx = ppuX(vp)
+  const ppy = ppuY(vp)
   const cx = vp.center.x
   const cy = vp.center.y
   const W = vp.widthPx
@@ -230,7 +232,7 @@ function drawResiduals(
     const x = s.xs[i]
     const y = s.ys[i]
     if (!Number.isFinite(x) || !Number.isFinite(y)) continue
-    const sx = hw + (x - cx) * ppu
+    const sx = hw + (x - cx) * ppx
     // A vertical segment off the left or right of the board is off the board.
     if (sx < -m || sx > W + m) continue
     let fy: number | null
@@ -240,8 +242,8 @@ function drawResiduals(
       fy = null
     }
     if (fy === null || !Number.isFinite(fy)) continue
-    let y0 = hh - (y - cy) * ppu
-    let y1 = hh - (fy - cy) * ppu
+    let y0 = hh - (y - cy) * ppy
+    let y1 = hh - (fy - cy) * ppy
     // Both ends above, or both below: nothing of it shows.
     if ((y0 < -m && y1 < -m) || (y0 > H + m && y1 > H + m)) continue
     // Clamping a VERTICAL segment to the band is exact (it cannot bend), and it
@@ -278,7 +280,8 @@ function drawMarkers(
   const rim = SCATTER_RIM * stroke
   const hw = vp.widthPx / 2
   const hh = vp.heightPx / 2
-  const ppu = vp.pxPerUnit
+  const ppx = ppuX(vp)
+  const ppy = ppuY(vp)
   const cx = vp.center.x
   const cy = vp.center.y
   // A marker whose whole glyph (rim included) is off the board is not drawn.
@@ -296,9 +299,9 @@ function drawMarkers(
     const x = s.xs[i]
     const y = s.ys[i]
     if (!Number.isFinite(x) || !Number.isFinite(y)) continue
-    const sx = hw + (x - cx) * ppu
+    const sx = hw + (x - cx) * ppx
     if (sx < x0 || sx > x1) continue
-    const sy = hh - (y - cy) * ppu
+    const sy = hh - (y - cy) * ppy
     if (sy < y0 || sy > y1) continue
     P[k++] = sx
     P[k++] = sy

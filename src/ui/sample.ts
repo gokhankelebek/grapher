@@ -1,7 +1,7 @@
 // Best-effort screen-space sampling of a fitted curve, used for canvas hit
 // testing (selection) only. Rendering itself is done by render/curves.ts.
 import type { FittedCurve, ModelSpec, Vec2, Viewport } from '../core/types'
-import { toScreen } from '../core/types'
+import { ppuX, toScreen } from '../core/types'
 
 const TWO_PI = Math.PI * 2
 
@@ -20,7 +20,7 @@ export function sampleCurveScreen(
 
   try {
     if (spec && spec.evalExplicit) {
-      const halfW = vp.widthPx / (2 * vp.pxPerUnit)
+      const halfW = vp.widthPx / (2 * ppuX(vp))
       const [x0, x1] = curve.domain ?? [vp.center.x - halfW, vp.center.x + halfW]
       for (let i = 0; i <= n; i++) {
         const x = x0 + ((x1 - x0) * i) / n
