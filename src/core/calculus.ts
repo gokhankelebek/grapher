@@ -55,6 +55,9 @@ const QUAD_BUDGET = 20000
 /** Recursion depth ceiling for adaptive Simpson. */
 const QUAD_DEPTH = 50
 
+/** Levels adaptive Simpson always subdivides before it may accept. */
+const MIN_QUAD_DEPTH = 4
+
 /** A value this far outside the curve's own magnitude at a gap edge is a pole. */
 const POLE_FACTOR = 20
 
@@ -843,7 +846,11 @@ function adaptiveSimpson(f: Fn, a: number, b: number, tol: number): Quad | null 
     // honest approximation flagged exact:false beats an unbounded loop while
     // somebody drags a slider
     if (depth >= QUAD_DEPTH || evals >= QUAD_BUDGET) return left + right + delta / 15
-    if (Math.abs(delta) <= 15 * eps) return left + right + delta / 15
+    // Never accept in the first levels: a symmetric integrand sampled at
+    // 0, ¼, ½, ¾, 1 of a period can make the whole and the halves agree by
+    // coincidence — (1 + cos x)²/2 on [0, 2π] "converged" to 4π/3 instead
+    // of 3π/2. Four levels (16 panels) sees any shape a board can draw.
+    if (depth >= MIN_QUAD_DEPTH && Math.abs(delta) <= 15 * eps) return left + right + delta / 15
     return (
       go(x0, mid, y0, ylm, ym, left, eps / 2, depth + 1) +
       go(mid, x1, ym, yrm, y1, right, eps / 2, depth + 1)

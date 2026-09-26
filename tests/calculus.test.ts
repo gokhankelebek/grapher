@@ -1086,3 +1086,18 @@ describe('performance', () => {
     expect(ms).toBeLessThan(2)
   })
 })
+
+describe('areaUnder — no early acceptance on symmetric integrands', () => {
+  it('∫₀^{2π} (1 + cos x)²/2 dx = 3π/2, not the coincidental 4π/3', () => {
+    const { curve: c, models } = typed('y = (1 + cos(x))^2/2')
+    const r = areaUnder(c, models, 0, 2 * Math.PI)
+    expect(r).not.toBeNull()
+    expect(r!.value).toBeCloseTo((3 * Math.PI) / 2, 9)
+  })
+  it('∫₀^{2π} sin²x dx = π and ∫₀^{π} cos⁴x dx = 3π/8', () => {
+    const a = typed('y = sin(x)^2')
+    expect(areaUnder(a.curve, a.models, 0, 2 * Math.PI)!.value).toBeCloseTo(Math.PI, 9)
+    const b = typed('y = cos(x)^4')
+    expect(areaUnder(b.curve, b.models, 0, Math.PI)!.value).toBeCloseTo((3 * Math.PI) / 8, 9)
+  })
+})
