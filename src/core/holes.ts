@@ -105,7 +105,7 @@
 // styles).
 // ============================================================================
 
-import type { Asymptote, FittedCurve, ModelSpec, Vec2 } from './types'
+import type { Asymptote, FittedCurve, ModelSpec, PieceInfo, Vec2 } from './types'
 import { endBehaviour } from './fit/models'
 
 export interface Hole {
@@ -512,6 +512,9 @@ function lineKey(l: Extract<Asymptote, { kind: 'line' }>): string {
 //   * a NON-FINITE f at any rung ends that side with no asymptote: √x has
 //     nothing to say to the left of its branch point, ln x nothing to the left
 //     of 0, and e^x at 10^8 is Infinity, which is not a line.
+//   * the line must also hold OFF the ladder, at e·x₅ between the last two
+//     rungs: every rung is an integer, and ⌊x⌋, ⌈x⌉, x − ⌊x⌋ are exact there
+//     and nowhere else. Without it floor(x) "leaned on" y = x.
 //   * SLOW DRIFT is caught by b, not by m: ln x and √x send m to 0 honestly,
 //     and then b = f keeps growing and never settles. Oscillation is caught
 //     the same way — x + sin x has m = 1 exactly and a b that is sin x.
@@ -520,7 +523,11 @@ function lineKey(l: Extract<Asymptote, { kind: 'line' }>): string {
 //     same verdict the `line` family gets in its own table (src/core/fit/
 //     models.ts). One sampled check decides it, over the HALF of the visible
 //     range this end looks out from — |x| is the line y = x to the right and
-//     y = −x to the left, and each end has to be allowed to say so.
+//     y = −x to the left, and each end has to be allowed to say so. For a
+//     PIECEWISE curve (ModelSpec.pieces) the check reads the outermost
+//     piece's own interval ∩ that half instead: −x + 5 for x > 2 IS its line,
+//     and the 3 on [0, 2] sharing the half-window says nothing about the
+//     tail. A side no piece runs out to has no end behaviour at all.
 //   * a side whose DOMAIN is finite has no end at all: `{-3 < x < 5}` stops,
 //     and what the formula would have done past the stop is not on the graph.
 //   * two sides that name the SAME line are reported once (1/x leans on y = 0
@@ -650,9 +657,23 @@ function endSide(f: Fn, side: 1 | -1, x0: number, mag: number): EndLine | null {
   // against it, and "the last three agree" is exactly that question.
   let b = tailLimit(bs, bTol, m === 0)
   if (b === null || !Number.isFinite(b)) return null
+  // Off the ladder. Every rung is 100·10^k — an integer — and a step function
+  // is exact on integers: floor(x) − x is 0 at every rung and anywhere in
+  // [−1, 0) between them, so the ladder alone reads ⌊x⌋ as leaning on y = x
+  // (and x − ⌊x⌋ on y = 0). One sample between the last two rungs, at a
+  // non-round multiple of x₅, asks whether the line holds where the ladder did
+  // not look. An honest limit is at least as close there as it was at x₅ —
+  // tailLimit already held |b₅ − b₆| inside bTol — so the test costs it nothing.
+  const xOff = xs[n - 2] * OFF_LADDER
+  const vOff = f(xOff)
+  if (typeof vOff !== 'number' || !Number.isFinite(vOff)) return null
+  if (Math.abs(vOff - m * xOff - b) > 2 * bTol) return null
   if (Math.abs(b) <= bTol) b = 0
   return { m, b }
 }
+
+/** Where, as a multiple of rung x₅, the off-ladder check samples: e, not round. */
+const OFF_LADDER = Math.E
 
 /**
  * The graph IS this line, over the part of the visible range that this END
@@ -681,6 +702,62 @@ function isTheLine(f: Fn, m: number, b: number, lo: number, hi: number, mag: num
     if (Math.abs(v - want) > tol) return false
   }
   return seen > 0
+}
+
+/** A typed piecewise curve's pieces (ModelSpec.pieces), validated; null when it has none. */
+function piecesOf(spec: ModelSpec, params: number[]): PieceInfo[] | null {
+  if (typeof spec.pieces !== 'function') return null
+  let raw: PieceInfo[] | null | undefined
+  try { raw = spec.pieces(params) } catch { return null }
+  if (!Array.isArray(raw)) return null
+  const out = raw.filter(
+    (p) => p != null && typeof p.lo === 'number' && typeof p.hi === 'number' &&
+      !Number.isNaN(p.lo) && !Number.isNaN(p.hi) && p.lo <= p.hi,
+  )
+  return out.length > 0 ? out : null
+}
+
+/** How far inside an excluded piece end the coincidence check starts. */
+const PIECE_STEP_REL = 1e-9
+
+/**
+ * The window the "graph IS the line" check reads on one side of a PIECEWISE
+ * curve: the piece that runs out to ±∞ on that side, ∩ the half-window the
+ * plain check would read. y = −x + 5 for x > 2 is the line on its own piece,
+ * and it was only ever "approaching" it because the half-window [0, 10] also
+ * held the 3 on [0, 2]. An excluded end is stepped inside, since the gated
+ * evaluator answers with the NEIGHBOUR's value there. Where the piece does not
+ * reach the window (x + 1 for x < −20) its own first stretch of the same width
+ * is read instead — the tail is still the line, just off the board.
+ *
+ * Null when no piece is unbounded on that side: the graph stops, and a stop
+ * has no end behaviour (the same rule as a finite declared domain).
+ */
+function tailWindow(
+  pieces: PieceInfo[], side: 1 | -1, clo: number, chi: number,
+): [number, number] | null {
+  let tail: PieceInfo | null = null
+  for (const p of pieces) {
+    if (side > 0 ? p.hi !== Infinity : p.lo !== -Infinity) continue
+    // the outermost: the one reaching furthest back in, if several claim ±∞
+    if (!tail || (side > 0 ? p.lo < tail.lo : p.hi > tail.hi)) tail = p
+  }
+  if (!tail) return null
+  const inLo = (v: number): number =>
+    v === tail!.lo && !tail!.loClosed ? v + PIECE_STEP_REL * Math.max(1, Math.abs(v)) : v
+  const inHi = (v: number): number =>
+    v === tail!.hi && !tail!.hiClosed ? v - PIECE_STEP_REL * Math.max(1, Math.abs(v)) : v
+  let a = Math.max(tail.lo, clo)
+  let b = Math.min(tail.hi, chi)
+  if (!(b > a)) {
+    const width = chi - clo
+    if (side > 0) { a = tail.lo; b = tail.lo + width }
+    else { a = tail.hi - width; b = tail.hi }
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return null
+  }
+  a = inLo(a)
+  b = inHi(b)
+  return b > a ? [a, b] : null
 }
 
 /** Two end lines that name the same line — 1/x leans on y = 0 from both sides. */
@@ -831,6 +908,7 @@ export function findEndAsymptotes(
       if (!(hi > lo)) { lo = END_MAG_RANGE[0]; hi = END_MAG_RANGE[1] }
       const mag = magnitudeOf(f, lo, hi)
       const x0 = endBase(curve, domLo, domHi)
+      const pieces = piecesOf(spec, curve.params)
       for (const side of [-1, 1] as const) {
         if (side < 0 ? !openLeft : !openRight) continue
         const line = endSide(f, side, x0, mag)
@@ -840,6 +918,14 @@ export function findEndAsymptotes(
         let clo = side < 0 ? lo : Math.max(lo, 0)
         let chi = side < 0 ? Math.min(hi, 0) : hi
         if (!(chi > clo)) { clo = lo; chi = hi }
+        if (pieces) {
+          // A piecewise graph's tail is its outermost piece, and nothing else:
+          // the other pieces are in the window too, and they are not the line.
+          const w = tailWindow(pieces, side, clo, chi)
+          if (!w) continue // no piece runs out this way: the graph stops
+          clo = w[0]
+          chi = w[1]
+        }
         if (isTheLine(f, line.m, line.b, clo, chi, mag)) continue
         found.push(line)
       }

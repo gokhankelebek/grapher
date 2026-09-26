@@ -11,7 +11,7 @@
 //     circles/ellipses stay smooth at any zoom.
 // ============================================================================
 
-import type { Vec2, Viewport, FittedCurve, ModelSpec } from '../core/types'
+import type { Vec2, Viewport, FittedCurve, ModelSpec, PieceInfo } from '../core/types'
 import { ppuX, ppuY } from '../core/types'
 
 const TWO_PI = Math.PI * 2
@@ -19,6 +19,11 @@ const DEFAULT_STROKE = 2.5
 const CHORD_TOL_PX = 0.25 // max midpoint-to-chord deviation before bisecting
 const MAX_DEPTH = 8       // recursion cap for adaptive bisection
 const BASE_SAMPLES = 160  // uniform samples across the span before refinement
+/**
+ * A chord-accepted segment vouches for continuity only when its midpoint
+ * projects onto the chord within [VOUCH_LO, 1 − VOUCH_LO] (see refine).
+ */
+const VOUCH_LO = 0.2
 
 // ---------------------------------------------------------------------------
 // Shared scratch (module-level, reused across calls — no per-sample allocs).
@@ -53,6 +58,12 @@ interface Emitter {
   lastX: number
   lastY: number
   suspectPx: number // gap this large is ambiguous → probe before joining
+  /**
+   * The jump probe's resolution in the parameter: JUMP_REL_T of the whole
+   * sampled span. A gap that is still open, and still as tall, once the
+   * interval is this narrow is a jump.
+   */
+  tEps: number
   cx0: number       // clip box (generous ±1 viewport of overdraw)
   cx1: number
   cy0: number
@@ -97,6 +108,7 @@ const EM: Emitter = {
   lastX: 0,
   lastY: 0,
   suspectPx: 0,
+  tEps: 0,
   cx0: 0, cx1: 0, cy0: 0, cy1: 0,
   tap: null,
   edge: null,
@@ -116,6 +128,7 @@ function resetEmitter(
   em.lastX = 0
   em.lastY = 0
   em.suspectPx = 2 * vp.heightPx
+  em.tEps = 0
   em.cx0 = -vp.widthPx
   em.cx1 = 2 * vp.widthPx
   em.cy0 = -vp.heightPx
@@ -129,37 +142,76 @@ function resetEmitter(
 // ---------------------------------------------------------------------------
 // Discontinuity test.
 //
-// A large screen-space gap between adjacent samples is ambiguous: either a
-// pole/jump (lift the pen) or a perfectly finite curve that is merely very
-// steep (keep the pen down). Canvas height cannot tell those apart — judging by
-// a fixed fraction of it silently deleted every line whose on-screen slope
-// exceeded ~2*H*BASE_SAMPLES/W, so y = 300x rendered as nothing at all.
+// A screen-space gap between adjacent samples is ambiguous: either a pole or a
+// jump (lift the pen) or a perfectly finite curve that is merely very steep
+// (keep the pen down). Neither the size of the gap nor the canvas height can
+// tell those apart: judging by a fixed fraction of the height once deleted
+// every line steeper than ~2*H*BASE_SAMPLES/W (y = 300x rendered as nothing),
+// and only probing gaps taller than 2H stroked every smaller jump — the step
+// of a piecewise function, every riser of floor(x), sign(x), |x|/x — as a
+// vertical line.
 //
-// Ask the function instead. Bisect the parameter interval, always descending
-// into the half that still carries the larger screen-space span. Under
-// refinement a continuous piece collapses geometrically — its span halves at
-// every step — while a pole holds or grows its span (values blow up faster than
-// the interval shrinks) and a jump discontinuity holds its span forever. A gap
-// that has not collapsed to a drawable step within PROBE_STEPS halvings is a
-// discontinuity. Cost is O(PROBE_STEPS) evals, paid only by suspicious gaps.
+// So ask the function. Bisect the parameter interval, always descending into
+// the half that still carries the larger screen-space span, and watch how
+// that span behaves as the interval shrinks:
+//
+//   CONTINUOUS  the span shrinks WITH the interval — halving at every step
+//               for a differentiable curve, however steep (y = 50x, e^(10x),
+//               tan x short of its pole). Joined as soon as it is ≤ JOIN_PX.
+//   JUMP        the span holds its height: once the interval is small the
+//               continuous part of the gap is gone and what is left is the
+//               jump itself, forever.
+//   POLE        the span holds or grows (the values run away faster than the
+//               interval shrinks), or a midpoint has no finite value at all.
+//
+// THE CRITERION. Bisect until one of:
+//   (1) the span is ≤ JOIN_PX                        → continuous: join;
+//   (2) a midpoint is non-finite or undefined         → break;
+//   (3) the interval has shrunk to ≤ tEps = JUMP_REL_T (1e-9) of the whole
+//       sampled parameter span, with the span still > JOIN_PX. It is a
+//       discontinuity iff the span HELD: it is ≥ HOLD_RATIO (3/4) of what it
+//       was HOLD_STEPS (8) halvings earlier. Over 8 halvings a continuous
+//       curve's span falls by ~256× (by 2^(8/9) ≈ 1.85× even for x^(1/9) at 0,
+//       a vertical tangent), while a jump's falls by nothing;
+//   (4) the interval collapsed to adjacent doubles, or PROBE_STEPS halvings
+//       ran out, with the gap open                   → break.
+//
+// COST. Probed gaps are the ones the chord test did NOT vouch for (see
+// emitPoint): a segment emitted at the refinement's depth cap, or off the
+// base pass. From a depth-capped interval (1/(160·256) of the span) rule (3)
+// is reached in ~15 evaluations; from a base interval in ~23. A continuous
+// gap of G px exits by rule (1) in ~log2(G / JOIN_PX) evaluations. Every
+// probe is capped at PROBE_STEPS evaluations.
 // ---------------------------------------------------------------------------
 
-const PROBE_STEPS = 40 // resolves slopes past 1e9 px/px before giving up
-const JOIN_PX = 8      // span at which the remaining gap is a drawable step
+const PROBE_STEPS = 48   // hard cap on evaluations per probed gap
+const PROBE_GATE_PX = 3  // an unvouched gap taller/wider than this is probed
+const JOIN_PX = 1        // span at which the remaining gap is a drawable step
+const JUMP_REL_T = 1e-9  // rule (3): interval ≤ this fraction of the span
+const HOLD_STEPS = 8     // rule (3): compare against the span this many halvings back
+const HOLD_RATIO = 0.75  // rule (3): a jump keeps at least this much of its height
 const PROBE: Sample = { x: 0, y: 0, ok: false }
+const SPANS = new Float64Array(PROBE_STEPS + 1) // span history, reused
+
+/** Probe counters, for the performance report and its tests. */
+export const PROBE_STATS = { probes: 0, evals: 0 }
 
 function isDiscontinuity(
   f: EvalToScreen,
   ta: number, xa: number, ya: number,
   tb: number, xb: number, yb: number,
+  tEps: number,
 ): boolean {
   let aT = ta, aX = xa, aY = ya
   let bT = tb, bX = xb, bY = yb
-  for (let i = 0; i < PROBE_STEPS; i++) {
+  PROBE_STATS.probes++
+  SPANS[0] = Math.hypot(xb - xa, yb - ya)
+  for (let i = 1; i <= PROBE_STEPS; i++) {
     const mT = (aT + bT) / 2
     // interval collapsed to floating-point resolution with the gap still open
     if (mT === aT || mT === bT) return true
     f(mT, PROBE)
+    PROBE_STATS.evals++
     const mX = PROBE.x
     const mY = PROBE.y
     if (!PROBE.ok || !Number.isFinite(mX) || !Number.isFinite(mY)) return true
@@ -169,6 +221,10 @@ function isDiscontinuity(
     if (lo >= hi) { bT = mT; bX = mX; bY = mY; span = lo }
     else { aT = mT; aX = mX; aY = mY; span = hi }
     if (span <= JOIN_PX) return false // collapsed: continuous, just steep
+    SPANS[i] = span
+    if (Math.abs(bT - aT) <= tEps) {
+      return span >= HOLD_RATIO * SPANS[Math.max(0, i - HOLD_STEPS)]
+    }
   }
   return true
 }
@@ -217,7 +273,19 @@ function drawSeg(
   em.penDown = t1 >= 1
 }
 
-function emitPoint(em: Emitter, t: number, x: number, y: number, ok: boolean): void {
+/**
+ * Add one sample. `vouched` is true when the chord test has just accepted the
+ * segment arriving here — its midpoint was evaluated, lies within CHORD_TOL_PX
+ * of the chord AND projects onto its middle — which a jump cannot pass except
+ * by a three-point coincidence (the midpoint value landing between the two
+ * sides, in proportion: a staircase sampled two risers per interval). A
+ * vouched gap is only probed when it is huge (> suspectPx, the pole guard);
+ * an unvouched one — the refinement ran out of depth, or the base pass
+ * skipped refining — whenever it exceeds PROBE_GATE_PX.
+ */
+function emitPoint(
+  em: Emitter, t: number, x: number, y: number, ok: boolean, vouched = false,
+): void {
   if (!ok || !Number.isFinite(x) || !Number.isFinite(y)) {
     // defined -> undefined. em.lastT still holds the last FINITE parameter,
     // which is the near side of the boundary this sample is the far side of.
@@ -237,13 +305,16 @@ function emitPoint(em: Emitter, t: number, x: number, y: number, ok: boolean): v
     const dy = y - py
     if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
       broken = true // a gap too wide to even subtract is a pole by construction
-    } else if (Math.abs(dy) > em.suspectPx || Math.abs(dx) > em.suspectPx) {
+    } else if (
+      Math.abs(dy) > em.suspectPx || Math.abs(dx) > em.suspectPx ||
+      (!vouched && (Math.abs(dy) > PROBE_GATE_PX || Math.abs(dx) > PROBE_GATE_PX))
+    ) {
       // Only pay for the probe when the gap could put ink on the canvas: a gap
       // that stays off one side of the box is invisible whichever way it goes.
       const offSameSide =
         (py < em.cy0 && y < em.cy0) || (py > em.cy1 && y > em.cy1) ||
         (px < em.cx0 && x < em.cx0) || (px > em.cx1 && x > em.cx1)
-      if (!offSameSide) broken = isDiscontinuity(em.f, em.lastT, px, py, t, x, y)
+      if (!offSameSide) broken = isDiscontinuity(em.f, em.lastT, px, py, t, x, y, em.tEps)
     }
     if (broken) em.penDown = false
     else drawSeg(em, px, py, x, y)
@@ -281,6 +352,7 @@ function refine(
   const okm = SCR.ok
 
   let split = false
+  let vouched = false
   if (oka && okb && okm) {
     const dx = xb - xa
     const dy = yb - ya
@@ -288,8 +360,16 @@ function refine(
     let dev: number
     if (l2 < 1e-12) {
       dev = Math.hypot(xm - xa, ym - ya)
+      vouched = true
     } else {
       dev = Math.abs(dy * (xm - xa) - dx * (ym - ya)) / Math.sqrt(l2)
+      // Where along the chord the midpoint projects. A jump's chord is near
+      // vertical, and the midpoint — sitting at one END of it — is within a
+      // fraction of a pixel of it however tall the jump is: the deviation
+      // test alone would vouch for a riser of floor(x). A continuous curve
+      // puts its midpoint somewhere in the MIDDLE of its own chord.
+      const s = ((xm - xa) * dx + (ym - ya) * dy) / l2
+      vouched = s >= VOUCH_LO && s <= 1 - VOUCH_LO
     }
     split = dev > CHORD_TOL_PX
   } else if (oka !== okm || okm !== okb) {
@@ -297,7 +377,8 @@ function refine(
   }
 
   if (!split) {
-    emitPoint(em, tb, xb, yb, okb)
+    // all three defined, on one chord, the midpoint mid-chord: vouched for
+    emitPoint(em, tb, xb, yb, okb, vouched)
     return
   }
   refine(em, f, ta, xa, ya, oka, tm, xm, ym, okm, depth - 1)
@@ -310,8 +391,10 @@ function sampleAdaptive(
   t0: number,
   t1: number,
   vp: Viewport,
+  n = BASE_SAMPLES,
 ): void {
   if (!(t1 > t0)) return
+  if (!(em.tEps > 0)) em.tEps = JUMP_REL_T * (t1 - t0)
   const offX0 = -vp.widthPx
   const offX1 = 2 * vp.widthPx
   const offY0 = -vp.heightPx
@@ -324,9 +407,9 @@ function sampleAdaptive(
   let pok = SCR.ok
   emitPoint(em, pt, px, py, pok)
 
-  const inv = (t1 - t0) / BASE_SAMPLES
-  for (let i = 1; i <= BASE_SAMPLES; i++) {
-    const t = i === BASE_SAMPLES ? t1 : t0 + inv * i
+  const inv = (t1 - t0) / n
+  for (let i = 1; i <= n; i++) {
+    const t = i === n ? t1 : t0 + inv * i
     f(t, SCR)
     const x = SCR.x
     const y = SCR.y
@@ -351,6 +434,131 @@ function sampleAdaptive(
 }
 
 // ---------------------------------------------------------------------------
+// Piecewise curves: one pass per piece.
+//
+// When the model states its pieces (ModelSpec.pieces — a typed piecewise
+// line), where the graph breaks is not a question for the jump probe: it is
+// written down. The span is cut at every finite piece end and each piece is
+// sampled on its own interval with the pen lifted between them, which is
+// exact and costs nothing extra. Each side of a cut is evaluated from INSIDE
+// its own piece: an included end is sampled AT the end, an excluded one is
+// approached to within PIECE_STEP_REL·max(1, |end|) — the same one-sided step
+// src/render/pieceDots.ts takes its limits with — so x² + 1 on x < 0 stops at
+// (0⁻, 1) and 3 on 0 ≤ x ≤ 2 starts at (0, 3), whatever the gated evaluator
+// says AT 0. Where two pieces meet continuously — within PIECE_JOIN_PX, and
+// one of them including the point — the pen stays down and the stroke is
+// unbroken, which is the case the dots layer draws nothing for.
+//
+// Between pieces that do not meet — and before the first / after the last
+// when the view reaches past them — the gap is sampled once, so a formula
+// with no value there reports a defined/undefined edge exactly as the plain
+// sampler would (the end-cap layer's natural endpoints read those edges).
+// Inside a piece the ordinary machinery, jump probe included, still runs:
+// floor(x) as one piece still breaks at every integer.
+// ---------------------------------------------------------------------------
+
+const PIECE_STEP_REL = 1e-9
+/** Adjacent pieces arriving within this many px of each other join (pieceDots' PIECE_SAME_PX). */
+const PIECE_JOIN_PX = 0.5
+/** Base samples a piece gets at least, however narrow it is. */
+const PIECE_MIN_SAMPLES = 16
+
+/** The model's pieces, validated and sorted — null when it has none. */
+function modelPieces(model: ModelSpec, params: number[]): PieceInfo[] | null {
+  if (typeof model.pieces !== 'function') return null
+  let raw: PieceInfo[] | null | undefined
+  try {
+    raw = model.pieces(params)
+  } catch {
+    return null
+  }
+  if (!Array.isArray(raw) || raw.length === 0) return null
+  const out = raw.filter(
+    (p) => p != null && typeof p.lo === 'number' && typeof p.hi === 'number' &&
+      !Number.isNaN(p.lo) && !Number.isNaN(p.hi) && p.lo <= p.hi,
+  )
+  if (out.length === 0) return null
+  return out.slice().sort((a, b) => a.lo - b.lo || a.hi - b.hi)
+}
+
+/** Lift the pen without an edge: the next sample starts a new run. */
+function liftPen(em: Emitter): void {
+  em.has = false
+  em.penDown = false
+}
+
+/** Sample one parameter inside a gap: an undefined value there is an edge. */
+function sampleGap(em: Emitter, f: EvalToScreen, t: number): void {
+  f(t, SCR)
+  if (!SCR.ok || !Number.isFinite(SCR.x) || !Number.isFinite(SCR.y)) {
+    emitPoint(em, t, SCR.x, SCR.y, false)
+  } else {
+    liftPen(em)
+  }
+}
+
+/**
+ * Two pieces that meet at one point, one of them including it, are ONE
+ * unbroken stroke there — 3 on [0, 2] and −x + 5 on x > 2 both arrive at
+ * (2, 3). Only then is the pen kept down: a join where neither piece includes
+ * the point is a hole (the dots layer rings it) and stays broken.
+ */
+function joins(em: Emitter, f: EvalToScreen, t: number): boolean {
+  f(t, SCR)
+  return SCR.ok && Math.hypot(SCR.x - em.lastX, SCR.y - em.lastY) <= PIECE_JOIN_PX
+}
+
+function samplePieces(
+  em: Emitter, f: EvalToScreen, t0: number, t1: number, vp: Viewport,
+  pieces: PieceInfo[],
+): void {
+  if (!(t1 > t0)) return
+  em.tEps = JUMP_REL_T * (t1 - t0)
+  let cursor = t0 // everything left of this has been sampled
+  let first = true
+  let prevHiClosed = false
+  for (const p of pieces) {
+    const a0 = Math.max(p.lo, t0)
+    const b0 = Math.min(p.hi, t1)
+    if (!(b0 >= a0) || b0 < cursor) continue
+    // step inside an excluded end; an included one is sampled where it is
+    const a = a0 === p.lo && !p.loClosed ? p.lo + PIECE_STEP_REL * Math.max(1, Math.abs(p.lo)) : a0
+    const b = b0 === p.hi && !p.hiClosed ? p.hi - PIECE_STEP_REL * Math.max(1, Math.abs(p.hi)) : b0
+    if (!(b > a)) continue // a single point (x = c) or an empty sliver: the dots layer's
+    if (first) {
+      if (a0 > t0) sampleGap(em, f, t0)
+    } else if (a0 > cursor) {
+      sampleGap(em, f, (cursor + a0) / 2)
+    } else if (!(em.has && (prevHiClosed || (a === a0 && p.loClosed)) && joins(em, f, a))) {
+      liftPen(em)
+    }
+    first = false
+    prevHiClosed = b === b0 && p.hiClosed
+    const n = Math.max(PIECE_MIN_SAMPLES, Math.ceil((BASE_SAMPLES * (b - a)) / (t1 - t0)))
+    // Sampled over the NOMINAL interval [a0, b0], evaluated one step inside at
+    // an excluded end: the run then ends at t = b0 exactly — the piece end (or
+    // the declared domain end the end-cap layer compares against) — with the
+    // one-sided value, which is what the graph approaches there.
+    const g: EvalToScreen = a === a0 && b === b0 ? f
+      : (t, out) => f(t === a0 ? a : t === b0 ? b : t, out)
+    sampleAdaptive(em, g, a0, b0, vp, n)
+    cursor = b0
+  }
+  if (first) {
+    // no piece reaches the view: the plain pass, which will find nothing
+    sampleAdaptive(em, f, t0, t1, vp)
+    return
+  }
+  if (cursor < t1) sampleGap(em, f, t1)
+}
+
+/** Sample a span, by pieces when it has them. */
+function sampleSpan(em: Emitter, span: CurveSpan, vp: Viewport): void {
+  if (span.pieces) samplePieces(em, span.f, span.t0, span.t1, vp, span.pieces)
+  else sampleAdaptive(em, span.f, span.t0, span.t1, vp)
+}
+
+// ---------------------------------------------------------------------------
 // Kind-specific path builders.
 // ---------------------------------------------------------------------------
 
@@ -371,6 +579,8 @@ interface CurveSpan {
   /** True when t0 / t1 IS the curve's own declared domain end. */
   atDomain0: boolean
   atDomain1: boolean
+  /** An explicit curve's stated pieces (ModelSpec.pieces), or null. */
+  pieces?: PieceInfo[] | null
 }
 
 function explicitSpan(model: ModelSpec, curve: FittedCurve, vp: Viewport): CurveSpan | null {
@@ -403,12 +613,12 @@ function explicitSpan(model: ModelSpec, curve: FittedCurve, vp: Viewport): Curve
     out.y = hh - (y - cy) * ppy
     out.ok = Number.isFinite(y)
   }
-  return { f, t0: x0, t1: x1, atDomain0, atDomain1 }
+  return { f, t0: x0, t1: x1, atDomain0, atDomain1, pieces: modelPieces(model, params) }
 }
 
 function buildSpan(path: PolylineSink, span: CurveSpan, vp: Viewport): boolean {
   resetEmitter(EM, path, span.f, vp)
-  sampleAdaptive(EM, span.f, span.t0, span.t1, vp)
+  sampleSpan(EM, span, vp)
   return EM.drawn
 }
 
@@ -1057,7 +1267,7 @@ export function traceCurve(
     else if (runs.length > 0) hi[runs.length - 1] = { def, und }
   }
   try {
-    sampleAdaptive(EM, span.f, span.t0, span.t1, vp)
+    sampleSpan(EM, span, vp)
   } catch {
     /* an evaluator that threw mid-span still leaves the runs it produced */
   } finally {

@@ -1009,3 +1009,73 @@ describe('findEndAsymptotes — a level well away from 0', () => {
     }
   })
 })
+
+describe('findEndAsymptotes — a piecewise tail is judged on its own piece', () => {
+  it('a linear last piece is not its own slant asymptote', () => {
+    // −x + 5 for x > 2 IS the line; the half-window [0, 10] also holds the 3
+    // on [0, 2], which used to make the tail look like it was "approaching"
+    for (const src of [
+      'y = piecewise(x^2+1, x<0, 3, 0<=x<=2, -x+5, x>2)',
+      'y = { x^2+1 if x < 0 ; 3 if 0 <= x <= 2 ; -x+5 if x > 2 }',
+    ]) {
+      expect(endsOf(src), src).toEqual([])
+    }
+  })
+
+  it('also when the tail piece starts off the board, and on the left', () => {
+    expect(endsOf('y = piecewise(x+1, x<-20, x^2, x>=-20)')).toEqual([])
+    expect(endsOf('y = piecewise(2x-1, x<=-1, x^3, x>-1)')).toEqual([])
+  })
+
+  it('a last piece that APPROACHES a line still reports it: 1/x + 2 → y = 2', () => {
+    const lines = endsOf('y = piecewise(x^2, x<1, 1/x+2, x>=1)')
+    expect(lines).toHaveLength(1)
+    expect(lines[0].m).toBe(0)
+    expect(lines[0].b).toBeCloseTo(2, 6)
+  })
+
+  it('a slant approached by the tail piece is kept: x + 1/x for x > 1', () => {
+    // the constant left piece IS y = −3: not an asymptote of itself, so the
+    // slant is the only line
+    const lines = endsOf('y = piecewise(-3, x<=1, x+1/x, x>1)')
+    expect(lines).toHaveLength(1)
+    expect(lines[0].m).toBeCloseTo(1, 6)
+    expect(lines[0].b).toBeCloseTo(0, 6)
+  })
+
+  it('a hand-made ModelSpec with pieces and an ungated evaluator agrees', () => {
+    const spec: ModelSpec = {
+      id: 'hand3',
+      kind: 'explicit',
+      name: 'Three pieces',
+      evalExplicit: (_p, x) => (x < 0 ? x * x + 1 : x <= 2 ? 3 : -x + 5),
+      pieces: () => [
+        { lo: -Infinity, hi: 0, loClosed: false, hiClosed: false },
+        { lo: 0, hi: 2, loClosed: true, hiClosed: true },
+        { lo: 2, hi: Infinity, loClosed: false, hiClosed: false },
+      ],
+      latex: () => '',
+      paramMeta: () => [],
+    }
+    const curve: FittedCurve = {
+      id: 'c', modelId: 'hand3', params: [], kind: 'explicit', domain: null,
+      color: '#fff', strokeWidth: 2.5, visible: true, error: 0,
+    }
+    expect(findEndAsymptotes(curve, { hand3: spec })).toEqual([])
+  })
+})
+
+describe('findEndAsymptotes — step functions are checked off the ladder', () => {
+  it('floor, ceil and the sawtooth lean on nothing (the ladder rungs are integers)', () => {
+    for (const src of ['y = floor(x)', 'y = ceil(x)', 'y = x - floor(x)']) {
+      expect(endsOf(src), src).toEqual([])
+    }
+  })
+
+  it('floor(x)/x still approaches y = 1', () => {
+    const lines = endsOf('y = floor(x)/x')
+    expect(lines).toHaveLength(1)
+    expect(lines[0].m).toBe(0)
+    expect(lines[0].b).toBeCloseTo(1, 6)
+  })
+})
