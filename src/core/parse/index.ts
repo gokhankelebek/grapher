@@ -2628,6 +2628,298 @@ function matchParen(src: string, i: number): number {
 }
 
 // ----------------------------------------------------------------------------
+// Typed parametric curves — the BC particle (see ../motion.ts)
+//
+//   (2cos(t), 3sin(t))                 a bare ordered pair of t-expressions
+//   (x, y) = (t^2, t^3 - 3t)           the same pair with its (x, y) = head
+//   x = 2cos(t), y = 3sin(t)           two equations (either order)
+//
+// followed, optionally, by the t-interval in any of the restriction spellings
+//   … {0 <= t <= 2pi}     … for 0 <= t <= 2pi     … , 0 <= t <= 2pi
+// (and `[0, 2pi]` / `t in …`, whatever ./condition.ts reads as one interval).
+// Without one the interval is [0, 2π] when a trig function of t appears in
+// either component — one turn — and [−10, 10] otherwise.
+//
+// ADDITIVE, by construction: every one of these shapes is an ERROR on the
+// ordinary path (a comma inside a bracket, or `x = …` mixing x with t), so
+// parseExpression only tries them after the ordinary parse has failed. Nothing
+// that parsed before can change; a line that is not shaped like a parametric
+// curve keeps its old message word for word. A shape with no t anywhere —
+// `(1, 2)`, `x = 2, y = 3` — is not a curve either, and keeps its old error.
+//
+// Each component is an ordinary expression in t: sliders (shared between the
+// two components, in order of first appearance), named calls through the env
+// — (f(t), g(t)) — and everything else the engine reads. x, y, r and θ are
+// refused inside a component, as are a third component and an interval that
+// is not in t. The interval must be one bounded stretch; its bounds are
+// constants (a slider bound is not supported: ParsedPlot.domain is fixed).
+// ----------------------------------------------------------------------------
+
+/** Trig functions whose argument makes a curve periodic in t. */
+const TRIG_OF_T: ReadonlySet<string> = new Set(['sin', 'cos', 'tan', 'sec', 'csc', 'cot'])
+
+/** Does a trig function of t appear anywhere in `n`? */
+function hasTrigOfT(n: Node): boolean {
+  switch (n.t) {
+    case 'call': {
+      if (TRIG_OF_T.has(n.fn)) {
+        const v = new Set<VarName>()
+        collectVars(n.args[0], v)
+        if (v.has('t')) return true
+      }
+      return n.args.some(hasTrigOfT)
+    }
+    case 'neg': return hasTrigOfT(n.a)
+    case 'bin': return hasTrigOfT(n.a) || hasTrigOfT(n.b)
+    case 'ucall': return hasTrigOfT(n.arg)
+    default: return false
+  }
+}
+
+/** Default t-interval when none is typed: one turn for trig, [−10, 10] else. */
+export const PARAM_TRIG_INTERVAL: [number, number] = [0, 2 * Math.PI]
+export const PARAM_PLAIN_INTERVAL: [number, number] = [-10, 10]
+
+interface Span { text: string; at: number }
+
+/** The shape of a parametric line, as text; null when it is not one. */
+interface ParamShape {
+  comps: Span[]
+  interval: Span | null
+  /** where the interval marker sits (for messages) */
+  intervalAt: number
+}
+
+/**
+ * The first top-level interval marker: a `{…}` group (not LaTeX's ^{…}) or
+ * the word `for`. Commas are the caller's business.
+ */
+function paramIntervalMarker(src: string): { at: number; cond: Span; brace: boolean; end: number } | null {
+  let depth = 0
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i]
+    if (c === '{' && depth === 0) {
+      if (/[\^_]\s*$/.test(src.slice(0, i))) continue
+      const close = matchBrace(src, i)
+      if (close < 0) return null
+      return { at: i, cond: { text: src.slice(i + 1, close), at: i + 1 }, brace: true, end: close + 1 }
+    }
+    if (OPENERS.includes(c)) { depth++; continue }
+    if (CLOSERS.includes(c)) { if (depth > 0) depth--; continue }
+    if (depth !== 0) continue
+    if (/[A-Za-z]/.test(c) && (i === 0 || !/[A-Za-z0-9]/.test(src[i - 1]))) {
+      let j = i
+      while (j < src.length && /[A-Za-z0-9]/.test(src[j])) j++
+      if (src.slice(i, j).toLowerCase() === 'for') {
+        return { at: i, cond: { text: src.slice(j), at: j }, brace: false, end: src.length }
+      }
+      i = j - 1
+    }
+  }
+  return null
+}
+
+const PAIR_HEAD_RE = /^\s*\(\s*x\s*,\s*y\s*\)\s*=(?!=)/
+const X_EQ_RE = /^\s*x\s*=(?!=)/
+const Y_EQ_RE = /^\s*y\s*=(?!=)/
+/** `z = …`, `w = …`: a third equation, not an interval */
+const LETTER_EQ_RE = /^\s*[A-Za-z]\s*=(?!=)/
+
+/** The segment after its `x =` / `y =`, with its offset. */
+function afterEq(seg: Span): Span {
+  const k = seg.text.indexOf('=')
+  return { text: seg.text.slice(k + 1), at: seg.at + k + 1 }
+}
+
+/**
+ * Read the ordered pair `( a, b [, c…] )` that `s` consists of (plus an
+ * optional `, interval` after it). Null when `s` is not a bracketed list.
+ */
+function readPair(s: Span): { comps: Span[]; rest: Span | null } | null {
+  const lead = s.text.length - s.text.trimStart().length
+  const open = lead
+  if (s.text[open] !== '(') return null
+  const close = matchParen(s.text, open)
+  if (close < 0) return null
+  const inner = splitTop(s.text.slice(open + 1, close), s.at + open + 1, ',')
+  if (inner.length < 2) return null
+  const tail = s.text.slice(close + 1)
+  if (tail.trim() === '') return { comps: inner, rest: null }
+  const t = tail.trimStart()
+  if (t[0] !== ',') return null
+  const at = s.at + close + 1 + (tail.length - t.length) + 1
+  return { comps: inner, rest: { text: t.slice(1), at } }
+}
+
+/** Recognise the three spellings. Throws for a malformed one it is sure of. */
+function paramShapeOf(src: string): ParamShape | null {
+  const marker = paramIntervalMarker(src)
+  if (marker && marker.brace && src.slice(marker.end).trim() !== '') return null
+  const body: Span = { text: marker ? src.slice(0, marker.at) : src, at: 0 }
+  let interval: Span | null = marker ? marker.cond : null
+  const intervalAt = marker ? marker.at : -1
+
+  const withRest = (comps: Span[], rest: Span | null): ParamShape | null => {
+    if (rest) {
+      if (interval) {
+        throw new ParseError('Give the t-interval once — e.g. {0 <= t <= 2pi}', rest.at)
+      }
+      interval = rest
+    }
+    return { comps, interval, intervalAt: rest ? rest.at : intervalAt }
+  }
+
+  // (x, y) = ( … , … )
+  const head = PAIR_HEAD_RE.exec(body.text)
+  if (head) {
+    const pair = readPair({ text: body.text.slice(head[0].length), at: head[0].length })
+    return pair ? withRest(pair.comps, pair.rest) : null
+  }
+  // ( … , … )
+  const pair = readPair(body)
+  if (pair) return withRest(pair.comps, pair.rest)
+
+  // x = …, y = …   (or y = …, x = …)
+  const segs = splitTop(body.text, 0, ',')
+  if (segs.length < 2) return null
+  const [s0, s1] = segs
+  let xs: Span, ys: Span
+  if (X_EQ_RE.test(s0.text) && Y_EQ_RE.test(s1.text)) { xs = s0; ys = s1 }
+  else if (Y_EQ_RE.test(s0.text) && X_EQ_RE.test(s1.text)) { xs = s1; ys = s0 }
+  else return null
+  const comps = [afterEq(xs), afterEq(ys)]
+  const extra = segs.slice(2)
+  for (let i = 0; i < extra.length; i++) {
+    if (LETTER_EQ_RE.test(extra[i].text)) comps.push(afterEq(extra[i]))
+    else if (i === extra.length - 1) return withRest(comps, extra[i])
+    else return null
+  }
+  return withRest(comps, null)
+}
+
+/**
+ * Parse a parametric line; null when it is not shaped like one (the caller
+ * then reports its own error). Throws ParseError for one that is, but is
+ * wrong — a third component, an x in a component, an interval in x.
+ */
+function parseParametric(src: string, env?: FunctionEnv | null): ParsedPlot | null {
+  const shape = paramShapeOf(src)
+  if (!shape) return null
+
+  const nodes = shape.comps.map((c) => {
+    if (c.text.trim() === '') {
+      throw new ParseError('Each component needs a formula in t, e.g. (cos(t), sin(t))', c.at)
+    }
+    return atOffset(c.at, () => {
+      const { lhs, rhs } = new Parser(c.text, env).parseInput()
+      if (rhs !== null) throw new ParseError(`A component is a formula in t, not an equation — drop the '='`)
+      return lhs
+    })
+  })
+  const varsOf = nodes.map((n) => { const v = new Set<VarName>(); collectVars(n, v); return v })
+  const anyT = varsOf.some((v) => v.has('t'))
+  const bad = varsOf.findIndex((v) => v.has('x') || v.has('y') || v.has('r') || v.has('theta'))
+  // a pair of plain numbers is a point, not a curve — not ours to claim
+  if (!anyT && bad < 0) return null
+  if (nodes.length !== 2) {
+    throw new ParseError(
+      `A parametric curve has two components, x(t) and y(t) — this one has ${nodes.length}`,
+      shape.comps[2].at,
+    )
+  }
+  if (bad >= 0) {
+    const v = varsOf[bad]
+    const name = v.has('x') ? 'x' : v.has('y') ? 'y' : v.has('r') ? 'r' : 'θ'
+    throw new ParseError(
+      `Each component of a parametric curve is a formula in t — ${bad === 0 ? 'x(t)' : 'y(t)'} cannot use ${name}`,
+      shape.comps[bad].at,
+    )
+  }
+
+  // the sliders of both components, one shared list in order of appearance
+  const paramNames: string[] = []
+  const index = new Map<string, number>()
+  for (const n of nodes) reindexParams(n, paramNames, index)
+  const logBases = logBaseParams(nodes)
+
+  let domain: [number, number]
+  let intervalTex: string
+  if (shape.interval) {
+    const iv = shape.interval
+    if (iv.text.trim() === '') {
+      throw new ParseError('Empty interval — write something like {0 <= t <= 2pi}', shape.intervalAt)
+    }
+    const ctx = newCtx(analyzeExpr)
+    const pieces = atOffset(0, () => parseCondition(iv.text, ctx, iv.at))
+    if (ctx.name !== null && ctx.name !== 't') {
+      const nm = ctx.name === 'theta' ? 'θ' : ctx.name
+      throw new ParseError(
+        `The interval is about '${nm}', but a parametric curve runs in t — write it as {0 <= t <= 2pi}`,
+        ctx.pos,
+      )
+    }
+    const p = pieces.length === 1 ? pieces[0] : null
+    if (!p || !Number.isFinite(p.lo) || !Number.isFinite(p.hi) || !(p.hi > p.lo)) {
+      throw new ParseError(
+        'The t-interval must be one stretch with both ends, e.g. {0 <= t <= 2pi}',
+        iv.at,
+      )
+    }
+    domain = [p.lo, p.hi]
+    intervalTex = compactLatex([p], 't')
+  } else if (nodes.some(hasTrigOfT)) {
+    domain = [PARAM_TRIG_INTERVAL[0], PARAM_TRIG_INTERVAL[1]]
+    intervalTex = '0 \\leq t \\leq 2\\pi'
+  } else {
+    domain = [PARAM_PLAIN_INTERVAL[0], PARAM_PLAIN_INTERVAL[1]]
+    intervalTex = '-10 \\leq t \\leq 10'
+  }
+
+  const latex = `\\left(${toLatex(nodes[0])},\\ ${toLatex(nodes[1])}\\right),\\ ${intervalTex}`
+  const ex = compile(nodes[0])
+  const ey = compile(nodes[1])
+  const defaultParams = defaultsOf(paramNames, logBases)
+  return {
+    kind: 'parametric',
+    latex,
+    paramNames,
+    defaultParams,
+    domain,
+    makeModel(modelId: string): ModelSpec {
+      return {
+        id: modelId,
+        kind: 'parametric',
+        name: 'Expression',
+        latex: () => latex,
+        paramMeta: (params: number[]) =>
+          paramNames.map((nm, i) => metaFor(nm, params[i] ?? defaultParams[i])),
+        evalParametric: (params, t) => ({ x: ex(params, t, 0), y: ey(params, t, 0) }),
+      }
+    },
+  }
+}
+
+/** parseParametric as an outcome; null when the line is not parametric-shaped. */
+function tryParametric(src: string, env?: FunctionEnv | null): ParseOutcome | null {
+  try {
+    const plot = parseParametric(src, env)
+    return plot ? { ok: true, plot } : null
+  } catch (err) {
+    if (err instanceof ParseError) {
+      return err.pos !== undefined
+        ? { ok: false, error: err.message, pos: err.pos }
+        : { ok: false, error: err.message }
+    }
+    if (err instanceof CondError) {
+      return err.pos !== undefined
+        ? { ok: false, error: err.message, pos: err.pos }
+        : { ok: false, error: err.message }
+    }
+    return null
+  }
+}
+
+// ----------------------------------------------------------------------------
 // Public API
 // ----------------------------------------------------------------------------
 
@@ -2656,6 +2948,10 @@ export function parseExpression(src: string, env?: FunctionEnv | null): ParseOut
       plot: makePlot(cls.kind, cls.latex, paramNames, cls.domain, cls.ev, singPlanOf(cls.body), logBases),
     }
   } catch (err) {
+    // Only a line the ordinary path REFUSED is tried as a parametric curve,
+    // so nothing that parsed before can change (see parseParametric).
+    const param = tryParametric(src, env)
+    if (param) return param
     if (err instanceof ParseError) {
       return err.pos !== undefined
         ? { ok: false, error: err.message, pos: err.pos }

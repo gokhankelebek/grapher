@@ -1374,6 +1374,30 @@ describe('latex round-trip fuzz', () => {
     expect(bad.slice(0, 5).join('\n---\n')).toBe('')
     expect(parsed).toBeGreaterThan(1000)
   })
+
+  // -------------------------------------------------------------------------
+  // Typed parametric curves are ADDITIVE: the parametric reading is tried
+  // only after the ordinary parse has refused a line, so no generated input
+  // — every one of which the ordinary path reads or refuses on its own — may
+  // ever come back as a parametric curve, and its outcome is the old one.
+  // -------------------------------------------------------------------------
+
+  it('no generated input is read as a parametric curve (seed 5150)', () => {
+    const rng = makeRng(5150)
+    const bad: string[] = []
+    for (let i = 0; i < 3000; i++) {
+      const roll = rng()
+      const src =
+        roll < 0.4 ? genInput(rng)
+          : roll < 0.55 ? genInput(rng, true, true)
+          : roll < 0.75 ? genRestricted(rng)
+          : roll < 0.9 ? genPiecewise(rng)
+          : genRestricted(rng, true, true)
+      const o = parseExpression(src)
+      if (o.ok && o.plot.kind === 'parametric') bad.push(src)
+    }
+    expect(bad.slice(0, 5).join('\n')).toBe('')
+  })
 })
 
 describe('named calls leave every env-less reading alone', () => {
@@ -1437,5 +1461,125 @@ describe('xy is the product x·y', () => {
     expect(parseExpression('xy = 1').ok).toBe(true)
     expect(parseExpression('y = xyz').ok).toBe(false)
     expect(parseExpression('y = ab').ok).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Typed parametric curves (src/core/motion.ts has the calculus)
+// ---------------------------------------------------------------------------
+
+describe('typed parametric curves', () => {
+  const TWO_PI = 2 * Math.PI
+  const at = (src: string, t: number, params?: number[]) => {
+    const p = plot(src)
+    expect(p.kind).toBe('parametric')
+    return p.makeModel('m').evalParametric!(params ?? p.defaultParams, t)
+  }
+
+  it('reads the three spellings as the same curve, card and interval', () => {
+    const srcs = ['(2cos(t), 3sin(t))', '(x, y) = (2cos(t), 3sin(t))', 'x = 2cos(t), y = 3sin(t)', 'y = 3sin(t), x = 2cos(t)']
+    const ps = srcs.map(plot)
+    for (const p of ps) {
+      expect(p.kind).toBe('parametric')
+      expect(p.latex).toBe(ps[0].latex)
+      expect(p.domain).toEqual([0, TWO_PI])
+      expect(p.paramNames).toEqual([])
+    }
+    expect(ps[0].latex).toBe('\\left(2\\cos\\left(t\\right),\\ 3\\sin\\left(t\\right)\\right),\\ 0 \\leq t \\leq 2\\pi')
+    for (const t of [0, 0.4, 1.3, 2.9, 5.5]) {
+      for (const src of srcs) {
+        const v = at(src, t)
+        expect(v.x).toBeCloseTo(2 * Math.cos(t), 14)
+        expect(v.y).toBeCloseTo(3 * Math.sin(t), 14)
+      }
+    }
+  })
+
+  it('takes the t-interval in braces, after for, or after a comma', () => {
+    const table: Array<[string, [number, number], string]> = [
+      ['(t, t^2) {0 <= t <= 2}', [0, 2], '0 \\leq t \\leq 2'],
+      ['(t, t^2) for -1 <= t <= 3', [-1, 3], '-1 \\leq t \\leq 3'],
+      ['(t, t^2), 0 < t < 1', [0, 1], '0 < t < 1'],
+      ['x = cos(t), y = sin(t) {0 <= t <= pi}', [0, Math.PI], '0 \\leq t \\leq \\pi'],
+      ['x = cos(t), y = sin(t) for 0 <= t <= pi/2', [0, Math.PI / 2], '0 \\leq t \\leq \\pi/2'],
+      ['x = cos(t), y = sin(t), 0 <= t <= 3pi', [0, 3 * Math.PI], '0 \\leq t \\leq 3\\pi'],
+      ['(x, y) = (t^2, t^3 - 3t) {-2 <= t <= 2}', [-2, 2], '-2 \\leq t \\leq 2'],
+    ]
+    for (const [src, dom, tex] of table) {
+      const p = plot(src)
+      expect(p.kind, src).toBe('parametric')
+      expect(p.domain![0], src).toBeCloseTo(dom[0], 14)
+      expect(p.domain![1], src).toBeCloseTo(dom[1], 14)
+      expect(p.latex.endsWith(`,\\ ${tex}`), `${src}: ${p.latex}`).toBe(true)
+    }
+  })
+
+  it('defaults the interval to [0, 2π] with a trig function of t, else [−10, 10]', () => {
+    expect(plot('(cos(t), sin(t))').domain).toEqual([0, TWO_PI])
+    expect(plot('(t, 2sin(3t) + 1)').domain).toEqual([0, TWO_PI])
+    expect(plot('(t^2, t^3 - 3t)').domain).toEqual([-10, 10])
+    expect(plot('(t^2, t^3 - 3t)').latex).toBe('\\left(t^{2},\\ t^{3}-3t\\right),\\ -10 \\leq t \\leq 10')
+    // a trig function of a constant is not periodic in t
+    expect(plot('(t, cos(1) t)').domain).toEqual([-10, 10])
+  })
+
+  it('shares one slider list between the components, in order of appearance', () => {
+    const p = plot('(a cos(t) + h, b sin(t) + k)')
+    expect(p.paramNames).toEqual(['a', 'h', 'b', 'k'])
+    expect(p.defaultParams).toEqual([1, 1, 1, 1])
+    const v = at('(a cos(t) + h, b sin(t) + k)', 0.7, [2, 5, 3, -1])
+    expect(v.x).toBeCloseTo(2 * Math.cos(0.7) + 5, 14)
+    expect(v.y).toBeCloseTo(3 * Math.sin(0.7) - 1, 14)
+    const m = p.makeModel('m').paramMeta([2, 5, 3, -1])
+    expect(m.map((q) => q.name)).toEqual(['a', 'h', 'b', 'k'])
+    // the same letter in both components is one slider
+    expect(plot('x = a cos(t), y = a sin(t)').paramNames).toEqual(['a'])
+  })
+
+  it('calls named curves inside a component through the env', () => {
+    const env: FunctionEnv = { has: (n) => n === 'f', eval: (_n, u) => u * u + 1 }
+    const o = parseExpression('(t, f(t - 1))', env)
+    expect(o.ok).toBe(true)
+    if (!o.ok) return
+    expect(o.plot.kind).toBe('parametric')
+    expect(o.plot.paramNames).toEqual([])
+    const v = o.plot.makeModel('m').evalParametric!([], 3)
+    expect(v).toEqual({ x: 3, y: 5 })
+    // without the env, f(…) is the slider f times a bracket, as ever
+    expect(plot('(t, f(t - 1))').paramNames).toEqual(['f'])
+  })
+
+  it('refuses a component in x or y, a third component, and an interval not in t', () => {
+    expect(err('(x, t)').error).toMatch(/formula in t — x\(t\) cannot use x/)
+    expect(err('(t, y + t)').error).toMatch(/y\(t\) cannot use y/)
+    expect(err('x = t, y = x + t').error).toMatch(/y\(t\) cannot use x/)
+    expect(err('(t, theta)').error).toMatch(/cannot use θ/)
+    const three = err('(t, t^2, t^3)')
+    expect(three.error).toMatch(/two components.*has 3/)
+    expect(three.pos).toBe(8)
+    expect(err('x = t, y = t^2, z = t^3').error).toMatch(/two components/)
+    const inX = err('(t, t^2) {0 <= x <= 1}')
+    expect(inX.error).toMatch(/interval is about 'x'.*runs in t/)
+    expect(inX.pos).toBe(15)
+    expect(err('(t, t^2) {t > 0}').error).toMatch(/one stretch with both ends/)
+    expect(err('(t, t^2) {t < 0 or t > 1}').error).toMatch(/one stretch with both ends/)
+    expect(err('(t, t^2) {}').error).toMatch(/Empty interval/)
+    // a component's own syntax error keeps its position in the whole line
+    const bad = err('(t, 2 + * t)')
+    expect(bad.pos).toBe(8)
+  })
+
+  it('leaves lines that are not parametric exactly as they were', () => {
+    // a pair of numbers is a point (the shape reader's), not a curve
+    expect(err('(1, 2)').error).toMatch(/Expected '\)' but found ','/)
+    expect(err('x = 2, y = 3').error).toMatch(/domain restriction needs an explicit curve/)
+    // t-only lines are still functions of t, and x with t still does not mix
+    expect(plot('y = t^2').kind).toBe('explicit')
+    expect(plot('t^2 + 1').kind).toBe('explicit')
+    expect(err('x + t').error).toMatch(/Cannot mix/)
+    expect(err('x = t').error).toMatch(/Cannot mix/)
+    // restrictions with a comma are restrictions
+    expect(plot('y = x^2, 0 <= x < 3').kind).toBe('explicit')
+    expect(plot('r = 2cos(3theta) {0 <= theta <= pi}').kind).toBe('polar')
   })
 })
