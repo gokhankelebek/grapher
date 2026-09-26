@@ -110,11 +110,30 @@ export interface ModelSpec {
    * Sorted, deduplicated, within `range`. Absent for library families.
    */
   singularities?(params: number[], range: [number, number]): number[]
+  /**
+   * For a typed PIECEWISE (or restricted) explicit expression: its pieces in
+   * increasing x, each with its interval and which ends it includes — what
+   * a textbook marks with a filled (included) or open (excluded) dot, and
+   * where a jump or a removable gap sits. Absent for everything else.
+   * Produced by the parser (src/core/parse/index.ts) from the conditions as
+   * written; `lo`/`hi` are ±Infinity for an unbounded side. A single piece
+   * with no condition is not reported (absent), so ordinary curves are
+   * untouched.
+   */
+  pieces?(params: number[]): PieceInfo[]
   latex(params: number[]): string    // KaTeX-renderable string
   paramMeta(params: number[]): ParamMeta[]  // ranges centered on current values
   /** Optional: return params translated by (dx, dy) in math units (for drag-editing).
    *  Omit when translation isn't meaningful for the family. */
   translate?(params: number[], dx: number, dy: number): number[]
+}
+
+/** One piece of a piecewise definition (ModelSpec.pieces). */
+export interface PieceInfo {
+  lo: number
+  hi: number
+  loClosed: boolean
+  hiClosed: boolean
 }
 
 /** One curve living on the board. */
