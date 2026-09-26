@@ -25,9 +25,17 @@
 // Slope fields, shapes and number-line items never reach this file: they are
 // not curves, and a lattice of directions is not a graph of anything.
 //
-// Pure: no React, no DOM, no canvas. Names are DERIVED, never stored — a
-// document that remembered "this one is g" would disagree with the board the
-// moment a curve above it was deleted.
+// Pure: no React, no DOM, no canvas.
+//
+// STORED NAMES. Since functions can use other functions (g(x) = 2f(x − 1) + 3),
+// a curve's letter is part of the document: g's line says "f", so f must stay
+// f when a curve above it is deleted. The board keeps one letter per curve
+// (src/ui/nameLinks.ts hands them out and never reshuffles them) and passes
+// that map here as `stored`; the rules above then apply only to what a stored
+// letter cannot say — f′ for a derivative, f⁻¹ for an inverse, nothing for a
+// tangent. Without `stored` the letters are derived exactly as they always
+// were, which is how a document written before names were stored gets its
+// letters the first time it is opened.
 // ============================================================================
 
 import type { FittedCurve } from '../core/types'
@@ -37,10 +45,17 @@ import type { CalcLink } from '../core/persist'
  * The letters a board hands out, in order.
  *
  * f, g, h are the ones a calculus class already reads as "some function";
- * k, p, q, r, s continue without touching the letters that mean something else
- * on a graph (x, y, t are variables, e is a constant, n and i are counters).
+ * k, p, q, s, u, v, w continue without touching the letters that mean
+ * something else on a graph (x, y, t are variables, r is the polar radius, e
+ * is a constant, n and i are counters) — a name is something a typed line can
+ * CALL as f(x), and the parser reads r(…) as the radius, never as a call.
  */
-export const NAME_POOL: readonly string[] = ['f', 'g', 'h', 'k', 'p', 'q', 'r', 's']
+export const NAME_POOL: readonly string[] = ['f', 'g', 'h', 'k', 'p', 'q', 's', 'u', 'v', 'w']
+
+/** The inverse of a function named f: f⁻¹. */
+export function inverted(base: string): string {
+  return `${base}⁻¹`
+}
 
 /** Prime marks, by order of the derivative. Beyond four, f⁽⁵⁾. */
 const PRIMES: readonly string[] = ['′', '″', '‴', '⁗']
@@ -99,6 +114,8 @@ export function curveNames(
   curves: readonly FittedCurve[],
   sources: Readonly<Record<string, string>> = {},
   links: readonly CalcLink[] = [],
+  stored?: Readonly<Record<string, string>>,
+  inverses: readonly { parentId: string; curveId: string }[] = [],
 ): Record<string, string> {
   const tangents = new Set<string>()
   const derivedFrom = new Map<string, string>()
@@ -106,14 +123,29 @@ export function curveNames(
     if (l.kind === 'tangent') tangents.add(l.curveId)
     else if (l.kind === 'derivative') derivedFrom.set(l.curveId, l.parentId)
   }
+  const inverseOf = new Map<string, string>()
+  for (const l of inverses) inverseOf.set(l.curveId, l.parentId)
 
-  const open = curves.filter((c) => nameable(c) && !tangents.has(c.id))
+  const open = curves.filter(
+    (c) => nameable(c) && !tangents.has(c.id) && !inverseOf.has(c.id),
+  )
   const names: Record<string, string> = {}
   const taken = new Set<string>()
+
+  // 0. The letters the document stores. They are claims too — and the only
+  //    ones, for every curve that has one: a stored name never moves.
+  if (stored) {
+    for (const letter of Object.values(stored)) taken.add(letter)
+    for (const c of open) {
+      const s = stored[c.id]
+      if (typeof s === 'string' && s !== '' && !derivedFrom.has(c.id)) names[c.id] = s
+    }
+  }
 
   // 1. The names the teacher wrote. They are claims on a letter, so they are
   //    all read before anything is handed out.
   for (const c of open) {
+    if (names[c.id] !== undefined) continue
     const typed = typedName(sources[c.id])
     if (typed && !taken.has(typed)) {
       names[c.id] = typed
@@ -167,6 +199,15 @@ export function curveNames(
     if (letter === null) continue
     names[c.id] = letter
     taken.add(letter)
+  }
+
+  // 4. An inverse is f⁻¹ — of its parent's letter, stored or derived, whether
+  //    or not the parent itself is on show.
+  for (const c of curves) {
+    const parent = inverseOf.get(c.id)
+    if (parent === undefined || !c.visible) continue
+    const base = names[parent] ?? stored?.[parent]
+    if (typeof base === 'string' && base !== '') names[c.id] = inverted(base)
   }
 
   return names

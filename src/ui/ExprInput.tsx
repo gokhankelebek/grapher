@@ -11,11 +11,17 @@ interface Props {
    * belongs IN the field rather than in a line of prose underneath it.
    */
   placeholder?: string
+  /**
+   * The board's function names (f, g, h). Offered as chips while typing: a
+   * click puts `f(x)` in at the caret, which is how a teacher discovers that
+   * `g(x) = 2f(x − 1) + 3` is a thing this box understands.
+   */
+  names?: readonly string[]
 }
 
 /** Inline equation-entry card ("+" in the sidebar). Enter submits, Esc closes;
  *  stays open after a successful submit for rapid multi-entry. */
-export function ExprInput({ onSubmit, onClose, placeholder }: Props) {
+export function ExprInput({ onSubmit, onClose, placeholder, names }: Props) {
   const [text, setText] = useState('')
   const [error, setError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -23,6 +29,22 @@ export function ExprInput({ onSubmit, onClose, placeholder }: Props) {
   useEffect(() => {
     inputRef.current?.focus()
   }, [])
+
+  /** `f(x)` at the caret (over any selection), caret left after it. */
+  const insertCall = (n: string): void => {
+    const el = inputRef.current
+    const piece = `${n}(x)`
+    const start = el?.selectionStart ?? text.length
+    const end = el?.selectionEnd ?? text.length
+    const next = text.slice(0, start) + piece + text.slice(end)
+    setText(next)
+    if (error) setError(null)
+    requestAnimationFrame(() => {
+      const at = start + piece.length
+      el?.focus()
+      el?.setSelectionRange(at, at)
+    })
+  }
 
   const submit = (): void => {
     const src = text.trim()
@@ -61,6 +83,23 @@ export function ExprInput({ onSubmit, onClose, placeholder }: Props) {
           }
         }}
       />
+      {names && names.length > 0 && (
+        <div className="expr-names" role="group" aria-label="Use a function on this board">
+          {names.map((n) => (
+            <button
+              key={n}
+              type="button"
+              className="expr-name-chip"
+              title={`Insert ${n}(x)`}
+              // Keep the caret: a mousedown on a button would blur the field.
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => insertCall(n)}
+            >
+              {n}
+            </button>
+          ))}
+        </div>
+      )}
       {error && <div className="expr-error">{error}</div>}
     </div>
   )

@@ -34,6 +34,7 @@
 import type { CurveKind, FittedCurve, ModelSpec, ParsedPlot } from '../core/types'
 import type { NLItem } from '../core/types'
 import { parseExpression } from '../core/parse'
+import type { FunctionEnv } from '../core/functionEnv'
 
 // ----------------------------------------------------------------------------
 // Numbers
@@ -489,13 +490,18 @@ export function readCurveEquation(
   src: string,
   curve: FittedCurve,
   spec: ModelSpec | undefined,
+  /**
+   * The names this line may call (src/ui/nameLinks.ts) — `f'(x)` is only an
+   * equation with one. Absent: parsed exactly as before.
+   */
+  env?: FunctionEnv,
 ): EquationRead {
   const text = src.trim()
   if (text === '') return { ok: false, error: 'Type an equation, or press Esc to leave this one.' }
 
   let outcome: ReturnType<typeof parseExpression>
   try {
-    outcome = parseExpression(text)
+    outcome = parseExpression(text, env)
   } catch {
     return { ok: false, error: 'The parser crashed on this input' }
   }

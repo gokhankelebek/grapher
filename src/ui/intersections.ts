@@ -75,11 +75,22 @@ export function crossable(c: FittedCurve): boolean {
 export function intersectionKey(
   curves: readonly FittedCurve[],
   span: readonly [number, number],
+  /**
+   * curveId -> the state of the curves a typed line CALLS (nameLinks'
+   * dependencyKeys): g = 2f(x − 1) + 3 moves when f's slider does, with its
+   * own params untouched. Absent: nothing calls anything.
+   */
+  deps?: Readonly<Record<string, string>>,
 ): string {
   const parts: string[] = []
   for (const c of curves) {
     if (!crossable(c)) continue
-    parts.push(`${c.id}:${c.modelId}:${c.params.join(',')}:${c.domain ? c.domain.join(',') : ''}`)
+    const dep = deps?.[c.id]
+    parts.push(
+      `${c.id}:${c.modelId}:${c.params.join(',')}:${c.domain ? c.domain.join(',') : ''}${
+        dep ? `:${dep}` : ''
+      }`,
+    )
   }
   return `${parts.join('|')}#${span[0]},${span[1]}`
 }

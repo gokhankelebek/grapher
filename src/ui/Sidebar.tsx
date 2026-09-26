@@ -226,6 +226,25 @@ interface Props {
   onRegressionDigits?(id: string, regId: string, digits: number): void
   onRegressionResiduals?(id: string, regId: string): void
   onRegressionRefit?(id: string, regId: string): void
+  /**
+   * What each card is called (f, g, f′, f⁻¹), keyed by curve id — shown as the
+   * chip in its header. Absent: no chips.
+   */
+  cardNames?: Readonly<Record<string, string>>
+  /** The curves that hold a letter of their own (their chip renames). */
+  storedNames?: Readonly<Record<string, string>>
+  /** Rename a curve; every line calling it follows. Refusal, or null. */
+  onRename?(id: string, letter: string): string | null
+  /** Why a typed line that calls another curve can't be drawn, per curve. */
+  linkErrors?: Readonly<Record<string, string>>
+  /** A read-only line under a card's equation (an inverse's horizontal line test). */
+  cardNotes?: Readonly<Record<string, string>>
+  /** "Show inverse" on any explicit curve's ⋯ menu. */
+  onShowInverseOf?(id: string): void
+  /** curveId -> the state of the curves that line calls (memo keys). */
+  depKeys?: Readonly<Record<string, string>>
+  /** The board's callable names, offered as chips in the equation box. */
+  exprNames?: readonly string[]
 }
 
 const NO_DATA: BoardData[] = []
@@ -355,6 +374,14 @@ export function Sidebar({
   onRegressionDigits = noop,
   onRegressionResiduals = noop,
   onRegressionRefit = noop,
+  cardNames,
+  storedNames,
+  onRename,
+  linkErrors,
+  cardNotes,
+  onShowInverseOf,
+  depKeys,
+  exprNames,
 }: Props) {
   const numberLine = kind === 'number-line'
 
@@ -421,6 +448,7 @@ export function Sidebar({
             <ExprInput
               onSubmit={onExprSubmit}
               onClose={onExprToggle}
+              names={numberLine ? undefined : exprNames}
               placeholder={
                 numberLine
                   ? '-2 <= x < 5'
@@ -522,6 +550,13 @@ export function Sidebar({
               onTransformShowParent={
                 onTransformShowParent ? (on) => onTransformShowParent(curve.id, on) : undefined
               }
+              name={cardNames?.[curve.id]}
+              nameEditable={storedNames?.[curve.id] !== undefined}
+              onRename={onRename ? (letter) => onRename(curve.id, letter) : undefined}
+              linkError={linkErrors?.[curve.id]}
+              note={cardNotes?.[curve.id]}
+              onShowInverseOf={onShowInverseOf ? () => onShowInverseOf(curve.id) : undefined}
+              depKey={depKeys?.[curve.id]}
             />
           ))}
           {!numberLine &&

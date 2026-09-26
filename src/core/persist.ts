@@ -24,7 +24,8 @@ import type {
   Vec2,
 } from './types'
 import { FIGURE_STYLES } from './types'
-import { parseExpression } from './parse'
+import { namedCallSites, parseExpression } from './parse'
+import type { FunctionEnv } from './functionEnv'
 import { parseSlopeField } from './parse/slopeField'
 import { parseShape } from './parse/shapes'
 import { MODELS } from './fit/models'
@@ -174,6 +175,46 @@ export type CurveLink = TangentLink | DerivativeLink | AccumulationLink
 
 export const isCurveLink = (l: CalcLink): l is CurveLink =>
   l.kind === 'tangent' || l.kind === 'derivative' || l.kind === 'accumulation'
+
+// --- inverses and names -----------------------------------------------------
+//
+// "Show inverse" on ANY function: the relation x = f(y), drawn as the
+// parametric curve (f(t), t) under `inv_<link id>`. Like a derivative curve it
+// is a LINK plus a curve whose model is rebuilt from the parent on load and
+// follows the parent live; nothing computed is stored. `from`/`to` is the
+// stretch of the parent's x the inverse reflects — fixed when it was asked
+// for, so a reopened document reflects the same stretch.
+//
+// Curve NAMES (f, g, h …) are stored per curve (`StoredCurve.name`), and so
+// are the names a typed line CALLS (`StoredCurve.calls`) — the letters its
+// `f(x − 1)`, `f'(x)` are calls of rather than sliders. Both are omitted when
+// absent, so every document written before them serialises byte-for-byte as
+// it did. See src/ui/nameLinks.ts for what they mean.
+
+/** The inverse of `parentId`, drawn as the parametric curve `curveId`. */
+export interface InverseLink {
+  id: string
+  parentId: string
+  curveId: string
+  /** The parent's x-range the relation is drawn over. */
+  from: number
+  to: number
+}
+
+/** The model id an inverse relation registers under: this prefix + the link id. */
+export const INV_MODEL_PREFIX = 'inv_'
+
+/** One inverse link as JSON (all fields load-bearing). */
+export interface StoredInverseLink {
+  id: string
+  parentId: string
+  curveId: string
+  from: number
+  to: number
+}
+
+/** A curve name: one ASCII letter. */
+const isNameLetter = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z]$/.test(v)
 
 // --- slope fields -----------------------------------------------------------
 //
@@ -549,6 +590,19 @@ export interface StoredCurve {
    * Absent field = no source, so every document already on disk is unchanged.
    */
   displaySource?: string
+  /**
+   * The curve's letter (f, g, h …). Stable: it never shifts when curves are
+   * added, removed or reordered, which is what lets `g(x) = 2f(x − 1) + 3`
+   * keep meaning the same f. Absent on every document written before names
+   * were stored (the board derives them once on load).
+   */
+  name?: string
+  /**
+   * The names a typed line CALLS — `f` for `g(x) = 2f(x − 1) + 3` — as
+   * opposed to single letters it multiplies (`a(x + 1)` with slider a).
+   * Present only on a typed line that calls something.
+   */
+  calls?: string[]
   style?: CurveStyle
   candidates?: StoredCandidate[]
 }
@@ -601,6 +655,11 @@ export interface StoredBoard {
    * "this board has no calculus objects".
    */
   calc?: StoredCalcLink[]
+  /**
+   * "Show inverse" links (see InverseLink). Omitted when there are none, so a
+   * board that never had one serialises byte-for-byte as it did before.
+   */
+  inverses?: StoredInverseLink[]
   /**
    * The slope fields on this board, and the initial conditions their solution
    * curves were drawn through. Never the curves themselves: those are RK4
@@ -819,6 +878,12 @@ export interface BoardInput {
   axisUnits?: AxisUnitChoices
   /** Calculus objects. Absent or empty writes nothing at all. */
   calc?: readonly CalcLink[]
+  /** curveId -> its letter. Absent or empty writes nothing at all. */
+  names?: Readonly<Record<string, string>>
+  /** curveId -> the names that typed line calls. Absent or empty writes nothing. */
+  calls?: Readonly<Record<string, readonly string[]>>
+  /** Inverse links. Absent or empty writes nothing at all. */
+  inverses?: readonly InverseLink[]
   /** Slope fields. Absent or empty writes nothing at all, by the same rule. */
   fields?: readonly BoardField[]
   /** Shapes. Absent or empty writes nothing at all, by the same rule. */
@@ -878,6 +943,18 @@ export interface HydratedBoard {
    * exists to prevent.
    */
   calc: CalcLink[]
+  /**
+   * curveId -> the letter the document stored for it. Empty for a document
+   * written before names were stored: the board derives them once.
+   */
+  names: Record<string, string>
+  /** curveId -> the names that typed line calls (see StoredCurve.calls). */
+  calls: Record<string, string[]>
+  /**
+   * The inverse links whose parent and curve are both still here. The curve's
+   * model is NOT rebuilt here — the board registers one per link.
+   */
+  inverses: InverseLink[]
   /**
    * The slope fields that could be rebuilt. A field whose equation no longer
    * parses is dropped and REPORTED: it is the one thing on the board that is
@@ -1047,6 +1124,15 @@ export function boardToStored(input: BoardInput): StoredBoard {
     // forms serialises byte-for-byte as it did before this field existed.
     const shown = input.displaySources?.[c.id]
     if (typeof shown === 'string' && shown.trim() !== '') stored.displaySource = shown
+    // A name and the names a line calls, only when there are some: a board
+    // from before names were stored writes exactly the bytes it always did.
+    const nm = input.names?.[c.id]
+    if (isNameLetter(nm)) stored.name = nm
+    const calls = src !== undefined ? input.calls?.[c.id] : undefined
+    if (Array.isArray(calls) && calls.length > 0) {
+      const ok = calls.filter(isNameLetter)
+      if (ok.length > 0) stored.calls = ok.slice()
+    }
     const st = input.styles[c.id]
     // End caps are written only when a choice was actually made: 'auto' IS the
     // absence of one, so a curve nobody touched serialises byte-for-byte as it
@@ -1103,6 +1189,18 @@ export function boardToStored(input: BoardInput): StoredBoard {
   // had one writes exactly the JSON it wrote before this field existed.
   const calc = input.calc ?? []
   if (calc.length > 0) board.calc = calc.slice(0, MAX_CALC).map(calcLinkToStored)
+
+  // And for the inverses.
+  const inverses = input.inverses ?? []
+  if (inverses.length > 0) {
+    board.inverses = inverses.slice(0, MAX_CALC).map((l) => ({
+      id: l.id,
+      parentId: l.parentId,
+      curveId: l.curveId,
+      from: l.from,
+      to: l.to,
+    }))
+  }
 
   // And once more for the slope fields.
   const fields = input.fields ?? []
@@ -1575,10 +1673,11 @@ export function serializeDoc(doc: StoredDoc): string {
 function rebuildExprModel(
   modelId: string,
   source: string,
+  env?: FunctionEnv,
 ): { spec: ModelSpec } | { error: string } {
   let outcome: ReturnType<typeof parseExpression>
   try {
-    outcome = parseExpression(source)
+    outcome = parseExpression(source, env)
   } catch {
     return { error: 'the parser could not read it' }
   }
@@ -1748,7 +1847,17 @@ function styleOf(raw: unknown): CurveStyle | null {
  * Turn a parsed (but untrusted) document into live board state.
  * Never throws: whatever is individually valid is kept, the rest is reported.
  */
-export function hydrateDoc(rawDoc: unknown): LoadResult {
+/** How a load wires the typed lines that call other curves. */
+export interface HydrateOptions {
+  /**
+   * f(x) for the curve NAMED `name`, at its live parameters — the board's own
+   * resolver, so the models a load builds follow later slider drags. Absent:
+   * the loaded document's curves as they were stored (tests, previews).
+   */
+  resolve?: (name: string, x: number) => number
+}
+
+export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResult {
   const problems: string[] = []
   let degraded = false
 
@@ -1816,7 +1925,14 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
   const exprSources: Record<string, string> = {}
   const displaySources: Record<string, string> = {}
   const brokenExpr: Record<string, string> = {}
+  const names: Record<string, string> = {}
+  const calls: Record<string, string[]> = {}
   let exprCounter = 0
+
+  // The names a typed line calls are evaluated LAZILY, through this resolver,
+  // so the order the lines are read in does not matter: parsing only has to
+  // know WHICH letters are calls, and each stored line says so itself.
+  const resolve = opts.resolve ?? storedResolver(curves, names, extraModels)
 
   const rawCurves = Array.isArray(rawBoard.curves) ? rawBoard.curves : []
   if (!Array.isArray(rawBoard.curves)) {
@@ -1843,13 +1959,24 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
     }
     seen.add(curve.id)
 
+    // The curve's letter. Two curves claiming one letter is damage; the second
+    // loses it quietly and the board hands it a fresh one.
+    if (isNameLetter(stored.name) && !Object.values(names).includes(stored.name)) {
+      names[curve.id] = stored.name
+    }
+
     // Typed equations: rebuild the model closure from its source text.
     if (isStr(stored.exprSource) && stored.exprSource.trim()) {
       const source = stored.exprSource
       exprSources[curve.id] = source
       const m = /^expr_(\d+)$/.exec(curve.modelId)
       if (m) exprCounter = Math.max(exprCounter, Number(m[1]))
-      const rebuilt = rebuildExprModel(curve.modelId, source)
+      const lineCalls = Array.isArray(stored.calls)
+        ? [...new Set(stored.calls.filter(isNameLetter))]
+        : []
+      if (lineCalls.length > 0) calls[curve.id] = lineCalls
+      const env = storedLineEnv(resolve, lineCalls, source, stored.name)
+      const rebuilt = rebuildExprModel(curve.modelId, source, env)
       if ('spec' in rebuilt) {
         extraModels[curve.modelId] = rebuilt.spec
       } else {
@@ -2063,6 +2190,55 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
     }
   }
 
+  // ---- inverse links
+  //
+  // Kept when its parent and its curve are both here; the curve's model is
+  // the board's to register (it reads the parent live). An inverse curve whose
+  // link did not survive has nothing to draw it, so it goes too — reported.
+  const inverses: InverseLink[] = []
+  {
+    const rawInv = Array.isArray(rawBoard.inverses) ? rawBoard.inverses : []
+    if (rawBoard.inverses !== undefined && !Array.isArray(rawBoard.inverses)) {
+      problems.push('The list of inverses was unreadable.')
+      degraded = true
+    }
+    const curveIds = new Set(curves.map((c) => c.id))
+    const seenInv = new Set<string>()
+    const claimed = new Set<string>()
+    for (const raw of rawInv.slice(0, MAX_CALC)) {
+      if (!isObj(raw)) continue
+      const { id, parentId, curveId, from, to } = raw
+      if (!isStr(id) || !id || !isStr(parentId) || !isStr(curveId) || !isNum(from) || !isNum(to)) {
+        problems.push('A damaged inverse could not be read.')
+        degraded = true
+        continue
+      }
+      if (seenInv.has(id) || claimed.has(curveId)) continue
+      if (!curveIds.has(parentId) || !curveIds.has(curveId)) {
+        problems.push('An inverse was dropped: the curve it belonged to is no longer in this document.')
+        degraded = true
+        continue
+      }
+      seenInv.add(id)
+      claimed.add(curveId)
+      inverses.push({ id, parentId, curveId, from, to })
+    }
+    const orphan = curves.filter(
+      (c) => c.modelId.startsWith(INV_MODEL_PREFIX) && !claimed.has(c.id),
+    )
+    if (orphan.length > 0) {
+      const gone = new Set(orphan.map((c) => c.id))
+      for (let i = curves.length - 1; i >= 0; i--) {
+        if (gone.has(curves[i].id)) curves.splice(i, 1)
+      }
+      for (const id of gone) delete names[id]
+      problems.push(
+        `${orphan.length === 1 ? 'An inverse curve' : `${orphan.length} inverse curves`} could not be rebuilt, so ${orphan.length === 1 ? 'it was' : 'they were'} removed.`,
+      )
+      degraded = true
+    }
+  }
+
   // ---- slope fields
   //
   // A field is pure text plus a handful of numbers, so it is rebuilt exactly
@@ -2254,6 +2430,9 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
       brokenExpr,
       axisUnits,
       calc,
+      names,
+      calls,
+      inverses,
       fields,
       shapes,
       data,
@@ -2272,6 +2451,64 @@ export function hydrateDoc(rawDoc: unknown): LoadResult {
   }
 }
 
+/**
+ * f(x) for a named curve of the document being loaded, at its stored
+ * parameters. Used only when the caller brings no resolver of its own. A name
+ * re-entered while it is being evaluated (f and g calling each other) is NaN,
+ * never a stack overflow.
+ */
+function storedResolver(
+  curves: readonly FittedCurve[],
+  names: Readonly<Record<string, string>>,
+  extraModels: Readonly<Record<string, ModelSpec>>,
+): (name: string, x: number) => number {
+  const active = new Set<string>()
+  return (name, x) => {
+    let c: FittedCurve | undefined
+    for (const k of curves) {
+      if (names[k.id] === name) {
+        c = k
+        break
+      }
+    }
+    if (!c || c.kind !== 'explicit' || active.has(c.id)) return Number.NaN
+    if (c.domain && (x < Math.min(c.domain[0], c.domain[1]) || x > Math.max(c.domain[0], c.domain[1]))) {
+      return Number.NaN
+    }
+    const spec = extraModels[c.modelId] ?? MODELS[c.modelId]
+    if (!spec || !spec.evalExplicit) return Number.NaN
+    active.add(c.id)
+    try {
+      const v = spec.evalExplicit(c.params, x)
+      return typeof v === 'number' ? v : Number.NaN
+    } catch {
+      return Number.NaN
+    } finally {
+      active.delete(c.id)
+    }
+  }
+}
+
+/**
+ * The env one stored line is parsed against: the letters it CALLS (stored
+ * with it), plus its own head when that head is its stored name — so the
+ * line parses exactly as it did when it was typed. Undefined when the line
+ * calls nothing and names nothing: it then parses as it always has.
+ */
+function storedLineEnv(
+  resolve: (name: string, x: number) => number,
+  lineCalls: readonly string[],
+  source: string,
+  name: unknown,
+): FunctionEnv | undefined {
+  const head = namedCallSites(source).head
+  const own = isNameLetter(name) && head === name ? name : null
+  if (lineCalls.length === 0 && own === null) return undefined
+  const has = new Set(lineCalls)
+  if (own !== null) has.add(own)
+  return { has: (n) => has.has(n), eval: (n, x) => resolve(n, x) }
+}
+
 function blankHydrated(): HydratedBoard {
   return {
     curves: [],
@@ -2285,6 +2522,9 @@ function blankHydrated(): HydratedBoard {
     brokenExpr: {},
     axisUnits: { ...AUTO_AXIS_UNITS },
     calc: [],
+    names: {},
+    calls: {},
+    inverses: [],
     fields: [],
     shapes: [],
     data: [],
@@ -2301,7 +2541,7 @@ function blankHydrated(): HydratedBoard {
 }
 
 /** Parse a stored JSON string. Never throws — a hostile blob yields a report. */
-export function deserializeDoc(json: string): LoadResult {
+export function deserializeDoc(json: string, opts: HydrateOptions = {}): LoadResult {
   if (typeof json !== 'string' || json.trim() === '') {
     return { meta: null, board: null, problems: ['The saved document was empty.'], degraded: true }
   }
@@ -2316,7 +2556,7 @@ export function deserializeDoc(json: string): LoadResult {
       degraded: true,
     }
   }
-  return hydrateDoc(raw)
+  return hydrateDoc(raw, opts)
 }
 
 /** Round-trip helper used by save: live board -> full document record. */

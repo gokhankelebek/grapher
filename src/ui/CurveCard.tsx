@@ -169,6 +169,33 @@ interface Props {
   transformShowParent?: boolean
   /** The "show parent" switch. Absent = no switch. */
   onTransformShowParent?(on: boolean): void
+  /**
+   * What this curve is CALLED — its stored letter (f), or what it is named
+   * after its parent (f′, f⁻¹). Shown as a chip in the header. Absent: no
+   * chip (a tangent line, an implicit curve).
+   */
+  name?: string
+  /** The chip can be renamed (the curve holds a letter of its own). */
+  nameEditable?: boolean
+  /**
+   * Rename: every line that calls the old letter is rewritten. Returns the
+   * refusal to show ("g is already the name of another curve"), or null.
+   */
+  onRename?(letter: string): string | null
+  /**
+   * Why this typed line can't be drawn right now — "f is not defined", "f and
+   * g use each other". Absent when it can.
+   */
+  linkError?: string
+  /** A read-only line under the equation: an inverse's horizontal line test. */
+  note?: string
+  /** "Show inverse" on the ⋯ menu (any explicit curve). Absent = no item. */
+  onShowInverseOf?(): void
+  /**
+   * The state of the curves this line calls. Part of every memo key here, so
+   * g's asymptotes follow f's slider although g's own params never move.
+   */
+  depKey?: string
 }
 
 /**
@@ -651,11 +678,25 @@ export function CurveCard({
   onTransformRestate,
   transformShowParent,
   onTransformShowParent,
+  name,
+  nameEditable = false,
+  onRename,
+  linkError,
+  note,
+  onShowInverseOf,
+  depKey,
 }: Props) {
   const spec: ModelSpec | undefined = models[curve.modelId]
   const isExpression = curve.modelId.startsWith('expr_')
-  /** A typed curve whose model couldn't be rebuilt: shown, but inert. */
+  /**
+   * A typed curve whose model couldn't be rebuilt: shown, but inert. A line
+   * that CALLS another curve (it has a depKey) is treated the same way by the
+   * section readers below: they read the text without the names it calls,
+   * and `2f(x − 1) + 3` read that way is a product of sliders, not a
+   * transformation of anything this card could edit.
+   */
   const broken = Boolean(brokenReason)
+  const readable = !broken && depKey === undefined
 
   /**
    * The curve's line read back as factors — "y = (x + 1)^2(x - 3)" is a
@@ -664,8 +705,8 @@ export function CurveCard({
    * a sketched cubic already has its own zero handles.
    */
   const factored = useMemo(
-    () => (isExpression && !broken && curve.kind === 'explicit' ? safeReadFactored(exprSource) : null),
-    [isExpression, broken, curve.kind, exprSource],
+    () => (isExpression && readable && curve.kind === 'explicit' ? safeReadFactored(exprSource) : null),
+    [isExpression, readable, curve.kind, exprSource],
   )
 
   /**
@@ -675,10 +716,10 @@ export function CurveCard({
    */
   const exponential = useMemo(
     () =>
-      isExpression && !broken && curve.kind === 'explicit' && !factored
+      isExpression && readable && curve.kind === 'explicit' && !factored
         ? safeReadExponential(exprSource)
         : null,
-    [isExpression, broken, curve.kind, exprSource, factored],
+    [isExpression, readable, curve.kind, exprSource, factored],
   )
 
   /**
@@ -688,10 +729,10 @@ export function CurveCard({
    */
   const logarithmic = useMemo(
     () =>
-      isExpression && !broken && curve.kind === 'explicit' && !factored && !exponential
+      isExpression && readable && curve.kind === 'explicit' && !factored && !exponential
         ? safeReadLogarithmic(exprSource)
         : null,
-    [isExpression, broken, curve.kind, exprSource, factored, exponential],
+    [isExpression, readable, curve.kind, exprSource, factored, exponential],
   )
 
   /**
@@ -703,14 +744,14 @@ export function CurveCard({
   const sinusoidal = useMemo(
     () =>
       isExpression &&
-      !broken &&
+      readable &&
       curve.kind === 'explicit' &&
       !factored &&
       !exponential &&
       !logarithmic
         ? safeReadSinusoid(exprSource)
         : null,
-    [isExpression, broken, curve.kind, exprSource, factored, exponential, logarithmic],
+    [isExpression, readable, curve.kind, exprSource, factored, exponential, logarithmic],
   )
 
   /**
@@ -722,8 +763,8 @@ export function CurveCard({
    * 2^(x−1)+3); otherwise it opens by itself.
    */
   const transform = useMemo(
-    () => (isExpression && !broken && curve.kind === 'explicit' ? safeReadTransform(exprSource) : null),
-    [isExpression, broken, curve.kind, exprSource],
+    () => (isExpression && readable && curve.kind === 'explicit' ? safeReadTransform(exprSource) : null),
+    [isExpression, readable, curve.kind, exprSource],
   )
   const transformOthers = {
     factored,
@@ -809,6 +850,27 @@ export function CurveCard({
   // formula stays print-only rather than offering an editor that could only
   // throw the curve away.
   const [eqEdit, setEqEdit] = useState<{ text: string; error: string | null } | null>(null)
+  // Renaming from the chip: one letter, Enter commits, Esc leaves it.
+  const [nameEdit, setNameEdit] = useState<{ text: string; error: string | null } | null>(null)
+  const nameInputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (nameEdit) {
+      nameInputRef.current?.focus()
+      nameInputRef.current?.select()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nameEdit !== null])
+  const commitName = (): void => {
+    if (!nameEdit || !onRename) return
+    const letter = nameEdit.text.trim()
+    if (letter === '' || letter === name) {
+      setNameEdit(null)
+      return
+    }
+    const err = onRename(letter)
+    if (err) setNameEdit({ text: nameEdit.text, error: err })
+    else setNameEdit(null)
+  }
   const eqInputRef = useRef<HTMLInputElement>(null)
   useEffect(() => {
     if (eqEdit) {
@@ -957,7 +1019,9 @@ export function CurveCard({
    */
   const asymptotes = useMemo(
     () => (selected ? asymptoteTexts(curve, models, scale) : []),
-    [selected, curve, models, scale],
+    // depKey: a line that calls f moves with f while `curve` stands still.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selected, curve, models, scale, depKey],
   )
 
   /**
@@ -1294,7 +1358,7 @@ export function CurveCard({
     <div
       className={`card${selected ? ' card-selected' : ''}${curve.visible ? '' : ' card-hidden'}${
         shaking ? ' card-shake' : ''
-      }${broken ? ' card-broken-state' : ''}`}
+      }${broken || linkError ? ' card-broken-state' : ''}`}
       style={{ '--curve': curve.color } as CSSProperties}
       role="button"
       tabIndex={0}
@@ -1323,6 +1387,51 @@ export function CurveCard({
             onCycleColor()
           }}
         />
+        {name !== undefined &&
+          (nameEdit ? (
+            <input
+              ref={nameInputRef}
+              className={`name-chip-input${nameEdit.error ? ' param-edit-bad' : ''}`}
+              type="text"
+              spellCheck={false}
+              autoComplete="off"
+              autoCapitalize="off"
+              maxLength={2}
+              aria-label="Curve name"
+              value={nameEdit.text}
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => setNameEdit({ text: e.target.value, error: null })}
+              onKeyDown={(e) => {
+                e.stopPropagation()
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  commitName()
+                } else if (e.key === 'Escape') {
+                  e.preventDefault()
+                  setNameEdit(null)
+                }
+              }}
+              onBlur={() => setNameEdit(null)}
+            />
+          ) : nameEditable && onRename ? (
+            <button
+              type="button"
+              className="name-chip name-chip-btn"
+              title={`This curve is ${name} — click to rename it (every line that uses ${name} follows)`}
+              aria-label={`Curve name ${name}, click to rename`}
+              onClick={(e) => {
+                e.stopPropagation()
+                onSelect()
+                setNameEdit({ text: name, error: null })
+              }}
+            >
+              {name}
+            </button>
+          ) : (
+            <span className="name-chip" title={`This curve is ${name}`}>
+              {name}
+            </span>
+          ))}
         <span className="model-name">{broken ? 'Equation' : modelName}</span>
         {broken ? (
           <span className="err-badge err-badge-bad" title={brokenReason}>
@@ -1365,6 +1474,12 @@ export function CurveCard({
               {menuItem(curve.visible ? 'Hide' : 'Show', onToggleVisible)}
               {menuItem(copied ? 'Copied' : 'Copy LaTeX', copyLatex)}
               {menuItem('Delete', onDelete, 'card-menu-danger')}
+              {onShowInverseOf && curve.kind === 'explicit' && !broken && (
+                <>
+                  <div className="card-menu-sep" />
+                  {menuItem('Show inverse', onShowInverseOf)}
+                </>
+              )}
               {fitted && onConvertTyped && (
                 <>
                   <div className="card-menu-sep" />
@@ -1579,6 +1694,20 @@ export function CurveCard({
         <div className="card-eq-foot" onClick={(e) => e.stopPropagation()}>
           {eqEdit.error && <div className="expr-error">{eqEdit.error}</div>}
           <div className="expr-hint">Enter saves · Esc cancels</div>
+        </div>
+      )}
+
+      {nameEdit?.error && <div className="expr-error name-error">{nameEdit.error}</div>}
+
+      {linkError && !broken && (
+        <div className="card-link-error" role="status">
+          {linkError}
+        </div>
+      )}
+
+      {note && (
+        <div className="card-note" onClick={(e) => e.stopPropagation()}>
+          {note}
         </div>
       )}
 

@@ -130,10 +130,11 @@ describe('curveNames — what each curve is called', () => {
   })
 
   it('runs out of letters quietly rather than inventing one', () => {
-    const cs = Array.from({ length: 10 }, (_, i) => curve({ id: `c${i}` }))
+    const cs = Array.from({ length: 12 }, (_, i) => curve({ id: `c${i}` }))
     const names = curveNames(cs)
-    expect(Object.keys(names)).toHaveLength(8)
-    expect(namesInOrder(cs, names)).toEqual(['f', 'g', 'h', 'k', 'p', 'q', 'r', 's'])
+    expect(Object.keys(names)).toHaveLength(10)
+    // No r: a name is something a line can CALL, and r(…) is the polar radius.
+    expect(namesInOrder(cs, names)).toEqual(['f', 'g', 'h', 'k', 'p', 'q', 's', 'u', 'v', 'w'])
   })
 
   it('the board the teacher will actually build: y = …, g(x) = …, and f′', () => {

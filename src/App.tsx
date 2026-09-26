@@ -111,7 +111,34 @@ import type { DataParse } from './core/data'
 import { fitRegression, regressionSource } from './core/data'
 import { POLAR_OFFER, suggestPolarRuling } from './ui/boardGrid'
 import { defaultCaption, exportLook, screenLook } from './ui/figureStyle'
-import { curveNames, namesInOrder } from './render/curveNames'
+import { curveNames, namesInOrder, typedName } from './render/curveNames'
+import {
+  boardLetters,
+  boundCalls,
+  callableNames,
+  createResolver,
+  dependencyKeys,
+  ensureCalls,
+  ensureNames,
+  inverseDependents,
+  inverseInfo,
+  inverseRange,
+  inverseSpec,
+  legacyNames,
+  lineEnv,
+  lineErrors,
+  awaitedLetters,
+  nameOwners,
+  nextFreeLetter,
+  notCallable,
+  rewriteName,
+  orphanNotice,
+  planClaim,
+  planRename,
+  sliderLetters,
+} from './ui/nameLinks'
+import type { InverseInfo, NameState } from './ui/nameLinks'
+import type { FunctionEnv } from './core/functionEnv'
 import {
   boardIntersections,
   cardIntersections,
@@ -155,6 +182,7 @@ import {
   MIRROR_SRC,
   dragLogHandle,
   inverseColor,
+  isIdentityLine,
   inverseSources,
   logHandles,
   planInverse,
@@ -234,7 +262,8 @@ import { PresentBar } from './ui/PresentBar'
 import { PresentLegend } from './ui/PresentLegend'
 import { DEFAULT_PRESENT_TYPE, curveLegend, itemLegend, presentScale } from './ui/present'
 import { copyDocName, nextDocName } from './ui/docName'
-import { ACCUM_MODEL_PREFIX, DERIV_MODEL_PREFIX } from './core/persist'
+import { ACCUM_MODEL_PREFIX, DERIV_MODEL_PREFIX, INV_MODEL_PREFIX } from './core/persist'
+import type { InverseLink } from './core/persist'
 import {
   AUTO_AXIS_UNITS,
   createDoc,
@@ -459,6 +488,15 @@ interface Snapshot {
    */
   data: BoardData[]
   /**
+   * Curve names (f, g, h …), the letters each typed line calls, and the
+   * "Show inverse" links. In the history because they are the document's:
+   * a rename rewrites every line that calls the old letter, and one undo has
+   * to take the letter AND the rewritten lines back together.
+   */
+  names: Record<string, string>
+  calls: Record<string, string[]>
+  inverses: InverseLink[]
+  /**
    * The LOOK the board is in, and the line printed under the figure.
    *
    * Unlike the ruling and the axis units — which are ways of MEASURING a board
@@ -509,6 +547,9 @@ interface StatePatch {
   fields?: BoardField[]
   shapes?: BoardShape[]
   data?: BoardData[]
+  names?: Record<string, string>
+  calls?: Record<string, string[]>
+  inverses?: InverseLink[]
   figure?: FigureStyleId
   caption?: string | null
   candidates?: Map<string, FitResult[]>
@@ -778,6 +819,16 @@ export default function App() {
   const [displaySources, setDisplaySources] = useState<Record<string, string>>({})
   /** curveId -> what has been done to it since it was recognised. */
   const [edits, setEdits] = useState<Record<string, CurveEdit[]>>({})
+  /**
+   * curveId -> its letter. STORED and stable (src/ui/nameLinks.ts): a line
+   * that says f(x − 1) has to keep meaning the same f when a curve above it
+   * is deleted, so letters are handed out once and never reshuffled.
+   */
+  const [names, setNames] = useState<Record<string, string>>({})
+  /** curveId -> the letters that typed line calls (fixed when it was typed). */
+  const [calls, setCalls] = useState<Record<string, string[]>>({})
+  /** "Show inverse" on any function: the links (the curves are ordinary curves). */
+  const [inverses, setInverses] = useState<InverseLink[]>([])
   const [dropActive, setDropActive] = useState(false)
 
   // ---- curve analysis (zeros, extrema, inflections)
@@ -866,6 +917,9 @@ export default function App() {
   const fieldsRef = useRef<BoardField[]>([])
   const shapesRef = useRef<BoardShape[]>([])
   const dataRef = useRef<BoardData[]>([])
+  const namesRef = useRef<Record<string, string>>({})
+  const callsRef = useRef<Record<string, string[]>>({})
+  const inversesRef = useRef<InverseLink[]>([])
   /**
    * regressionId -> the equation the regression sync last wrote on (or found
    * on) its curve. A curve whose equation is neither that nor what the table
@@ -959,17 +1013,73 @@ export default function App() {
   modelsRef.current = models
   selectedRef.current = selectedId
 
+  /**
+   * Register model closures NOW as well as in state: a name handed out in the
+   * same breath (a new line's sliders are reserved from the auto letters) and
+   * the resolver both read modelsRef before React has re-rendered.
+   */
+  const registerModels = useCallback((map: Record<string, ModelSpec>): void => {
+    if (Object.keys(map).length === 0) return
+    modelsRef.current = { ...modelsRef.current, ...map }
+    setExtraModels((prev) => ({ ...prev, ...map }))
+  }, [])
+
+  /**
+   * f(x) for the curve NAMED f, read off the live board at every call — the
+   * one thing every typed line that calls another curve evaluates through
+   * (src/ui/nameLinks.ts). Nothing is snapshotted, so dragging f's slider
+   * moves g on the very next frame, and a deleted f is NaN until it returns.
+   */
+  const resolveName = useMemo(
+    () =>
+      createResolver(() => ({
+        curves: curvesRef.current,
+        names: namesRef.current,
+        models: modelsRef.current,
+      })),
+    [],
+  )
+  /** The env one typed line is parsed against: its calls, plus its own head. */
+  const envFor = useCallback(
+    (lineCalls: readonly string[], head: string | null): FunctionEnv | undefined =>
+      lineCalls.length > 0 || head ? lineEnv(resolveName, lineCalls, head) : undefined,
+    [resolveName],
+  )
+  /** linkId -> the inverse relation's facts (sentence, t-range, latex), kept current below. */
+  const inverseInfoRef = useRef<Record<string, InverseInfo>>({})
+  /** An inverse curve's model: (f(t), t), reading its parent live. */
+  const makeInverseSpec = useCallback(
+    (modelId: string, link: InverseLink): ModelSpec =>
+      inverseSpec(
+        modelId,
+        link.parentId,
+        () => ({ curves: curvesRef.current, models: modelsRef.current }),
+        () => inverseInfoRef.current[link.id]?.latex ?? 'x = f\\left(y\\right)',
+      ),
+    [],
+  )
+
   const selectedCurve = useMemo(
     () => curves.find((c) => c.id === selectedId) ?? null,
     [curves, selectedId],
   )
+
+  /**
+   * curveId -> the state of every curve a typed line reaches through its
+   * calls (src/ui/nameLinks.ts). g's own params do not move when f's slider
+   * does — g does — so every memo that caches a curve by its params appends
+   * this.
+   */
+  const depKeys = useMemo(() => dependencyKeys(curves, names, calls), [curves, names, calls])
+  const depKeysRef = useRef(depKeys)
+  depKeysRef.current = depKeys
 
   // Value-based key: re-analyze only when the curve's shape actually changes,
   // so unrelated re-renders (hover, save state, toasts) never pay the cost.
   const analysisKey = selectedCurve
     ? `${selectedCurve.id}|${selectedCurve.modelId}|${selectedCurve.params.join(',')}|${
         selectedCurve.domain ? selectedCurve.domain.join(',') : ''
-      }`
+      }|${depKeys[selectedCurve.id] ?? ''}`
     : ''
 
   const analysisRef = useRef<SpecialPoint[]>([])
@@ -1004,7 +1114,7 @@ export default function App() {
   const analysisFor = useCallback((curve: FittedCurve): SpecialPoint[] => {
     const key = `${curve.id}|${curve.modelId}|${curve.params.join(',')}|${
       curve.domain ? curve.domain.join(',') : ''
-    }`
+    }|${depKeysRef.current[curve.id] ?? ''}`
     const hit = analysisCacheRef.current.get(key)
     if (hit) return hit
     let pts: SpecialPoint[] = []
@@ -1127,6 +1237,9 @@ export default function App() {
       fields: fieldsRef.current,
       shapes: shapesRef.current,
       data: dataRef.current,
+      names: namesRef.current,
+      calls: callsRef.current,
+      inverses: inversesRef.current,
       figure: figureStyleRef.current,
       caption: figureCaptionRef.current,
       candidates: candidatesRef.current,
@@ -1183,6 +1296,40 @@ export default function App() {
     if (s.data) {
       dataRef.current = s.data
       setDataSets(s.data)
+    }
+    if (s.inverses) {
+      inversesRef.current = s.inverses
+      setInverses(s.inverses)
+    }
+    // Names and calls follow the curves: a curve that arrives gets a letter,
+    // one that leaves gives its letter up, and a line that leaves stops
+    // calling anything. Asked on every change that can move them — and a
+    // no-op (the same objects back) on a slider frame.
+    if (s.names || s.calls || s.curves || s.exprSources || s.displaySources || s.calc || s.inverses) {
+      const nextCalls = ensureCalls(
+        s.calls ?? callsRef.current,
+        curvesRef.current,
+        exprSourcesRef.current,
+      )
+      if (nextCalls !== callsRef.current) {
+        callsRef.current = nextCalls
+        setCalls(nextCalls)
+      }
+      const nextNames = ensureNames(
+        s.names ?? namesRef.current,
+        {
+          curves: curvesRef.current,
+          sources: { ...displaySourcesRef.current, ...exprSourcesRef.current },
+          calc: calcRef.current,
+          inverses: inversesRef.current,
+          calls: callsRef.current,
+        },
+        () => sliderLetters(curvesRef.current, exprSourcesRef.current, modelsRef.current),
+      )
+      if (nextNames !== namesRef.current) {
+        namesRef.current = nextNames
+        setNames(nextNames)
+      }
     }
     // Compared against undefined, not truthiness: '' is a caption a teacher
     // deliberately cleared, and an undo has to be able to bring it back.
@@ -1408,6 +1555,9 @@ export default function App() {
       brokenExpr: {},
       axisUnits: { ...AUTO_AXIS_UNITS },
       calc: [],
+      names: {},
+      calls: {},
+      inverses: [],
       fields: [],
       shapes: [],
       data: [],
@@ -1436,6 +1586,9 @@ export default function App() {
       displaySources: displaySourcesRef.current,
       axisUnits: axisUnitChoiceRef.current,
       calc: calcRef.current,
+      names: namesRef.current,
+      calls: callsRef.current,
+      inverses: inversesRef.current,
       fields: fieldsRef.current,
       shapes: shapesRef.current,
       data: dataRef.current,
@@ -1562,6 +1715,34 @@ export default function App() {
     shapesRef.current = board.shapes
     // And the tables: the cells come back, every fit is re-asked of them.
     dataRef.current = board.data
+    // The inverse links come back; their models are registered below, reading
+    // the parent live exactly as they did before the document was closed.
+    inversesRef.current = board.inverses
+    callsRef.current = ensureCalls(board.calls, board.curves, board.exprSources)
+    {
+      // Names: the ones the document stored — or, for a document written
+      // before names were stored, the letters the board derived for it (so
+      // its caption still names the same curves) — then every curve still
+      // without one gets the next free letter, once. From here on they are
+      // stored, and never shift.
+      const nameBoard = {
+        curves: board.curves,
+        sources: { ...board.displaySources, ...board.exprSources },
+        calc: board.calc,
+        inverses: board.inverses,
+        calls: callsRef.current,
+      }
+      const seed =
+        Object.keys(board.names).length > 0
+          ? board.names
+          : legacyNames(
+              curveNames(board.curves, nameBoard.sources, board.calc),
+              nameBoard,
+            )
+      namesRef.current = ensureNames(seed, nameBoard, () =>
+        sliderLetters(board.curves, board.exprSources, { ...MODELS, ...board.extraModels }),
+      )
+    }
     regWrittenRef.current = new Map()
     regAutoHiddenRef.current = new Set()
     cellFoldRef.current = null
@@ -1595,6 +1776,9 @@ export default function App() {
     setFields(board.fields)
     setShapes(board.shapes)
     setDataSets(board.data)
+    setInverses(board.inverses)
+    setCalls(callsRef.current)
+    setNames(namesRef.current)
     setBoardGrid(board.grid)
     setFigureStyle(board.figure)
     setFigureCaption(board.captionAuto ? null : board.caption)
@@ -1603,7 +1787,16 @@ export default function App() {
     setPreviewFigure(false)
     setArmedField(null)
     setEdits({})
-    setExtraModels(board.extraModels)
+    {
+      // One live model per inverse link, under its curve's model id.
+      const inv: Record<string, ModelSpec> = {}
+      for (const l of board.inverses) {
+        const child = board.curves.find((c) => c.id === l.curveId)
+        if (child) inv[child.modelId] = makeInverseSpec(child.modelId, l)
+      }
+      modelsRef.current = { ...MODELS, ...board.extraModels, ...inv }
+      setExtraModels({ ...board.extraModels, ...inv })
+    }
     setSelectedId(board.selectedId)
     setDocMeta(meta)
     bumpHistory((v) => v + 1)
@@ -1636,7 +1829,7 @@ export default function App() {
     if (id) {
       const json = readDocJSON(id)
       if (json !== null) {
-        const res = deserializeDoc(json)
+        const res = deserializeDoc(json, { resolve: resolveName })
         if (res.meta && res.board) {
           applyHydrated(res.meta, res.board)
           docStoredRef.current = true
@@ -1719,6 +1912,10 @@ export default function App() {
     shapes,
     // And a data table: a typed cell changes no curve until the fit re-runs.
     dataSets,
+    // And a rename, which may change nothing but a letter.
+    names,
+    calls,
+    inverses,
     // And the ruling, which is a property of the document like the units.
     boardGrid,
     // And the look the figure is in, with its caption: both are the document's
@@ -1753,7 +1950,7 @@ export default function App() {
   const reloadCurrentDoc = useCallback((): void => {
     const id = docMetaRef.current.id
     const json = id ? readDocJSON(id) : null
-    const res = json === null ? null : deserializeDoc(json)
+    const res = json === null ? null : deserializeDoc(json, { resolve: resolveName })
     if (!res || !res.meta || !res.board) {
       setLoadNotice({
         problems: res?.problems ?? ['That document is no longer in storage.'],
@@ -1846,7 +2043,7 @@ export default function App() {
       if (id === docMetaRef.current.id) return
       if (!saveBeforeSwitch()) return
       const json = readDocJSON(id)
-      const res = json === null ? null : deserializeDoc(json)
+      const res = json === null ? null : deserializeDoc(json, { resolve: resolveName })
       if (!res || !res.meta || !res.board) {
         setLoadNotice({
           problems: res?.problems ?? ['That document could not be found.'],
@@ -1927,7 +2124,7 @@ export default function App() {
       const next = remaining[0]
       if (next) {
         const json = readDocJSON(next.id)
-        const res = json === null ? null : deserializeDoc(json)
+        const res = json === null ? null : deserializeDoc(json, { resolve: resolveName })
         if (res?.meta && res.board) {
           applyHydrated(res.meta, res.board)
           docStoredRef.current = true
@@ -1968,7 +2165,7 @@ export default function App() {
       file
         .text()
         .then((text) => {
-          const res = deserializeDoc(text)
+          const res = deserializeDoc(text, { resolve: resolveName })
           if (!res.board || !res.meta) {
             setLoadNotice({
               problems: res.problems.length ? res.problems : ['That file could not be read.'],
@@ -2071,8 +2268,16 @@ export default function App() {
       label: string,
       /** The tables as they should be after this commit (a table being deleted). */
       dataBase: BoardData[] = dataRef.current,
-    ): { curves: FittedCurve[]; lost: CalcLink[] } => {
-      const dead = dependentsOf(calcRef.current, ids)
+    ): { curves: FittedCurve[]; lost: CalcLink[]; lostInverses: InverseLink[] } => {
+      // The calculus dependents, then the inverses of everything going, then
+      // the calculus dependents of THOSE — an inverse is a curve too.
+      let dead = dependentsOf(calcRef.current, ids)
+      const inv = inverseDependents(inversesRef.current, dead.curveIds)
+      if (inv.curveIds.size > 0) {
+        dead = dependentsOf(calcRef.current, [...dead.curveIds, ...inv.curveIds])
+      }
+      const invDead = inverseDependents(inversesRef.current, dead.curveIds)
+      const lostInverses = inversesRef.current.filter((l) => invDead.linkIds.has(l.id))
       const lost = calcRef.current.filter((l) => dead.linkIds.has(l.id))
       const curves = curvesRef.current.filter((c) => !dead.curveIds.has(c.id))
       const styles: StyleMap = {}
@@ -2107,11 +2312,14 @@ export default function App() {
           // A regression whose curve goes is not a regression any more: the
           // entry leaves its table in the same commit.
           data: dropRegressionsFor(dataBase, dead.curveIds),
+          ...(lostInverses.length > 0
+            ? { inverses: inversesRef.current.filter((l) => !invDead.linkIds.has(l.id)) }
+            : {}),
         },
         label,
       )
       setSelectedId((sel) => (sel && dead.curveIds.has(sel) ? null : sel))
-      return { curves, lost }
+      return { curves, lost, lostInverses }
     },
     [commitState],
   )
@@ -2122,13 +2330,30 @@ export default function App() {
       // equation text, and the calculus objects that only exist because it
       // does. A tangent left behind pointing at nothing is not a curve the
       // board can draw, and a second undo to finish the job is not an undo.
-      const { lost } = removeWithDependents([id], 'delete curve')
-      if (lost.length === 0) return
-      const kinds = [...new Set(lost.map((l) => linkNoun(l.kind)))].join(', ')
-      showToast(
-        `Deleted the curve and ${countPhrase(lost.length, 'thing')} that depended on it (${kinds}). Undo brings all of it back.`,
-        { ms: 5000, action: { label: 'Undo', run: undo } },
-      )
+      // Lines that CALL this curve are not its dependents: they stay, in
+      // their error state, and come back to life if the curve does. Read
+      // before the commit, while the curve still has its name.
+      const namesBefore = namesRef.current
+      const callsBefore = callsRef.current
+      const gone = namesBefore[id] ? namesBefore[id] : 'the curve'
+      const { lost, lostInverses } = removeWithDependents([id], 'delete curve')
+      const orphans = orphanNotice([id], namesBefore, callsBefore)
+      const count = lost.length + lostInverses.length
+      if (count === 0 && !orphans) return
+      const kinds = [
+        ...new Set([
+          ...lost.map((l) => linkNoun(l.kind)),
+          ...lostInverses.map(() => 'inverse'),
+        ]),
+      ].join(', ')
+      const took =
+        count > 0
+          ? `Deleted ${gone} and ${countPhrase(count, 'thing')} that depended on it (${kinds}).`
+          : `Deleted ${gone}.`
+      showToast(`${took}${orphans ? ` ${orphans}.` : ''} Undo brings ${count > 0 ? 'all of it' : 'it'} back.`, {
+        ms: orphans ? 6500 : 5000,
+        action: { label: 'Undo', run: undo },
+      })
     },
     [removeWithDependents, showToast, undo],
   )
@@ -2172,6 +2397,9 @@ export default function App() {
         brokenExpr: {},
         displaySources: {},
         edits: {},
+        names: {},
+        calls: {},
+        inverses: [],
       },
       'remove all curves',
     )
@@ -2584,13 +2812,46 @@ export default function App() {
         ...(stroke ? { sourceStroke: stroke } : {}),
       }
       const cands = candidatesRef.current.get(id)
-      const srcExpr = exprSourcesRef.current[id]
+      let srcExpr = exprSourcesRef.current[id]
       const brokenWhy = brokenExprRef.current[id]
       const st = stylesRef.current[id]
-      const shownSrc = displaySourcesRef.current[id]
+      let shownSrc = displaySourcesRef.current[id]
       const madeEdits = editsRef.current[id]
+      // A copy is a new curve with a letter of its own. A copy of
+      // `g(x) = 2f(x − 1) + 3` says so in its head, calls what g calls, and
+      // gets a model parsed for its own name.
+      const lineCalls = callsRef.current[id]
+      const head = typedName(srcExpr ?? shownSrc)
+      let copyName: string | null = null
+      if (head) {
+        copyName = nextFreeLetter(
+          new Set(Object.values(namesRef.current)),
+          new Set([
+            ...awaitedLetters(callsRef.current),
+            ...sliderLetters(curvesRef.current, exprSourcesRef.current, modelsRef.current),
+          ]),
+        )
+        if (copyName) {
+          if (srcExpr !== undefined) srcExpr = rewriteName(srcExpr, head, copyName, { head: true })
+          if (shownSrc !== undefined) shownSrc = rewriteName(shownSrc, head, copyName, { head: true })
+        }
+      }
+      if (copyName && srcExpr !== undefined && srcExpr !== exprSourcesRef.current[id]) {
+        try {
+          const o = parseExpression(srcExpr, envFor(lineCalls ?? [], copyName))
+          if (o.ok) {
+            const modelId = `expr_${++exprCounterRef.current}`
+            registerModels({ [modelId]: o.plot.makeModel(modelId) })
+            copy.modelId = modelId
+          }
+        } catch {
+          /* the copy keeps sharing the original's model */
+        }
+      }
       commitState(
         {
+          ...(copyName ? { names: { ...namesRef.current, [copy.id]: copyName } } : {}),
+          ...(lineCalls ? { calls: { ...callsRef.current, [copy.id]: lineCalls.slice() } } : {}),
           curves: [...curvesRef.current, copy],
           ...(st ? { styles: { ...stylesRef.current, [copy.id]: st } } : {}),
           ...(cands ? { candidates: new Map(candidatesRef.current).set(copy.id, cands) } : {}),
@@ -2611,7 +2872,7 @@ export default function App() {
       )
       setSelectedId(copy.id)
     },
-    [commitState, pickColor],
+    [commitState, envFor, pickColor, registerModels],
   )
 
   // ------------------------------------------------------------- curve style
@@ -3159,7 +3420,7 @@ export default function App() {
       // parent that has no derivative — it is one to come back to.
       const sig = `${parent.modelId}#${specSerial(parentSpec)}|${parent.params.join(',')}|${
         parent.domain ? parent.domain.join(',') : ''
-      }|${parent.color}|${link.kind === 'tangent' ? link.x : ''}|${
+      }|${depKeysRef.current[parent.id] ?? ''}|${parent.color}|${link.kind === 'tangent' ? link.x : ''}|${
         link.kind === 'accumulation' ? `${link.a}|${link.C}` : ''
       }`
       if (!parentSpec) continue
@@ -3928,6 +4189,64 @@ export default function App() {
   )
 
   // ------------------------------------------------------- typed expressions
+
+  /**
+   * Fresh models for typed lines whose TEXT a rename rewrote (f(x − 1) →
+   * p(x − 1)): each is parsed again against its own calls, under a NEW
+   * expr_N — never over the old id, so an undo that brings the old text back
+   * finds the old model still registered.
+   */
+  const reparseLines = useCallback(
+    (
+      ids: readonly string[],
+      st: NameState,
+    ):
+      | {
+          models: Record<string, ModelSpec>
+          count: number
+          apply(curves: FittedCurve[]): FittedCurve[]
+        }
+      | { error: string } => {
+      const models: Record<string, ModelSpec> = {}
+      const patch = new Map<string, { modelId: string; params: number[] }>()
+      for (const id of ids) {
+        const curve = curvesRef.current.find((c) => c.id === id)
+        const src = st.exprSources[id]
+        if (!curve || src === undefined) continue
+        let outcome: ReturnType<typeof parseExpression>
+        try {
+          outcome = parseExpression(src, envFor(st.calls[id] ?? [], typedName(src)))
+        } catch {
+          return { error: `“${src}” could not be rewritten` }
+        }
+        if (!outcome.ok) return { error: `“${src}” could not be rewritten: ${outcome.error}` }
+        const modelId = `expr_${++exprCounterRef.current}`
+        try {
+          models[modelId] = outcome.plot.makeModel(modelId)
+        } catch {
+          return { error: `“${src}” could not be rewritten` }
+        }
+        const params =
+          outcome.plot.defaultParams.length === curve.params.length
+            ? curve.params.slice()
+            : outcome.plot.defaultParams.slice()
+        patch.set(id, { modelId, params })
+      }
+      return {
+        models,
+        count: patch.size,
+        apply: (curves) =>
+          patch.size === 0
+            ? curves
+            : curves.map((c) => {
+                const p = patch.get(c.id)
+                return p ? { ...c, modelId: p.modelId, params: p.params } : c
+              }),
+      }
+    },
+    [envFor],
+  )
+
   /** Parse and add a typed expression. Returns an error message, or null on success. */
   const addExpression = useCallback(
     (src: string, label = 'add equation'): string | null => {
@@ -3948,9 +4267,25 @@ export default function App() {
       const asShape = readShape(src)
       if (asShape.ok) return addShape(src)
 
+      // Which letters this line CALLS — f of `2f(x − 1)` — decided now, once
+      // (src/ui/nameLinks.ts). A call of a curve that is not a function of x
+      // is refused in words rather than read as a slider.
+      const head = typedName(src)
+      const lineCalls = boundCalls(src, {
+        letters: boardLetters(namesRef.current, callsRef.current, head ?? undefined),
+      })
+      {
+        const owners = nameOwners(namesRef.current)
+        for (const L of lineCalls) {
+          const holder = owners.get(L)
+          const c = holder ? curvesRef.current.find((k) => k.id === holder) : undefined
+          if (c && c.kind !== 'explicit') return notCallable(L, c, modelsRef.current[c.modelId])
+        }
+      }
+
       let outcome: ReturnType<typeof parseExpression>
       try {
-        outcome = parseExpression(src)
+        outcome = parseExpression(src, envFor(lineCalls, head))
       } catch {
         return 'The parser crashed on this input'
       }
@@ -3967,6 +4302,31 @@ export default function App() {
         return outcome.error
       }
       const plot = outcome.plot
+      const curveId = nextId()
+      // The name: a typed head claims its letter (moving a curve that only
+      // had it automatically, and the lines calling that curve with it).
+      let nameState: NameState = {
+        names: namesRef.current,
+        exprSources: { ...exprSourcesRef.current, [curveId]: src },
+        displaySources: displaySourcesRef.current,
+        calls: lineCalls.length > 0 ? { ...callsRef.current, [curveId]: lineCalls } : callsRef.current,
+      }
+      let rewritten: string[] = []
+      let displaced: { id: string; from: string; to: string } | undefined
+      if (head) {
+        const claim = planClaim(
+          nameState,
+          curveId,
+          head,
+          sliderLetters(curvesRef.current, exprSourcesRef.current, modelsRef.current),
+        )
+        if ('error' in claim) return claim.error
+        nameState = claim.state
+        rewritten = claim.rewritten.filter((r) => r !== curveId)
+        displaced = claim.displaced
+      }
+      const re = reparseLines(rewritten, nameState)
+      if ('error' in re) return re.error
       const modelId = `expr_${++exprCounterRef.current}`
       let spec: ModelSpec
       try {
@@ -3974,9 +4334,9 @@ export default function App() {
       } catch {
         return 'Could not build a plot from this expression'
       }
-      setExtraModels((prev) => ({ ...prev, [modelId]: spec }))
+      registerModels({ ...re.models, [modelId]: spec })
       const curve: FittedCurve = {
-        id: nextId(),
+        id: curveId,
         modelId,
         params: plot.defaultParams.slice(),
         kind: plot.kind,
@@ -3991,15 +4351,27 @@ export default function App() {
       // the curve so undo/redo can never separate the two.
       commitState(
         {
-          curves: [...curvesRef.current, curve],
-          exprSources: { ...exprSourcesRef.current, [curve.id]: src },
+          curves: [...re.apply(curvesRef.current), curve],
+          exprSources: nameState.exprSources,
+          displaySources: nameState.displaySources,
+          names: nameState.names,
+          calls: nameState.calls,
         },
         label,
       )
       setSelectedId(curve.id)
+      if (displaced) {
+        showFeatureNote({
+          kind: 'moved',
+          key: Date.now(),
+          text: `${displaced.from} is this line now — the curve that was ${displaced.from} is called ${displaced.to}${
+            re.count > 0 ? ', and the lines that used it say so' : ''
+          }.`,
+        })
+      }
       return null
     },
-    [addField, addShape, commitState, pickColor],
+    [addField, addShape, commitState, envFor, pickColor, registerModels, reparseLines, showFeatureNote],
   )
 
   /**
@@ -4022,6 +4394,64 @@ export default function App() {
     ): string | null => {
       const curve = curvesRef.current.find((c) => c.id === id)
       if (!curve) return null
+      // The letters this line calls: what it called before stays a call,
+      // what was a slider stays a slider, anything new is decided as a new
+      // line's would be. A line that calls something is parsed again against
+      // them — the plot handed in was read without any.
+      const own = namesRef.current[id]
+      const head = typedName(src)
+      let prevSliders: Set<string> | undefined
+      try {
+        const was = modelsRef.current[curve.modelId]
+        prevSliders = was ? new Set(was.paramMeta(curve.params).map((m) => m.name)) : undefined
+      } catch {
+        prevSliders = undefined
+      }
+      const lineCalls = boundCalls(src, {
+        letters: boardLetters(namesRef.current, callsRef.current, own),
+        prevCalls: callsRef.current[id],
+        prevSliders,
+      })
+      {
+        const owners = nameOwners(namesRef.current)
+        for (const L of lineCalls) {
+          const holder = owners.get(L)
+          const c = holder && holder !== id ? curvesRef.current.find((k) => k.id === holder) : undefined
+          if (c && c.kind !== 'explicit') return notCallable(L, c, modelsRef.current[c.modelId])
+        }
+      }
+      if (lineCalls.length > 0 || head) {
+        let again: ReturnType<typeof parseExpression>
+        try {
+          again = parseExpression(src, envFor(lineCalls, head))
+        } catch {
+          return 'The parser crashed on this input'
+        }
+        if (!again.ok) return again.error
+        plot = again.plot
+      }
+      // A retyped head is a rename: `g(x) = …` retyped as `p(x) = …` takes p
+      // and every line that called g now calls p.
+      let nameState: NameState = {
+        names: namesRef.current,
+        exprSources: { ...exprSourcesRef.current, [id]: src },
+        displaySources: displaySourcesRef.current,
+        calls: { ...callsRef.current, [id]: lineCalls },
+      }
+      let rewritten: string[] = []
+      if (head && head !== own && !live) {
+        const claim = planClaim(
+          nameState,
+          id,
+          head,
+          sliderLetters(curvesRef.current, exprSourcesRef.current, modelsRef.current),
+        )
+        if ('error' in claim) return claim.error
+        nameState = claim.state
+        rewritten = claim.rewritten.filter((r) => r !== id)
+      }
+      const re = reparseLines(rewritten, nameState)
+      if ('error' in re) return re.error
       const modelId = `expr_${++exprCounterRef.current}`
       let spec: ModelSpec
       try {
@@ -4029,29 +4459,32 @@ export default function App() {
       } catch {
         return 'Could not build a plot from this expression'
       }
-      setExtraModels((prev) => ({ ...prev, [modelId]: spec }))
+      registerModels({ ...re.models, [modelId]: spec })
       // The ink belonged to the family that just went away; keeping it would
       // let an oversketch try to refit a model that no longer exists. Undo
       // restores the whole curve, ink included.
       const { sourceStroke: _ink, ...bare } = curve
       const { [id]: _wasBroken, ...restBroken } = brokenExprRef.current
-      const { [id]: _shown, ...restShown } = displaySourcesRef.current
+      const { [id]: _shown, ...restShown } = nameState.displaySources
+      const finalPlot = plot
       const patch: StatePatch = {
-        curves: curvesRef.current.map((c) =>
+        curves: re.apply(curvesRef.current).map((c) =>
           c.id === id
             ? {
                 ...bare,
                 modelId,
-                kind: plot.kind,
-                params: plot.defaultParams.slice(),
-                domain: plot.domain,
+                kind: finalPlot.kind,
+                params: finalPlot.defaultParams.slice(),
+                domain: finalPlot.domain,
                 error: 0,
               }
             : c,
         ),
-        exprSources: { ...exprSourcesRef.current, [id]: src },
+        exprSources: nameState.exprSources,
         brokenExpr: restBroken,
         displaySources: restShown,
+        names: nameState.names,
+        calls: nameState.calls,
       }
       if (live) {
         relabelEdit(label)
@@ -4063,7 +4496,7 @@ export default function App() {
       }
       return null
     },
-    [applyState, commitState, noteEdit, relabelEdit, withEdit],
+    [applyState, commitState, envFor, noteEdit, registerModels, relabelEdit, reparseLines, withEdit],
   )
 
   /**
@@ -4079,7 +4512,12 @@ export default function App() {
       if (exprSourcesRef.current[id] === src && brokenExprRef.current[id] === undefined) return null
       let res: ReturnType<typeof readCurveEquation>
       try {
-        res = readCurveEquation(src, curve, undefined)
+        res = readCurveEquation(
+          src,
+          curve,
+          undefined,
+          envFor(callsRef.current[id] ?? [], typedName(src)),
+        )
       } catch {
         return 'The parser crashed on this input'
       }
@@ -4087,7 +4525,7 @@ export default function App() {
       if (res.mode === 'family') return null
       return restateAsExpression(id, src, res.plot, label, live)
     },
-    [restateAsExpression],
+    [envFor, restateAsExpression],
   )
 
   /**
@@ -4109,13 +4547,20 @@ export default function App() {
       const curve = curvesRef.current.find((c) => c.id === id)
       if (!curve) return null
       const isExpr = curve.modelId.startsWith('expr_')
+      // The letters the new text would call. A line that calls another curve
+      // is typed by construction — it is never read back as a family.
+      const lineCalls = boundCalls(src, {
+        letters: boardLetters(namesRef.current, callsRef.current, namesRef.current[id]),
+        prevCalls: callsRef.current[id],
+      })
       // A curve that is already an expression stays one: it has no handles to
       // protect, and its free constants are sliders the user asked for by name.
-      const familySpec = isExpr ? undefined : modelsRef.current[curve.modelId]
+      const familySpec =
+        isExpr || lineCalls.length > 0 ? undefined : modelsRef.current[curve.modelId]
 
       let res: ReturnType<typeof readCurveEquation>
       try {
-        res = readCurveEquation(src, curve, familySpec)
+        res = readCurveEquation(src, curve, familySpec, envFor(lineCalls, typedName(src)))
       } catch {
         return 'The parser crashed on this input'
       }
@@ -4126,17 +4571,46 @@ export default function App() {
           res.params.length === curve.params.length &&
           res.params.every((v, i) => Object.is(v, curve.params[i]))
         // Pressing Enter on a line nobody edited is not an edit.
-        if (unchanged) return null
+        const renames = typedName(src) !== null && typedName(src) !== namesRef.current[id]
+        if (unchanged && !renames) return null
+        // `g(x) = …` typed over a curve called f renames it — with every line
+        // that called f following it to g.
+        let nameState: NameState = {
+          names: namesRef.current,
+          exprSources: exprSourcesRef.current,
+          displaySources: { ...displaySourcesRef.current, [id]: src },
+          calls: callsRef.current,
+        }
+        const head = typedName(src)
+        let re: Exclude<ReturnType<typeof reparseLines>, { error: string }> | null = null
+        if (head && head !== namesRef.current[id]) {
+          const claim = planClaim(
+            nameState,
+            id,
+            head,
+            sliderLetters(curvesRef.current, exprSourcesRef.current, modelsRef.current),
+          )
+          if ('error' in claim) return claim.error
+          nameState = claim.state
+          const got = reparseLines(claim.rewritten.filter((r) => r !== id), nameState)
+          if ('error' in got) return got.error
+          re = got
+          registerModels(got.models)
+        }
         // The curve is still a cubic (or a circle, or a sine) — so every handle
         // and every interpretation survives, and the card goes on printing the
         // line the user wrote. A lesson about factored form must not have its
         // equation expanded the moment it is entered.
+        const base = re ? re.apply(curvesRef.current) : curvesRef.current
         commitState(
           {
-            curves: curvesRef.current.map((c) =>
+            curves: base.map((c) =>
               c.id === id ? { ...c, params: res.params.slice() } : c,
             ),
-            displaySources: { ...displaySourcesRef.current, [id]: src },
+            displaySources: nameState.displaySources,
+            exprSources: nameState.exprSources,
+            names: nameState.names,
+            calls: nameState.calls,
             edits: withEdit(id, { kind: 'equation' }),
           },
           'edit equation',
@@ -4160,7 +4634,7 @@ export default function App() {
       }
       return null
     },
-    [restateAsExpression, commitState, showFeatureNote, withEdit],
+    [restateAsExpression, commitState, envFor, registerModels, reparseLines, showFeatureNote, withEdit],
   )
 
   // ============================================================= data tables
@@ -5000,6 +5474,20 @@ export default function App() {
   )
 
   /**
+   * The typed lines that call nothing. A line like h(x) = p(g(x)) read on its
+   * own — without the names it calls — is the product p·g·x, which at its
+   * default sliders IS y = x; only lines that stand alone can be asked
+   * "are you already the mirror line?".
+   */
+  const plainSources = useCallback(
+    (): string[] =>
+      Object.entries(exprSourcesRef.current)
+        .filter(([id]) => !(callsRef.current[id]?.length))
+        .map(([, src]) => src),
+    [],
+  )
+
+  /**
    * "Show inverse" on an Exponential or a Logarithmic section: the exact
    * inverse as a NEW, independent typed curve in the paired palette colour,
    * and — once per board — the mirror line y = x, dashed. One undo entry.
@@ -5010,7 +5498,7 @@ export default function App() {
       const curve = curvesRef.current.find((c) => c.id === id)
       const from = exprSourcesRef.current[id]
       if (!curve || !from) return
-      const plan = planInverse(from, Object.values(exprSourcesRef.current))
+      const plan = planInverse(from, plainSources())
       if (!plan) {
         showFeatureNote({ kind: 'moved', key: Date.now(), text: 'This curve has no inverse to show.' })
         return
@@ -5076,7 +5564,156 @@ export default function App() {
       )
       showFeatureNote({ kind: 'moved', key: Date.now(), text: plan.notice })
     },
-    [commitState, showFeatureNote],
+    [commitState, plainSources, showFeatureNote],
+  )
+
+  /**
+   * "Show inverse" on ANY explicit curve's ⋯ menu. An exponential or a
+   * logarithm gets its EXACT inverse as a typed line (showInverse above) —
+   * y = log_2(x) is a better answer than a reflected picture of 2^x. Anything
+   * else gets the inverse RELATION: the parametric curve (f(t), t) as a link
+   * to f (src/core/functionEnv.ts's inverseRelation), drawn in the paired
+   * colour and reading f live, with the horizontal line test on its card —
+   * plus the one dashed y = x. One undo entry; deleting f takes it along.
+   */
+  const showInverseOf = useCallback(
+    (id: string): void => {
+      const curve = curvesRef.current.find((c) => c.id === id)
+      if (!curve || curve.kind !== 'explicit') return
+      const typed = exprSourcesRef.current[id]
+      if (typed && planInverse(typed, plainSources())) {
+        showInverse(id)
+        return
+      }
+      const name = namesRef.current[id] ?? 'f'
+      if (inversesRef.current.some((l) => l.parentId === id)) {
+        showFeatureNote({
+          kind: 'moved',
+          key: Date.now(),
+          text: `The inverse of ${name} is already on the board.`,
+        })
+        return
+      }
+      const range = inverseRange(curve, viewWindow())
+      const linkId = nextId()
+      const modelId = `${INV_MODEL_PREFIX}${linkId}`
+      const link: InverseLink = { id: linkId, parentId: id, curveId: nextId(), from: range[0], to: range[1] }
+      let info: InverseInfo
+      try {
+        info = inverseInfo(curve, modelsRef.current, link, name)
+      } catch {
+        showFeatureNote({ kind: 'moved', key: Date.now(), text: 'This curve has no inverse to show.' })
+        return
+      }
+      inverseInfoRef.current = { ...inverseInfoRef.current, [linkId]: info }
+      const models: Record<string, ModelSpec> = { [modelId]: makeInverseSpec(modelId, link) }
+      const child: FittedCurve = {
+        id: link.curveId,
+        modelId,
+        params: [],
+        kind: 'parametric',
+        domain: info.tRange,
+        color: inverseColor(curve.color),
+        strokeWidth: 2.5,
+        visible: true,
+        error: 0,
+      }
+      const made: FittedCurve[] = [child]
+      const sources: Record<string, string> = {}
+      let mirror: FittedCurve | undefined
+      if (!plainSources().some(isIdentityLine)) {
+        const o = parseExpression(MIRROR_SRC)
+        if (o.ok) {
+          const mid = `expr_${++exprCounterRef.current}`
+          models[mid] = o.plot.makeModel(mid)
+          mirror = {
+            id: nextId(),
+            modelId: mid,
+            params: o.plot.defaultParams.slice(),
+            kind: o.plot.kind,
+            domain: o.plot.domain,
+            color: MIRROR_COLOR,
+            strokeWidth: 2.5,
+            visible: true,
+            error: 0,
+          }
+          made.push(mirror)
+          sources[mirror.id] = MIRROR_SRC
+        }
+      }
+      registerModels(models)
+      commitState(
+        {
+          curves: [...curvesRef.current, ...made],
+          inverses: [...inversesRef.current, link],
+          ...(mirror
+            ? {
+                exprSources: { ...exprSourcesRef.current, ...sources },
+                styles: {
+                  ...stylesRef.current,
+                  [mirror.id]: { ...stylesRef.current[mirror.id], dash: MIRROR_DASH.slice() },
+                },
+              }
+            : {}),
+        },
+        'show inverse',
+      )
+      showFeatureNote({
+        kind: 'moved',
+        key: Date.now(),
+        text: `${info.sentence}${mirror ? ' — added the line y = x' : ''}.`,
+      })
+    },
+    [commitState, makeInverseSpec, plainSources, registerModels, showFeatureNote, showInverse, viewWindow],
+  )
+
+  /**
+   * Rename a curve from its card's name chip. Every line that calls the old
+   * letter is rewritten to the new one — one commit, one undo, which takes
+   * the letter and every rewritten line back together.
+   */
+  const renameCurve = useCallback(
+    (id: string, letter: string): string | null => {
+      const from = namesRef.current[id]
+      const st: NameState = {
+        names: namesRef.current,
+        exprSources: exprSourcesRef.current,
+        displaySources: displaySourcesRef.current,
+        calls: callsRef.current,
+      }
+      const plan = planRename(
+        st,
+        id,
+        letter,
+        sliderLetters(curvesRef.current, exprSourcesRef.current, modelsRef.current),
+      )
+      if ('error' in plan) return plan.error
+      if (plan.state === st) return null
+      const re = reparseLines(plan.rewritten, plan.state)
+      if ('error' in re) return re.error
+      registerModels(re.models)
+      const to = letter.trim()
+      commitState(
+        {
+          curves: re.apply(curvesRef.current),
+          exprSources: plan.state.exprSources,
+          displaySources: plan.state.displaySources,
+          names: plan.state.names,
+          calls: plan.state.calls,
+        },
+        from ? `rename ${from} to ${to}` : `name ${to}`,
+      )
+      const callers = plan.rewritten.filter((r) => r !== id).length
+      if (from && callers > 0) {
+        showFeatureNote({
+          kind: 'moved',
+          key: Date.now(),
+          text: `Renamed ${from} to ${to} — ${callers === 1 ? 'the line' : `the ${callers} lines`} that used ${from} now ${callers === 1 ? 'says' : 'say'} ${to}.`,
+        })
+      }
+      return null
+    },
+    [commitState, registerModels, reparseLines, showFeatureNote],
   )
 
   // ======================================================= number-line items
@@ -5781,7 +6418,15 @@ export default function App() {
     // denominator's at its asymptote. Mid-drag the handles come from the spec
     // being dragged, so the one under the finger keeps its identity.
     const typed = curves.find((c) => c.id === selectedId)
-    if (typed && typed.visible && typed.kind === 'explicit' && typed.modelId.startsWith('expr_')) {
+    if (
+      typed &&
+      typed.visible &&
+      typed.kind === 'explicit' &&
+      typed.modelId.startsWith('expr_') &&
+      // A line that calls another curve reads, without its names, as a
+      // product of sliders — no family's handles belong on it.
+      !(calls[typed.id]?.length)
+    ) {
       const drag = factorDragRef.current
       const spec =
         drag && drag.curveId === typed.id && drag.bracket !== null && drag.bracket === preEditRef.current
@@ -5916,6 +6561,7 @@ export default function App() {
     shapeCompiled,
     dragShapeVertex,
     exprSources,
+    calls,
     dragFactorRoot,
     dragExp,
     dragLog,
@@ -5934,6 +6580,7 @@ export default function App() {
     if (kind !== 'cartesian' || !selectedCurve) return null
     const c = selectedCurve
     if (!c.visible || c.kind !== 'explicit' || !c.modelId.startsWith('expr_')) return null
+    if (calls[c.id]?.length) return null
     const src = exprSources[c.id]
     if (!src) return null
     // The same precedence as the card: a line the Roots, Exponential or
@@ -5941,7 +6588,7 @@ export default function App() {
     if (safeReadFactored(src) || safeReadExponential(src) || safeReadLogarithmic(src)) return null
     const spec = safeReadSinusoid(src)
     return spec ? { spec, color: c.color, id: c.id } : null
-  }, [kind, selectedCurve, exprSources])
+  }, [kind, selectedCurve, exprSources, calls])
 
   const sinMarks = useMemo<SpecialPoint[]>(
     () => (selectedSin ? sinKeyMarks(selectedSin.spec) : []),
@@ -5968,6 +6615,7 @@ export default function App() {
     if (kind !== 'cartesian' || !selectedCurve) return null
     const c = selectedCurve
     if (!c.visible || c.kind !== 'explicit' || !c.modelId.startsWith('expr_')) return null
+    if (calls[c.id]?.length) return null
     const src = exprSources[c.id]
     if (!src) return null
     const spec = safeReadTransform(src)
@@ -5981,7 +6629,7 @@ export default function App() {
     const ghost = showParent[c.id] ?? primary
     if (!primary && !ghost) return null
     return { spec, id: c.id, marks: primary || ghost, ghost }
-  }, [kind, selectedCurve, exprSources, showParent])
+  }, [kind, selectedCurve, exprSources, showParent, calls])
 
   ghostActiveRef.current = selectedTransform !== null && selectedTransform.ghost
   useEffect(() => {
@@ -6034,15 +6682,101 @@ export default function App() {
   // it was given, a derivative keeping its parent's letter and a prime — and
   // the caption and the labels on the figure both read from that ONE map.
   //
-  // Derived, never stored: a document that remembered "this one is g" would
-  // disagree with the board the moment a curve above it was deleted.
+  // The letters are STORED (src/ui/nameLinks.ts) — a line that says f(x − 1)
+  // needs f to stay f — and this reads them, adding only what a letter cannot
+  // say: f′ for a derivative, f⁻¹ for an inverse, nothing for a tangent.
   const boardCurveNames = useMemo(
     () =>
       kind === 'cartesian'
-        ? curveNames(curves, { ...displaySources, ...exprSources }, calcLinks)
+        ? curveNames(curves, { ...displaySources, ...exprSources }, calcLinks, names, inverses)
         : {},
-    [kind, curves, displaySources, exprSources, calcLinks],
+    [kind, curves, displaySources, exprSources, calcLinks, names, inverses],
   )
+  /** What each CARD is called — hidden curves included, which a caption leaves out. */
+  const cardNames = useMemo(
+    () =>
+      curveNames(
+        curves.map((c) => (c.visible ? c : { ...c, visible: true })),
+        { ...displaySources, ...exprSources },
+        calcLinks,
+        names,
+        inverses,
+      ),
+    [curves, displaySources, exprSources, calcLinks, names, inverses],
+  )
+  /** Why a typed line that calls another curve can't be drawn, per curve. */
+  const linkErrors = useMemo(
+    () => lineErrors({ curves, names, calls, models }),
+    [curves, names, calls, models],
+  )
+  /** The letters the equation box offers as chips. */
+  const exprNames = useMemo(
+    () => (kind === 'cartesian' ? callableNames(curves, names) : []),
+    [kind, curves, names],
+  )
+
+  // ------------------------------------------------ inverses, kept current
+  //
+  // The inverse curve's model reads its parent live, so it follows a drag on
+  // its own. What has to be re-asked when the parent changes is the
+  // horizontal line test — the card's sentence — and the stretch of t it is
+  // drawn over. Cached per link on the parent's state.
+  const inverseCacheRef = useRef(new Map<string, { key: string; info: InverseInfo }>())
+  const inverseInfos = useMemo<Record<string, InverseInfo>>(() => {
+    const out: Record<string, InverseInfo> = {}
+    for (const l of inverses) {
+      const parent = curves.find((c) => c.id === l.parentId)
+      if (!parent) continue
+      const name = names[l.parentId] ?? 'f'
+      const range: [number, number] = parent.domain
+        ? [Math.min(...parent.domain), Math.max(...parent.domain)]
+        : [l.from, l.to]
+      const key = `${parent.modelId}|${parent.params.join(',')}|${range.join(',')}|${
+        depKeys[parent.id] ?? ''
+      }|${name}|${models[parent.modelId] ? 1 : 0}`
+      const hit = inverseCacheRef.current.get(l.id)
+      if (hit && hit.key === key) {
+        out[l.id] = hit.info
+        continue
+      }
+      try {
+        const info = inverseInfo(parent, models, { from: range[0], to: range[1] }, name)
+        inverseCacheRef.current.set(l.id, { key, info })
+        out[l.id] = info
+      } catch {
+        /* no facts to state this frame */
+      }
+    }
+    return out
+  }, [inverses, curves, names, depKeys, models])
+  inverseInfoRef.current = inverseInfos
+
+  // The inverse curve's t-range follows its parent's (a sketch's ends
+  // dragged). Never pushes history: it is the consequence of that drag.
+  useEffect(() => {
+    const links = inversesRef.current
+    if (links.length === 0) return
+    const before = curvesRef.current
+    let changed = false
+    const after = before.map((c) => {
+      const l = links.find((k) => k.curveId === c.id)
+      const info = l ? inverseInfos[l.id] : undefined
+      if (!info || String(c.domain) === String(info.tRange)) return c
+      changed = true
+      return { ...c, domain: info.tRange }
+    })
+    if (changed) applyState({ curves: after })
+  }, [inverseInfos, applyState])
+
+  /** The card note an inverse curve wears: the horizontal line test. */
+  const inverseNotes = useMemo(() => {
+    const out: Record<string, string> = {}
+    for (const l of inverses) {
+      const info = inverseInfos[l.id]
+      if (info) out[l.curveId] = info.sentence
+    }
+    return out
+  }, [inverses, inverseInfos])
   const boardCurveNamesRef = useRef(boardCurveNames)
   boardCurveNamesRef.current = boardCurveNames
 
@@ -6122,7 +6856,7 @@ export default function App() {
    * curve array, which a slider drag rebuilds on every frame with the same
    * numbers in it.
    */
-  const crossKey = crossingsOn ? intersectionKey(curves, crossSpan) : ''
+  const crossKey = crossingsOn ? intersectionKey(curves, crossSpan, depKeys) : ''
   const curvesForCross = useRef(curves)
   curvesForCross.current = curves
 
@@ -6968,6 +7702,14 @@ export default function App() {
         logInverseSources={logInverseSources}
         onLogRestate={restateFactors}
         onShowInverse={showInverse}
+        cardNames={cardNames}
+        storedNames={names}
+        onRename={renameCurve}
+        linkErrors={linkErrors}
+        cardNotes={inverseNotes}
+        onShowInverseOf={showInverseOf}
+        depKeys={depKeys}
+        exprNames={exprNames}
         onExpBuild={buildExponential}
         onExpRestate={restateFactors}
         onConvertTyped={convertToTyped}
