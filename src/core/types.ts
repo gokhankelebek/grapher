@@ -8,24 +8,74 @@ export interface Vec2 { x: number; y: number }
 
 export interface Viewport {
   center: Vec2        // math coords at canvas center
-  pxPerUnit: number   // zoom: pixels per math unit
+  /**
+   * Zoom: pixels per math unit ALONG X — and along y too unless pxPerUnitY
+   * says otherwise.
+   */
+  pxPerUnit: number
+  /**
+   * Pixels per math unit along y, when the axes are scaled independently
+   * (data: years 1990–2020 against millions). Absent means equal axes —
+   * every viewport that never sets it behaves exactly as before. Read it
+   * through ppuY(vp); never assume a square board where a length, a slope
+   * or a distance on screen is computed.
+   */
+  pxPerUnitY?: number
   widthPx: number
   heightPx: number
 }
 
+/** Pixels per unit along x. */
+export const ppuX = (vp: Viewport): number => vp.pxPerUnit
+
+/** Pixels per unit along y (equal to ppuX on an equal-axes board). */
+export const ppuY = (vp: Viewport): number =>
+  vp.pxPerUnitY !== undefined && Number.isFinite(vp.pxPerUnitY) && vp.pxPerUnitY > 0
+    ? vp.pxPerUnitY
+    : vp.pxPerUnit
+
+/** True when the board is stretched: one screen pixel is not the same length in x and y. */
+export const isStretched = (vp: Viewport): boolean => ppuY(vp) !== ppuX(vp)
+
 export function toScreen(p: Vec2, vp: Viewport): Vec2 {
   return {
-    x: vp.widthPx / 2 + (p.x - vp.center.x) * vp.pxPerUnit,
-    y: vp.heightPx / 2 - (p.y - vp.center.y) * vp.pxPerUnit,
+    x: vp.widthPx / 2 + (p.x - vp.center.x) * ppuX(vp),
+    y: vp.heightPx / 2 - (p.y - vp.center.y) * ppuY(vp),
   }
 }
 
 export function toMath(p: Vec2, vp: Viewport): Vec2 {
   return {
-    x: vp.center.x + (p.x - vp.widthPx / 2) / vp.pxPerUnit,
-    y: vp.center.y - (p.y - vp.heightPx / 2) / vp.pxPerUnit,
+    x: vp.center.x + (p.x - vp.widthPx / 2) / ppuX(vp),
+    y: vp.center.y - (p.y - vp.heightPx / 2) / ppuY(vp),
   }
 }
+
+// ----------------------------------------------------------------------------
+// Independent x and y scales — the contract for the wave that adds them.
+//
+// RENDER (src/render/**, src/ui/renderBoard.ts, src/ui/exportFit.ts):
+//   every place that turns a math LENGTH into pixels or back uses ppuX for
+//   horizontal and ppuY for vertical: the grid gets its own tick ladder per
+//   axis (pickTickStep(ppuX) for x labels and verticals, pickTickStep(ppuY)
+//   for y) and its own π rule per axis; samplers measure screen distance in
+//   pixels, not in math units scaled by one ppu; slope-field segments,
+//   vector arrowheads, end-cap arrows, polygon label normals, residuals and
+//   asymptote lines are computed in SCREEN space; the polar ruling is only
+//   drawn on an equal-axes board (a stretched board draws the cartesian grid
+//   and the App refuses polar ruling while stretched); exportFit fits x and y
+//   independently when the board is stretched.
+// APP (App.tsx, CanvasStage, gestures, snap, persist, settings):
+//   Axes: Equal / Independent (board setting, persisted with the view as
+//   board.viewport.ppuY — omitted when equal, byte-identical for old docs);
+//   a WINDOW panel (x min, x max, y min, y max — TI style) that sets the
+//   view exactly and turns Independent on when the two spans need it;
+//   wheel/pinch zoom scales both axes by the same factor about the cursor;
+//   dragging along an axis' numbers (or ⇧-wheel over the board for x,
+//   ⌥-wheel for y) stretches ONE axis; "Zoom to data" and fit-to-curves fit
+//   each axis to its own extent when Independent is on; snapping, hit radii
+//   and handle drags convert per axis.
+// ----------------------------------------------------------------------------
 
 export type CurveKind = 'explicit' | 'polar' | 'parametric' | 'implicit'
 
