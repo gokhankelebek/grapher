@@ -29,6 +29,8 @@ import { ExprInput } from './ExprInput'
 import { FactorEditor } from './FactorEditor'
 import { ExpEditor } from './ExpEditor'
 import { LogEditor } from './LogEditor'
+import { SinEditor } from './SinEditor'
+import type { SinSpec } from '../core/sinusoidal'
 import type { InverseSource } from './logLinks'
 import { BuildMenu } from './BuildMenu'
 import { BoardKindSwitch } from './BoardKindSwitch'
@@ -122,6 +124,13 @@ interface Props {
   onLogRestate?(id: string, src: string, label: string): string | null
   /** "Show inverse" on an Exponential or Logarithmic section. */
   onShowInverse?(id: string): void
+  /** "Build ▾ → Sinusoidal" is open at the top of the list. */
+  sinOpen?: boolean
+  onSinToggle?(): void
+  /** Put a sinusoid stated the precalculus way on the board. Error, or null. */
+  onSinBuild?(spec: SinSpec): string | null
+  /** Rewrite a typed curve's line in place from its Sinusoidal section. */
+  onSinRestate?(id: string, src: string, label: string): string | null
   /** What this curve's card says about calculus. Undefined = nothing to say. */
   /**
    * Where each curve meets the OTHERS, already named — the row is the same
@@ -271,6 +280,10 @@ export function Sidebar({
   onLogBuild,
   logInverseSources,
   onLogRestate,
+  sinOpen = false,
+  onSinToggle,
+  onSinBuild,
+  onSinRestate,
   onShowInverse,
   intersectionsFor,
   calcFor,
@@ -349,7 +362,7 @@ export function Sidebar({
             >
               +
             </button>
-            {!numberLine && (onFactorToggle || onExpToggle || onLogToggle || onDataAdd) && (
+            {!numberLine && (onFactorToggle || onExpToggle || onLogToggle || onSinToggle || onDataAdd) && (
               <BuildMenu
                 factorOpen={factorOpen}
                 expOpen={expOpen}
@@ -357,6 +370,8 @@ export function Sidebar({
                 onFactorToggle={onFactorToggle}
                 onExpToggle={onExpToggle}
                 onLogToggle={onLogToggle}
+                sinOpen={sinOpen}
+                onSinToggle={onSinToggle}
                 onDataAdd={onDataAdd}
               />
             )}
@@ -371,6 +386,9 @@ export function Sidebar({
           )}
           {!numberLine && logOpen && onLogBuild && onLogToggle && (
             <LogEditor onBuild={onLogBuild} onClose={onLogToggle} sources={logInverseSources} />
+          )}
+          {!numberLine && sinOpen && onSinBuild && onSinToggle && (
+            <SinEditor onBuild={onSinBuild} onClose={onSinToggle} />
           )}
           {exprOpen && (
             <ExprInput
@@ -465,6 +483,9 @@ export function Sidebar({
                 onLogRestate ? (src, label) => onLogRestate(curve.id, src, label) : undefined
               }
               onShowInverse={onShowInverse ? () => onShowInverse(curve.id) : undefined}
+              onSinRestate={
+                onSinRestate ? (src, label) => onSinRestate(curve.id, src, label) : undefined
+              }
             />
           ))}
           {!numberLine &&

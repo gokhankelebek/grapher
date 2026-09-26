@@ -18,6 +18,8 @@ import { ExpSection } from './ExpEditor'
 import { fittedExp, safeReadExponential } from './expLinks'
 import { LogSection } from './LogEditor'
 import { fittedLog, safeReadLogarithmic } from './logLinks'
+import { SinSection } from './SinEditor'
+import { fittedSine, safeReadSinusoid } from './sinLinks'
 import { fitQuality } from '../core/fit/recognize'
 import { findAsymptotes } from '../core/holes'
 import { Latex } from './Latex'
@@ -148,6 +150,11 @@ interface Props {
    * inverse as a new typed curve (and y = x once). Absent = no button.
    */
   onShowInverse?(): void
+  /**
+   * Rewrite this TYPED curve's line in place from its Sinusoidal section —
+   * the same restate path again. Absent = no section.
+   */
+  onSinRestate?(src: string, label: string): string | null
 }
 
 /**
@@ -625,6 +632,7 @@ export function CurveCard({
   onConvertTyped,
   onLogRestate,
   onShowInverse,
+  onSinRestate,
 }: Props) {
   const spec: ModelSpec | undefined = models[curve.modelId]
   const isExpression = curve.modelId.startsWith('expr_')
@@ -669,11 +677,36 @@ export function CurveCard({
   )
 
   /**
+   * The line read back as a sinusoid — "y = 3sin(2(x - pi/4)) + 1", a
+   * hand-typed 3sin(2x - pi/2) + 1 or 4 - 2cos(x), and sin(x) + cos(x) folded
+   * into one — or null. Only a typed curve none of the sections above
+   * already speaks for (the shapes cannot overlap; the order is kept anyway).
+   */
+  const sinusoidal = useMemo(
+    () =>
+      isExpression &&
+      !broken &&
+      curve.kind === 'explicit' &&
+      !factored &&
+      !exponential &&
+      !logarithmic
+        ? safeReadSinusoid(exprSource)
+        : null,
+    [isExpression, broken, curve.kind, exprSource, factored, exponential, logarithmic],
+  )
+
+  /**
    * A SKETCH that fitted the library's a·e^{bx} + c, stated the precalculus
    * way: one read-only line, and a menu item that makes it a typed curve.
    */
   const fitted = useMemo(
     () => (!isExpression && !broken && curve.modelId === 'exp' ? fittedExp(curve.params) : null),
+    [isExpression, broken, curve.modelId, curve.params],
+  )
+
+  /** The same for a sketch that fitted a·sin(bx + c) + d. */
+  const fittedSin = useMemo(
+    () => (!isExpression && !broken && curve.modelId === 'sine' ? fittedSine(curve.params) : null),
     [isExpression, broken, curve.modelId, curve.params],
   )
 
@@ -1310,6 +1343,14 @@ export function CurveCard({
                   })}
                 </>
               )}
+              {fittedSin && onConvertTyped && (
+                <>
+                  <div className="card-menu-sep" />
+                  {menuItem('Convert to typed sinusoid', () => {
+                    onConvertTyped(fittedSin.src, 'convert to typed sinusoid')
+                  })}
+                </>
+              )}
               {calc?.canAdd && (
                 <>
                   <div className="card-menu-sep" />
@@ -1513,6 +1554,7 @@ export function CurveCard({
           {logarithmic && onLogRestate && (
             <LogSection spec={logarithmic} onRestate={onLogRestate} onShowInverse={onShowInverse} />
           )}
+          {sinusoidal && onSinRestate && <SinSection spec={sinusoidal} onRestate={onSinRestate} />}
           {fitted && (
             <div className="xe-fitted-note" data-testid="fitted-exp-note">
               {fitted.note}
@@ -1521,6 +1563,11 @@ export function CurveCard({
           {fittedLn && (
             <div className="xe-fitted-note" data-testid="fitted-log-note">
               {fittedLn.note}
+            </div>
+          )}
+          {fittedSin && (
+            <div className="xe-fitted-note" data-testid="fitted-sin-note">
+              {fittedSin.note}
             </div>
           )}
           {/* Teaching order: the numbers you move, then what they do to the

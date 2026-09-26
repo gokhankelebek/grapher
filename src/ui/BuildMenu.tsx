@@ -6,7 +6,9 @@ import { useEffect, useRef, useState } from 'react'
 // The header has room for "+" and one more control, and there is more than one
 // way to BUILD a function from what a teacher states: from its roots (a
 // polynomial or a rational function), as an exponential (a starting value
-// and a rate) and as a logarithm (its base, asymptote and shifts). One small menu instead of a button per builder. Each item opens
+// and a rate), as a logarithm (its base, asymptote and shifts) and as a
+// sinusoid (amplitude, period, phase shift, midline). One small menu instead
+// of a button per builder. Each item opens
 // its editor at the top of the list; choosing the one already open closes it.
 // "Data table" is the one action: it adds a table to the list and selects it.
 // ============================================================================
@@ -15,9 +17,11 @@ interface Props {
   factorOpen: boolean
   expOpen: boolean
   logOpen?: boolean
+  sinOpen?: boolean
   onFactorToggle?(): void
   onExpToggle?(): void
   onLogToggle?(): void
+  onSinToggle?(): void
   /** Add a data table to the list (an action, not an editor that stays open). */
   onDataAdd?(): void
 }
@@ -26,9 +30,11 @@ export function BuildMenu({
   factorOpen,
   expOpen,
   logOpen = false,
+  sinOpen = false,
   onFactorToggle,
   onExpToggle,
   onLogToggle,
+  onSinToggle,
   onDataAdd,
 }: Props) {
   const [open, setOpen] = useState(false)
@@ -54,7 +60,7 @@ export function BuildMenu({
     }
   }, [open])
 
-  const anyOpen = factorOpen || expOpen || logOpen
+  const anyOpen = factorOpen || expOpen || logOpen || sinOpen
   const item = (
     label: string,
     on: boolean,
@@ -84,7 +90,7 @@ export function BuildMenu({
         ref={btnRef}
         type="button"
         className={`add-btn factor-btn build-btn${anyOpen ? ' factor-open' : ''}`}
-        title="Build a function from what you state: its roots, a starting value and a rate, or a logarithm's base and asymptote"
+        title="Build a function from what you state: its roots, a starting value and a rate, a logarithm's base and asymptote, or a sinusoid's amplitude and period"
         aria-label="Build"
         aria-haspopup="menu"
         aria-expanded={open}
@@ -101,6 +107,7 @@ export function BuildMenu({
           {item('From roots (polynomial / rational)', factorOpen, onFactorToggle, 'build-roots')}
           {item('Exponential', expOpen, onExpToggle, 'build-exp')}
           {item('Logarithmic', logOpen, onLogToggle, 'build-log')}
+          {item('Sinusoidal', sinOpen, onSinToggle, 'build-sin')}
           {onDataAdd && (
             <>
               <div className="card-menu-sep" role="separator" />

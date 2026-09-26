@@ -5138,6 +5138,47 @@ button.calc-field-btn {
   line-height: 1.45;
 }
 
+/* A sinusoid's five key points: one cycle, exact text, as a class tabulates it. */
+.se-keys {
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text);
+  margin-bottom: var(--sp-1);
+}
+
+.se-keys-cap {
+  caption-side: top;
+  text-align: left;
+  color: var(--muted);
+  font-family: var(--font-sans, inherit);
+  padding-bottom: 2px;
+}
+
+.se-keys th,
+.se-keys td {
+  padding: 2px var(--sp-1);
+  text-align: center;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.se-keys th {
+  color: var(--muted);
+  font-weight: 500;
+  text-align: left;
+  padding-left: 0;
+}
+
+.se-keys-kind td {
+  color: var(--muted);
+  border-bottom: none;
+}
+
+.se-key-max,
+.se-key-min {
+  color: var(--curve, var(--accent));
+}
+
 @media (pointer: coarse) {
   .xe-select {
     min-height: 44px;

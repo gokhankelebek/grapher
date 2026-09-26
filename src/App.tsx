@@ -111,6 +111,7 @@ import {
 } from './ui/intersections'
 import type { BoardIntersection, CurveIntersections } from './ui/intersections'
 import { snapCoord, snapPlaced } from './ui/snap'
+import { ppuX } from './core/types'
 import {
   INDEPENDENT_NEEDS_SQUARE,
   POLAR_NEEDS_EQUAL,
@@ -151,6 +152,20 @@ import {
   safeReadLogarithmic,
 } from './ui/logLinks'
 import type { LogHandleKind } from './ui/logLinks'
+import { sinSource } from './core/sinusoidal'
+import type { SinSpec } from './core/sinusoidal'
+import {
+  SIN_HANDLE_LABEL,
+  dragSinHandle,
+  midlinePolyline,
+  safeReadSinusoid,
+  sinHandles,
+  sinKeyMarks,
+  snapPiX,
+  stickyX,
+  withKeyMarks,
+} from './ui/sinLinks'
+import type { SinHandleKind } from './ui/sinLinks'
 import { curveBounds, splitNotice, unionBoxes } from './ui/curveState'
 import { answerPieces } from './ui/nlText'
 import { AnswerContext } from './ui/answerContext'
@@ -552,6 +567,20 @@ export default function App() {
     curveId: string
     bracket: unknown
     spec: LogSpec
+  } | null>(null)
+  /** "Build ▾ → Sinusoidal" open at the top of the list (src/ui/SinEditor.tsx). */
+  const [sinOpen, setSinOpen] = useState(false)
+  /**
+   * The sinusoid handle being dragged, the spec at the press and where the
+   * handle was then (as expDragRef) — the handle's x at the press is what a
+   * drag that has not really moved sideways stays on.
+   */
+  const sinDragRef = useRef<{
+    handleId: string
+    curveId: string
+    bracket: unknown
+    spec: SinSpec
+    anchor: Vec2
   } | null>(null)
   const [extraModels, setExtraModels] = useState<Record<string, ModelSpec>>({})
   /**
@@ -4636,6 +4665,71 @@ export default function App() {
     [restateTypedCurve],
   )
 
+  // ======================================================= sinusoids
+  //
+  // y = a·sin(b(x − h)) + k (or cos) is one more ordinary TYPED curve: "Build ▾
+  // → Sinusoidal" writes its line (src/core/sinusoidal.ts) and hands it to
+  // addExpression — so a built sinusoid turns the π axis on exactly as a
+  // typed one does (suggestAxisUnits reads the same exprSources). The card's
+  // Sinusoidal section, its "write as" and the three board handles rewrite
+  // that line and restate it in place through restateTypedCurve.
+
+  /** "Add to graph": the normal typed-equation path, one undo entry. */
+  const buildSinusoid = useCallback(
+    (spec: SinSpec): string | null => {
+      let src: string
+      try {
+        src = sinSource(spec)
+      } catch {
+        return 'This sinusoid could not be written out.'
+      }
+      const err = addExpression(src, 'build sinusoid')
+      if (err) return err
+      setSinOpen(false)
+      return null
+    },
+    [addExpression],
+  )
+
+  /**
+   * Drag one sinusoid handle: the midline vertically (k), the first maximum
+   * (vertically the amplitude, sideways the phase shift) or the end of the
+   * first cycle sideways (the period). Every frame is computed from the spec
+   * at the press; x snaps to π/q rungs on a π axis (a phase shift of π/4, not
+   * 0.8) and to the grid's ladder otherwise, y to its own axis's ladder; one
+   * undo per drag.
+   */
+  const dragSin = useCallback(
+    (curveId: string, which: SinHandleKind, handleId: string, anchor: Vec2, to: Vec2): void => {
+      const bracket = preEditRef.current
+      let s = sinDragRef.current
+      if (!s || s.handleId !== handleId || s.curveId !== curveId || s.bracket !== bracket || !bracket) {
+        const spec = safeReadSinusoid(exprSourcesRef.current[curveId])
+        if (!spec) return
+        s = { handleId, curveId, bracket, spec, anchor: { x: anchor.x, y: anchor.y } }
+        sinDragRef.current = s
+      }
+      const vp = vpRef.current
+      const ppu = ppuX(vp)
+      const snappedX =
+        axisUnitsRef.current.x === 'pi' ? snapPiX(to.x, ppu) : snapCoord(to.x, vp, 'x')
+      const snapped: Vec2 = {
+        x: stickyX(to.x, s.anchor.x, ppu, snappedX),
+        y: snapCoord(to.y, vp, 'y'),
+      }
+      const next = dragSinHandle(s.spec, which, snapped)
+      if (!next) return
+      let src: string
+      try {
+        src = sinSource(next)
+      } catch {
+        return
+      }
+      restateTypedCurve(curveId, src, SIN_HANDLE_LABEL[which], true)
+    },
+    [restateTypedCurve],
+  )
+
   /**
    * "Show inverse" on an Exponential or a Logarithmic section: the exact
    * inverse as a NEW, independent typed curve in the paired palette colour,
@@ -5397,6 +5491,34 @@ export default function App() {
           : safeReadFactored(exprSources[typed.id])
       const exp = spec ? null : safeReadExponential(exprSources[typed.id])
       const log = spec || exp ? null : safeReadLogarithmic(exprSources[typed.id])
+      const sin = spec || exp || log ? null : safeReadSinusoid(exprSources[typed.id])
+      if (sin) {
+        // Mid-drag the handles come from the line as it now reads — the
+        // handle under the finger keeps its id, and the drag computes from
+        // the spec at the press, so nothing compounds.
+        for (const h of sinHandles(sin)) {
+          const id = `sin:${typed.id}:${h.which}`
+          // The midline is a whole line: its handle sits at the board's LEFT
+          // EDGE, read live (the viewport pans without re-rendering App), as
+          // the exponential's asymptote does.
+          const pos: Vec2 =
+            h.which === 'k'
+              ? {
+                  get x(): number {
+                    const vp = vpRef.current
+                    return vp.center.x - vp.widthPx / 2 / vp.pxPerUnit + 28 / vp.pxPerUnit
+                  },
+                  y: h.pos.y,
+                }
+              : h.pos
+          out.push({
+            id,
+            pos,
+            label: h.label,
+            onDrag: (p) => dragSin(typed.id, h.which, id, h.pos, p),
+          })
+        }
+      }
       if (log) {
         // Mid-drag the handles come from the spec at the press, moved — the
         // asymptote handle stays the one under the finger.
@@ -5483,7 +5605,47 @@ export default function App() {
     dragFactorRoot,
     dragExp,
     dragLog,
+    dragSin,
   ])
+
+  // ----------------------------------------------- a selected sinusoid, marked
+  //
+  // While a typed sinusoid is selected the board marks the five key points of
+  // the cycle that starts at x = h — through the analysis path, so they are
+  // the same rings and exact-text chips ("(π/4, 1)") as any special point —
+  // and draws its midline y = k dashed. Screen only: neither is figure
+  // content, and neither reaches an export.
+  const selectedSin = useMemo<{ spec: SinSpec; color: string; id: string } | null>(() => {
+    if (kind !== 'cartesian' || !selectedCurve) return null
+    const c = selectedCurve
+    if (!c.visible || c.kind !== 'explicit' || !c.modelId.startsWith('expr_')) return null
+    const src = exprSources[c.id]
+    if (!src) return null
+    // The same precedence as the card: a line the Roots, Exponential or
+    // Logarithmic section speaks for is not read as a sinusoid.
+    if (safeReadFactored(src) || safeReadExponential(src) || safeReadLogarithmic(src)) return null
+    const spec = safeReadSinusoid(src)
+    return spec ? { spec, color: c.color, id: c.id } : null
+  }, [kind, selectedCurve, exprSources])
+
+  const sinMarks = useMemo<SpecialPoint[]>(
+    () => (selectedSin ? sinKeyMarks(selectedSin.spec) : []),
+    [selectedSin],
+  )
+
+  /** What the board marks for the selected curve. */
+  const boardAnalysis = useMemo<SpecialPoint[]>(() => {
+    const base = showAnalysis ? analysis : EMPTY_ANALYSIS
+    return sinMarks.length > 0 ? withKeyMarks(base, sinMarks) : base
+  }, [showAnalysis, analysis, sinMarks])
+
+  /** The on-screen polylines: the fields' solutions, and a sinusoid's midline. */
+  const screenPolylines = useMemo<Polyline[]>(() => {
+    const mid = selectedSin
+      ? midlinePolyline(selectedSin.spec, selectedSin.color, `midline:${selectedSin.id}`)
+      : null
+    return mid ? [...fieldPolylines, mid] : fieldPolylines
+  }, [fieldPolylines, selectedSin])
 
   const copyTimerRef = useRef(0)
 
@@ -6370,6 +6532,7 @@ export default function App() {
           setFactorOpen(false)
           setExpOpen(false)
           setLogOpen(false)
+          setSinOpen(false)
           setExprOpen((o) => !o)
         }}
         factorOpen={factorOpen}
@@ -6377,6 +6540,7 @@ export default function App() {
           setExprOpen(false)
           setExpOpen(false)
           setLogOpen(false)
+          setSinOpen(false)
           setFactorOpen((o) => !o)
         }}
         expOpen={expOpen}
@@ -6384,6 +6548,7 @@ export default function App() {
           setExprOpen(false)
           setFactorOpen(false)
           setLogOpen(false)
+          setSinOpen(false)
           setExpOpen((o) => !o)
         }}
         logOpen={logOpen}
@@ -6391,8 +6556,19 @@ export default function App() {
           setExprOpen(false)
           setFactorOpen(false)
           setExpOpen(false)
+          setSinOpen(false)
           setLogOpen((o) => !o)
         }}
+        sinOpen={sinOpen}
+        onSinToggle={() => {
+          setExprOpen(false)
+          setFactorOpen(false)
+          setExpOpen(false)
+          setLogOpen(false)
+          setSinOpen((o) => !o)
+        }}
+        onSinBuild={buildSinusoid}
+        onSinRestate={restateFactors}
         onLogBuild={buildLogarithm}
         logInverseSources={logInverseSources}
         onLogRestate={restateFactors}
@@ -6439,6 +6615,7 @@ export default function App() {
           setFactorOpen(false)
           setExpOpen(false)
           setLogOpen(false)
+          setSinOpen(false)
           addDataTable()
         }}
         data={dataSets}
@@ -6527,8 +6704,8 @@ export default function App() {
           onCurveEditCancel={editCancel}
           onViewportChange={viewportChanged}
           onNotice={showNotice}
-          analysis={showAnalysis ? analysis : EMPTY_ANALYSIS}
-          analysisHighlight={highlight}
+          analysis={boardAnalysis}
+          analysisHighlight={showAnalysis ? highlight : null}
           intersections={showAnalysis || markedBoard ? crossings : EMPTY_CROSSINGS}
           onFeatureEdit={applyFeature}
           theme={boardTheme}
@@ -6537,7 +6714,7 @@ export default function App() {
           axisUnits={axisUnits}
           overlays={overlays}
           fields={fieldScene}
-          polylines={fieldPolylines}
+          polylines={screenPolylines}
           shapes={shapeScene}
           scatter={scatterScene}
           grid={boardGrid}
