@@ -20,6 +20,8 @@ import { LogSection } from './LogEditor'
 import { fittedLog, safeReadLogarithmic } from './logLinks'
 import { SinSection } from './SinEditor'
 import { fittedSine, safeReadSinusoid } from './sinLinks'
+import { TransformSection } from './TransformEditor'
+import { safeReadTransform, transformOpenByDefault, transformOwnsHandles } from './transformLinks'
 import { fitQuality } from '../core/fit/recognize'
 import { findAsymptotes } from '../core/holes'
 import { Latex } from './Latex'
@@ -155,6 +157,18 @@ interface Props {
    * the same restate path again. Absent = no section.
    */
   onSinRestate?(src: string, label: string): string | null
+  /**
+   * Rewrite this TYPED curve's line in place from its Transformation section
+   * — the same restate path again. Absent = no section.
+   */
+  onTransformRestate?(src: string, label: string): string | null
+  /**
+   * Whether the board shows the parent's ghost and the key-point arrows for
+   * this curve. Absent = the section's own default (open ⇒ shown).
+   */
+  transformShowParent?: boolean
+  /** The "show parent" switch. Absent = no switch. */
+  onTransformShowParent?(on: boolean): void
 }
 
 /**
@@ -633,6 +647,9 @@ export function CurveCard({
   onLogRestate,
   onShowInverse,
   onSinRestate,
+  onTransformRestate,
+  transformShowParent,
+  onTransformShowParent,
 }: Props) {
   const spec: ModelSpec | undefined = models[curve.modelId]
   const isExpression = curve.modelId.startsWith('expr_')
@@ -694,6 +711,26 @@ export function CurveCard({
         : null,
     [isExpression, broken, curve.kind, exprSource, factored, exponential, logarithmic],
   )
+
+  /**
+   * The line read as a TRANSFORMED PARENT, y = a·f(b(x − h)) + k — a
+   * hand-typed -2(x-3)^2+1, |2x-6|+1, sqrt(4-x), x^2 - 6x + 8 (vertex form),
+   * 1/(x+2) - 3 — or null. Unlike the four sections above it does not step
+   * aside: when one of them already speaks for the line the Transformation
+   * section is there too, collapsed (a teacher may want both readings of
+   * 2^(x−1)+3); otherwise it opens by itself.
+   */
+  const transform = useMemo(
+    () => (isExpression && !broken && curve.kind === 'explicit' ? safeReadTransform(exprSource) : null),
+    [isExpression, broken, curve.kind, exprSource],
+  )
+  const transformOthers = {
+    factored,
+    exponential: exponential !== null,
+    logarithmic: logarithmic !== null,
+    sinusoidal: sinusoidal !== null,
+  }
+  const transformOpen = transform ? transformOpenByDefault(transform, transformOthers) : false
 
   /**
    * A SKETCH that fitted the library's a·e^{bx} + c, stated the precalculus
@@ -1555,6 +1592,16 @@ export function CurveCard({
             <LogSection spec={logarithmic} onRestate={onLogRestate} onShowInverse={onShowInverse} />
           )}
           {sinusoidal && onSinRestate && <SinSection spec={sinusoidal} onRestate={onSinRestate} />}
+          {transform && onTransformRestate && (
+            <TransformSection
+              spec={transform}
+              defaultOpen={transformOpen}
+              showParent={transformShowParent ?? transformOpen}
+              onShowParent={onTransformShowParent}
+              handles={transformOwnsHandles(transformOthers)}
+              onRestate={onTransformRestate}
+            />
+          )}
           {fitted && (
             <div className="xe-fitted-note" data-testid="fitted-exp-note">
               {fitted.note}

@@ -30,6 +30,9 @@ import { FactorEditor } from './FactorEditor'
 import { ExpEditor } from './ExpEditor'
 import { LogEditor } from './LogEditor'
 import { SinEditor } from './SinEditor'
+import { TransformEditor } from './TransformEditor'
+import type { TransformSpec } from '../core/transform'
+import type { Theme } from '../core/types'
 import type { SinSpec } from '../core/sinusoidal'
 import type { InverseSource } from './logLinks'
 import { BuildMenu } from './BuildMenu'
@@ -131,6 +134,18 @@ interface Props {
   onSinBuild?(spec: SinSpec): string | null
   /** Rewrite a typed curve's line in place from its Sinusoidal section. */
   onSinRestate?(id: string, src: string, label: string): string | null
+  /** "Build ▾ → Transformation" is open at the top of the list. */
+  transformOpen?: boolean
+  onTransformToggle?(): void
+  /** Put a transformed parent on the board. Error, or null. */
+  onTransformBuild?(spec: TransformSpec): string | null
+  /** Rewrite a typed curve's line in place from its Transformation section. */
+  onTransformRestate?(id: string, src: string, label: string): string | null
+  /** The "show parent" switch's state for a curve; undefined = the section's default. */
+  transformShowParentFor?(id: string): boolean | undefined
+  onTransformShowParent?(id: string, on: boolean): void
+  /** The board's ground, for the transformation gallery's thumbnails. */
+  boardTheme?: Theme
   /** What this curve's card says about calculus. Undefined = nothing to say. */
   /**
    * Where each curve meets the OTHERS, already named — the row is the same
@@ -284,6 +299,13 @@ export function Sidebar({
   onSinToggle,
   onSinBuild,
   onSinRestate,
+  transformOpen = false,
+  onTransformToggle,
+  onTransformBuild,
+  onTransformRestate,
+  transformShowParentFor,
+  onTransformShowParent,
+  boardTheme,
   onShowInverse,
   intersectionsFor,
   calcFor,
@@ -362,7 +384,7 @@ export function Sidebar({
             >
               +
             </button>
-            {!numberLine && (onFactorToggle || onExpToggle || onLogToggle || onSinToggle || onDataAdd) && (
+            {!numberLine && (onFactorToggle || onExpToggle || onLogToggle || onSinToggle || onTransformToggle || onDataAdd) && (
               <BuildMenu
                 factorOpen={factorOpen}
                 expOpen={expOpen}
@@ -372,6 +394,8 @@ export function Sidebar({
                 onLogToggle={onLogToggle}
                 sinOpen={sinOpen}
                 onSinToggle={onSinToggle}
+                transformOpen={transformOpen}
+                onTransformToggle={onTransformToggle}
                 onDataAdd={onDataAdd}
               />
             )}
@@ -389,6 +413,9 @@ export function Sidebar({
           )}
           {!numberLine && sinOpen && onSinBuild && onSinToggle && (
             <SinEditor onBuild={onSinBuild} onClose={onSinToggle} />
+          )}
+          {!numberLine && transformOpen && onTransformBuild && onTransformToggle && (
+            <TransformEditor onBuild={onTransformBuild} onClose={onTransformToggle} theme={boardTheme} />
           )}
           {exprOpen && (
             <ExprInput
@@ -485,6 +512,15 @@ export function Sidebar({
               onShowInverse={onShowInverse ? () => onShowInverse(curve.id) : undefined}
               onSinRestate={
                 onSinRestate ? (src, label) => onSinRestate(curve.id, src, label) : undefined
+              }
+              onTransformRestate={
+                onTransformRestate
+                  ? (src, label) => onTransformRestate(curve.id, src, label)
+                  : undefined
+              }
+              transformShowParent={transformShowParentFor?.(curve.id)}
+              onTransformShowParent={
+                onTransformShowParent ? (on) => onTransformShowParent(curve.id, on) : undefined
               }
             />
           ))}

@@ -5179,6 +5179,146 @@ button.calc-field-btn {
   color: var(--curve, var(--accent));
 }
 
+/* ------------------------------------------------------ transformations */
+/* The sixteen parents, each a real board drawn through renderBoard (as the
+   figure-style thumbnails are): four across in the 320px sidebar, a picture
+   first and its name under it. */
+
+.te-gallery {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--sp-1);
+}
+
+.te-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding: 2px 2px var(--sp-1);
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  transition: border-color 0.12s var(--ease), color 0.12s var(--ease);
+}
+
+.te-tile:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+/* Outlined, not tinted: a tint would sit on the picture being chosen. */
+.te-tile-on,
+.te-tile-on:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+  color: var(--text);
+}
+
+.te-tile:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.te-thumb-canvas {
+  display: block;
+  width: 100%;
+  border-radius: 4px;
+}
+
+.te-tile-name {
+  line-height: 1.1;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.te-parent {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+/* a, b, h, k: the exact text, then a slider for quick exploration. */
+.te-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.te-tag {
+  flex: none;
+  width: 3ch;
+}
+
+.te-input {
+  flex: none;
+  width: 7ch;
+}
+
+.te-slider {
+  flex: 1;
+  min-width: 0;
+}
+
+.te-of {
+  color: var(--text);
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* The steps, numbered, in the order a textbook applies them. */
+.te-steps {
+  margin: 0;
+  padding-left: var(--sp-4);
+  color: var(--curve, var(--accent));
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+/* parent → image, one key point per row; the anchor's row is the one a class tracks. */
+.te-map {
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text);
+}
+
+.te-map th {
+  color: var(--muted);
+  font-family: var(--font-sans, inherit);
+  font-weight: 500;
+  text-align: left;
+  padding: 0 var(--sp-2) 2px 0;
+}
+
+.te-map td {
+  padding: 2px var(--sp-2) 2px 0;
+  border-bottom: 1px solid var(--border-soft);
+  white-space: nowrap;
+}
+
+.te-map-arrow {
+  color: var(--muted);
+}
+
+.te-map-anchor td:first-child,
+.te-map-anchor td:last-child {
+  color: var(--curve, var(--accent));
+}
+
+.te-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
 @media (pointer: coarse) {
   .xe-select {
     min-height: 44px;

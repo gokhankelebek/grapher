@@ -111,7 +111,7 @@ import {
 } from './ui/intersections'
 import type { BoardIntersection, CurveIntersections } from './ui/intersections'
 import { snapCoord, snapPlaced } from './ui/snap'
-import { ppuX } from './core/types'
+import { ppuX, ppuY } from './core/types'
 import {
   INDEPENDENT_NEEDS_SQUARE,
   POLAR_NEEDS_EQUAL,
@@ -166,6 +166,21 @@ import {
   withKeyMarks,
 } from './ui/sinLinks'
 import type { SinHandleKind } from './ui/sinLinks'
+import { transformSource } from './core/transform'
+import type { TransformSpec } from './core/transform'
+import {
+  TRANSFORM_HANDLE_LABEL,
+  dragTransformHandle,
+  ghostInk,
+  keyPointArrows,
+  parentGhost,
+  safeReadTransform,
+  sticky,
+  transformHandles,
+  transformKeyMarks,
+  transformOpenByDefault,
+} from './ui/transformLinks'
+import type { ArrowFrame, TransformHandleKind } from './ui/transformLinks'
 import { curveBounds, splitNotice, unionBoxes } from './ui/curveState'
 import { answerPieces } from './ui/nlText'
 import { AnswerContext } from './ui/answerContext'
@@ -582,6 +597,22 @@ export default function App() {
     spec: SinSpec
     anchor: Vec2
   } | null>(null)
+  /** "Build ▾ → Transformation" open at the top of the list (src/ui/TransformEditor.tsx). */
+  const [transformOpen, setTransformOpen] = useState(false)
+  /** The transformation handle being dragged, the spec at the press and the handle's place then. */
+  const transformDragRef = useRef<{
+    handleId: string
+    curveId: string
+    bracket: unknown
+    spec: TransformSpec
+    anchor: Vec2
+  } | null>(null)
+  /**
+   * The card's "show parent" switch, per curve, as the teacher left it —
+   * absent means the section's own default (shown when it opens by itself).
+   * A way of looking at the board, not part of the document: never saved.
+   */
+  const [showParent, setShowParent] = useState<Record<string, boolean>>({})
   const [extraModels, setExtraModels] = useState<Record<string, ModelSpec>>({})
   /**
    * Tangent lines, derivative curves, shaded areas and Riemann sums, as the
@@ -3419,6 +3450,38 @@ export default function App() {
     refreshSolveSpan()
   }, [fields, refreshSolveSpan])
 
+  /**
+   * Where a selected transformation's GHOST (the parent, dashed) is sampled
+   * and at what scale its arrowheads are drawn: the window, padded, and the
+   * px per unit along each axis. Like the solved span it is refreshed only
+   * when the window has left the span or the zoom has moved by a fifth — a
+   * pan inside the margin costs two comparisons and no render.
+   */
+  const [ghostFrame, setGhostFrame] = useState<{ span: [number, number] } & ArrowFrame>(() => ({
+    span: [-10, 10],
+    ppx: 60,
+    ppy: 60,
+  }))
+  const ghostFrameRef = useRef(ghostFrame)
+  ghostFrameRef.current = ghostFrame
+  /** True while a transformation's ghost or arrows are on the board. */
+  const ghostActiveRef = useRef(false)
+  const refreshGhostFrame = useCallback((force = false): void => {
+    if (!ghostActiveRef.current && !force) return
+    const vp = vpRef.current
+    const px = ppuX(vp)
+    const py = ppuY(vp)
+    if (!(px > 0) || !(py > 0)) return
+    const half = vp.widthPx / 2 / px
+    const window: [number, number] = [vp.center.x - half, vp.center.x + half]
+    const cur = ghostFrameRef.current
+    const zoomed = (a: number, b: number): boolean => Math.abs(Math.log(a / b)) > Math.log(1.2)
+    if (spanCovers(cur.span, window) && !zoomed(cur.ppx, px) && !zoomed(cur.ppy, py)) return
+    const next = { span: solveSpan(window), ppx: px, ppy: py }
+    ghostFrameRef.current = next
+    setGhostFrame(next)
+  }, [])
+
   const fieldPolylines = useMemo<Polyline[]>(
     () => solutionPolylines(fields, fieldCompiled, solvedSpan),
     [fields, fieldCompiled, solvedSpan],
@@ -4730,6 +4793,80 @@ export default function App() {
     [restateTypedCurve],
   )
 
+  // ======================================================= transformations
+  //
+  // y = a·f(b(x − h)) + k over a parent library is one more ordinary TYPED
+  // curve: "Build ▾ → Transformation" writes its line (src/core/transform.ts)
+  // and hands it to addExpression; the card's Transformation section and the
+  // two board handles rewrite that line and restate it in place through
+  // restateTypedCurve — the sinusoid's path exactly.
+
+  /** "Add to graph": the normal typed-equation path, one undo entry. */
+  const buildTransformation = useCallback(
+    (spec: TransformSpec): string | null => {
+      let src: string
+      try {
+        src = transformSource(spec)
+      } catch {
+        return 'This transformation could not be written out.'
+      }
+      const err = addExpression(src, 'build transformation')
+      if (err) return err
+      setTransformOpen(false)
+      return null
+    },
+    [addExpression],
+  )
+
+  /**
+   * Drag one transformation handle: the anchor (h and k together) or the
+   * other key point (vertically a, sideways b, the anchor held). Every frame
+   * is computed from the spec at the press; x snaps to π/q rungs on a π axis
+   * and to the grid's ladder otherwise, y to its own ladder; a coordinate
+   * that has not really moved stays exactly where it was, so a vertical drag
+   * never rewrites b. One undo per drag.
+   */
+  const dragTransform = useCallback(
+    (curveId: string, which: TransformHandleKind, handleId: string, anchor: Vec2, to: Vec2): void => {
+      const bracket = preEditRef.current
+      let s = transformDragRef.current
+      if (!s || s.handleId !== handleId || s.curveId !== curveId || s.bracket !== bracket || !bracket) {
+        const spec = safeReadTransform(exprSourcesRef.current[curveId])
+        if (!spec) return
+        s = { handleId, curveId, bracket, spec, anchor: { x: anchor.x, y: anchor.y } }
+        transformDragRef.current = s
+      }
+      const vp = vpRef.current
+      const px = ppuX(vp)
+      const py = ppuY(vp)
+      const snappedX =
+        axisUnitsRef.current.x === 'pi' ? snapPiX(to.x, px) : snapCoord(to.x, vp, 'x')
+      const snapped: Vec2 = {
+        x: sticky(to.x, s.anchor.x, px, snappedX),
+        y: sticky(to.y, s.anchor.y, py, snapCoord(to.y, vp, 'y')),
+      }
+      const next = dragTransformHandle(s.spec, which, snapped)
+      if (!next) return
+      let src: string
+      try {
+        src = transformSource(next)
+      } catch {
+        return
+      }
+      restateTypedCurve(curveId, src, TRANSFORM_HANDLE_LABEL[which], true)
+    },
+    [restateTypedCurve],
+  )
+
+  const setTransformShowParent = useCallback((id: string, on: boolean): void => {
+    setShowParent((m) => (m[id] === on ? m : { ...m, [id]: on }))
+  }, [])
+
+  const transformShowParentFor = useCallback(
+    (id: string): boolean | undefined => showParent[id],
+    [showParent],
+  )
+
   /**
    * "Show inverse" on an Exponential or a Logarithmic section: the exact
    * inverse as a NEW, independent typed curve in the paired palette colour,
@@ -5068,12 +5205,14 @@ export default function App() {
     // hot path — it fires on every frame of a pan — and refreshSolveSpan does
     // nothing at all unless the window has genuinely left the solved span.
     refreshSolveSpan()
+    // The same for a selected transformation's ghost and arrowheads.
+    refreshGhostFrame()
     // A stretch gesture on the stage turns Independent on by itself; the
     // settings panel's segment has to follow. Same value = no render.
     setAxesMode(axesModeOf(vpRef.current))
     viewSubsRef.current.forEach((fn) => fn())
     scheduleSave()
-  }, [refreshCrossSpan, refreshSolveSpan, scheduleSave])
+  }, [refreshCrossSpan, refreshSolveSpan, refreshGhostFrame, scheduleSave])
 
   /** The view was changed from outside the stage: redraw everything that rides it. */
   const viewMoved = useCallback((): void => {
@@ -5492,6 +5631,22 @@ export default function App() {
       const exp = spec ? null : safeReadExponential(exprSources[typed.id])
       const log = spec || exp ? null : safeReadLogarithmic(exprSources[typed.id])
       const sin = spec || exp || log ? null : safeReadSinusoid(exprSources[typed.id])
+      // A transformed parent carries its own two handles only when no family
+      // above already has handles on this line (the Roots section's roots,
+      // the exponential's asymptote …): one set of handles per curve.
+      const tf =
+        spec || exp || log || sin ? null : safeReadTransform(exprSources[typed.id])
+      if (tf) {
+        for (const h of transformHandles(tf)) {
+          const id = `transform:${typed.id}:${h.which}`
+          out.push({
+            id,
+            pos: h.pos,
+            label: h.label,
+            onDrag: (p) => dragTransform(typed.id, h.which, id, h.pos, p),
+          })
+        }
+      }
       if (sin) {
         // Mid-drag the handles come from the line as it now reads — the
         // handle under the finger keeps its id, and the drag computes from
@@ -5606,6 +5761,7 @@ export default function App() {
     dragExp,
     dragLog,
     dragSin,
+    dragTransform,
   ])
 
   // ----------------------------------------------- a selected sinusoid, marked
@@ -5633,19 +5789,80 @@ export default function App() {
     [selectedSin],
   )
 
+  // ----------------------------------------- a selected transformation, marked
+  //
+  // While a typed curve that reads as a transformed parent is selected, the
+  // board marks the image of every parent key point (analysis path: rings and
+  // exact chips, "(1, −7)"), and — while "show parent" is on — draws the
+  // parent itself as a faint dashed ghost and a thin arrow from each parent
+  // key point to its image. When another family section speaks for the line
+  // (2^(x−1)+3 is an exponential first) nothing is drawn until the teacher
+  // turns "show parent" on in the collapsed section. Screen only: none of it
+  // is figure content, none of it reaches an export.
+  const selectedTransform = useMemo<{
+    spec: TransformSpec
+    id: string
+    /** Mark the image key points: the section opens by itself, or the ghost is on. */
+    marks: boolean
+    ghost: boolean
+  } | null>(() => {
+    if (kind !== 'cartesian' || !selectedCurve) return null
+    const c = selectedCurve
+    if (!c.visible || c.kind !== 'explicit' || !c.modelId.startsWith('expr_')) return null
+    const src = exprSources[c.id]
+    if (!src) return null
+    const spec = safeReadTransform(src)
+    if (!spec) return null
+    const factored = safeReadFactored(src)
+    const exponential = !factored && safeReadExponential(src) !== null
+    const logarithmic = !factored && !exponential && safeReadLogarithmic(src) !== null
+    const sinusoidal =
+      !factored && !exponential && !logarithmic && safeReadSinusoid(src) !== null
+    const primary = transformOpenByDefault(spec, { factored, exponential, logarithmic, sinusoidal })
+    const ghost = showParent[c.id] ?? primary
+    if (!primary && !ghost) return null
+    return { spec, id: c.id, marks: primary || ghost, ghost }
+  }, [kind, selectedCurve, exprSources, showParent])
+
+  ghostActiveRef.current = selectedTransform !== null && selectedTransform.ghost
+  useEffect(() => {
+    if (selectedTransform?.ghost) refreshGhostFrame(true)
+  }, [selectedTransform, refreshGhostFrame])
+
+  const transformMarks = useMemo<SpecialPoint[]>(
+    () =>
+      selectedTransform?.marks
+        ? transformKeyMarks(selectedTransform.spec)
+        : [],
+    [selectedTransform],
+  )
+
   /** What the board marks for the selected curve. */
   const boardAnalysis = useMemo<SpecialPoint[]>(() => {
     const base = showAnalysis ? analysis : EMPTY_ANALYSIS
-    return sinMarks.length > 0 ? withKeyMarks(base, sinMarks) : base
-  }, [showAnalysis, analysis, sinMarks])
+    const withSin = sinMarks.length > 0 ? withKeyMarks(base, sinMarks) : base
+    return transformMarks.length > 0 ? withKeyMarks(withSin, transformMarks) : withSin
+  }, [showAnalysis, analysis, sinMarks, transformMarks])
 
-  /** The on-screen polylines: the fields' solutions, and a sinusoid's midline. */
+  /**
+   * The on-screen polylines: the fields' solutions, a sinusoid's midline, and
+   * a transformation's parent ghost with its key-point arrows.
+   */
   const screenPolylines = useMemo<Polyline[]>(() => {
+    const out = fieldPolylines.slice()
     const mid = selectedSin
       ? midlinePolyline(selectedSin.spec, selectedSin.color, `midline:${selectedSin.id}`)
       : null
-    return mid ? [...fieldPolylines, mid] : fieldPolylines
-  }, [fieldPolylines, selectedSin])
+    if (mid) out.push(mid)
+    if (selectedTransform?.ghost) {
+      const inkFor = ghostInk(canvasTheme !== 'light')
+      out.push(
+        parentGhost(selectedTransform.spec.parent, ghostFrame.span, inkFor.ghost, `ghost:${selectedTransform.id}`),
+        ...keyPointArrows(selectedTransform.spec, ghostFrame, inkFor.arrow, `arrow:${selectedTransform.id}`),
+      )
+    }
+    return out.length === fieldPolylines.length ? fieldPolylines : out
+  }, [fieldPolylines, selectedSin, selectedTransform, ghostFrame, canvasTheme])
 
   const copyTimerRef = useRef(0)
 
@@ -6533,6 +6750,7 @@ export default function App() {
           setExpOpen(false)
           setLogOpen(false)
           setSinOpen(false)
+          setTransformOpen(false)
           setExprOpen((o) => !o)
         }}
         factorOpen={factorOpen}
@@ -6541,6 +6759,7 @@ export default function App() {
           setExpOpen(false)
           setLogOpen(false)
           setSinOpen(false)
+          setTransformOpen(false)
           setFactorOpen((o) => !o)
         }}
         expOpen={expOpen}
@@ -6549,6 +6768,7 @@ export default function App() {
           setFactorOpen(false)
           setLogOpen(false)
           setSinOpen(false)
+          setTransformOpen(false)
           setExpOpen((o) => !o)
         }}
         logOpen={logOpen}
@@ -6557,6 +6777,7 @@ export default function App() {
           setFactorOpen(false)
           setExpOpen(false)
           setSinOpen(false)
+          setTransformOpen(false)
           setLogOpen((o) => !o)
         }}
         sinOpen={sinOpen}
@@ -6565,10 +6786,25 @@ export default function App() {
           setFactorOpen(false)
           setExpOpen(false)
           setLogOpen(false)
+          setTransformOpen(false)
           setSinOpen((o) => !o)
         }}
         onSinBuild={buildSinusoid}
         onSinRestate={restateFactors}
+        transformOpen={transformOpen}
+        onTransformToggle={() => {
+          setExprOpen(false)
+          setFactorOpen(false)
+          setExpOpen(false)
+          setLogOpen(false)
+          setSinOpen(false)
+          setTransformOpen((o) => !o)
+        }}
+        onTransformBuild={buildTransformation}
+        onTransformRestate={restateFactors}
+        transformShowParentFor={transformShowParentFor}
+        onTransformShowParent={setTransformShowParent}
+        boardTheme={screenTheme}
         onLogBuild={buildLogarithm}
         logInverseSources={logInverseSources}
         onLogRestate={restateFactors}
@@ -6616,6 +6852,7 @@ export default function App() {
           setExpOpen(false)
           setLogOpen(false)
           setSinOpen(false)
+          setTransformOpen(false)
           addDataTable()
         }}
         data={dataSets}

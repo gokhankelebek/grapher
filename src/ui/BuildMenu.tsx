@@ -6,8 +6,9 @@ import { useEffect, useRef, useState } from 'react'
 // The header has room for "+" and one more control, and there is more than one
 // way to BUILD a function from what a teacher states: from its roots (a
 // polynomial or a rational function), as an exponential (a starting value
-// and a rate), as a logarithm (its base, asymptote and shifts) and as a
-// sinusoid (amplitude, period, phase shift, midline). One small menu instead
+// and a rate), as a logarithm (its base, asymptote and shifts), as a
+// sinusoid (amplitude, period, phase shift, midline) and as a transformed
+// parent (a·f(b(x − h)) + k, from a gallery of sixteen). One small menu instead
 // of a button per builder. Each item opens
 // its editor at the top of the list; choosing the one already open closes it.
 // "Data table" is the one action: it adds a table to the list and selects it.
@@ -18,10 +19,12 @@ interface Props {
   expOpen: boolean
   logOpen?: boolean
   sinOpen?: boolean
+  transformOpen?: boolean
   onFactorToggle?(): void
   onExpToggle?(): void
   onLogToggle?(): void
   onSinToggle?(): void
+  onTransformToggle?(): void
   /** Add a data table to the list (an action, not an editor that stays open). */
   onDataAdd?(): void
 }
@@ -31,10 +34,12 @@ export function BuildMenu({
   expOpen,
   logOpen = false,
   sinOpen = false,
+  transformOpen = false,
   onFactorToggle,
   onExpToggle,
   onLogToggle,
   onSinToggle,
+  onTransformToggle,
   onDataAdd,
 }: Props) {
   const [open, setOpen] = useState(false)
@@ -60,7 +65,7 @@ export function BuildMenu({
     }
   }, [open])
 
-  const anyOpen = factorOpen || expOpen || logOpen || sinOpen
+  const anyOpen = factorOpen || expOpen || logOpen || sinOpen || transformOpen
   const item = (
     label: string,
     on: boolean,
@@ -90,7 +95,7 @@ export function BuildMenu({
         ref={btnRef}
         type="button"
         className={`add-btn factor-btn build-btn${anyOpen ? ' factor-open' : ''}`}
-        title="Build a function from what you state: its roots, a starting value and a rate, a logarithm's base and asymptote, or a sinusoid's amplitude and period"
+        title="Build a function from what you state: its roots, a starting value and a rate, a logarithm's base and asymptote, a sinusoid's amplitude and period, or a parent function transformed"
         aria-label="Build"
         aria-haspopup="menu"
         aria-expanded={open}
@@ -108,6 +113,7 @@ export function BuildMenu({
           {item('Exponential', expOpen, onExpToggle, 'build-exp')}
           {item('Logarithmic', logOpen, onLogToggle, 'build-log')}
           {item('Sinusoidal', sinOpen, onSinToggle, 'build-sin')}
+          {item('Transformation', transformOpen, onTransformToggle, 'build-transform')}
           {onDataAdd && (
             <>
               <div className="card-menu-sep" role="separator" />
