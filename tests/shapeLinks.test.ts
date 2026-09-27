@@ -42,7 +42,13 @@ import {
   shapeVertices,
 } from '../src/ui/shapeLinks'
 import { snapCoord, snapPlaced, snapStep } from '../src/ui/snap'
-import { isPolarCurve, suggestPolarRuling, RULINGS } from '../src/ui/boardGrid'
+import {
+  isPolarCurve,
+  suggestPolarRuling,
+  RULINGS,
+  circleDeviation,
+  CIRCLE_TOL,
+} from '../src/ui/boardGrid'
 
 // ---------------------------------------------------------------------------
 // fixtures
@@ -568,6 +574,63 @@ describe('the board’s ruling', () => {
     expect(
       suggestPolarRuling([curve({ modelId: 'polarRose', kind: 'polar', visible: false })]),
     ).toBe(false)
+  })
+
+  it('never offers itself for a sketched CIRCLE, whichever family read it', () => {
+    const ring = (cx: number, cy: number, R: number, wobble = 0.02) =>
+      Array.from({ length: 120 }, (_, i) => {
+        const t = (2 * Math.PI * i) / 120
+        const r = R * (1 + wobble * Math.sin(7 * t))
+        return { x: cx + r * Math.cos(t), y: cy + r * Math.sin(t) }
+      })
+    // The circle and ellipse fits are implicit — never polar.
+    expect(isPolarCurve(curve({ modelId: 'circle', kind: 'implicit', params: [0, 0, 5] }))).toBe(false)
+    expect(
+      isPolarCurve(curve({ modelId: 'ellipse', kind: 'implicit', params: [1, 0, 2, 0, 0, -4] })),
+    ).toBe(false)
+    // A circle through the pole IS a rose with k = 1: r = a·cos(θ + c).
+    const rose1 = curve({ modelId: 'polarRose', kind: 'polar', params: [4, 1, 0.7] })
+    expect(isPolarCurve(rose1)).toBe(false)
+    expect(suggestPolarRuling([rose1])).toBe(false)
+    // A centred circle read as a limaçon with a vanishing b, or a spiral that
+    // hardly climbs: the READING is a circle.
+    expect(isPolarCurve(curve({ modelId: 'limacon', kind: 'polar', params: [3, 0.2] }))).toBe(false)
+    expect(isPolarCurve(curve({ modelId: 'spiral', kind: 'polar', params: [3, 0.01] }))).toBe(false)
+    // An off-centre circle the recogniser read as a cardioid-ish limaçon: the
+    // reading is not a circle, but the INK is.
+    expect(
+      isPolarCurve(
+        curve({ modelId: 'limacon', kind: 'polar', params: [2.9, -2.97], sourceStroke: ring(-2.7, 0.1, 3.6) }),
+      ),
+    ).toBe(false)
+  })
+
+  it('still offers itself for a sketched rose, cardioid, dimpled limaçon or spiral', () => {
+    expect(isPolarCurve(curve({ modelId: 'polarRose', kind: 'polar', params: [3, 2, 0] }))).toBe(true)
+    expect(isPolarCurve(curve({ modelId: 'polarRose', kind: 'polar', params: [3, 3, 0.2] }))).toBe(true)
+    expect(isPolarCurve(curve({ modelId: 'limacon', kind: 'polar', params: [2, 2] }))).toBe(true)
+    expect(isPolarCurve(curve({ modelId: 'limacon', kind: 'polar', params: [3, 2] }))).toBe(true)
+    expect(isPolarCurve(curve({ modelId: 'limacon', kind: 'polar', params: [1, 2.5] }))).toBe(true)
+    expect(isPolarCurve(curve({ modelId: 'spiral', kind: 'polar', params: [0, 0.4], domain: [0, 4 * Math.PI] }))).toBe(true)
+    // A TYPED r = … is polar whatever it draws — even r = 5, a circle: the
+    // teacher wrote it in polar.
+    expect(isPolarCurve(curve({ modelId: 'expr_3', kind: 'polar', params: [] }))).toBe(true)
+  })
+
+  it('measures how far points are from a circle', () => {
+    const pts = Array.from({ length: 64 }, (_, i) => {
+      const t = (2 * Math.PI * i) / 64
+      return { x: 100 + 5 * Math.cos(t), y: -40 + 5 * Math.sin(t) }
+    })
+    expect(circleDeviation(pts)).toBeLessThan(1e-9)
+    const square = [
+      { x: 0, y: 0 }, { x: 1, y: 0 }, { x: 2, y: 0 }, { x: 2, y: 1 }, { x: 2, y: 2 },
+      { x: 1, y: 2 }, { x: 0, y: 2 }, { x: 0, y: 1 },
+    ]
+    expect(circleDeviation(square)).toBeGreaterThan(CIRCLE_TOL)
+    // Collinear, or too few: no circle at all.
+    expect(circleDeviation(Array.from({ length: 10 }, (_, i) => ({ x: i, y: 2 * i })))).toBe(Infinity)
+    expect(circleDeviation([{ x: 0, y: 0 }, { x: 1, y: 1 }])).toBe(Infinity)
   })
 
   it('offers exactly two rulings', () => {

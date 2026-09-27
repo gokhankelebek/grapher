@@ -166,6 +166,7 @@ import type { FunctionEnv } from './core/functionEnv'
 import {
   boardIntersections,
   cardIntersections,
+  crossingsClearOf,
   intersectionKey,
   intersectionSpan,
 } from './ui/intersections'
@@ -7854,6 +7855,19 @@ export default function App() {
   crossingsRef.current = crossings
 
   /**
+   * The crossings the BOARD draws: the same list, less any crossing standing
+   * exactly where the selected curve's own marker is (a circle's lowest point
+   * that the parabola touches, a vertex a line goes through). There the
+   * analysis marker keeps its chip and the crossing yields, so one place is
+   * one chip — see crossingsClearOf. The cards still read `crossings`.
+   */
+  const boardCrossings = useMemo<readonly BoardIntersection[]>(() => {
+    if (!(showAnalysis || markedBoard)) return EMPTY_CROSSINGS
+    const marks = selectedCurve && selectedCurve.visible ? boardAnalysis : EMPTY_ANALYSIS
+    return crossingsClearOf(crossings, marks, crossSpan)
+  }, [showAnalysis, markedBoard, selectedCurve, boardAnalysis, crossings, crossSpan])
+
+  /**
    * What each card lists, named the way the caption names the curves: the
    * board's derived letters (f, g, f′) when it has them, and otherwise the
    * card's own label, which is what a curve is called in every other sentence
@@ -7951,6 +7965,14 @@ export default function App() {
             ]),
           )
         : []
+    const exportAnalysis =
+      kindRef.current === 'cartesian' &&
+      showAnalysisRef.current &&
+      sel &&
+      sel.visible &&
+      analysisRef.current.length > 0
+        ? { curve: sel, points: analysisRef.current }
+        : null
     return {
       vp: evp,
       // A figure style owns the ground; the Background control is disabled and
@@ -7963,21 +7985,20 @@ export default function App() {
       curves: curvesRef.current,
       styles: stylesRef.current,
       models: modelsRef.current,
-      analysis:
-        kindRef.current === 'cartesian' &&
-        showAnalysisRef.current &&
-        sel &&
-        sel.visible &&
-        analysisRef.current.length > 0
-          ? { curve: sel, points: analysisRef.current }
-          : null,
+      analysis: exportAnalysis,
       // Where the curves cross is a fact about the FIGURE, not a note the
       // editor is keeping, so the PNG gets the same list the screen drew, by
-      // the same field — there is no second place that could forget it.
+      // the same field — there is no second place that could forget it. And
+      // by the same rule: a crossing on the selected curve's own marker
+      // yields to it, so the file has one chip there too.
       intersections:
         kindRef.current === 'cartesian' &&
         (showAnalysisRef.current || (figure != null && figure.curveEnds === 'marked'))
-          ? crossingsRef.current
+          ? crossingsClearOf(
+              crossingsRef.current,
+              exportAnalysis ? exportAnalysis.points : EMPTY_ANALYSIS,
+              crossSpanRef.current,
+            )
           : undefined,
       // The screen palette is tuned against near-black and washes out on white
       // (amber lands near 1.7:1 — a copier renders it as nothing), so a light
@@ -9003,7 +9024,7 @@ export default function App() {
           onNotice={showNotice}
           analysis={boardAnalysis}
           analysisHighlight={showAnalysis ? highlight : null}
-          intersections={showAnalysis || markedBoard ? crossings : EMPTY_CROSSINGS}
+          intersections={boardCrossings}
           onFeatureEdit={applyFeature}
           theme={boardTheme}
           present={present}

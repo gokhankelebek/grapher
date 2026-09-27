@@ -36,6 +36,7 @@ import {
   MAX_PAIRS,
   boardIntersections,
   cardIntersections,
+  crossingsClearOf,
   intersectionKey,
   intersectionPairs,
   intersectionSpan,
@@ -511,5 +512,93 @@ describe('CurveCard — the Intersections row', () => {
     const html = renderCard(PARABOLA, undefined)
     expect(html).not.toContain('Intersection')
     expect(html).not.toContain('an-with')
+  })
+})
+
+describe('every card kind lists its crossings, not only y = f(x)', () => {
+  const CIRCLE5: FittedCurve = {
+    id: 'c', modelId: 'circle', params: [0, 0, 5],
+    kind: 'implicit', domain: null,
+    color: CURVE_COLORS[2], strokeWidth: 2.5, visible: true, error: 0,
+  }
+  /** y = x² − 5 */
+  const P5: FittedCurve = { ...PARABOLA, params: [-5, 0, 1] }
+  const ROSE1: FittedCurve = {
+    id: 'r', modelId: 'polarRose', params: [3, 2, 0],
+    kind: 'polar', domain: null,
+    color: CURVE_COLORS[3], strokeWidth: 2.5, visible: true, error: 0,
+  }
+  const LISS: FittedCurve = {
+    id: 'q', modelId: 'fourier', params: [0, 0, 3, 0, 0, 3],
+    kind: 'parametric', domain: null,
+    color: CURVE_COLORS[4], strokeWidth: 2.5, visible: true, error: 0,
+  }
+  const names: Record<string, string> = { f: 'f', c: 'Circle', r: 'Rose', q: 'Fourier curve' }
+  const all = boardIntersections([P5, CIRCLE5, ROSE1, LISS], MODELS, RANGE)
+
+  it('a circle card lists where the parabola meets it, in the explicit card\'s format', () => {
+    const groups = cardIntersections('c', all, (id) => names[id])
+    const f = groups.find((g) => g.id === 'f')
+    expect(f?.points.map((p) => [p.pos.x, p.pos.y])).toEqual([[-3, 4], [0, -5], [3, 4]])
+    const text = plain(renderCard(CIRCLE5, groups))
+    expect(text).toContain('Intersections')
+    expect(text).toContain('with f: (−3, 4),(0, −5),(3, 4)')
+  })
+
+  it('a polar card and a parametric card list theirs too', () => {
+    for (const c of [ROSE1, LISS]) {
+      const groups = cardIntersections(c.id, all, (id) => names[id])
+      expect(groups.length).toBeGreaterThan(0)
+      const text = plain(renderCard(c, groups))
+      expect(text).toContain('Intersection')
+      expect(text).toContain(`with ${groups[0].name}:`)
+    }
+  })
+})
+
+describe('crossingsClearOf — one place, one chip', () => {
+  const at = (x: number, y: number, kind: SpecialPoint['kind'] = 'min'): SpecialPoint => ({
+    kind, pos: { x, y }, label: kind, exact: false,
+  })
+  const cross = (x: number, y: number): BoardIntersection => ({
+    curveId: 'f', point: { ...at(x, y, 'intersection'), withId: 'c' },
+  })
+  const span: [number, number] = [-12, 12]
+
+  it('drops a crossing standing on the selected curve\'s own marker, keeps the rest', () => {
+    const all = [cross(-3, 4), cross(0, -5), cross(3, 4)]
+    const got = crossingsClearOf(all, [at(0, -5 + 1e-9), at(5, 0, 'max')], span)
+    expect(got.map((m) => m.point.pos.x)).toEqual([-3, 3])
+  })
+
+  it('is the same array when nothing coincides, or there are no markers', () => {
+    const all = [cross(-3, 4), cross(3, 4)]
+    expect(crossingsClearOf(all, [], span)).toBe(all)
+    expect(crossingsClearOf(all, [at(0, -5)], span)).toBe(all)
+    // a thousandth apart is two places, whatever the zoom
+    expect(crossingsClearOf(all, [at(3.001, 4)], span)).toBe(all)
+  })
+
+  it('scales the tolerance with the window, and ignores markers with no position', () => {
+    const all = [cross(1000, 0)]
+    expect(crossingsClearOf(all, [at(1000 + 5e-4, 0)], [-1000, 1000])).toHaveLength(0)
+    expect(crossingsClearOf(all, [at(1000 + 5e-4, 0)], [-1, 1])).toBe(all)
+    expect(crossingsClearOf(all, [at(Number.NaN, 0)], span)).toBe(all)
+  })
+
+  it('draws one chip where a circle\'s lowest point is where the parabola touches it', () => {
+    const CIRCLE5: FittedCurve = {
+      id: 'c', modelId: 'circle', params: [0, 0, 5],
+      kind: 'implicit', domain: null,
+      color: CURVE_COLORS[2], strokeWidth: 2.5, visible: true, error: 0,
+    }
+    const P5: FittedCurve = { ...PARABOLA, params: [-5, 0, 1] }
+    const all = boardIntersections([P5, CIRCLE5], MODELS, RANGE)
+    const bottom = all.find((m) => Math.abs(m.point.pos.x) < 1e-9)
+    expect(bottom).toBeDefined()
+    // the parabola's vertex is its minimum, at (0, −5)
+    const got = crossingsClearOf(all, [at(0, -5)], RANGE)
+    expect(got).toHaveLength(all.length - 1)
+    expect(got.some((m) => Math.abs(m.point.pos.x) < 1e-9)).toBe(false)
   })
 })

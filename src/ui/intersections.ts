@@ -199,3 +199,53 @@ export function cardIntersections(
   out.sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0))
   return out
 }
+
+/**
+ * How close two points must be to be ONE place on the board, as a fraction of
+ * the span the crossings are hunted over. A millionth of the window is far
+ * below a pixel at any zoom the board allows, and far above the round-off
+ * between a vertex found by one solver and a crossing found by another.
+ */
+export const SAME_SPOT = 1e-6
+
+/**
+ * The crossings the board should DRAW, given the markers already standing
+ * there.
+ *
+ * A circle's lowest point that is also where the parabola touches it, a
+ * vertex on the line through it: the analysis layer marks and labels that
+ * place for the selected curve, and the crossing layer would put a second,
+ * identical chip beside it. One place gets one chip, so the crossing YIELDS:
+ * its diamond and chip are dropped where an analysis marker already sits, and
+ * the analysis marker keeps its glyph, its chip and everything the pointer can
+ * do with it (hover from the card, click to edit). renderBoard has no switch
+ * for "a diamond without its chip", and a marker taken out of the analysis
+ * list would shift every index the card and the board address it by.
+ *
+ * The crossing is still on both CARDS — this is the board's list, not the
+ * list cardIntersections reads — and it comes back the moment the selection
+ * moves to a curve without a marker there.
+ *
+ * Returns `all` itself when nothing is dropped, so a memo downstream sees the
+ * same array.
+ */
+export function crossingsClearOf(
+  all: readonly BoardIntersection[],
+  marks: readonly SpecialPoint[],
+  span: readonly [number, number],
+): readonly BoardIntersection[] {
+  if (all.length === 0 || marks.length === 0) return all
+  const width = Math.abs(span[1] - span[0])
+  const tol = SAME_SPOT * Math.max(1, Number.isFinite(width) ? width : 1)
+  const at = marks.filter(
+    (m) => m && m.pos && Number.isFinite(m.pos.x) && Number.isFinite(m.pos.y),
+  )
+  if (at.length === 0) return all
+  const kept = all.filter(
+    (c) =>
+      !at.some(
+        (m) => Math.abs(m.pos.x - c.point.pos.x) <= tol && Math.abs(m.pos.y - c.point.pos.y) <= tol,
+      ),
+  )
+  return kept.length === all.length ? all : kept
+}
