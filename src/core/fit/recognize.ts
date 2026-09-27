@@ -9,6 +9,7 @@
 
 import type { ProcessedStroke, Viewport, FitResult, Vec2, CurveKind } from '../types'
 import { MODELS } from './models'
+import { CIRCLE_TOL, circleDeviation } from './circleDeviation'
 import {
   polyfit,
   linearLeastSquares,
@@ -813,6 +814,138 @@ function fitFourier(
 }
 
 // ---------------------------------------------------------------------------
+// Loop closure
+//
+// stroke.closed asks whether the pen came back to where it started: the ends
+// within 8% of the bbox diagonal. That is a question about the ENDPOINTS, and
+// a hand drawing a circle does not aim at them — it goes round, and lifts the
+// pen somewhere near the start. On a circle of radius R the 8% window is only
+// ±13° of arc, so an overshoot of a fifteenth of a turn, or a gap of one,
+// leaves the stroke "open" — and an open stroke used to get no circle, no
+// ellipse and no Fourier candidate at all. What was left to read it were the
+// polar families (a circle through or around the origin is a k = 1 rose, a
+// limaçon with a small b, a spiral that barely climbs) and the mirrored
+// Fourier fallback. Measured on 300 random circle sketches (overshoot/gap in
+// [−4%, +8%] of a turn): all 189 flagged closed came back Circle; of the 111
+// that were not, 22 read as a rose, 28 as a limaçon, 8 as a spiral, 53 as
+// Fourier and none as a circle.
+//
+// So the closed-curve families also compete for any stroke that GOES ROUND —
+// that sweeps at least LOOP_TURNS of a full turn about its own best-fit
+// circle's centre, while its own direction turns too (a figure-eight does
+// not). The polar families, the explicit families and the
+// endpoint-closed path are untouched; this only adds candidates, and a
+// circle or an ellipse still has to out-fit everything else to win.
+// ---------------------------------------------------------------------------
+
+/**
+ * How much of a turn a stroke must go round to count as a loop. CHOSEN FROM
+ * A SEED SWEEP: circles (150 per bin; radius 0.6–4, centre anywhere within
+ * 1.6 radii of the origin, jitter 0.01–0.05) drawn with a gap (−) or an
+ * overshoot (+) of the given fraction of a turn, read as Circle:
+ *
+ *   gap/over     −25…−18%  −18…−12%  −12…−8%  −8…−4%  −4…0%  0…+10%  +10…+30%  +30…+100%
+ *   before           0         0         0        3     135      60        0          8
+ *   0.80            48       148       150      150     150     150      150        150
+ *   0.85             0        86       150      150     150     150      150        150
+ *   0.90             0         0        74      150     150     150      150        150
+ *   0.95             0         0         0       36     150     150      150        150
+ *
+ * and open arcs of 0.8–0.88 of a turn (200 strokes) read as Circle 195
+ * times at 0.80, 78 at 0.85, and never at 0.90 — exactly as before. 0.90 is
+ * the largest gap a hand plausibly leaves on a circle it meant to close
+ * (about a tenth of a turn) without turning a drawn arc into one.
+ */
+const LOOP_TURNS = 0.9
+
+/**
+ * The stroke's own direction must turn at least this much too. It only has to
+ * tell a loop from a figure-eight, so it sits well below LOOP_TURNS: measured
+ * on chords a sixteenth of the stroke long (see tangentTurns) a full loop
+ * reads 15/16 of a turn before noise. Over 2000 random strokes each (radius
+ * 0.25–4, jitter 0.01–0.08, gap/overshoot −10%…+30% of a turn), loops read
+ * ≥ 0.79 in 99% of cases and figure-eights never above 0.44.
+ */
+const TURNING_MIN = 0.6
+
+/**
+ * Net turning of the stroke's own direction, in turns (unsigned). A simple
+ * loop turns once whatever its shape — circle, ellipse, heart, a dented
+ * blob — and a figure-eight turns once each way, i.e. not at all; an open
+ * arc turns by the fraction of the circle it covers.
+ *
+ * The sum telescopes to (last direction − first direction), so jitter in the
+ * end segments would land in it whole, and on a small, shaky loop the
+ * direction between neighbouring samples is mostly jitter; directions are
+ * therefore taken over chords a sixteenth of the stroke long.
+ */
+function tangentTurns(pts: Vec2[]): number {
+  const n = pts.length
+  const k = Math.max(1, Math.floor(n / 16))
+  let total = 0
+  let prev = NaN
+  for (let i = 0; i + k < n; i += k) {
+    const dx = pts[i + k].x - pts[i].x
+    const dy = pts[i + k].y - pts[i].y
+    if (dx === 0 && dy === 0) continue
+    const a = Math.atan2(dy, dx)
+    if (Number.isFinite(prev)) total += wrapPi(a - prev)
+    prev = a
+  }
+  return Math.abs(total) / (2 * Math.PI)
+}
+
+/**
+ * For an open stroke that nonetheless goes all the way round: the index at
+ * which it completes ONE turn about its fitted centre (the overshoot starts
+ * there), or pts.length when it never quite gets there (a gap). Null when
+ * the stroke is not a loop at all.
+ *
+ * Going round is asked twice, and both must agree: the stroke sweeps
+ * LOOP_TURNS about its best-fit circle's centre, AND its own direction turns
+ * by TURNING_MIN. Each alone can be fooled — a figure-eight seen from inside
+ * one lobe goes round that point once, and the direction of a jittery open
+ * arc can wander past its true turning at the ends — but not both at once.
+ */
+function loopCut(pts: Vec2[]): number | null {
+  if (pts.length < 8) return null
+  if (tangentTurns(pts) < TURNING_MIN) return null
+  const c = fitCircle(pts)
+  if (!c) return null
+  let total = 0
+  let cut = -1
+  let prev = Math.atan2(pts[0].y - c.cy, pts[0].x - c.cx)
+  for (let i = 1; i < pts.length; i++) {
+    const a = Math.atan2(pts[i].y - c.cy, pts[i].x - c.cx)
+    total += wrapPi(a - prev)
+    prev = a
+    if (cut < 0 && Math.abs(total) >= 2 * Math.PI) cut = Math.max(i + 1, 8)
+  }
+  if (Math.abs(total) < LOOP_TURNS * 2 * Math.PI) return null
+  return cut < 0 ? pts.length : cut
+}
+
+/** Squared distance from p to the nearest point of a closed polyline. */
+function distToLoopSq(p: Vec2, poly: Vec2[]): number {
+  let best = Infinity
+  const S = poly.length
+  for (let j = 0; j < S; j++) {
+    const a = poly[j]
+    const b = poly[(j + 1) % S]
+    const bx = b.x - a.x, by = b.y - a.y
+    const len2 = bx * bx + by * by
+    let t = len2 > 1e-18 ? ((p.x - a.x) * bx + (p.y - a.y) * by) / len2 : 0
+    if (t < 0) t = 0
+    else if (t > 1) t = 1
+    const dx = p.x - (a.x + t * bx)
+    const dy = p.y - (a.y + t * by)
+    const dd = dx * dx + dy * dy
+    if (dd < best) best = dd
+  }
+  return best
+}
+
+// ---------------------------------------------------------------------------
 // Polar analysis
 // ---------------------------------------------------------------------------
 
@@ -1100,6 +1233,73 @@ function fitSpiral(ps: PolarSamples): { params: number[]; rms: number } | null {
 }
 
 // ---------------------------------------------------------------------------
+// Occam between a circle and a polar family that draws one
+//
+// Several polar families contain circles. r = a·cos(θ + c) — a rose with
+// k = 1 — IS a circle, through the pole. A limaçon r = a + b·cos θ with a
+// small b/a is a circle to within the pen (its deviation from its best circle
+// grows as ~0.15·(b/a)²: 3% at b/a ≈ 0.44), and a spiral r = a + b·θ that
+// climbs less than a sixth of its radius per turn is one too. On a circle
+// sketched through or around the origin these readings fit the ink as well
+// as the circle does, and the score alone separates them by the difference
+// in their complexity terms — about 2 points, i.e. a few percent of rms,
+// which is well inside what hand jitter moves from one sketch to the next.
+//
+// That is the wrong thing to leave to chance, because the two answers do not
+// mean the same thing to the person who drew it: the card says "Rose" and
+// prints r = a·cos(θ − c) for what a teacher drew as a circle and expects to
+// read as (x − h)² + (y − k)².
+//
+// The rule: when a circle candidate exists, a polar candidate whose READING
+// is a circle — its own curve, sampled over its own domain, is within
+// CIRCLE_TOL of a circle (the same test the board uses to withhold the polar
+// ruling) — is charged ROUND_POLAR_CHARGE. It stays in the list, honestly
+// ranked, so the polar reading is one tap away; it just no longer takes a
+// tie from the family that says the same thing more plainly.
+//
+// Genuine polar sketches are untouched by construction: a rose with k ≥ 2, a
+// cardioid, a limaçon with an inner loop or a dimple, a spiral of any real
+// climb — none of their readings is within 3% of a circle, so none is
+// charged. The charge is chosen from a seed sweep (see tests/recognize.test.ts,
+// "a circle in polar dress"): see the note on the constant.
+// ---------------------------------------------------------------------------
+
+/**
+ * Score charged to a polar candidate whose reading is itself a circle, when a
+ * circle candidate is in the running. In score units (2·N_EFF·ln of an rms
+ * ratio): 6 lets the circle keep a tie against a polar twin that fits up to
+ * ~10% tighter in rms, which only happens when the difference is jitter.
+ */
+const ROUND_POLAR_CHARGE = 6
+
+const POLAR_FAMILIES = new Set(['polarRose', 'limacon', 'spiral'])
+
+/** Is this polar reading, drawn over its own domain, a circle? */
+function polarReadingIsRound(c: FitResult): boolean {
+  const spec = MODELS[c.modelId]
+  if (!spec?.evalPolar) return false
+  const d = c.domain
+  const lo = d && Number.isFinite(d[0]) ? d[0] : 0
+  const hi = d && Number.isFinite(d[1]) && d[1] > lo ? d[1] : lo + 2 * Math.PI
+  const S = 180
+  const pts: Vec2[] = []
+  for (let i = 0; i < S; i++) {
+    const t = lo + ((hi - lo) * i) / S
+    const r = spec.evalPolar(c.params, t)
+    if (!Number.isFinite(r)) continue
+    pts.push({ x: r * Math.cos(t), y: r * Math.sin(t) })
+  }
+  return circleDeviation(pts) <= CIRCLE_TOL
+}
+
+function chargeRoundPolar(out: FitResult[]): void {
+  if (!out.some(c => c.modelId === 'circle')) return
+  for (const c of out) {
+    if (POLAR_FAMILIES.has(c.modelId) && polarReadingIsRound(c)) c.score += ROUND_POLAR_CHARGE
+  }
+}
+
+// ---------------------------------------------------------------------------
 // What the Interpretations list should show
 //
 // The list is ranked by `score`, and the sidebar prints each row's `error`
@@ -1270,7 +1470,14 @@ function recognizeInto(stroke: ProcessedStroke, out: FitResult[]): void {
   }
 
   // ---- closed -> circle, ellipse, Fourier -----------------------------------
-  if (stroke.closed) {
+  // A stroke closed at its endpoints is a loop; so is an open one that goes
+  // all the way round (see loopCut). Every closed family is scored against
+  // ALL the ink — an overshoot lies on the curve the hand meant, so it costs
+  // a circle or an ellipse nothing, and anything that does NOT lie on it is
+  // evidence the family has to answer for.
+  const cut = stroke.closed ? pts.length : loopCut(pts)
+  const loop = cut !== null
+  if (cut !== null) {
     try {
       const c = fitCircle(pts)
       if (c) {
@@ -1291,9 +1498,25 @@ function recognizeInto(stroke: ProcessedStroke, out: FitResult[]): void {
     } catch { /* skip */ }
 
     try {
-      const f = fitFourier(pts, true, diag)
+      // Fourier reads its points as ONE closed period, so it is fitted on the
+      // first full turn: handed an overshoot it would spend its harmonics on
+      // the jump back to the start instead of on the shape. The overshoot is
+      // then measured geometrically against the fitted curve, so the family
+      // is still scored on every point drawn.
+      const ring = cut < pts.length ? pts.slice(0, cut) : pts
+      const f = fitFourier(ring, true, diag)
       if (f) {
-        push(makeCandidate('fourier', f.params, 'parametric', [0, 2 * Math.PI], f.rms, diag, 2 + f.N))
+        let rms = f.rms
+        if (ring !== pts) {
+          const ev = MODELS.fourier.evalParametric!
+          const S = 360
+          const poly: Vec2[] = []
+          for (let j = 0; j < S; j++) poly.push(ev(f.params, (2 * Math.PI * j) / S))
+          let ss = f.rms * f.rms * ring.length
+          for (let i = cut; i < pts.length; i++) ss += distToLoopSq(pts[i], poly)
+          rms = Math.sqrt(ss / pts.length)
+        }
+        push(makeCandidate('fourier', f.params, 'parametric', [0, 2 * Math.PI], rms, diag, 2 + f.N))
       }
     } catch { /* skip */ }
   }
@@ -1335,7 +1558,7 @@ function recognizeInto(stroke: ProcessedStroke, out: FitResult[]): void {
       const fullTurn: [number, number] = [0, 2 * Math.PI]
       const fitted: [number, number] = [thetaLo, thetaHi]
 
-      const loopDomain = stroke.closed || petalStyle ? fullTurn : fitted
+      const loopDomain = loop || petalStyle ? fullTurn : fitted
       const rose = fitRose(ps)
       if (rose) {
         push(makeCandidate('polarRose', rose.params, 'polar', loopDomain, rose.rms, diag, 3))
@@ -1350,6 +1573,9 @@ function recognizeInto(stroke: ProcessedStroke, out: FitResult[]): void {
       }
     }
   } catch { /* skip */ }
+
+  // ---- a circle in polar dress is a circle ----------------------------------
+  chargeRoundPolar(out)
 
   // ---- safety net -----------------------------------------------------------
   const best = out.reduce<number>((m, c) => Math.min(m, c.error / diag), Infinity)

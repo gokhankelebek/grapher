@@ -897,3 +897,211 @@ describe('fitQuality — the column that CAN sit beside a ranked list', () => {
     expect(q[1]).toBe(1)
   })
 })
+
+// ---------------------------------------------------------------------------
+// A circle is a circle — not a polar family that happens to draw one.
+//
+// A circle sketched through or around the origin is also a k = 1 rose
+// (r = a·cos(θ + c)), a limaçon with a small b, or a spiral that barely
+// climbs. Two things used to hand it to them: a stroke whose ENDPOINTS missed
+// the 8% closure window (an overshoot or gap of ~1/15 of a turn) got no
+// circle candidate at all, and where it did, the circle beat its polar twins
+// by only the ~2-point difference in complexity terms. Measured on 300 random
+// circle sketches (the sweep below at N = 300): 189/300 Circle before (22
+// rose, 28 limaçon, 8 spiral, 53 Fourier), 300/300 after.
+// ---------------------------------------------------------------------------
+
+describe('recognize — a circle in polar dress is a circle', () => {
+  const U = (rng: () => number, a: number, b: number) => a + (b - a) * rng()
+
+  /** A hand-drawn circle: centre (cx, cy), radius R, starting at `start`,
+   *  going round `turns` times in direction `dir`, with a little wobble. */
+  function circleStroke(
+    cx: number, cy: number, R: number, rng: () => number,
+    o: { start?: number; turns?: number; dir?: number; jitter?: number; n?: number } = {},
+  ) {
+    const start = o.start ?? 0
+    const dir = o.dir ?? 1
+    return drawStroke(
+      (t: number): Vec2 => ({ x: cx + R * Math.cos(start + dir * t), y: cy + R * Math.sin(start + dir * t) }),
+      0, 2 * Math.PI * (o.turns ?? 1), rng, { n: o.n ?? 160, jitter: o.jitter ?? JITTER },
+    )
+  }
+
+  /** A random circle sketch the way the sweep draws them. */
+  function randomCircle(seed: number) {
+    const rng = makeRng(seed * 9973 + 17)
+    const R = U(rng, 0.6, 4)
+    const mode = Math.floor(rng() * 5)
+    const d =
+      mode === 0 ? U(rng, 0, 0.08) * R         // centred on the origin
+        : mode === 1 ? U(rng, 0.93, 1.07) * R  // through the origin
+          : mode === 2 ? U(rng, 0.08, 0.93) * R // around it, off-centre
+            : mode === 3 ? U(rng, 1.07, 1.6) * R // just missing it
+              : U(rng, 0, 2.5) * R
+    const phi = U(rng, 0, 2 * Math.PI)
+    let cx = d * Math.cos(phi)
+    let cy = d * Math.sin(phi)
+    const s = Math.max(1, (Math.abs(cx) + R) / 9.3, (Math.abs(cy) + R) / 6.1) // stay on screen
+    cx /= s
+    cy /= s
+    return circleStroke(cx, cy, R / s, rng, {
+      start: U(rng, 0, 2 * Math.PI),
+      dir: rng() < 0.5 ? 1 : -1,
+      turns: 1 + U(rng, -0.04, 0.08), // a small gap … an overshoot
+      jitter: U(rng, 0.01, 0.06),
+      n: Math.floor(U(rng, 80, 260)),
+    })
+  }
+
+  it('random circle sketches come back Circle ≥ 99% (seed sweep)', () => {
+    const N = 150
+    const misses: string[] = []
+    for (let seed = 1; seed <= N; seed++) {
+      const res = recognize(randomCircle(seed), VP)
+      if (winner(res).modelId !== 'circle') misses.push(`seed ${seed}: ${ranking(res.slice(0, 3))}`)
+    }
+    expect(misses.length, misses.join('\n')).toBeLessThanOrEqual(Math.floor(0.01 * N))
+  })
+
+  it('genuine polar sketches and ellipses keep their reading ≥ 97% (seed sweep)', () => {
+    const N = 30
+    const polar = (f: (t: number) => number, rot = 0) => (t: number): Vec2 => {
+      const r = f(t)
+      return { x: r * Math.cos(t + rot), y: r * Math.sin(t + rot) }
+    }
+    type Shape = (rng: () => number) => { fn: (t: number) => Vec2; span: number }
+    const rose = (k: number): Shape => rng => {
+      const A = U(rng, 2, 5.5)
+      const c = U(rng, 0, 2 * Math.PI)
+      return { fn: polar(t => A * Math.cos(k * t + c)), span: k % 2 ? Math.PI : 2 * Math.PI }
+    }
+    // limaçons are drawn from a random starting angle (the family has no phase)
+    const limacon = (lo: number, hi: number): Shape => rng => {
+      const a = U(rng, 1.2, 3)
+      const b = (rng() < 0.5 ? 1 : -1) * U(rng, lo, hi) * a
+      const st = U(rng, 0, 2 * Math.PI)
+      const sc = Math.max(1, (a + Math.abs(b)) / 6)
+      return { fn: polar(t => (a + b * Math.cos(t + st)) / sc, st), span: 2 * Math.PI }
+    }
+    const spiral: Shape = rng => {
+      const span = U(rng, 1.3, 2.2) * 2 * Math.PI
+      const a = U(rng, 0, 0.5)
+      const b = U(rng, 4.5, 6) / span
+      return { fn: polar(t => a + b * t, U(rng, 0, 2 * Math.PI)), span }
+    }
+    const ellipse: Shape = rng => {
+      const rx = U(rng, 1.5, 4)
+      const ry = rx * U(rng, 0.45, 0.8)
+      const rot = U(rng, 0, Math.PI)
+      const cx = U(rng, -1, 1)
+      const cy = U(rng, -0.6, 0.6)
+      const st = U(rng, 0, 2 * Math.PI)
+      return {
+        fn: (t: number): Vec2 => {
+          const u = rx * Math.cos(t + st), v = ry * Math.sin(t + st)
+          return { x: cx + u * Math.cos(rot) - v * Math.sin(rot), y: cy + u * Math.sin(rot) + v * Math.cos(rot) }
+        },
+        span: 2 * Math.PI * (1 + U(rng, -0.03, 0.06)),
+      }
+    }
+    const suites: Array<[string, Shape, string]> = [
+      ['rose k=2', rose(2), 'polarRose'],
+      ['rose k=3', rose(3), 'polarRose'],
+      ['rose k=4', rose(4), 'polarRose'],
+      ['cardioid', limacon(1, 1), 'limacon'],
+      ['inner-loop limaçon', limacon(1.6, 2.4), 'limacon'],
+      ['dimpled limaçon b/a = 1/2', limacon(0.5, 0.5), 'limacon'],
+      ['dimpled limaçon b/a = 2/3', limacon(2 / 3, 2 / 3), 'limacon'],
+      ['Archimedean spiral', spiral, 'spiral'],
+      ['ellipse', ellipse, 'ellipse'],
+    ]
+    for (const [label, shape, want] of suites) {
+      let hits = 0
+      const misses: string[] = []
+      for (let seed = 1; seed <= N; seed++) {
+        const rng = makeRng(seed * 7919 + label.length * 131)
+        const { fn, span } = shape(rng)
+        const res = recognize(
+          drawStroke(fn, 0, span, rng, { n: Math.floor(U(rng, 140, 280)), jitter: U(rng, 0.01, 0.05) }), VP,
+        )
+        if (winner(res).modelId === want) hits++
+        else misses.push(`seed ${seed}: ${ranking(res.slice(0, 3))}`)
+      }
+      expect(hits, `${label}\n${misses.join('\n')}`).toBeGreaterThanOrEqual(Math.ceil(0.97 * N))
+    }
+  })
+
+  function expectCircle(res: FitResult[], cx: number, cy: number, R: number): void {
+    const w = expectWinner(res, 'circle')
+    expect(Math.abs(w.params[0] - cx)).toBeLessThan(0.05 * R + 0.02)
+    expect(Math.abs(w.params[1] - cy)).toBeLessThan(0.05 * R + 0.02)
+    expect(relErr(w.params[2], R)).toBeLessThan(0.05)
+    // every polar reading that draws a circle ranks BELOW the circle
+    for (const c of res) {
+      if (c.modelId === 'polarRose' && Math.round(c.params[1]) === 1) {
+        expect(c.score).toBeGreaterThan(w.score)
+      }
+    }
+  }
+
+  // Each drawn three ways: closed at the endpoints, overshooting by a tenth
+  // of a turn, and stopping a twentieth of a turn short.
+  const ways: Array<[string, number]> = [['closed', 1], ['overshoot', 1.1], ['gap', 0.95]]
+
+  for (const [how, turns] of ways) {
+    it(`a circle THROUGH the origin is a circle, not a k = 1 rose (${how})`, () => {
+      // centre (1.2, 1.6), radius 2: passes through (0, 0)
+      const res = recognize(circleStroke(1.2, 1.6, 2, makeRng(5101), { turns, start: 2.5 }), VP)
+      expectCircle(res, 1.2, 1.6, 2)
+      // …and on the x-axis, where a limaçon r = b·cos θ is also this circle
+      const res2 = recognize(circleStroke(2.5, 0, 2.5, makeRng(5102), { turns, start: 1 }), VP)
+      expectCircle(res2, 2.5, 0, 2.5)
+    })
+
+    it(`a circle CENTRED at the origin is a circle, not a limaçon or spiral (${how})`, () => {
+      const res = recognize(circleStroke(0, 0, 3, makeRng(5103), { turns, start: 0.4, dir: -1 }), VP)
+      expectCircle(res, 0, 0, 3)
+    })
+
+    it(`a SMALL circle near the origin is a circle (${how})`, () => {
+      const res = recognize(circleStroke(0.25, -0.15, 0.6, makeRng(5104), { turns, start: 4 }), VP)
+      expectCircle(res, 0.25, -0.15, 0.6)
+    })
+  }
+
+  it('an overshooting circle that misses the closure window still gets a circle reading', () => {
+    const st = circleStroke(-0.8, 0.5, 2.2, makeRng(5105), { turns: 1.15, start: 1.3 })
+    expect(st.closed).toBe(false)
+    expectCircle(recognize(st, VP), -0.8, 0.5, 2.2)
+  })
+
+  it('going round is not enough on its own: a figure-eight and an open arc are not circles', () => {
+    // a figure-eight turns once each way — never a loop, whatever the centre
+    for (let seed = 1; seed <= 8; seed++) {
+      const res = drawAndRecognize(
+        (t: number): Vec2 => ({ x: 3 * Math.sin(t), y: 3 * Math.sin(t) * Math.cos(t) }),
+        0, 2 * Math.PI * 1.06, makeRng(5200 + seed),
+      )
+      expect(winner(res).modelId, ranking(res.slice(0, 3))).not.toBe('circle')
+    }
+    // three quarters of a circle is an arc: no circle candidate is offered
+    const arc = drawStroke(
+      (t: number): Vec2 => ({ x: 1 + 2.5 * Math.cos(t), y: -0.5 + 2.5 * Math.sin(t) }),
+      0, 2 * Math.PI * 0.75, makeRng(5210),
+    )
+    expect(candidate(recognize(arc, VP), 'circle')).toBeUndefined()
+  })
+
+  it('a heart drawn with an overshoot is still a Fourier curve, not a circle', () => {
+    const s = 0.18
+    const res = drawAndRecognize(
+      (t: number): Vec2 => ({
+        x: s * 16 * Math.pow(Math.sin(t), 3),
+        y: s * (13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t)),
+      }),
+      0.3, 0.3 + 2 * Math.PI * 1.1, makeRng(5220),
+    )
+    expectWinner(res, 'fourier')
+  })
+})
