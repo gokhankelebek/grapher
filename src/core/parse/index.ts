@@ -1049,6 +1049,20 @@ interface SingSource {
   within: Piece[] | null
   /** q calls a named curve, so its zeros move when that curve changes */
   live?: boolean
+  /**
+   * Set for a named call f(u), f′(u), f″(u): q is then the ARGUMENT u, and the
+   * singular x are where u(x) hits one of f's own singular values (asked of
+   * env.singularities) — not the zeros of q.
+   */
+  call?: CallSing
+}
+
+/** A named call's singularities, mapped back through its argument. */
+interface CallSing {
+  name: string
+  env: FunctionEnv
+  /** u = a·x + b with a, b free of x: solved exactly, no scan */
+  linear: boolean
 }
 
 /** Everything a compiled expression knows about its own singularities. */
@@ -1070,13 +1084,16 @@ function negativeExponent(n: Node): boolean {
 /**
  * Walk the AST once, compiling every sub-expression whose zeros are singular.
  *
- * A named call f(u) contributes NONE of its own: f's poles and holes are
- * f's business, and are not visible through env.eval. Only the call's
- * argument is walked, and a named call INSIDE a written denominator, tan or
- * logarithm counts as usual — 1/f(x) is singular where f(x) = 0. So the
- * singularities of g(x) = 2f(x − 1) + 3 with f = 1/x are NOT reported (g
- * draws its asymptote as a steep pen stroke, not as a found pole), while
- * those of 1/f(x), tan(f(x)) or f(1/x) are.
+ * A named call f(u) — and f′(u), f″(u), which are undefined wherever f is —
+ * contributes f's OWN singular values s (poles, holes, exclusions, vertical
+ * asymptotes), asked of env.singularities at scan time, mapped back through
+ * the argument: the x where u(x) = s. So g(x) = 2f(x − 1) + 3 with f = 1/x
+ * reports its asymptote at x = 1. An env without `singularities` makes the
+ * call contribute nothing of its own (and adds no source, so such a plan is
+ * exactly what it was before). The argument is walked as well, so f(1/x) is
+ * singular at 0 and f(g(x)) collects g's own set through the inner call; a
+ * named call INSIDE a written denominator, tan or logarithm counts as usual —
+ * 1/f(x) is singular where f(x) = 0.
  */
 function collectSingSources(n: Node, within: Piece[] | null, out: SingSource[]): void {
   const push = (m: Node, q: Evaluator): void => {
@@ -1084,6 +1101,18 @@ function collectSingSources(n: Node, within: Piece[] | null, out: SingSource[]):
   }
   switch (n.t) {
     case 'ucall':
+      if (typeof n.env.singularities === 'function') {
+        const shape = affineShape(n.arg)
+        // a constant argument (f(2)) is singular everywhere or nowhere: no x
+        if (shape !== 'const') {
+          out.push({
+            q: compile(n.arg),
+            within,
+            live: true,
+            call: { name: n.name, env: n.env, linear: shape === 'lin' },
+          })
+        }
+      }
       collectSingSources(n.arg, within, out)
       break
     case 'neg':
@@ -1116,6 +1145,50 @@ function collectSingSources(n: Node, within: Piece[] | null, out: SingSource[]):
     default:
       break
   }
+}
+
+/**
+ * How an expression depends on the scanned variable (slot a: x, θ or t):
+ * 'const' — not at all; 'lin' — a·x + b with a, b free of it; null — any
+ * other way (or through y, or through a named call of it). Conservative: a
+ * linear expression written unusually ((x + 1)^1) is null and simply gets
+ * the scan instead of the closed form.
+ */
+function affineShape(n: Node): 'const' | 'lin' | null {
+  switch (n.t) {
+    case 'num':
+    case 'const':
+    case 'param':
+      return 'const'
+    case 'var':
+      return n.name === 'y' ? null : 'lin'
+    case 'neg':
+      return affineShape(n.a)
+    case 'bin': {
+      const a = affineShape(n.a)
+      const b = affineShape(n.b)
+      if (a === null || b === null) return null
+      switch (n.op) {
+        case '+':
+        case '-':
+          return a === 'lin' || b === 'lin' ? 'lin' : 'const'
+        case '*':
+          if (a === 'const') return b
+          if (b === 'const') return a
+          return null
+        case '/':
+          return b === 'const' ? a : null
+        case '^':
+          return a === 'const' && b === 'const' ? 'const' : null
+      }
+      return null
+    }
+    case 'call':
+      return n.args.every((m) => affineShape(m) === 'const') ? 'const' : null
+    case 'ucall':
+      return affineShape(n.arg) === 'const' ? 'const' : null
+  }
+  return null
 }
 
 /** The singularity plan for one explicit body, unrestricted. */
@@ -1203,12 +1276,20 @@ function scanSingularZeros(q: Scalar, lo: number, hi: number, out: number[]): vo
   const step = (hi - lo) / n
   const xs = new Array<number>(n + 1)
   const ys = new Array<number>(n + 1)
-  const mags: number[] = []
   for (let i = 0; i <= n; i++) {
     const x = i === n ? hi : lo + i * step
     xs[i] = x
-    const v = q(x)
-    ys[i] = v
+    ys[i] = q(x)
+  }
+  scanSampledZeros(q, xs, ys, out)
+}
+
+/** scanSingularZeros on samples already taken: ys[i] = q(xs[i]). */
+function scanSampledZeros(q: Scalar, xs: number[], ys: number[], out: number[]): void {
+  const n = xs.length - 1
+  const mags: number[] = []
+  for (let i = 0; i <= n; i++) {
+    const v = ys[i]
     if (Number.isFinite(v)) mags.push(Math.abs(v))
   }
   if (mags.length === 0) return
@@ -1248,6 +1329,88 @@ function scanSingularZeros(q: Scalar, lo: number, hi: number, out: number[]): vo
   }
 }
 
+/**
+ * More singular values of a called curve than this in the image of its
+ * argument (tan called with e^x) and the call reports none: a list that
+ * long is a smear at any zoom, and scanning it would be the frame budget.
+ */
+const SING_CALL_MAX = 2000
+
+/** env.singularities, guarded: a throwing or odd env reports nothing. */
+function envSingularities(c: CallSing, lo: number, hi: number): number[] {
+  let r: unknown
+  try { r = c.env.singularities!(c.name, [lo, hi]) } catch { return [] }
+  if (!Array.isArray(r)) return []
+  return r.filter((v): v is number => typeof v === 'number' && Number.isFinite(v))
+}
+
+/**
+ * The x in [lo, hi] where a named call f(u) is undefined: u(x) = s for each
+ * singular value s of f. `u` is the call's argument at the current params.
+ *
+ * Linear u (x − 1, 2x, (x + 3)/a) is solved in closed form, x = (s − b)/a.
+ * Anything else is sampled once (SING_SAMPLES + 1 points, which also gives
+ * the image of u to ask f about) and each u − s is scanned on those samples
+ * exactly as a denominator is — sign changes bisected, touches refined. A
+ * "crossing" that is really u jumping across s at its own pole is dropped:
+ * u there is nowhere near s (u's pole is reported by u's own sources).
+ */
+function callSingularities(c: CallSing, u: Scalar, lo: number, hi: number, out: number[]): void {
+  if (c.linear) {
+    const b = u(0)
+    const a = u(1) - b
+    if (!Number.isFinite(a) || !Number.isFinite(b) || a === 0) return
+    const ua = a * lo + b
+    const ub = a * hi + b
+    const uLo = Math.min(ua, ub)
+    const uHi = Math.max(ua, ub)
+    const pad = 1e-9 * Math.max(1, Math.abs(uLo), Math.abs(uHi))
+    const ss = envSingularities(c, uLo - pad, uHi + pad)
+    if (ss.length > SING_CALL_MAX) return
+    for (const s of ss) {
+      const x = (s - b) / a
+      if (!Number.isFinite(x)) continue
+      const tol = 1e-12 * Math.max(1, Math.abs(x))
+      out.push(snapSingular((t) => u(t) - s, x, x - tol, x + tol))
+    }
+    return
+  }
+
+  const n = SING_SAMPLES
+  const step = (hi - lo) / n
+  const xs = new Array<number>(n + 1)
+  const us = new Array<number>(n + 1)
+  let uLo = Infinity
+  let uHi = -Infinity
+  for (let i = 0; i <= n; i++) {
+    const x = i === n ? hi : lo + i * step
+    xs[i] = x
+    const v = u(x)
+    us[i] = v
+    if (Number.isFinite(v)) {
+      if (v < uLo) uLo = v
+      if (v > uHi) uHi = v
+    }
+  }
+  if (!(uHi > uLo)) return // u never moves (or is never defined): no x to name
+  // samples can step over an extremum of u; the touch scan finds it exactly
+  const pad = 0.02 * (uHi - uLo)
+  const ss = envSingularities(c, uLo - pad, uHi + pad)
+  if (ss.length > SING_CALL_MAX) return
+  const ys = new Array<number>(n + 1)
+  for (const s of ss) {
+    const q: Scalar = (x) => u(x) - s
+    for (let i = 0; i <= n; i++) ys[i] = us[i] - s
+    const found: number[] = []
+    scanSampledZeros(q, xs, ys, found)
+    const tol = 1e-6 * Math.max(1, Math.abs(s))
+    for (const r of found) {
+      const v = q(r)
+      if (Number.isFinite(v) && Math.abs(v) <= tol) out.push(r)
+    }
+  }
+}
+
 /** True when `x` is a number somebody could have written down. */
 const looksWritten = (x: number): boolean => x === Number(x.toPrecision(12))
 
@@ -1268,7 +1431,8 @@ function computeSingularities(
       return typeof v === 'number' ? v : Number.NaN
     }
     const found: number[] = []
-    scanSingularZeros(q, lo, hi, found)
+    if (s.call) callSingularities(s.call, q, lo, hi, found)
+    else scanSingularZeros(q, lo, hi, found)
     for (const r of found) {
       if (s.within === null || inPieces(s.within, r)) raw.push(r)
     }

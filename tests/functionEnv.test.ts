@@ -290,6 +290,118 @@ describe('named calls — speed', () => {
 })
 
 // ---------------------------------------------------------------------------
+// named calls — a called curve's singularities, mapped through the argument
+// ---------------------------------------------------------------------------
+
+/**
+ * makeEnv plus `singularities`, answered from each name's real parsed model —
+ * its own `singularities` (denominators, exclusions), as the App's env does.
+ */
+function makeSingEnv(defs: Record<string, string>): FunctionEnv & { define(name: string, src: string): void } {
+  const models = new Map<string, { spec: ModelSpec; params: number[] }>()
+  const define = (name: string, src: string): void => {
+    const o = parseExpression(src)
+    if (!o.ok) throw new Error(`bad def ${src}: ${o.error}`)
+    models.set(name, { spec: o.plot.makeModel(name), params: o.plot.defaultParams })
+  }
+  for (const [k, v] of Object.entries(defs)) define(k, v)
+  return {
+    has: (n) => models.has(n),
+    eval: (n, x) => {
+      const m = models.get(n)
+      return m ? m.spec.evalExplicit!(m.params, x) : Number.NaN
+    },
+    singularities: (n, range) => {
+      const m = models.get(n)
+      return m?.spec.singularities ? m.spec.singularities(m.params, range) : []
+    },
+    define,
+  }
+}
+
+describe('named calls — the called curve\'s singularities', () => {
+  const singWith = (src: string, env: FunctionEnv, range: [number, number] = [-10, 10]) =>
+    plotWith(src, env).makeModel('m').singularities!([], range)
+
+  it('g(x) = 2f(x − 1) + 3 with f = 1/x is singular at exactly 1', () => {
+    const env = makeSingEnv({ f: '1/x' })
+    expect(singWith('2f(x - 1) + 3', env)).toEqual([1])
+    expect(singWith('g(x) = 2f(x - 1) + 3', env)).toEqual([1])
+    // linear arguments of every spelling, solved exactly
+    expect(singWith('f(2x)', env)).toEqual([0])
+    expect(singWith('f(3 - x)', env)).toEqual([3])
+    expect(singWith('f((x + 3)/2)', env)).toEqual([-3])
+  })
+
+  it('a nonlinear argument is scanned: f(x² − 4) at ±2, f(x²) touching at 0', () => {
+    const env = makeSingEnv({ f: '1/x' })
+    expect(singWith('f(x^2 - 4)', env)).toEqual([-2, 2])
+    expect(singWith('f(x^2)', env)).toEqual([0])
+    // a value f's argument never reaches gives nothing: x² + 1 never hits 0
+    expect(singWith('f(x^2 + 1)', env)).toEqual([])
+  })
+
+  it("f'(u) and f''(u) inherit f's singularities", () => {
+    const env = makeSingEnv({ f: '1/x' })
+    expect(singWith("f'(x - 1)", env)).toEqual([1])
+    expect(singWith("f''(2x + 4)", env)).toEqual([-2])
+  })
+
+  it('an exclusion of f is mapped too: f = x² {x ≠ 2} called as f(2x) is singular at 1', () => {
+    const env = makeSingEnv({ f: 'y = x^2 {x != 2}' })
+    expect(singWith('f(2x)', env)).toEqual([1])
+  })
+
+  it('composition: f(g(x)) collects f through g AND g\'s own set', () => {
+    const env = makeSingEnv({ f: '1/x', g: 'x - 1', h: '1/(x - 3)' })
+    // f's 0 is where g(x) = 0
+    expect(singWith('f(g(x))', env)).toEqual([1])
+    // h's pole at 3 comes from the inner call; h(x) = 0 nowhere (its jump
+    // across 0 at the pole is not a crossing)
+    expect(singWith('f(h(x))', env)).toEqual([3])
+  })
+
+  it('follows f live: redefining f moves the answer without re-parsing', () => {
+    const env = makeSingEnv({ f: '1/x' })
+    const m = plotWith('f(x - 1)', env).makeModel('m')
+    expect(m.singularities!([], [-10, 10])).toEqual([1])
+    env.define('f', '1/(x - 2)')
+    expect(m.singularities!([], [-10, 10])).toEqual([3])
+    env.define('f', 'x^2')
+    expect(m.singularities!([], [-10, 10])).toEqual([])
+  })
+
+  it('an argument with a slider is solved at the current params', () => {
+    const env = makeSingEnv({ f: '1/x' })
+    const p = plotWith('f(x - a)', env)
+    const m = p.makeModel('m')
+    expect(m.singularities!([1], [-10, 10])).toEqual([1])
+    expect(m.singularities!([2.5], [-10, 10])).toEqual([2.5])
+  })
+
+  it('only the requested range counts, and a constant argument names no x', () => {
+    const env = makeSingEnv({ f: '1/x' })
+    expect(singWith('f(x - 5)', env, [-2, 2])).toEqual([])
+    expect(singWith('f(0) + x', env)).toEqual([])
+  })
+
+  it('an env without singularities, or one that throws, reports exactly as before', () => {
+    const plain = makeEnv({ f: '1/x' })
+    for (const src of ['2f(x - 1) + 3', 'f(x^2 - 4)', "f'(x)", 'f(x)·x']) {
+      expect(singWith(src, plain), src).toEqual([])
+    }
+    // the old behaviour, byte-identical, where a denominator is written
+    expect(singWith('1/f(x - 1) + 1/(x + 4)', plain)).toEqual([-4])
+    const throwing: FunctionEnv = {
+      has: (n) => n === 'f',
+      eval: (_n, x) => 1 / x,
+      singularities: () => { throw new Error('boom') },
+    }
+    expect(singWith('2f(x - 1) + 3', throwing)).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
 // referencedNames
 // ---------------------------------------------------------------------------
 

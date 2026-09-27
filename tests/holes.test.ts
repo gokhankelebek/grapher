@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest'
 import type { Asymptote, FittedCurve, ModelSpec } from '../src/core/types'
 import { parseExpression } from '../src/core/parse'
+import type { FunctionEnv } from '../src/core/functionEnv'
 import { MODELS } from '../src/core/fit/models'
 import { findAsymptotes, findEndAsymptotes, findHoles, findPoles } from '../src/core/holes'
 import { analyzeCurve } from '../src/core/analyze'
@@ -1077,5 +1078,122 @@ describe('findEndAsymptotes — step functions are checked off the ladder', () =
     expect(lines).toHaveLength(1)
     expect(lines[0].m).toBe(0)
     expect(lines[0].b).toBeCloseTo(1, 6)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// named calls — a line that calls another curve inherits its holes and poles
+// ---------------------------------------------------------------------------
+
+/**
+ * A FunctionEnv over typed formulas whose `singularities` answers from each
+ * name's real parsed model, as the App's env does.
+ */
+function singEnv(defs: Record<string, string>): FunctionEnv {
+  const models = new Map<string, { spec: ModelSpec; params: number[] }>()
+  for (const [name, src] of Object.entries(defs)) {
+    const o = parseExpression(src)
+    if (!o.ok) throw new Error(`bad def ${src}: ${o.error}`)
+    models.set(name, { spec: o.plot.makeModel(name), params: o.plot.defaultParams })
+  }
+  return {
+    has: (n) => models.has(n),
+    eval: (n, x) => {
+      const m = models.get(n)
+      return m ? m.spec.evalExplicit!(m.params, x) : Number.NaN
+    },
+    singularities: (n, range) => {
+      const m = models.get(n)
+      return m?.spec.singularities ? m.spec.singularities(m.params, range) : []
+    },
+  }
+}
+
+/** typed(), parsed against an env. */
+function typedWith(src: string, env: FunctionEnv): Typed {
+  const r = parseExpression(src, env)
+  if (!r.ok) throw new Error(`expected "${src}" to parse, got: ${r.error}`)
+  const spec = r.plot.makeModel('expr_1')
+  const curve: FittedCurve = {
+    id: 'test-curve', modelId: 'expr_1', params: r.plot.defaultParams, kind: r.plot.kind,
+    domain: r.plot.domain, color: '#4f9cf9', strokeWidth: 2.5, visible: true, error: 0,
+  }
+  return { curve, models: { expr_1: spec }, spec }
+}
+
+describe('named calls — holes and asymptotes of the called curve', () => {
+  const R: [number, number] = [-10, 10]
+  const verticals = (t: Typed) =>
+    findAsymptotes(t.curve, t.models, R)
+      .filter((a): a is Extract<Asymptote, { kind: 'vertical' }> => a.kind === 'vertical')
+      .map((a) => a.x)
+
+  it('g(x) = 2f(x − 1) + 3 with f = 1/x has its vertical asymptote at 1', () => {
+    const t = typedWith('g(x) = 2f(x - 1) + 3', singEnv({ f: '1/x' }))
+    expect(findPoles(t.curve, t.models, R)).toEqual([1])
+    expect(verticals(t)).toEqual([1])
+    expect(findHoles(t.curve, t.models, R)).toEqual([])
+  })
+
+  it('h(x) = f(x² − 4) has vertical asymptotes at ±2', () => {
+    const t = typedWith('h(x) = f(x^2 - 4)', singEnv({ f: '1/x' }))
+    expect(findPoles(t.curve, t.models, R)).toEqual([-2, 2])
+    expect(verticals(t)).toEqual([-2, 2])
+  })
+
+  it('k(x) = f(x)·x with f = 1/x has a removable hole at 0, not a pole', () => {
+    const t = typedWith('k(x) = f(x)*x', singEnv({ f: '1/x' }))
+    const holes = findHoles(t.curve, t.models, R)
+    expect(holes).toHaveLength(1)
+    expect(holes[0].x).toBe(0)
+    expect(holes[0].y).toBeCloseTo(1, 6)
+    expect(findPoles(t.curve, t.models, R)).toEqual([])
+  })
+
+  it('f = x² {x ≠ 2} called as f(2x) has a hole at 1', () => {
+    const t = typedWith('f(2x)', singEnv({ f: 'y = x^2 {x != 2}' }))
+    const holes = findHoles(t.curve, t.models, R)
+    expect(holes).toHaveLength(1)
+    expect(holes[0].x).toBe(1)
+    expect(holes[0].y).toBeCloseTo(4, 6)
+    expect(findPoles(t.curve, t.models, R)).toEqual([])
+  })
+
+  it('an env without singularities reports nothing — the old behaviour', () => {
+    const withSing = singEnv({ f: '1/x' })
+    const plain: FunctionEnv = { has: withSing.has, eval: withSing.eval }
+    for (const src of ['2f(x - 1) + 3', 'f(x^2 - 4)', 'f(x)*x']) {
+      const t = typedWith(src, plain)
+      expect(t.spec.singularities!(t.curve.params, R), src).toEqual([])
+      expect(findPoles(t.curve, t.models, R), src).toEqual([])
+      expect(findHoles(t.curve, t.models, R), src).toEqual([])
+    }
+  })
+
+  it('a line with no named call costs what it did', () => {
+    // same plan as before (no call source), still memoised: the second ask is
+    // a cache hit and far cheaper than a scan
+    const t = typed('y = (x^2-1)/(x-1)')
+    t.spec.singularities!(t.curve.params, R)
+    const n = 2000
+    const t0 = performance.now()
+    for (let i = 0; i < n; i++) t.spec.singularities!(t.curve.params, R)
+    const per = (performance.now() - t0) / n
+    expect(per, `${per.toFixed(4)} ms per call`).toBeLessThan(0.05)
+  })
+
+  it('a named-call round (singularities + holes + poles) stays under a few ms', () => {
+    const t = typedWith('h(x) = 2f(x^2 - 4) + f(x - 1)', singEnv({ f: '1/x' }))
+    const once = () => {
+      t.spec.singularities!(t.curve.params, R)
+      findHoles(t.curve, t.models, R)
+      findPoles(t.curve, t.models, R)
+    }
+    for (let i = 0; i < 10; i++) once()
+    const n = 50
+    const t0 = performance.now()
+    for (let i = 0; i < n; i++) once()
+    const per = (performance.now() - t0) / n
+    expect(per, `${per.toFixed(3)} ms per call`).toBeLessThan(5)
   })
 })
