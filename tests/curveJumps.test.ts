@@ -18,7 +18,7 @@ import { describe, it, expect } from 'vitest'
 import type { FittedCurve, ModelSpec, Viewport } from '../src/core/types'
 import { parseExpression } from '../src/core/parse'
 import { MODELS } from '../src/core/fit/models'
-import { drawCurve, sampleExplicitPolylines, traceCurve, type CurveTrace } from '../src/render/curves'
+import { drawCurve, sampleExplicitPolylines, traceCurve, type CurveJump, type CurveTrace } from '../src/render/curves'
 import { MockCtx, withMockPath2D, type MockPath2D } from './mockCanvas'
 
 type Ctx2D = Parameters<typeof drawCurve>[0]
@@ -274,5 +274,106 @@ describe('cost', () => {
     for (let i = 0; i < N; i++) traceCurve(curve, models, VP_OFF)
     const per = (performance.now() - t0) / N
     expect(per, `${per.toFixed(3)} ms per trace`).toBeLessThan(2)
+  })
+})
+
+// ===========================================================================
+// The jumps the stroke was broken at: traceCurve(...).jumps
+// ===========================================================================
+
+describe('trace.jumps: where, the two limits, and f there', () => {
+  const pick = (j: CurveJump): [number, number, number, number] => [j.x, j.left, j.right, j.value]
+
+  it('⌊x⌋: every integer, snapped exactly, left n − 1, right n, f(n) = n', () => {
+    for (const vp of [VP, VP_OFF]) {
+      const { curve, models } = typed('y = floor(x)')
+      const js = traceCurve(curve, models, vp)!.jumps
+      expect(js.map((j) => j.x)).toEqual([-7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7])
+      for (const j of js) {
+        expect(j.exact).toBe(true)
+        expect(j.left).toBeCloseTo(j.x - 1, 9)
+        expect(j.right).toBeCloseTo(j.x, 9)
+        expect(j.value).toBe(j.x)
+      }
+    }
+  })
+
+  it('⌈x⌉ attains the left limit; sign x attains neither; |x|/x has no value', () => {
+    const ceil = traceCurve(typed('y = ceil(x)').curve, typed('y = ceil(x)').models, VP_OFF)!.jumps
+    const at1 = ceil.find((j) => j.x === 1)!
+    expect(pick(at1)).toEqual([1, 1, 2, 1])
+    for (const vp of [VP, VP_OFF]) {
+      const s = typed('y = sign(x)')
+      expect(traceCurve(s.curve, s.models, vp)!.jumps.map(pick)).toEqual([[0, -1, 1, 0]])
+      const q = typed('y = abs(x)/x')
+      const js = traceCurve(q.curve, q.models, vp)!.jumps
+      expect(js).toHaveLength(1)
+      expect(js[0].x).toBe(0)
+      expect([js[0].left, js[0].right]).toEqual([-1, 1])
+      expect(js[0].value).toBeNaN()
+      expect(Object.is(js[0].x, -0)).toBe(false)
+    }
+  })
+
+  it('snaps to fractions and π multiples when the function separates there', () => {
+    const half = typed('y = floor(2x)')
+    const xs = traceCurve(half.curve, half.models, VP)!.jumps.map((j) => j.x)
+    expect(xs).toContain(0.5)
+    expect(xs).toContain(-2.5)
+    const trig = typed('y = floor(sin(x))')
+    const tx = traceCurve(trig.curve, trig.models, VP)!.jumps.map((j) => j.x)
+    expect(tx).toContain(Math.PI)
+    expect(tx).toContain(-Math.PI)
+  })
+
+  it('a jump no nice number separates is kept, but not exact — ⌊x²⌋ at √2', () => {
+    const { curve, models } = typed('y = floor(x^2)')
+    const js = traceCurve(curve, models, VP)!.jumps
+    const r2 = js.find((j) => Math.abs(j.x - Math.SQRT2) < 1e-6)!
+    expect(r2.exact).toBe(false)
+    expect(r2.value).toBeNaN()
+    expect([r2.left, r2.right].map((v) => Math.round(v))).toEqual([1, 2])
+    expect(js.find((j) => j.x === 2)!.exact).toBe(true)
+  })
+
+  it('poles and continuous curves have no jumps', () => {
+    for (const src of ['y = tan(x)', 'y = 1/x', 'y = 1/x^2', 'y = ln(abs(x))', 'y = 50x', 'y = x^(1/3)', 'y = sin(x)']) {
+      for (const vp of [VP, VP_OFF]) {
+        const { curve, models } = typed(src)
+        expect(traceCurve(curve, models, vp)!.jumps, src).toEqual([])
+      }
+    }
+  })
+
+  it('a piecewise curve reports no jump at a piece end, only inside a piece', () => {
+    const three = typed(THREE)
+    expect(traceCurve(three.curve, three.models, VP)!.jumps).toEqual([])
+    const r = typed('y = floor(x) {-3 <= x < 3}')
+    expect(traceCurve(r.curve, r.models, VP)!.jumps.map((j) => j.x)).toEqual([-2, -1, 0, 1, 2])
+  })
+
+  it('drawCurve fills its `jumps` out-param with the same list, and draws the same path', () => {
+    const { curve, models } = typed('y = floor(x/2) + 1')
+    const out: CurveJump[] = []
+    const withOut = withMockPath2D(() => {
+      const ctx = new MockCtx()
+      drawCurve(ctx as unknown as Ctx2D, curve, models, VP_OFF, false, { jumps: out })
+      return ctx.strokedPaths[0].cmds
+    })
+    const plain = pathFor(curve, models, VP_OFF)!.cmds
+    expect(withOut).toEqual(plain)
+    expect(out.map(pick)).toEqual(traceCurve(curve, models, VP_OFF)!.jumps.map(pick))
+    expect(out.map((j) => j.x)).toEqual([-6, -4, -2, 0, 2, 4, 6])
+  })
+
+  it('jumps cost little on top of the trace — ⌊10x⌋/10, 150 steps', () => {
+    const { curve, models } = typed('y = floor(10x)/10')
+    const N = 20
+    let n = 0
+    const t0 = performance.now()
+    for (let i = 0; i < N; i++) n += traceCurve(curve, models, VP_OFF)!.jumps.length
+    const per = (performance.now() - t0) / N
+    expect(n / N).toBeGreaterThan(140)
+    expect(per, `${per.toFixed(3)} ms per trace + jumps`).toBeLessThan(10)
   })
 })

@@ -531,3 +531,30 @@ describe('absent pieces: the board it always was', () => {
     }
   })
 })
+
+// ===========================================================================
+// 7. With the jump-dot layer (src/render/jumpDots.ts)
+// ===========================================================================
+
+describe('piece dots and jump dots share the board without doubling', () => {
+  it('⌊x⌋ as ONE piece [−3, 3): ends from this layer, inner steps from the jump layer', () => {
+    const one = piecewise('onefloor', [
+      { f: (x) => Math.floor(x), lo: -3, hi: 3, loClosed: true, hiClosed: false },
+    ])
+    const ctx = render(scene({ curves: [curve('onefloor')], models: { ...MODELS_PW, onefloor: one } }))
+    const f = discs(ctx, SCREEN_INK, DARK_THEME.bg)
+    const o = rings(ctx, SCREEN_INK, DARK_THEME.bg)
+    expect(f).toHaveLength(6)
+    expect(o).toHaveLength(6)
+    for (const k of [-3, -2, -1, 0, 1, 2]) {
+      expect(f.filter((a) => near(a, sx(k), sy(k))), `● at ${k}`).toHaveLength(1)
+      expect(o.filter((a) => near(a, sx(k + 1), sy(k))), `○ at ${k + 1}`).toHaveLength(1)
+    }
+  })
+
+  it('six ⌊x⌋ pieces: every step is a piece end, and the jump layer adds nothing', () => {
+    const ctx = render(scene({ curves: [curve('floor')] }))
+    expect(discs(ctx, SCREEN_INK, DARK_THEME.bg)).toHaveLength(6)
+    expect(rings(ctx, SCREEN_INK, DARK_THEME.bg)).toHaveLength(6)
+  })
+})

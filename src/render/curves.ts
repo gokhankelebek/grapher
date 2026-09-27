@@ -94,6 +94,18 @@ interface Emitter {
   /** The most recent NON-finite sample, for the run that comes back after it. */
   badT: number
   hasBad: boolean
+  /**
+   * Optional listener on every place the pen was lifted for a reason that
+   * could be a finite JUMP: a probed gap the probe broke (its final bracket,
+   * ~1e-9 of the span wide), or an undefined stretch no wider than
+   * GAP_JUMP_REL of the span between two defined samples (|x|/x sampled AT
+   * 0). `a` < `b` bracket the break. Poles report here too — telling the two
+   * apart is `analyzeJumps`' business, asked only when someone wants the
+   * answer. Null for every ordinary paint.
+   */
+  jump: ((a: number, b: number) => void) | null
+  /** A finite sample has been emitted since the reset (lastT is real). */
+  anyT: boolean
 }
 
 // path/f are assigned by resetEmitter before any use; kept unset here so merely
@@ -114,6 +126,8 @@ const EM: Emitter = {
   edge: null,
   badT: 0,
   hasBad: false,
+  jump: null,
+  anyT: false,
 }
 
 function resetEmitter(
@@ -137,6 +151,8 @@ function resetEmitter(
   em.edge = null
   em.badT = 0
   em.hasBad = false
+  em.jump = null
+  em.anyT = false
 }
 
 // ---------------------------------------------------------------------------
@@ -195,6 +211,15 @@ const SPANS = new Float64Array(PROBE_STEPS + 1) // span history, reused
 
 /** Probe counters, for the performance report and its tests. */
 export const PROBE_STATS = { probes: 0, evals: 0 }
+/** The bracket the last probe that returned `true` ended on (a < b in t). */
+const PROBE_OUT = { a: 0, b: 0 }
+/**
+ * An undefined stretch this narrow (a fraction of the sampled span) between
+ * two defined samples is a candidate jump point, not a gap in the domain: the
+ * refinement localises an isolated undefined sample to the depth cap, 1/(160·
+ * 2^8) ≈ 2.4e-5 of the span, on each side.
+ */
+const GAP_JUMP_REL = 1e-4
 
 function isDiscontinuity(
   f: EvalToScreen,
@@ -209,12 +234,12 @@ function isDiscontinuity(
   for (let i = 1; i <= PROBE_STEPS; i++) {
     const mT = (aT + bT) / 2
     // interval collapsed to floating-point resolution with the gap still open
-    if (mT === aT || mT === bT) return true
+    if (mT === aT || mT === bT) return probeBroke(aT, bT)
     f(mT, PROBE)
     PROBE_STATS.evals++
     const mX = PROBE.x
     const mY = PROBE.y
-    if (!PROBE.ok || !Number.isFinite(mX) || !Number.isFinite(mY)) return true
+    if (!PROBE.ok || !Number.isFinite(mX) || !Number.isFinite(mY)) return probeBroke(aT, bT)
     const lo = Math.hypot(mX - aX, mY - aY)
     const hi = Math.hypot(bX - mX, bY - mY)
     let span: number
@@ -223,9 +248,15 @@ function isDiscontinuity(
     if (span <= JOIN_PX) return false // collapsed: continuous, just steep
     SPANS[i] = span
     if (Math.abs(bT - aT) <= tEps) {
-      return span >= HOLD_RATIO * SPANS[Math.max(0, i - HOLD_STEPS)]
+      return span >= HOLD_RATIO * SPANS[Math.max(0, i - HOLD_STEPS)] && probeBroke(aT, bT)
     }
   }
+  return probeBroke(aT, bT)
+}
+
+function probeBroke(a: number, b: number): true {
+  PROBE_OUT.a = Math.min(a, b)
+  PROBE_OUT.b = Math.max(a, b)
   return true
 }
 
@@ -314,7 +345,10 @@ function emitPoint(
       const offSameSide =
         (py < em.cy0 && y < em.cy0) || (py > em.cy1 && y > em.cy1) ||
         (px < em.cx0 && x < em.cx0) || (px > em.cx1 && x > em.cx1)
-      if (!offSameSide) broken = isDiscontinuity(em.f, em.lastT, px, py, t, x, y, em.tEps)
+      if (!offSameSide) {
+        broken = isDiscontinuity(em.f, em.lastT, px, py, t, x, y, em.tEps)
+        if (broken && em.jump) em.jump(PROBE_OUT.a, PROBE_OUT.b)
+      }
     }
     if (broken) em.penDown = false
     else drawSeg(em, px, py, x, y)
@@ -323,9 +357,16 @@ function emitPoint(
   // way; only the edge tap can tell a boundary that has a point from one that
   // has an asymptote.
   if (!had && em.hasBad && em.edge) em.edge(t, em.badT, true)
+  // ...and an undefined stretch only a point wide, between two defined
+  // samples, may be a jump whose own point has no value (|x|/x at 0).
+  if (
+    !had && em.hasBad && em.jump && em.anyT && t > em.lastT &&
+    t - em.lastT <= GAP_JUMP_REL * (em.tEps / JUMP_REL_T)
+  ) em.jump(em.lastT, t)
   em.hasBad = false
   if (em.tap) em.tap(t, x, y, !had || broken)
   em.has = true
+  em.anyT = true
   em.lastT = t
   em.lastX = x
   em.lastY = y
@@ -616,9 +657,17 @@ function explicitSpan(model: ModelSpec, curve: FittedCurve, vp: Viewport): Curve
   return { f, t0: x0, t1: x1, atDomain0, atDomain1, pieces: modelPieces(model, params) }
 }
 
-function buildSpan(path: PolylineSink, span: CurveSpan, vp: Viewport): boolean {
+function buildSpan(
+  path: PolylineSink, span: CurveSpan, vp: Viewport,
+  jump: ((a: number, b: number) => void) | null = null,
+): boolean {
   resetEmitter(EM, path, span.f, vp)
-  sampleSpan(EM, span, vp)
+  EM.jump = jump
+  try {
+    sampleSpan(EM, span, vp)
+  } finally {
+    EM.jump = null
+  }
   return EM.drawn
 }
 
@@ -627,9 +676,17 @@ function buildExplicit(
   model: ModelSpec,
   curve: FittedCurve,
   vp: Viewport,
+  jumps: CurveJump[] | null = null,
 ): boolean {
   const span = explicitSpan(model, curve, vp)
-  return span !== null && buildSpan(path, span, vp)
+  if (span === null) return false
+  if (!jumps) return buildSpan(path, span, vp)
+  const brackets: number[] = []
+  const drawn = buildSpan(path, span, vp, (a, b) => { brackets.push(a, b) })
+  if (brackets.length > 0) {
+    for (const j of analyzeJumps(model, curve.params, span, vp, brackets)) jumps.push(j)
+  }
+  return drawn
 }
 
 /**
@@ -1181,6 +1238,201 @@ export function classifyEdge(
   return { t: a, x: lx, y: ly, closed: false }
 }
 
+// ---------------------------------------------------------------------------
+// Jumps: where the stroke was broken at a FINITE step.
+//
+// The probe above decides that a gap HOLDS its height as the interval shrinks
+// and lifts the pen; it does not say what kind of break it lifted it for. A
+// textbook does: at a jump (⌊x⌋ at every integer, sign x and |x|/x at 0) it
+// draws ● at the end the function attains and ○ at the other; at a pole it
+// draws nothing. So each bracket the sampler broke at is asked three things.
+//
+//  1. WHERE, exactly. The bracket is ~1e-9 of the span wide, which pins the
+//     jump to the pixel but not to the number — and the dot's fill is decided
+//     by f AT the jump, so the number matters: ⌊x⌋ at 0.9999999998 is 0, at 1
+//     it is 1. The jump is snapped to the SIMPLEST nice number inside the
+//     bracket (widened by its own width): an integer, then p/q for q = 2…12,
+//     then pπ/q for q = 1…12. A candidate is kept only when it still SEPARATES
+//     the two sides — its one-sided limits exist, differ by more than half a
+//     pixel, and each is closer to the value the stroke arrived at on its own
+//     side than to the other side's. The first candidate that passes wins.
+//  2. The two one-sided LIMITS at the snapped x, by the same one-sided
+//     extrapolation pieceDots takes a piece end's limit with (oneSidedLimit):
+//     a side that runs away is a pole, and a pole has no dots.
+//  3. The VALUE f(x) at the snapped x, exactly as the evaluator gives it (NaN
+//     when the formula has no value there: |x|/x).
+//
+// A bracket no nice number separates is kept with `exact: false` and a NaN
+// value: IEEE arithmetic cannot say which side ⌊x²⌋ attains at √3 (the
+// double nearest √3 squares to 2.9999999999999996), and a dot on the wrong
+// side would state something false. The dots layer draws nothing for it.
+//
+// Jumps at a piece end (ModelSpec.pieces) are not reported: those ends are
+// src/render/pieceDots.ts's. Nor is one at the sampled span's own end, which
+// is the end-cap layer's.
+// ---------------------------------------------------------------------------
+
+/** One finite jump the stroke was broken at. Math coordinates. */
+export interface CurveJump {
+  /** Where: snapped to a nice number when `exact`, else the bracket's middle. */
+  x: number
+  /** The one-sided limits: from below (`left`) and from above (`right`). */
+  left: number
+  right: number
+  /** f(x), exactly as the formula evaluates there — NaN when it has no value. */
+  value: number
+  /** True when `x` is a snapped nice number and `value` can be trusted. */
+  exact: boolean
+}
+
+/** The one-sided step in, relative to max(1, |e|). */
+const ONE_SIDED_STEP_REL = 1e-9
+
+/**
+ * The one-sided limit of `ev` at `e`, approached in direction `dir` (+1 from
+ * above, −1 from below), or null when that side runs away or has no value.
+ * `width` caps the step so it never leaves a narrow piece. Screen tolerance
+ * via `ppy` (px per unit in y).
+ *
+ * The limit is taken by stepping in by h = 1e-9·max(1, |e|) and 2h and
+ * extrapolating linearly (2·f(e ± h) − f(e ± 2h)); the two samples must agree
+ * to within half a pixel (plus 1e-6 of their magnitude), or the side runs
+ * away (ln x at 0⁺, 1/x) and there is no limit.
+ */
+export function oneSidedLimit(
+  ev: (x: number) => number, e: number, dir: 1 | -1, width: number, ppy: number,
+): number | null {
+  let h = ONE_SIDED_STEP_REL * Math.max(1, Math.abs(e))
+  if (Number.isFinite(width) && width > 0 && 2 * h > width / 2) h = width / 4
+  if (!(h > 0)) return null
+  let y1: number
+  let y2: number
+  try {
+    y1 = ev(e + dir * h)
+    y2 = ev(e + dir * 2 * h)
+  } catch {
+    return null
+  }
+  if (!Number.isFinite(y1)) return null
+  if (!Number.isFinite(y2)) return y1
+  const tol = LIMIT_TOL_PX + LIMIT_REL * Math.abs(y1) * ppy
+  if (!(Math.abs(y1 - y2) * ppy <= tol)) return null // a pole, not a limit
+  const lim = 2 * y1 - y2
+  return Number.isFinite(lim) ? lim : y1
+}
+
+/** Denominators tried for p/q and pπ/q, simplest first. */
+const SNAP_MAX_Q = 12
+/** One-sided limits closer than this (px) are the same value: no jump. */
+const JUMP_SAME_PX = 0.5
+
+/**
+ * Every nice number in [lo, hi], simplest first, until `take` accepts one.
+ * Integers, then p/q (q = 2…12, in lowest terms), then pπ/q (q = 1…12).
+ */
+function snapNice(lo: number, hi: number, take: (c: number) => boolean): number | null {
+  if (!(hi >= lo) || !Number.isFinite(lo) || !Number.isFinite(hi)) return null
+  const tryAll = (scale: number, q: number, skipReducible: boolean): number | null => {
+    const p0 = Math.ceil((lo * q) / scale)
+    const p1 = Math.floor((hi * q) / scale)
+    // a bracket this narrow holds a handful at most; a wide one is not a jump
+    if (p1 - p0 > 8) return null
+    for (let p = p0; p <= p1; p++) {
+      if (skipReducible && gcd(Math.abs(p), q) !== 1) continue
+      const c = (p * scale) / q + 0 // never −0
+      if (c >= lo && c <= hi && take(c)) return c
+    }
+    return null
+  }
+  let c = tryAll(1, 1, false)
+  if (c !== null) return c
+  for (let q = 2; q <= SNAP_MAX_Q; q++) {
+    c = tryAll(1, q, true)
+    if (c !== null) return c
+  }
+  for (let q = 1; q <= SNAP_MAX_Q; q++) {
+    c = tryAll(Math.PI, q, true)
+    if (c !== null && c !== 0) return c
+  }
+  return null
+}
+
+function gcd(a: number, b: number): number {
+  while (b) [a, b] = [b, a % b]
+  return a
+}
+
+/**
+ * Turn the brackets the sampler broke at (flat pairs a0, b0, a1, b1, …) into
+ * jumps, by the rules above. Poles are dropped; so are brackets at a piece
+ * end or at the span's own ends. Sorted by x, one per x.
+ */
+function analyzeJumps(
+  model: ModelSpec, params: number[], span: CurveSpan, vp: Viewport,
+  brackets: readonly number[],
+): CurveJump[] {
+  const evx = model.evalExplicit
+  if (!evx) return []
+  const ev = (x: number): number => {
+    try {
+      return evx.call(model, params, x)
+    } catch {
+      return Number.NaN
+    }
+  }
+  const ppy = ppuY(vp)
+  const ends: number[] = []
+  for (const p of span.pieces ?? []) {
+    if (Number.isFinite(p.lo)) ends.push(p.lo)
+    if (Number.isFinite(p.hi)) ends.push(p.hi)
+  }
+  const out: CurveJump[] = []
+  for (let i = 0; i + 1 < brackets.length; i += 2) {
+    const a = brackets[i]
+    const b = brackets[i + 1]
+    if (!(b >= a) || !Number.isFinite(a) || !Number.isFinite(b)) continue
+    const w = b - a
+    const ya = ev(a)
+    const yb = ev(b)
+    if (!Number.isFinite(ya) || !Number.isFinite(yb)) continue
+    const lim = { l: 0, r: 0 }
+    // Does c separate the two sides the stroke arrived at?
+    const separates = (c: number): boolean => {
+      const l = oneSidedLimit(ev, c, -1, Number.POSITIVE_INFINITY, ppy)
+      if (l === null) return false
+      const r = oneSidedLimit(ev, c, 1, Number.POSITIVE_INFINITY, ppy)
+      if (r === null) return false
+      if (!(Math.abs(l - r) * ppy > JUMP_SAME_PX)) return false
+      if (!(Math.abs(l - ya) <= Math.abs(l - yb)) || !(Math.abs(r - yb) <= Math.abs(r - ya))) return false
+      lim.l = l
+      lim.r = r
+      return true
+    }
+    const slack = Math.max(w, 4 * Number.EPSILON * Math.max(1, Math.abs(a), Math.abs(b)))
+    const snapped = snapNice(a - slack, b + slack, separates)
+    let jump: CurveJump | null = null
+    if (snapped !== null) {
+      jump = { x: snapped, left: lim.l, right: lim.r, value: ev(snapped), exact: true }
+    } else {
+      // No nice number: the limits from the bracket's own ends, when both
+      // sides settle (a pole's do not), and no trusted value.
+      const l = oneSidedLimit(ev, a, -1, Number.POSITIVE_INFINITY, ppy)
+      const r = oneSidedLimit(ev, b, 1, Number.POSITIVE_INFINITY, ppy)
+      if (l === null || r === null || !(Math.abs(l - r) * ppy > JUMP_SAME_PX)) continue
+      jump = { x: (a + b) / 2, left: l, right: r, value: Number.NaN, exact: false }
+    }
+    const x = jump.x
+    // the span's own ends are the end caps'; a piece end is pieceDots'
+    if (!(x > span.t0 && x < span.t1)) continue
+    const tolX = Math.max(slack, 2 * ONE_SIDED_STEP_REL * Math.max(1, Math.abs(x)))
+    if (ends.some((e) => Math.abs(e - x) <= tolX || (e >= a && e <= b))) continue
+    if (out.some((o) => Math.abs(o.x - x) <= tolX)) continue
+    out.push(jump)
+  }
+  out.sort((p, q) => p.x - q.x)
+  return out
+}
+
 /** The two parameters that bracket one defined/undefined boundary. */
 interface EdgeBracket { def: number; und: number }
 
@@ -1209,6 +1461,13 @@ export interface CurveTrace {
    */
   naturalStart(run: number): NaturalEnd | null
   naturalEnd(run: number): NaturalEnd | null
+  /**
+   * Every finite JUMP the stroke was broken at (explicit curves only): its
+   * x, its two one-sided limits and f there — see analyzeJumps. Poles are not
+   * jumps and are not listed; nor are piece ends (ModelSpec.pieces). Computed
+   * on first read and cached; empty for a curve that never broke at a step.
+   */
+  readonly jumps: CurveJump[]
 }
 
 const NULL_SINK: PolylineSink = { moveTo(): void {}, lineTo(): void {} }
@@ -1266,6 +1525,9 @@ export function traceCurve(
     if (entering) pending = { def, und }
     else if (runs.length > 0) hi[runs.length - 1] = { def, und }
   }
+  // Explicit only: the parameter IS x, which is what a jump's dots stand on.
+  const brackets: number[] = []
+  if (curve.kind === 'explicit') EM.jump = (a, b): void => { brackets.push(a, b) }
   try {
     sampleSpan(EM, span, vp)
   } catch {
@@ -1273,6 +1535,7 @@ export function traceCurve(
   } finally {
     EM.tap = null
     EM.edge = null
+    EM.jump = null
   }
 
   // Drop the empty runs, and their brackets with them, so a run index means
@@ -1297,6 +1560,8 @@ export function traceCurve(
     memo.set(key, out)
     return out
   }
+  const jumpSpan = span
+  let jumps: CurveJump[] | null = null
   return {
     runs: keep.map((i) => runs[i]),
     t0: span.t0,
@@ -1305,6 +1570,16 @@ export function traceCurve(
     atDomain1: span.atDomain1,
     naturalStart: (run) => natural(run, true),
     naturalEnd: (run) => natural(run, false),
+    get jumps(): CurveJump[] {
+      if (jumps === null) {
+        try {
+          jumps = brackets.length > 0 ? analyzeJumps(model, curve.params, jumpSpan, vp, brackets) : []
+        } catch {
+          jumps = []
+        }
+      }
+      return jumps
+    },
   }
 }
 
@@ -1349,6 +1624,12 @@ export interface CurvePaintOpts {
    * selection at all in the light theme. On white it needs real weight.
    */
   lightGround?: boolean
+  /**
+   * Out: when given, an explicit curve's paint pass appends every finite jump
+   * its stroke was broken at (the same list `traceCurve(...).jumps` gives),
+   * so the dots layer costs no second sampling pass.
+   */
+  jumps?: CurveJump[]
 }
 
 /** Selection-halo alpha: a soft wash on black, an actually visible one on white. */
@@ -1372,7 +1653,7 @@ export function drawCurve(
   let drawn = false
   switch (curve.kind) {
     case 'explicit':
-      drawn = buildExplicit(path, model, curve, vp)
+      drawn = buildExplicit(path, model, curve, vp, opts?.jumps ?? null)
       break
     case 'parametric':
       drawn = buildParametric(path, model, curve, vp)

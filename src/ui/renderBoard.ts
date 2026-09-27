@@ -42,6 +42,8 @@ import { SCREEN_GRID, drawGrid, labelFont as figureFont, paintScale } from '../r
 import type { GridStyle } from '../render/grid'
 import { drawPolarGrid } from '../render/polarGrid'
 import { curveLineWidth, drawCurve, drawInk, traceCurve } from '../render/curves'
+import type { CurveJump } from '../render/curves'
+import { jumpMarks } from '../render/jumpDots'
 import { END_DOT_R, curveEndPoints, drawCurveEnds, resolveEnds } from '../render/endCaps'
 import { drawAsymptotes, drawHoles, holeRange } from '../render/holes'
 import type { PieceMarks } from '../render/pieceDots'
@@ -1762,9 +1764,13 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
       }
       // lightGround: the selection halo is a wash of the curve's own colour,
       // and at 25% on white it was invisible — the same bug as the palette.
+      // `jumps` collects, from this very paint pass, every finite step the
+      // stroke was broken at — the jump-dot layer below needs no second pass.
+      const jumps: CurveJump[] = []
       drawCurve(ctx, c, models, vp, selected, {
         strokeScale: scale.stroke,
         lightGround,
+        jumps,
       })
       // What the ends of the graph SAY: an arrow where it runs off the board,
       // a filled dot where a restricted graph stops and the point belongs to
@@ -1838,6 +1844,14 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
         for (const d of pieces.dots) capped.push(d.at)
         for (const j of pieces.joins) capped.push(j)
       }
+      // A STEP function's jumps (src/render/jumpDots.ts): ● where the step is
+      // attained, ○ where it is not — the same fact-about-the-function as a
+      // piece dot, so every style draws it. The jumps came from drawCurve's
+      // own pass; a curve that never broke at a step costs one length check.
+      const jumpDots = jumps.length > 0 ? jumpMarks(jumps, vp, scale.stroke) : []
+      if (jumpDots.length > 0 && holes.length > 0) {
+        for (const d of jumpDots) capped.push(d.at)
+      }
       drawHoles(
         ctx,
         vp,
@@ -1851,6 +1865,27 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
           pieces.dots,
           { color: c.color, bg: theme.bg, stroke: scale.stroke },
           named,
+        )
+      }
+      if (jumpDots.length > 0) {
+        // Never on top of a piece's own dot, nor of an end cap that is drawn.
+        const skip: Vec2[] = pieces ? pieces.dots.map((d) => d.at) : []
+        const guess = resolveEnds(style, curve, fig)
+        if (guess.start !== 'none' || guess.end !== 'none') {
+          try {
+            const pts = curveEndPoints(c, models, vp)
+            const settled = resolveEnds(style, curve, fig, pts)
+            if (pts.start && settled.start !== 'none') skip.push(pts.start.at)
+            if (pts.end && settled.end !== 'none') skip.push(pts.end.at)
+          } catch {
+            /* no caps located: nothing to step around */
+          }
+        }
+        drawPieceDots(
+          ctx,
+          jumpDots,
+          { color: c.color, bg: theme.bg, stroke: scale.stroke },
+          skip,
         )
       }
     } catch {

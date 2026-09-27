@@ -46,6 +46,10 @@
 // hole layer is told every point this layer marked (or deliberately left
 // unmarked) so a hole at a piece end is not ringed a second time.
 //
+// A step INSIDE a piece (⌊x⌋ written as one piece on [−3, 3)) is not a piece
+// end: the sampler finds it, and src/render/jumpDots.ts marks it. The sampler
+// never reports a jump at a piece end, so the two layers cannot meet.
+//
 // Screen px throughout. FIGURE, not chrome: drawn with `chrome: null` too, so
 // it reaches the exported PNG; sizes scale with `present.stroke`.
 // ============================================================================
@@ -53,15 +57,15 @@
 import type { FittedCurve, ModelSpec, Vec2, Viewport } from '../core/types'
 import { ppuY, toMath, toScreen } from '../core/types'
 import { END_DOT_R, curvePieces, drawEndDot, type EndDotPaint } from './endCaps'
+import { oneSidedLimit } from './curves'
+
+// The one-sided limit lives with the sampler now, which takes a JUMP's limits
+// with it too (src/render/curves.ts analyzeJumps); re-exported so this layer's
+// callers and tests keep asking it here.
+export { oneSidedLimit }
 
 /** Marks closer than this (screen px) are the same point. */
 export const PIECE_SAME_PX = 0.5
-/** The one-sided step in, relative to max(1, |end|). */
-const STEP_REL = 1e-9
-/** Two inside samples this close (screen px) have settled on a limit. */
-const LIMIT_TOL_PX = 0.5
-/** ...plus this much of the value's own magnitude, in px. */
-const LIMIT_REL = 1e-6
 /** How far past the visible x-range piece ends are looked at, as a fraction of it. */
 const RANGE_PAD = 0.1
 
@@ -100,35 +104,6 @@ interface Mark {
   arrival: boolean
 }
 
-type Ev = (x: number) => number
-
-/**
- * The one-sided limit of `ev` at `e`, approached in direction `dir` (+1 from
- * above, −1 from below), or null when that side runs away or has no value.
- * `width` caps the step so it never leaves a narrow piece.
- */
-export function oneSidedLimit(
-  ev: Ev, e: number, dir: 1 | -1, width: number, ppy: number,
-): number | null {
-  let h = STEP_REL * Math.max(1, Math.abs(e))
-  if (Number.isFinite(width) && width > 0 && 2 * h > width / 2) h = width / 4
-  if (!(h > 0)) return null
-  let y1: number
-  let y2: number
-  try {
-    y1 = ev(e + dir * h)
-    y2 = ev(e + dir * 2 * h)
-  } catch {
-    return null
-  }
-  if (!Number.isFinite(y1)) return null
-  if (!Number.isFinite(y2)) return y1
-  const tol = LIMIT_TOL_PX + LIMIT_REL * Math.abs(y1) * ppy
-  if (!(Math.abs(y1 - y2) * ppy <= tol)) return null // a pole, not a limit
-  const lim = 2 * y1 - y2
-  return Number.isFinite(lim) ? lim : y1
-}
-
 /**
  * Every piece mark this curve carries on the board, merged by the rules in the
  * header. Null when the curve has no pieces (or is hidden, or not explicit, or
@@ -146,7 +121,7 @@ export function pieceMarks(
   const model = models[curve.modelId]
   if (!model || !model.evalExplicit) return null
   const params = curve.params
-  const ev: Ev = (x) => model.evalExplicit!(params, x)
+  const ev = (x: number): number => model.evalExplicit!(params, x)
   const ppy = ppuY(vp)
 
   // The visible x-range, padded, and the curve's own domain: an end outside
