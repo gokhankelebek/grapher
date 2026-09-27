@@ -40,6 +40,7 @@
 
 import type { CurveKind, ModelSpec, ParamMeta, ParseOutcome, ParsedPlot, PieceInfo } from '../types'
 import type { FunctionEnv } from '../functionEnv'
+import { evalExactAt } from './exactEval'
 import {
   CondError,
   compactLatex,
@@ -1813,6 +1814,9 @@ function makePlot(
   sing: SingPlan | null = null,
   logBases: ReadonlySet<string> = new Set(),
   pieces: ((params: readonly number[]) => PieceInfo[]) | null = null,
+  /** The formula itself, when one formula holds everywhere the curve is
+   *  drawn — what ModelSpec.evalExact walks (./exactEval.ts). */
+  exactBody: Node | null = null,
 ): ParsedPlot {
   const defaultParams = paramNames.map((nm) => (logBases.has(nm) ? LOG_BASE_DEFAULT : 1))
   return {
@@ -1834,6 +1838,10 @@ function makePlot(
         spec.evalExplicit = (params, x) => ev(params, x, 0)
         spec.singularities = makeSingularities(sing ?? emptySingPlan())
         if (pieces) spec.pieces = (params) => pieces(params)
+        if (exactBody) {
+          const body = exactBody
+          spec.evalExact = (params, x) => evalExactAt(body, params, x)
+        }
       } else if (kind === 'polar') {
         spec.evalPolar = (params, theta) => ev(params, theta, 0)
         // Same slot, read in θ: the candidates src/core/holes.ts sorts into
@@ -2342,7 +2350,7 @@ function parseRestricted(src: string, cut: Cut, env?: FunctionEnv | null): Parse
     const latex = `${cls.latex},\\ ${live.setTex(vTex)}`
     return makePlot(
       cls.kind, latex, paramNames, layout.domain, layout.ev, singPlanOf(cls.body), logBases,
-      pieceInfoOf(cls.kind, [branch]),
+      pieceInfoOf(cls.kind, [branch]), cls.body,
     )
   }
 
@@ -2372,6 +2380,8 @@ function parseRestricted(src: string, cut: Cut, env?: FunctionEnv | null): Parse
   return makePlot(
     cls.kind, latex, paramNames, layout.domain, layout.ev, plan, logBases,
     pieceInfoOf(cls.kind, [branch]),
+    // an excluded point {x != c} is undefined there, whatever the formula says
+    holes && holes.length > 0 ? null : cls.body,
   )
 }
 
@@ -3109,7 +3119,9 @@ export function parseExpression(src: string, env?: FunctionEnv | null): ParseOut
     const { cls, paramNames, logBases } = compileEquation(src, env)
     return {
       ok: true,
-      plot: makePlot(cls.kind, cls.latex, paramNames, cls.domain, cls.ev, singPlanOf(cls.body), logBases),
+      plot: makePlot(
+        cls.kind, cls.latex, paramNames, cls.domain, cls.ev, singPlanOf(cls.body), logBases, null, cls.body,
+      ),
     }
   } catch (err) {
     // Only a line the ordinary path REFUSED is tried as a parametric curve,

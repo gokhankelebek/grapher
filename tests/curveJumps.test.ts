@@ -377,3 +377,39 @@ describe('trace.jumps: where, the two limits, and f there', () => {
     expect(per, `${per.toFixed(3)} ms per trace + jumps`).toBeLessThan(10)
   })
 })
+
+describe('trace.jumps: the value at a step is exact, not the nearest double', () => {
+  const at = (src: string, x: number, vp: Viewport = VP): CurveJump => {
+    const { curve, models } = typed(src)
+    const j = traceCurve(curve, models, vp)!.jumps.find((k) => Math.abs(k.x - x) < 1e-12)
+    if (!j) throw new Error(`no jump of ${src} at ${x}`)
+    return j
+  }
+
+  it('sign(sin x) at ±π and ±2π is 0 — sin of the double nearest π is 1.2e-16', () => {
+    for (const x of [Math.PI, -Math.PI, 2 * Math.PI, -2 * Math.PI]) {
+      const j = at('y = sign(sin(x))', x)
+      expect(j.exact).toBe(true)
+      expect(j.value).toBe(0)
+      expect(Math.abs(j.left)).toBe(1)
+      expect(j.right).toBe(-j.left)
+    }
+  })
+
+  it('sign(cos x) at π/2 is 0', () => {
+    expect(at('y = sign(cos(x))', Math.PI / 2).value).toBe(0)
+    expect(at('y = sign(cos(x))', -Math.PI / 2).value).toBe(0)
+  })
+
+  it('ceil(10x) at 0.3 is 3 — 10 · 0.3 is 3.0000000000000004 in doubles', () => {
+    const j = at('y = ceil(10x)', 0.3, VP_OFF)
+    expect(j.value).toBe(3)
+    expect(j.left).toBeCloseTo(3, 9)
+    expect(j.right).toBeCloseTo(4, 9)
+  })
+
+  it('floor(sin x) at π stays 0, and floor(x/π) at π is 1', () => {
+    expect(at('y = floor(sin(x))', Math.PI).value).toBe(0)
+    expect(at('y = floor(x/pi)', Math.PI).value).toBe(1)
+  })
+})

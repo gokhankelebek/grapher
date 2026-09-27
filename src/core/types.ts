@@ -121,11 +121,27 @@ export interface ModelSpec {
    * untouched.
    */
   pieces?(params: number[]): PieceInfo[]
+  /**
+   * For a typed explicit expression: f at a NICE x (p/q or pπ/q), computed
+   * in exact arithmetic — what the jump-dot layer needs to say which side a
+   * step attains, where the nearest double cannot (sin of the double nearest
+   * π is 1.2e-16, not 0). NaN where the formula is certifiably undefined;
+   * undefined where exact arithmetic cannot certify a value (the caller
+   * keeps the ordinary evaluation). Absent for everything else.
+   */
+  evalExact?(params: number[], x: ExactPoint): number | undefined
   latex(params: number[]): string    // KaTeX-renderable string
   paramMeta(params: number[]): ParamMeta[]  // ranges centered on current values
   /** Optional: return params translated by (dx, dy) in math units (for drag-editing).
    *  Omit when translation isn't meaningful for the family. */
   translate?(params: number[], dx: number, dy: number): number[]
+}
+
+/** A nice x for ModelSpec.evalExact: p/q, or pπ/q when `pi` (q > 0). */
+export interface ExactPoint {
+  p: number
+  q: number
+  pi: boolean
 }
 
 /** One piece of a piecewise definition (ModelSpec.pieces). */

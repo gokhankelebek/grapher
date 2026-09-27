@@ -11,7 +11,7 @@
 //     circles/ellipses stay smooth at any zoom.
 // ============================================================================
 
-import type { Vec2, Viewport, FittedCurve, ModelSpec, PieceInfo } from '../core/types'
+import type { Vec2, Viewport, FittedCurve, ModelSpec, PieceInfo, ExactPoint } from '../core/types'
 import { ppuX, ppuY } from '../core/types'
 
 const TWO_PI = Math.PI * 2
@@ -1330,9 +1330,11 @@ const JUMP_SAME_PX = 0.5
  * Every nice number in [lo, hi], simplest first, until `take` accepts one.
  * Integers, then p/q (q = 2…12, in lowest terms), then pπ/q (q = 1…12).
  */
-function snapNice(lo: number, hi: number, take: (c: number) => boolean): number | null {
+function snapNice(
+  lo: number, hi: number, take: (c: number) => boolean,
+): { c: number; at: ExactPoint } | null {
   if (!(hi >= lo) || !Number.isFinite(lo) || !Number.isFinite(hi)) return null
-  const tryAll = (scale: number, q: number, skipReducible: boolean): number | null => {
+  const tryAll = (scale: number, q: number, skipReducible: boolean): { c: number; at: ExactPoint } | null => {
     const p0 = Math.ceil((lo * q) / scale)
     const p1 = Math.floor((hi * q) / scale)
     // a bracket this narrow holds a handful at most; a wide one is not a jump
@@ -1340,7 +1342,7 @@ function snapNice(lo: number, hi: number, take: (c: number) => boolean): number 
     for (let p = p0; p <= p1; p++) {
       if (skipReducible && gcd(Math.abs(p), q) !== 1) continue
       const c = (p * scale) / q + 0 // never −0
-      if (c >= lo && c <= hi && take(c)) return c
+      if (c >= lo && c <= hi && take(c)) return { c, at: { p, q, pi: scale !== 1 } }
     }
     return null
   }
@@ -1352,7 +1354,7 @@ function snapNice(lo: number, hi: number, take: (c: number) => boolean): number 
   }
   for (let q = 1; q <= SNAP_MAX_Q; q++) {
     c = tryAll(Math.PI, q, true)
-    if (c !== null && c !== 0) return c
+    if (c !== null && c.c !== 0) return c
   }
   return null
 }
@@ -1412,7 +1414,15 @@ function analyzeJumps(
     const snapped = snapNice(a - slack, b + slack, separates)
     let jump: CurveJump | null = null
     if (snapped !== null) {
-      jump = { x: snapped, left: lim.l, right: lim.r, value: ev(snapped), exact: true }
+      // The value AT the step, in exact arithmetic where the model offers it:
+      // the nearest double to π makes sign(sin x) 1 there, not 0.
+      let value: number | undefined
+      try {
+        value = model.evalExact?.(params, snapped.at)
+      } catch {
+        value = undefined
+      }
+      jump = { x: snapped.c, left: lim.l, right: lim.r, value: value ?? ev(snapped.c), exact: true }
     } else {
       // No nice number: the limits from the bracket's own ends, when both
       // sides settle (a pole's do not), and no trusted value.
