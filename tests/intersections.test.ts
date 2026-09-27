@@ -106,14 +106,86 @@ describe('boardIntersections — one entry per meeting point, per pair', () => {
     expect(pairs[0].map((c) => c.id)).toEqual(['f', 'g'])
   })
 
-  it('a hidden curve is not crossed, and a non-function is not either', () => {
+  it('a hidden curve is not crossed; a non-function now is (see "in the plane")', () => {
     expect(intersectionPairs([PARABOLA, { ...TWO, visible: false }])).toHaveLength(0)
-    expect(intersectionPairs([PARABOLA, { ...TWO, kind: 'polar' }])).toHaveLength(0)
+    expect(intersectionPairs([PARABOLA, { ...TWO, kind: 'polar' }])).toHaveLength(1)
   })
 
   it('a crowd of curves is capped rather than solved n² deep', () => {
     const many = Array.from({ length: 12 }, (_, i) => ({ ...TWO, id: `c${i}`, params: [i, 0] }))
     expect(intersectionPairs(many)).toHaveLength(MAX_PAIRS)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// in the plane: circles, conics, polar and parametric curves are crossed too
+// ---------------------------------------------------------------------------
+
+describe('boardIntersections — every kind of curve, not only y = f(x)', () => {
+  /** A sketched circle: the circle family, x² + y² = 4. */
+  const CIRCLE: FittedCurve = {
+    id: 'c', modelId: 'circle', params: [0, 0, 2],
+    kind: 'implicit', domain: null,
+    color: CURVE_COLORS[2], strokeWidth: 2.5, visible: true, error: 0,
+  }
+  const ROSE: FittedCurve = {
+    id: 'r', modelId: 'polarRose', params: [3, 2, 0],
+    kind: 'polar', domain: null,
+    color: CURVE_COLORS[3], strokeWidth: 2.5, visible: true, error: 0,
+  }
+  /** x = 1, the way a sketched vertical line is held. */
+  const VLINE: FittedCurve = {
+    id: 'v', modelId: 'vline', params: [1],
+    kind: 'parametric', domain: null,
+    color: CURVE_COLORS[4], strokeWidth: 2.5, visible: true, error: 0,
+  }
+
+  it('a sketched circle and a parabola: the pair is asked, and both points come back', () => {
+    expect(intersectionPairs([PARABOLA, CIRCLE]).map(([a, b]) => [a.id, b.id])).toEqual([['f', 'c']])
+    const got = boardIntersections([PARABOLA, CIRCLE], MODELS, RANGE)
+    // x² + x⁴ = 4  ->  x² = (√17 − 1)/2
+    const x2 = (Math.sqrt(17) - 1) / 2
+    expect(got).toHaveLength(2)
+    for (const m of got) {
+      expect(m.curveId).toBe('f')
+      expect(m.point.withId).toBe('c')
+      expect(m.point.kind).toBe('intersection')
+      expect(Math.abs(m.point.pos.x)).toBeCloseTo(Math.sqrt(x2), 12)
+      expect(m.point.pos.y).toBeCloseTo(x2, 12)
+    }
+    // both cards list them
+    const name = (id: string) => id
+    expect(cardIntersections('f', got, name)[0].id).toBe('c')
+    expect(cardIntersections('c', got, name)[0].id).toBe('f')
+    expect(cardIntersections('c', got, name)[0].points).toHaveLength(2)
+  })
+
+  it('every visible kind is paired, still capped at MAX_PAIRS', () => {
+    const pairs = intersectionPairs([PARABOLA, CIRCLE, ROSE, VLINE])
+    expect(pairs).toHaveLength(6)
+    expect(intersectionPairs([PARABOLA, CIRCLE, { ...ROSE, visible: false }, VLINE])).toHaveLength(3)
+    const many = Array.from({ length: 12 }, (_, i) => ({ ...CIRCLE, id: `k${i}`, params: [i, 0, 1] }))
+    expect(intersectionPairs(many)).toHaveLength(MAX_PAIRS)
+  })
+
+  it('a board of a parabola, a circle, a rose and a vertical line finds each pair', () => {
+    const got = boardIntersections([PARABOLA, CIRCLE, ROSE, VLINE], MODELS, RANGE)
+    const pairsFound = new Set(got.map((m) => `${m.curveId}×${m.point.withId}`))
+    expect([...pairsFound].sort()).toEqual(['c×r', 'c×v', 'f×c', 'f×r', 'f×v', 'r×v'].sort())
+    // x = 1 meets y = x² at (1, 1) and the circle at (1, ±√3)
+    const fv = got.filter((m) => m.curveId === 'f' && m.point.withId === 'v')
+    expect(fv.map((m) => [m.point.pos.x, m.point.pos.y])).toEqual([[1, 1]])
+    const cv = got.filter((m) => m.curveId === 'c' && m.point.withId === 'v')
+    expect(cv.map((m) => m.point.exactY)).toEqual(['−√3', '√3'])
+  })
+
+  it('the memo key sees a circle move', () => {
+    const span = intersectionSpan([-7.5, 7.5])
+    const k0 = intersectionKey([PARABOLA, CIRCLE], span)
+    expect(intersectionKey([PARABOLA, { ...CIRCLE, params: [0, 0, 2.5] }], span)).not.toBe(k0)
+    expect(intersectionKey([PARABOLA, { ...CIRCLE, params: [0, 0, 2] }], span)).toBe(k0)
+    expect(intersectionKey([PARABOLA, { ...ROSE, domain: [0, Math.PI] }], span))
+      .not.toBe(intersectionKey([PARABOLA, ROSE], span))
   })
 })
 

@@ -58,9 +58,18 @@ export function intersectionSpan(window: readonly [number, number]): [number, nu
   return [Math.floor(lo / step) * step, Math.ceil(hi / step) * step]
 }
 
-/** A curve that can be crossed: visible, and a function of x. */
+/**
+ * A curve that can be crossed: any visible curve. Functions of x, implicit
+ * curves (a sketched circle or ellipse, a typed conic), parametric and polar
+ * curves are all met in the plane by intersectionPoints — a circle and a
+ * parabola used to show no crossings at all because only y = f(x) pairs were
+ * ever asked.
+ */
 export function crossable(c: FittedCurve): boolean {
-  return c.visible && c.kind === 'explicit'
+  return (
+    c.visible &&
+    (c.kind === 'explicit' || c.kind === 'implicit' || c.kind === 'parametric' || c.kind === 'polar')
+  )
 }
 
 /**

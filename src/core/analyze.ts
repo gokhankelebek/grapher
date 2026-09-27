@@ -2065,8 +2065,13 @@ function touchesWithoutCrossing(
  * accepted only when both curves agree at the candidate — and the point is
  * polished onto the accepted form, so its decimal is the form's decimal.
  *
- * Returns [] unless both curves are explicit functions of x. Cheap enough to
- * run per visible pair on every analysis refresh; it memoises nothing.
+ * Two explicit functions of x take the path below, unchanged. Every other
+ * pairing — explicit × implicit, implicit × implicit, and anything with a
+ * parametric or polar curve in it — is solved in the plane by
+ * planeIntersections (see "Intersections in the plane"), and its points are
+ * reported the same way: kind 'intersection', withId, verified on both
+ * curves, exact forms only when both curves agree at the form. Cheap enough
+ * to run per visible pair on every analysis refresh; it memoises nothing.
  */
 export function intersectionPoints(
   parent: FittedCurve,
@@ -2077,7 +2082,9 @@ export function intersectionPoints(
   try {
     const f = explicitFnOf(parent, models)
     const g = explicitFnOf(other, models)
-    if (!f || !g) return []
+    // Anything that is not a pair of functions of x — a circle, a typed conic,
+    // a polar or parametric curve — goes through the plane solver below.
+    if (!f || !g) return planeIntersections(parent, other, models, range)
     const span = sharedSpan(parent.domain ?? null, other.domain ?? null, range)
     if (!span) return []
     const [lo, hi] = span
@@ -2126,4 +2133,1050 @@ export function intersectionPoints(
   } catch {
     return []
   }
+}
+
+// ---------------------------------------------------------------------------
+// Intersections in the plane — every pairing that is not two functions of x.
+//
+// A sketched circle fits the `circle` family, a sketched ellipse the general
+// conic `ellipse`, a typed x² + y² = 25 is an implicit expression, and polar
+// and parametric curves are neither. Each curve is reduced to one of three
+// shapes, and each pair of shapes has the one method that suits it:
+//
+//   explicit y = f(x)      × implicit G = 0     h(x) = G(x, f(x)), scanned in x
+//   parametric/polar P(t)  × implicit G = 0     h(t) = G(P(t)), scanned in t
+//   parametric/polar P(t)  × explicit f         h(t) = y(t) − f(x(t)), in t
+//   implicit A             × implicit B         A traced by marching squares
+//                                               into polylines, G_B's sign
+//                                               changes along them, 2D Newton
+//                                               on (G_A, G_B)
+//   parametric/polar       × parametric/polar   polyline segment crossings,
+//                                               2D Newton on (t₁, t₂); two
+//                                               polar curves also meet at the
+//                                               pole when BOTH reach r = 0,
+//                                               at whatever θ each does
+//
+// A one-variable scan finds sign changes (bisected to the last bit, with a
+// pole guard: a "root" where |h| is not small is an asymptote) and touches:
+// local minima of |h| refined by golden section, accepted when h comes within
+// TOUCH_H of zero on h's own scale — so a parabola tangent to a circle is ONE
+// point, flagged tangent. The same minima search along A's polylines finds
+// tangencies of two implicit curves.
+//
+// Every point then has to earn its place in the plane: its geometric distance
+// to BOTH curves (|G|/|∇G| for an implicit, the perpendicular offset for an
+// explicit, the nearest point of P for a parametric) must be below
+// MEET_ACCEPT · max(1, |x|, |y|), and it must lie inside both domains and the
+// x-range. Exact forms are proposed for x and y separately and accepted only
+// when the candidate point lies on both curves to MEET_CHECK.
+// ---------------------------------------------------------------------------
+
+type XYFn = (x: number, y: number) => number
+type PFn = (t: number) => Vec2
+
+interface ExplicitGeo { kind: 'explicit'; f: Fn; lo: number; hi: number }
+interface ImplicitGeo {
+  kind: 'implicit'
+  G: XYFn
+  /** Exact extent [x0, x1, y0, y1] when the family says so (circle, ellipse). */
+  box: [number, number, number, number] | null
+}
+interface ParamGeo {
+  kind: 'param'
+  P: PFn
+  t0: number
+  t1: number
+  /** r(θ) for a polar curve, else null. */
+  r: Fn | null
+}
+type Geo = ExplicitGeo | ImplicitGeo | ParamGeo
+
+/** A meeting point before it is a SpecialPoint: where, how, and the t's. */
+interface RawMeet {
+  x: number
+  y: number
+  tangent: boolean
+  /** Parameter on the parent / the other curve, when that curve is P(t). */
+  tA?: number
+  tB?: number
+}
+
+/** h within this (relative to h's own scale) of zero at a local min: a touch. */
+const TOUCH_H = 1e-9
+/** Only minima of |h| this small (relative) are worth a golden-section search. */
+const TOUCH_TRY = 1e-2
+/** Two plane points closer than this (relative to max(1, |x|, |y|)) are one. */
+const DEDUPE_XY = 1e-6
+/** Cells along the longer side of the grid an implicit curve is traced on. */
+const TRACE_CELLS = 96
+/** Cells along each side of the coarse grid that locates an implicit curve. */
+const PROBE_CELLS = 64
+/** Curves meeting at an angle whose sine is below this are touching. */
+const TANGENT_SIN = 1e-6
+/** |h| below this fraction of its off-curve size, sample after sample: overlap. */
+const OVERLAP = 1e-9
+/** More meetings than this is two curves lying along each other, not a list. */
+const MAX_MEETS = 64
+
+const safe1 = (fn: Fn): Fn => (u: number) => {
+  let v: number
+  try { v = fn(u) } catch { return Number.NaN }
+  return typeof v === 'number' ? v : Number.NaN
+}
+
+/** The curve as one of the three plane shapes, or null. */
+function geoOf(
+  curve: FittedCurve,
+  models: Record<string, ModelSpec>,
+  range: readonly [number, number],
+): Geo | null {
+  const spec = models[curve.modelId]
+  if (!spec) return null
+  if (!Array.isArray(curve.params) || !curve.params.every(Number.isFinite)) return null
+  const params = curve.params
+
+  if (spec.kind === 'explicit' && spec.evalExplicit) {
+    const f = explicitFnOf(curve, models)
+    const span = sharedSpan(curve.domain ?? null, null, range)
+    if (!f || !span) return null
+    return { kind: 'explicit', f, lo: span[0], hi: span[1] }
+  }
+
+  if (spec.evalImplicit) {
+    const ev = spec.evalImplicit
+    const G: XYFn = (x, y) => {
+      let v: number
+      try { v = ev.call(spec, params, x, y) } catch { return Number.NaN }
+      return typeof v === 'number' ? v : Number.NaN
+    }
+    let box: ImplicitGeo['box'] = null
+    if (curve.modelId === 'circle') {
+      const [a, b, r] = params
+      const R = Math.abs(r)
+      if (!(R > 0)) return null
+      box = [a - R, a + R, b - R, b + R]
+    } else if (curve.modelId === 'ellipse') {
+      const cf = conicToCenterForm(params)
+      if (cf) {
+        const c = Math.cos(cf.angle)
+        const s = Math.sin(cf.angle)
+        const hw = Math.sqrt(cf.rx * cf.rx * c * c + cf.ry * cf.ry * s * s)
+        const hh = Math.sqrt(cf.rx * cf.rx * s * s + cf.ry * cf.ry * c * c)
+        box = [cf.cx - hw, cf.cx + hw, cf.cy - hh, cf.cy + hh]
+      }
+    }
+    return { kind: 'implicit', G, box }
+  }
+
+  if (spec.evalPolar) {
+    const ev = spec.evalPolar
+    const r = safe1((th: number) => ev.call(spec, params, th))
+    const P: PFn = (th) => {
+      const rv = r(th)
+      return { x: rv * Math.cos(th), y: rv * Math.sin(th) }
+    }
+    const d = curve.domain
+    const t0 = d ? Math.min(d[0], d[1]) : 0
+    const t1 = d ? Math.max(d[0], d[1]) : 2 * Math.PI
+    if (!Number.isFinite(t0) || !Number.isFinite(t1) || !(t1 > t0)) return null
+    return { kind: 'param', P, t0, t1, r }
+  }
+
+  if (spec.evalParametric) {
+    const ev = spec.evalParametric
+    const P: PFn = (t) => {
+      let v: Vec2
+      try { v = ev.call(spec, params, t) } catch { return { x: Number.NaN, y: Number.NaN } }
+      return v && typeof v.x === 'number' && typeof v.y === 'number'
+        ? v
+        : { x: Number.NaN, y: Number.NaN }
+    }
+    let t0: number
+    let t1: number
+    if (curve.domain) {
+      t0 = Math.min(curve.domain[0], curve.domain[1])
+      t1 = Math.max(curve.domain[0], curve.domain[1])
+    } else if (xIsConstant(P)) {
+      // x = a drawn as t ↦ (a, t): t IS y, and the renderer runs it across
+      // the whole board. The board's height is not known here; the x-range's
+      // reach is a generous stand-in for it.
+      const R = 2 * Math.max(Math.abs(range[0]), Math.abs(range[1]), Math.abs(range[1] - range[0]))
+      t0 = -R
+      t1 = R
+    } else {
+      t0 = 0
+      t1 = 2 * Math.PI
+    }
+    if (!Number.isFinite(t0) || !Number.isFinite(t1) || !(t1 > t0)) return null
+    return { kind: 'param', P, t0, t1, r: null }
+  }
+  return null
+}
+
+/** Is x(t) the same at every probe? (the 'vline' shape — renderer's test) */
+function xIsConstant(P: PFn): boolean {
+  let x0: number | null = null
+  for (const t of [0, 0.73, -0.73, 2.19, 4.81]) {
+    const p = P(t)
+    if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) continue
+    if (x0 === null) x0 = p.x
+    else if (Math.abs(p.x - x0) > 1e-9 * (1 + Math.abs(x0))) return false
+  }
+  return x0 !== null
+}
+
+/** Samples of a P(t) sweep: enough for a long spiral, never fewer than a turn's. */
+function paramSamples(g: ParamGeo): number {
+  const turns = (g.t1 - g.t0) / (2 * Math.PI)
+  return Math.max(PARAM_SAMPLES, Math.min(4000, Math.ceil(PARAM_SAMPLES * turns)))
+}
+
+// ---- one-variable scan ----------------------------------------------------
+
+interface Hit1 { u: number; tangent: boolean }
+
+/** Bisect h = 0 on [a, b] (h(a) = ha, opposite sign at b) to the last bit. */
+function bisect1(h: Fn, a: number, b: number, ha: number): number {
+  let hb = Number.NaN
+  for (let i = 0; i < 200; i++) {
+    const m = 0.5 * (a + b)
+    if (!(m > a && m < b)) break
+    const hm = h(m)
+    if (!Number.isFinite(hm)) return Number.NaN
+    if (hm === 0) return m
+    if (hm > 0 === ha > 0) { a = m; ha = hm } else { b = m; hb = hm }
+  }
+  if (!Number.isFinite(hb)) hb = h(b)
+  return Math.abs(ha) <= Math.abs(hb) ? a : b
+}
+
+/**
+ * The zeros of h on [a, b]: sign changes bisected, exact zeros taken as they
+ * are, and touches — local minima of |h| that golden section drives to within
+ * TOUCH_H of zero — flagged tangent. A bracketed "root" at which |h| is not
+ * small is a pole, and is refused.
+ */
+function scan1D(h: Fn, a: number, b: number, n: number, unit?: number): Hit1[] {
+  const us = new Float64Array(n + 1)
+  const hs = new Float64Array(n + 1)
+  const abs: number[] = []
+  for (let i = 0; i <= n; i++) {
+    const u = a + ((b - a) * i) / n
+    us[i] = u
+    const v = h(u)
+    hs[i] = v
+    if (Number.isFinite(v)) abs.push(Math.abs(v))
+  }
+  if (abs.length === 0) return []
+  abs.sort((p, q) => p - q)
+  const q75 = abs[Math.min(abs.length - 1, Math.floor(0.75 * abs.length))]
+  const scale = q75 > 0 ? q75 : 1
+  const hits: Hit1[] = []
+  const root = (lo: number, hi: number, hlo: number) => {
+    const u = bisect1(h, lo, hi, hlo)
+    if (!Number.isFinite(u)) return
+    const v = h(u)
+    // the pole guard: bisection walks straight into an asymptote too
+    if (Number.isFinite(v) && Math.abs(v) <= MEET_ACCEPT * scale) hits.push({ u, tangent: false })
+  }
+  const same = (p: number, q: number) => p !== 0 && q !== 0 && p > 0 === q > 0
+
+  for (let i = 0; i <= n; i++) {
+    const v = hs[i]
+    if (!Number.isFinite(v)) continue
+    if (v === 0) {
+      const l = i > 0 ? hs[i - 1] : Number.NaN
+      const r = i < n ? hs[i + 1] : Number.NaN
+      hits.push({ u: us[i], tangent: Number.isFinite(l) && Number.isFinite(r) && same(l, r) })
+      continue
+    }
+    if (i < n) {
+      const w = hs[i + 1]
+      if (Number.isFinite(w) && w !== 0 && v > 0 !== w > 0) root(us[i], us[i + 1], v)
+    }
+  }
+
+  for (let i = 1; i < n; i++) {
+    const p = hs[i - 1]
+    const c = hs[i]
+    const q = hs[i + 1]
+    if (!Number.isFinite(p) || !Number.isFinite(c) || !Number.isFinite(q)) continue
+    if (!same(p, c) || !same(c, q)) continue
+    const ac = Math.abs(c)
+    if (!(ac < Math.abs(p) && ac <= Math.abs(q))) continue
+    if (ac > TOUCH_TRY * scale) continue
+    const s = c > 0 ? 1 : -1
+    const u = goldenMin(x => {
+      const v = h(x)
+      return Number.isFinite(v) ? s * v : Infinity
+    }, us[i - 1], us[i + 1])
+    const v = h(u)
+    if (!Number.isFinite(v)) continue
+    if (v === 0 || s * v > 0) {
+      if (Math.abs(v) <= TOUCH_H * scale) hits.push({ u, tangent: true })
+    } else {
+      // it dipped through zero between two samples: two crossings
+      root(us[i - 1], u, p)
+      root(u, us[i + 1], v)
+    }
+  }
+  hits.sort((x, y) => x.u - y.u)
+  if (!(unit !== undefined && unit > 0) || hits.length === 0) return hits
+
+  // Where the two curves LIE ALONG each other, h is zero to rounding over a
+  // whole run of samples and every sign flip of the noise would be reported.
+  // `unit` is what h measures one step off the curve; a run of samples this
+  // far below it is an overlap, and nothing inside it is a meeting point.
+  const flat = OVERLAP * unit
+  const runs: [number, number][] = []
+  for (let i = 0; i <= n; ) {
+    if (!(Math.abs(hs[i]) <= flat)) { i++; continue }
+    let j = i
+    while (j + 1 <= n && Math.abs(hs[j + 1]) <= flat) j++
+    if (j - i >= 2) runs.push([us[Math.max(0, i - 1)], us[Math.min(n, j + 1)]])
+    i = j + 1
+  }
+  if (runs.length === 0) return hits
+  return hits.filter(x => !runs.some(([l, r]) => x.u >= l && x.u <= r))
+}
+
+// ---- distances, pins, Newton ----------------------------------------------
+
+function grad(G: XYFn, x: number, y: number): [number, number] {
+  const hx = H1 * Math.max(1, Math.abs(x))
+  const hy = H1 * Math.max(1, Math.abs(y))
+  return [
+    (G(x + hx, y) - G(x - hx, y)) / (2 * hx),
+    (G(x, y + hy) - G(x, y - hy)) / (2 * hy),
+  ]
+}
+
+function dP(P: PFn, t: number): Vec2 {
+  const h = H1 * Math.max(1, Math.abs(t))
+  const a = P(t + h)
+  const b = P(t - h)
+  return { x: (a.x - b.x) / (2 * h), y: (a.y - b.y) / (2 * h) }
+}
+
+/** The t of P nearest (x, y), Gauss–Newton from a starting t. */
+function nearestT(g: ParamGeo, x: number, y: number, t: number): number {
+  for (let k = 0; k < 12; k++) {
+    const p = g.P(t)
+    const d = dP(g.P, t)
+    const den = d.x * d.x + d.y * d.y
+    if (!(den > 0) || !Number.isFinite(den)) break
+    const dt = -((p.x - x) * d.x + (p.y - y) * d.y) / den
+    if (!Number.isFinite(dt)) break
+    const nt = Math.min(g.t1, Math.max(g.t0, t + dt))
+    const moved = Math.abs(nt - t)
+    t = nt
+    if (moved <= 1e-15 * Math.max(1, Math.abs(t))) break
+  }
+  return t
+}
+
+/** How far (x, y) is from the curve; Infinity outside its domain. */
+function distTo(g: Geo, x: number, y: number, hint?: number): number {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return Infinity
+  switch (g.kind) {
+    case 'explicit': {
+      const tol = 1e-12 * Math.max(1, Math.abs(x))
+      if (x < g.lo - tol || x > g.hi + tol) return Infinity
+      const fx = g.f(x)
+      if (!Number.isFinite(fx)) return Infinity
+      const s = d1(g.f, x)
+      const k = Number.isFinite(s) ? Math.sqrt(1 + s * s) : 1
+      return Math.abs(y - fx) / k
+    }
+    case 'implicit': {
+      const v = g.G(x, y)
+      if (!Number.isFinite(v)) return Infinity
+      if (v === 0) return 0
+      const [gx, gy] = grad(g.G, x, y)
+      const n = Math.hypot(gx, gy)
+      return n > 0 && Number.isFinite(n) ? Math.abs(v) / n : Infinity
+    }
+    case 'param': {
+      const t = nearestT(g, x, y, hint ?? nearestSampleT(g, x, y))
+      const p = g.P(t)
+      const d = Math.hypot(p.x - x, p.y - y)
+      return Number.isFinite(d) ? d : Infinity
+    }
+  }
+}
+
+function nearestSampleT(g: ParamGeo, x: number, y: number): number {
+  const n = 256
+  let best = g.t0
+  let bd = Infinity
+  for (let i = 0; i <= n; i++) {
+    const t = g.t0 + ((g.t1 - g.t0) * i) / n
+    const p = g.P(t)
+    const d = Math.hypot(p.x - x, p.y - y)
+    if (d < bd) { bd = d; best = t }
+  }
+  return best
+}
+
+/**
+ * The y at which the curve passes x = cx, near yHint — or NaN when the curve
+ * cannot say (a vertical tangent, a curve that does not reach that x).
+ */
+function pinY(g: Geo, cx: number, yHint: number, tHint?: number): number {
+  switch (g.kind) {
+    case 'explicit': {
+      const tol = 1e-12 * Math.max(1, Math.abs(cx))
+      if (cx < g.lo - tol || cx > g.hi + tol) return Number.NaN
+      return g.f(cx)
+    }
+    case 'implicit': {
+      let y = yHint
+      for (let k = 0; k < 40; k++) {
+        const v = g.G(cx, y)
+        if (!Number.isFinite(v)) return Number.NaN
+        if (v === 0) return y
+        const h = H1 * Math.max(1, Math.abs(y))
+        const gy = (g.G(cx, y + h) - g.G(cx, y - h)) / (2 * h)
+        if (!(Math.abs(gy) > 0) || !Number.isFinite(gy)) return Number.NaN
+        const step = v / gy
+        y -= step
+        if (Math.abs(step) <= 1e-15 * Math.max(1, Math.abs(y))) break
+      }
+      return Math.abs(y - yHint) <= 1e-3 * Math.max(1, Math.abs(yHint)) ? y : Number.NaN
+    }
+    case 'param': {
+      let t = tHint ?? nearestSampleT(g, cx, yHint)
+      for (let k = 0; k < 40; k++) {
+        const p = g.P(t)
+        const d = dP(g.P, t)
+        if (!Number.isFinite(p.x) || !(Math.abs(d.x) > 0)) return Number.NaN
+        const step = (p.x - cx) / d.x
+        t = Math.min(g.t1, Math.max(g.t0, t - step))
+        if (Math.abs(step) <= 1e-15 * Math.max(1, Math.abs(t))) break
+      }
+      const p = g.P(t)
+      return Math.abs(p.x - cx) <= 1e-12 * Math.max(1, Math.abs(cx)) &&
+        Math.abs(p.y - yHint) <= 1e-3 * Math.max(1, Math.abs(yHint))
+        ? p.y
+        : Number.NaN
+    }
+  }
+}
+
+/** Newton on (G_A, G_B) = 0 from (x, y); null when the Jacobian is singular. */
+function newton2(GA: XYFn, GB: XYFn, x: number, y: number): Vec2 | null {
+  for (let k = 0; k < 40; k++) {
+    const f1 = GA(x, y)
+    const f2 = GB(x, y)
+    if (!Number.isFinite(f1) || !Number.isFinite(f2)) return null
+    if (f1 === 0 && f2 === 0) break
+    const [a, b] = grad(GA, x, y)
+    const [c, d] = grad(GB, x, y)
+    const det = a * d - b * c
+    if (!(Math.abs(det) > 1e-12 * Math.hypot(a, b) * Math.hypot(c, d))) return null
+    const dx = (-f1 * d + b * f2) / det
+    const dy = (-a * f2 + c * f1) / det
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return null
+    x += dx
+    y += dy
+    if (Math.hypot(dx, dy) <= 1e-15 * Math.max(1, Math.abs(x), Math.abs(y))) break
+  }
+  return { x, y }
+}
+
+/** Newton on P₁(t₁) − P₂(t₂) = 0; null when the tangents are parallel. */
+function newtonTT(A: ParamGeo, B: ParamGeo, t1: number, t2: number): [number, number] | null {
+  for (let k = 0; k < 40; k++) {
+    const p = A.P(t1)
+    const q = B.P(t2)
+    const fx = p.x - q.x
+    const fy = p.y - q.y
+    if (!Number.isFinite(fx) || !Number.isFinite(fy)) return null
+    if (fx === 0 && fy === 0) break
+    const a = dP(A.P, t1)
+    const b = dP(B.P, t2)
+    // J = [[a.x, −b.x], [a.y, −b.y]]
+    const det = -a.x * b.y + b.x * a.y
+    if (!(Math.abs(det) > 1e-12 * Math.hypot(a.x, a.y) * Math.hypot(b.x, b.y))) return null
+    const d1v = (-fx * -b.y - -b.x * -fy) / det
+    const d2v = (a.x * -fy - a.y * -fx) / det
+    if (!Number.isFinite(d1v) || !Number.isFinite(d2v)) return null
+    const n1 = Math.min(A.t1, Math.max(A.t0, t1 + d1v))
+    const n2 = Math.min(B.t1, Math.max(B.t0, t2 + d2v))
+    const moved = Math.abs(n1 - t1) + Math.abs(n2 - t2)
+    t1 = n1
+    t2 = n2
+    if (moved <= 1e-15 * Math.max(1, Math.abs(t1), Math.abs(t2))) break
+  }
+  return [t1, t2]
+}
+
+// ---- the pairings ---------------------------------------------------------
+
+function explicitImplicit(E: ExplicitGeo, I: ImplicitGeo): RawMeet[] {
+  const h = (x: number) => {
+    const y = E.f(x)
+    return Number.isFinite(y) ? I.G(x, y) : Number.NaN
+  }
+  // what G reads a short step off the explicit curve: the size of "not on it"
+  const step = 1e-2 * Math.max(1, E.hi - E.lo)
+  const unit = offCurveUnit(k => {
+    const x = E.lo + ((E.hi - E.lo) * k) / 16
+    const y = E.f(x)
+    return Math.max(Math.abs(I.G(x, y + step)), Math.abs(I.G(x + step, y)))
+  })
+  return scan1D(h, E.lo, E.hi, SAMPLES, unit).map(({ u, tangent }) => ({
+    x: u, y: E.f(u), tangent,
+  }))
+}
+
+/** Median of 17 finite probes of an off-curve magnitude; 0 when none. */
+function offCurveUnit(probe: (k: number) => number): number {
+  const v: number[] = []
+  for (let k = 0; k <= 16; k++) {
+    const m = probe(k)
+    if (Number.isFinite(m)) v.push(m)
+  }
+  return v.length > 0 ? median(v) : 0
+}
+
+function paramOther(P: ParamGeo, O: ExplicitGeo | ImplicitGeo): { m: RawMeet; t: number }[] {
+  const h: Fn = O.kind === 'implicit'
+    ? t => {
+      const p = P.P(t)
+      return O.G(p.x, p.y)
+    }
+    : t => {
+      const p = P.P(t)
+      if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return Number.NaN
+      if (p.x < O.lo || p.x > O.hi) return Number.NaN
+      return p.y - O.f(p.x)
+    }
+  const W = O.kind === 'explicit' ? Math.max(1, O.hi - O.lo) : 1
+  const unit = offCurveUnit(k => {
+    const p = P.P(P.t0 + ((P.t1 - P.t0) * k) / 16)
+    if (O.kind === 'explicit') return 1e-2 * W
+    const step = 1e-2 * Math.max(1, Math.abs(p.x), Math.abs(p.y))
+    return Math.max(Math.abs(O.G(p.x + step, p.y)), Math.abs(O.G(p.x, p.y + step)))
+  })
+  return scan1D(h, P.t0, P.t1, paramSamples(P), unit).map(({ u, tangent }) => {
+    const p = P.P(u)
+    return { m: { x: p.x, y: p.y, tangent }, t: u }
+  })
+}
+
+/** Where G changes sign on a box: its extent, grown by a cell; null if nowhere. */
+function probeBox(
+  G: XYFn,
+  x0: number, x1: number, y0: number, y1: number,
+  n: number,
+): [number, number, number, number] | null {
+  const dx = (x1 - x0) / n
+  const dy = (y1 - y0) / n
+  const vals = new Float64Array((n + 1) * (n + 1))
+  for (let j = 0; j <= n; j++) {
+    for (let i = 0; i <= n; i++) vals[j * (n + 1) + i] = G(x0 + i * dx, y0 + j * dy)
+  }
+  let bx0 = Infinity, bx1 = -Infinity, by0 = Infinity, by1 = -Infinity
+  const mark = (i: number, j: number) => {
+    const x = x0 + i * dx
+    const y = y0 + j * dy
+    if (x < bx0) bx0 = x
+    if (x > bx1) bx1 = x
+    if (y < by0) by0 = y
+    if (y > by1) by1 = y
+  }
+  const cross = (p: number, q: number) =>
+    Number.isFinite(p) && Number.isFinite(q) && p > 0 !== q > 0
+  for (let j = 0; j <= n; j++) {
+    for (let i = 0; i <= n; i++) {
+      const v = vals[j * (n + 1) + i]
+      if (i < n && cross(v, vals[j * (n + 1) + i + 1])) { mark(i, j); mark(i + 1, j) }
+      if (j < n && cross(v, vals[(j + 1) * (n + 1) + i])) { mark(i, j); mark(i, j + 1) }
+    }
+  }
+  if (!(bx1 >= bx0)) return null
+  return [
+    Math.max(x0, bx0 - dx), Math.min(x1, bx1 + dx),
+    Math.max(y0, by0 - dy), Math.min(y1, by1 + dy),
+  ]
+}
+
+/**
+ * Marching squares on a box: the zero set of G as polylines (vertices on the
+ * grid edges, linearly interpolated), each flagged closed when it loops.
+ */
+function tracePolylines(
+  G: XYFn,
+  x0: number, x1: number, y0: number, y1: number,
+  nx: number, ny: number,
+): { xs: number[]; ys: number[]; closed: boolean }[] {
+  const cols = nx + 1
+  const dx = (x1 - x0) / nx
+  const dy = (y1 - y0) / ny
+  const vals = new Float64Array(cols * (ny + 1))
+  for (let j = 0; j <= ny; j++) {
+    const y = y0 + j * dy
+    for (let i = 0; i <= nx; i++) vals[j * cols + i] = G(x0 + i * dx, y)
+  }
+  const HN = (ny + 1) * nx
+  const total = HN + ny * cols
+  const px = new Float64Array(total)
+  const py = new Float64Array(total)
+  const has = new Uint8Array(total)
+  const nb1 = new Int32Array(total).fill(-1)
+  const nb2 = new Int32Array(total).fill(-1)
+
+  const crossing = (id: number, ax: number, ay: number, va: number, bx: number, by: number, vb: number): boolean => {
+    if (has[id]) return true
+    if (!Number.isFinite(va) || !Number.isFinite(vb) || va > 0 === vb > 0) return false
+    const t = va / (va - vb)
+    px[id] = ax + (bx - ax) * t
+    py[id] = ay + (by - ay) * t
+    has[id] = 1
+    return true
+  }
+  const link = (a: number, b: number) => {
+    if (nb1[a] < 0) nb1[a] = b; else nb2[a] = b
+    if (nb1[b] < 0) nb1[b] = a; else nb2[b] = a
+  }
+
+  for (let j = 0; j < ny; j++) {
+    const ya = y0 + j * dy
+    const yb = ya + dy
+    for (let i = 0; i < nx; i++) {
+      const xa = x0 + i * dx
+      const xb = xa + dx
+      const v00 = vals[j * cols + i]
+      const v10 = vals[j * cols + i + 1]
+      const v01 = vals[(j + 1) * cols + i]
+      const v11 = vals[(j + 1) * cols + i + 1]
+      if (!Number.isFinite(v00) || !Number.isFinite(v10) || !Number.isFinite(v01) || !Number.isFinite(v11)) continue
+      const bottom = j * nx + i
+      const top = (j + 1) * nx + i
+      const left = HN + j * cols + i
+      const right = HN + j * cols + i + 1
+      const e: number[] = []
+      if (crossing(bottom, xa, ya, v00, xb, ya, v10)) e.push(bottom)
+      if (crossing(right, xb, ya, v10, xb, yb, v11)) e.push(right)
+      if (crossing(top, xa, yb, v01, xb, yb, v11)) e.push(top)
+      if (crossing(left, xa, ya, v00, xa, yb, v01)) e.push(left)
+      if (e.length === 2) {
+        link(e[0], e[1])
+      } else if (e.length === 4) {
+        // a saddle cell: the centre's sign says which corners are joined
+        const vc = G(xa + dx / 2, ya + dy / 2)
+        if (vc > 0 === v00 > 0) {
+          link(bottom, right)   // cut off corner (1, 0)
+          link(top, left)       // cut off corner (0, 1)
+        } else {
+          link(bottom, left)    // cut off corner (0, 0)
+          link(top, right)      // cut off corner (1, 1)
+        }
+      }
+    }
+  }
+
+  const seen = new Uint8Array(total)
+  const lines: { xs: number[]; ys: number[]; closed: boolean }[] = []
+  const walk = (start: number) => {
+    const xs: number[] = []
+    const ys: number[] = []
+    let prev = -1
+    let cur = start
+    let closed = false
+    while (cur >= 0 && !seen[cur]) {
+      seen[cur] = 1
+      xs.push(px[cur])
+      ys.push(py[cur])
+      const next = nb1[cur] !== prev ? nb1[cur] : nb2[cur]
+      prev = cur
+      cur = next
+      if (cur === start) { closed = true; break }
+    }
+    if (xs.length >= 2) lines.push({ xs, ys, closed })
+  }
+  // open chains from their ends first, then the loops
+  for (let id = 0; id < total; id++) {
+    if (has[id] && !seen[id] && (nb1[id] < 0 || nb2[id] < 0)) walk(id)
+  }
+  for (let id = 0; id < total; id++) if (has[id] && !seen[id]) walk(id)
+  return lines
+}
+
+function implicitImplicit(A: ImplicitGeo, B: ImplicitGeo, range: readonly [number, number]): RawMeet[] {
+  const lo = Math.min(range[0], range[1])
+  const hi = Math.max(range[0], range[1])
+  const R = Math.max(Math.abs(lo), Math.abs(hi), hi - lo)
+  const extent = (g: ImplicitGeo) =>
+    g.box ?? probeBox(g.G, lo, hi, -R, R, PROBE_CELLS)
+  const ea = extent(A)
+  if (!ea) return []
+  const eb = extent(B)
+  if (!eb) return []
+  const size = Math.max(ea[1] - ea[0], ea[3] - ea[2], eb[1] - eb[0], eb[3] - eb[2])
+  const pad = 0.02 * size + 1e-9 * Math.max(1, R)
+  const x0 = Math.max(lo, ea[0], eb[0]) - pad
+  const x1 = Math.min(hi, ea[1], eb[1]) + pad
+  const y0 = Math.max(ea[2], eb[2]) - pad
+  const y1 = Math.min(ea[3], eb[3]) + pad
+  if (!(x1 > x0) || !(y1 > y0)) return []
+  const w = x1 - x0
+  const hgt = y1 - y0
+  const nx = Math.max(12, Math.round(TRACE_CELLS * Math.min(1, w / hgt)))
+  const ny = Math.max(12, Math.round(TRACE_CELLS * Math.min(1, hgt / w)))
+  const lines = tracePolylines(A.G, x0, x1, y0, y1, nx, ny)
+
+  // Project a point onto A along ∇G_A — keeps a tangency search on A itself.
+  const onA = (x: number, y: number): Vec2 => {
+    for (let k = 0; k < 3; k++) {
+      const v = A.G(x, y)
+      if (!Number.isFinite(v) || v === 0) break
+      const [gx, gy] = grad(A.G, x, y)
+      const n2 = gx * gx + gy * gy
+      if (!(n2 > 0)) break
+      x -= (v * gx) / n2
+      y -= (v * gy) / n2
+    }
+    return { x, y }
+  }
+
+  const out: RawMeet[] = []
+  const cross = (x: number, y: number) => {
+    const p = newton2(A.G, B.G, x, y)
+    if (!p) return
+    // Newton creeps onto a tangency too (linearly, not quadratically): the
+    // gradients are parallel there, and that is what makes it a touch.
+    const [a, b] = grad(A.G, p.x, p.y)
+    const [c, d] = grad(B.G, p.x, p.y)
+    const sin = Math.abs(a * d - b * c) / (Math.hypot(a, b) * Math.hypot(c, d))
+    out.push({ x: p.x, y: p.y, tangent: sin <= TANGENT_SIN })
+  }
+  const sameSign = (p: number, q: number) =>
+    Number.isFinite(p) && Number.isFinite(q) && p !== 0 && q !== 0 && p > 0 === q > 0
+  for (const L of lines) {
+    const n = L.xs.length
+    if (liesAlong(L, B, onA)) continue
+    const gb = L.xs.map((x, k) => B.G(x, L.ys[k]))
+    const finite = gb.filter(Number.isFinite).map(Math.abs).sort((p, q) => p - q)
+    if (finite.length === 0) continue
+    const q75 = finite[Math.min(finite.length - 1, Math.floor(0.75 * finite.length))]
+    const scale = q75 > 0 ? q75 : 1
+    const segs = L.closed ? n : n - 1
+    for (let k = 0; k < segs; k++) {
+      const k2 = (k + 1) % n
+      const a = gb[k]
+      const b = gb[k2]
+      if (!Number.isFinite(a) || !Number.isFinite(b)) continue
+      if (a === 0) {
+        // a vertex ON B: a crossing unless B's sign is the same either side
+        const km = k > 0 ? k - 1 : L.closed ? n - 1 : -1
+        if (km >= 0 && sameSign(gb[km], b)) {
+          out.push({ x: L.xs[k], y: L.ys[k], tangent: true })
+        } else {
+          cross(L.xs[k], L.ys[k])
+        }
+        continue
+      }
+      if (b !== 0 && a > 0 !== b > 0) {
+        const t = a / (a - b)
+        cross(L.xs[k] + (L.xs[k2] - L.xs[k]) * t, L.ys[k] + (L.ys[k2] - L.ys[k]) * t)
+      }
+    }
+    // touches: a local minimum of |G_B| along A with no sign change around it
+    for (let k = 0; k < n; k++) {
+      if (!L.closed && (k === 0 || k === n - 1)) continue
+      const km = (k - 1 + n) % n
+      const kp = (k + 1) % n
+      const p = gb[km], c = gb[k], q = gb[kp]
+      if (!Number.isFinite(p) || !Number.isFinite(c) || !Number.isFinite(q)) continue
+      if (c === 0 || p === 0 || q === 0 || p > 0 !== c > 0 || c > 0 !== q > 0) continue
+      const ac = Math.abs(c)
+      if (!(ac < Math.abs(p) && ac <= Math.abs(q)) || ac > TOUCH_TRY * scale) continue
+      const s = c > 0 ? 1 : -1
+      // walk the two chords km → k → kp with s ∈ [0, 2], projected onto A
+      const at = (u: number): Vec2 => {
+        const [i0, i1, f] = u <= 1 ? [km, k, u] : [k, kp, u - 1]
+        return onA(
+          L.xs[i0] + (L.xs[i1] - L.xs[i0]) * f,
+          L.ys[i0] + (L.ys[i1] - L.ys[i0]) * f,
+        )
+      }
+      const u = goldenMin(v => {
+        const pt2 = at(v)
+        const g = B.G(pt2.x, pt2.y)
+        return Number.isFinite(g) ? s * g : Infinity
+      }, 0, 2)
+      const m = at(u)
+      const gm = B.G(m.x, m.y)
+      if (!Number.isFinite(gm)) continue
+      if (s * gm < 0) {
+        // dipped through between vertices: two crossings, Newton from each side
+        const l = at(u / 2)
+        const r = at((u + 2) / 2)
+        cross(l.x, l.y)
+        cross(r.x, r.y)
+      } else if (Math.abs(gm) <= TOUCH_H * scale) {
+        out.push({ x: m.x, y: m.y, tangent: true })
+      }
+    }
+  }
+  return out
+}
+
+/**
+ * Does B lie along this whole stretch of A? Five vertices, projected onto A,
+ * are asked for their distance to B; when most of them are ON B the two
+ * curves share this piece, and it has no meeting points to list.
+ */
+function liesAlong(
+  L: { xs: number[]; ys: number[] },
+  B: Geo,
+  onA: (x: number, y: number) => Vec2,
+): boolean {
+  const n = L.xs.length
+  if (n < 5) return false
+  let on = 0
+  for (let k = 0; k < 5; k++) {
+    const i = Math.floor(((n - 1) * (k + 0.5)) / 5)
+    const p = onA(L.xs[i], L.ys[i])
+    const Lc = Math.max(1, Math.abs(p.x), Math.abs(p.y))
+    if (distTo(B, p.x, p.y) <= MEET_ACCEPT * Lc) on++
+  }
+  return on >= 3
+}
+
+function sweep(g: ParamGeo): { ts: Float64Array; xs: Float64Array; ys: Float64Array } {
+  const n = paramSamples(g)
+  const ts = new Float64Array(n + 1)
+  const xs = new Float64Array(n + 1)
+  const ys = new Float64Array(n + 1)
+  for (let i = 0; i <= n; i++) {
+    const t = g.t0 + ((g.t1 - g.t0) * i) / n
+    const p = g.P(t)
+    ts[i] = t
+    xs[i] = p.x
+    ys[i] = p.y
+  }
+  return { ts, xs, ys }
+}
+
+function paramParam(A: ParamGeo, B: ParamGeo): RawMeet[] {
+  const a = sweep(A)
+  const b = sweep(B)
+  const out: RawMeet[] = []
+
+  // bucket B's segments on a grid over B's extent
+  let bx0 = Infinity, bx1 = -Infinity, by0 = Infinity, by1 = -Infinity
+  for (let i = 0; i < b.xs.length; i++) {
+    const x = b.xs[i], y = b.ys[i]
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue
+    if (x < bx0) bx0 = x
+    if (x > bx1) bx1 = x
+    if (y < by0) by0 = y
+    if (y > by1) by1 = y
+  }
+  if (!(bx1 >= bx0) || !(by1 >= by0)) return []
+  const G = 64
+  const cw = Math.max(bx1 - bx0, by1 - by0, 1e-12) / G
+  const cellOf = (x: number, y: number): [number, number] => [
+    Math.floor((x - bx0) / cw), Math.floor((y - by0) / cw),
+  ]
+  const buckets = new Map<number, number[]>()
+  const key = (i: number, j: number) => i * 100003 + j
+  const segOK = (s: { xs: Float64Array; ys: Float64Array }, k: number) =>
+    Number.isFinite(s.xs[k]) && Number.isFinite(s.ys[k]) &&
+    Number.isFinite(s.xs[k + 1]) && Number.isFinite(s.ys[k + 1])
+  for (let k = 0; k + 1 < b.xs.length; k++) {
+    if (!segOK(b, k)) continue
+    const [i0, j0] = cellOf(Math.min(b.xs[k], b.xs[k + 1]), Math.min(b.ys[k], b.ys[k + 1]))
+    const [i1, j1] = cellOf(Math.max(b.xs[k], b.xs[k + 1]), Math.max(b.ys[k], b.ys[k + 1]))
+    for (let i = i0; i <= i1; i++) {
+      for (let j = j0; j <= j1; j++) {
+        const kk = key(i, j)
+        const list = buckets.get(kk)
+        if (list) list.push(k); else buckets.set(kk, [k])
+      }
+    }
+  }
+  const stamp = new Int32Array(b.xs.length).fill(-1)
+  for (let k = 0; k + 1 < a.xs.length; k++) {
+    if (!segOK(a, k)) continue
+    const ax = a.xs[k], ay = a.ys[k]
+    const ex = a.xs[k + 1] - ax, ey = a.ys[k + 1] - ay
+    const [i0, j0] = cellOf(Math.min(ax, ax + ex), Math.min(ay, ay + ey))
+    const [i1, j1] = cellOf(Math.max(ax, ax + ex), Math.max(ay, ay + ey))
+    if (i1 < 0 || j1 < 0 || i0 > G || j0 > G) continue
+    for (let i = Math.max(0, i0); i <= Math.min(G, i1); i++) {
+      for (let j = Math.max(0, j0); j <= Math.min(G, j1); j++) {
+        const list = buckets.get(key(i, j))
+        if (!list) continue
+        for (const m of list) {
+          if (stamp[m] === k) continue
+          stamp[m] = k
+          const cx = b.xs[m], cy = b.ys[m]
+          const fx = b.xs[m + 1] - cx, fy = b.ys[m + 1] - cy
+          const den = ex * fy - ey * fx
+          if (den === 0) continue
+          const s = ((cx - ax) * fy - (cy - ay) * fx) / den
+          const u = ((cx - ax) * ey - (cy - ay) * ex) / den
+          if (s < 0 || s > 1 || u < 0 || u > 1) continue
+          const t1 = a.ts[k] + (a.ts[k + 1] - a.ts[k]) * s
+          const t2 = b.ts[m] + (b.ts[m + 1] - b.ts[m]) * u
+          const tt = newtonTT(A, B, t1, t2)
+          if (!tt) continue
+          const p = A.P(tt[0])
+          const da = dP(A.P, tt[0])
+          const db = dP(B.P, tt[1])
+          const sin = Math.abs(da.x * db.y - da.y * db.x) /
+            (Math.hypot(da.x, da.y) * Math.hypot(db.x, db.y))
+          out.push({ x: p.x, y: p.y, tangent: sin <= TANGENT_SIN, tA: tt[0], tB: tt[1] })
+          if (out.length > 4 * MAX_MEETS) return out
+        }
+      }
+    }
+  }
+
+  // Two polar curves meet at the pole whenever both reach r = 0 — at
+  // whatever θ each of them does. Nothing above can see that: the two
+  // curves are at the pole at DIFFERENT parameter values.
+  if (A.r && B.r) {
+    const za = scan1D(A.r, A.t0, A.t1, paramSamples(A))
+    const zb = za.length > 0 ? scan1D(B.r, B.t0, B.t1, paramSamples(B)) : []
+    if (za.length > 0 && zb.length > 0) {
+      out.push({ x: 0, y: 0, tangent: false, tA: za[0].u, tB: zb[0].u })
+    }
+  }
+  return out
+}
+
+/**
+ * Every meeting of two curves that are not both functions of x, as analysis
+ * points on the parent. See the section comment above.
+ */
+function planeIntersections(
+  parent: FittedCurve,
+  other: FittedCurve,
+  models: Record<string, ModelSpec>,
+  range: readonly [number, number],
+): SpecialPoint[] {
+  try {
+    const lo = Math.min(range[0], range[1])
+    const hi = Math.max(range[0], range[1])
+    if (!Number.isFinite(lo) || !Number.isFinite(hi) || !(hi > lo)) return []
+    // a curve with itself meets everywhere, which is not a list of points
+    if (
+      parent.modelId === other.modelId &&
+      parent.params.length === other.params.length &&
+      parent.params.every((v, i) => v === other.params[i]) &&
+      String(parent.domain) === String(other.domain)
+    ) return []
+    const A = geoOf(parent, models, range)
+    const B = geoOf(other, models, range)
+    if (!A || !B) return []
+
+    let raw: RawMeet[]
+    if (A.kind === 'explicit' && B.kind === 'implicit') {
+      raw = explicitImplicit(A, B)
+    } else if (A.kind === 'implicit' && B.kind === 'explicit') {
+      raw = explicitImplicit(B, A)
+    } else if (A.kind === 'implicit' && B.kind === 'implicit') {
+      raw = implicitImplicit(A, B, [lo, hi])
+    } else if (A.kind === 'param' && B.kind === 'param') {
+      raw = paramParam(A, B)
+    } else if (A.kind === 'param' && B.kind !== 'param') {
+      raw = paramOther(A, B).map(({ m, t }) => ({ ...m, tA: t }))
+    } else if (B.kind === 'param' && A.kind !== 'param') {
+      raw = paramOther(B, A).map(({ m, t }) => ({ ...m, tB: t }))
+    } else {
+      return []
+    }
+    return finishPlane(raw, A, B, other.id, lo, hi)
+  } catch {
+    return []
+  }
+}
+
+/** Verify, dedupe, attach exact forms, sort — the plane solver's last step. */
+function finishPlane(
+  raw: RawMeet[],
+  A: Geo,
+  B: Geo,
+  withId: string,
+  lo: number,
+  hi: number,
+): SpecialPoint[] {
+  const W = hi - lo
+  const kept: RawMeet[] = []
+  for (const m of raw) {
+    if (!Number.isFinite(m.x) || !Number.isFinite(m.y)) continue
+    if (m.x < lo - 1e-12 * W || m.x > hi + 1e-12 * W) continue
+    const L = Math.max(1, Math.abs(m.x), Math.abs(m.y))
+    if (distTo(A, m.x, m.y, m.tA) > MEET_ACCEPT * L) continue
+    if (distTo(B, m.x, m.y, m.tB) > MEET_ACCEPT * L) continue
+    const dup = kept.find(
+      q => Math.hypot(q.x - m.x, q.y - m.y) <= DEDUPE_XY * Math.max(1, Math.abs(m.x), Math.abs(m.y)),
+    )
+    if (dup) {
+      // a crossing outranks a touch found at the same place
+      if (dup.tangent && !m.tangent) dup.tangent = false
+      continue
+    }
+    kept.push({ ...m })
+  }
+  if (kept.length > MAX_MEETS) return []
+
+  const out: SpecialPoint[] = []
+  for (const m of kept) {
+    const p = pt('intersection', m.x, m.y, 'intersection', false, m.tangent)
+    if (!p) continue
+    p.withId = withId
+    attachPlaneExact(p, A, B, m.tA, m.tB)
+    out.push(p)
+  }
+  out.sort((p, q) => p.pos.x - q.pos.x || p.pos.y - q.pos.y)
+  return out
+}
+
+/**
+ * exactX / exactY for a point in the plane, each accepted only when the
+ * candidate point lies on BOTH curves to MEET_CHECK — the plane's version of
+ * "f − g vanishes at the form". The point is polished onto what is accepted.
+ */
+function attachPlaneExact(p: SpecialPoint, A: Geo, B: Geo, tA?: number, tB?: number): void {
+  const onBoth = (x: number, y: number): boolean => {
+    const L = Math.max(1, Math.abs(x), Math.abs(y))
+    return distTo(A, x, y, tA) <= MEET_CHECK * L && distTo(B, x, y, tB) <= MEET_CHECK * L
+  }
+  // The y a candidate x implies: read off whichever curve can say, and of
+  // those the one the other curve agrees with best.
+  const yAt = (cx: number, yHint: number): number => {
+    let best = Number.NaN
+    let bestD = Infinity
+    for (const [g, t, o, to] of [[A, tA, B, tB], [B, tB, A, tA]] as const) {
+      const y = pinY(g, cx, yHint, t)
+      if (!Number.isFinite(y)) continue
+      const d = distTo(o, cx, y, to)
+      if (d < bestD) { bestD = d; best = y }
+    }
+    return best
+  }
+
+  let { x, y } = p.pos
+  const fx = verifiedExact(x, c => {
+    const cy = yAt(c, y)
+    return onBoth(c, Number.isFinite(cy) ? cy : y)
+  })
+  if (fx) {
+    const cy = yAt(fx.value, y)
+    x = fx.value
+    if (Number.isFinite(cy)) y = cy
+    p.exactX = fx.text
+  }
+  const fy = verifiedExact(y, c => onBoth(x, c))
+  if (fy) {
+    y = fy.value
+    p.exactY = fy.text
+  }
+  p.pos = { x: x + 0, y: y + 0 }
 }

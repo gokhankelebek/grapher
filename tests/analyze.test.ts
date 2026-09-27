@@ -1469,13 +1469,16 @@ describe('analyzeCurve — intersections', () => {
     ).toEqual([[0, 0]])
   })
 
-  it('a curve that is not a function of x has no intersections to report', () => {
+  it('a curve that is not a function of x is met in the plane (see below)', () => {
+    // Once refused outright — which is why a sketched circle and parabola
+    // showed no crossings. The plane solver now answers these pairs.
     const f = named('f', 'poly2', [0, 0, 1])
-    expect(intersectionPoints(f, named('c', 'circle', [0, 0, 2]), MODELS, [-4, 4])).toEqual([])
-    expect(intersectionPoints(named('c', 'circle', [0, 0, 2]), f, MODELS, [-4, 4])).toEqual([])
-    expect(intersectionPoints(f, named('r', 'polarRose', [2, 3, 0]), MODELS, [-4, 4])).toEqual([])
-    // a NaN parameter says nothing either
+    expect(intersectionPoints(f, named('c', 'circle', [0, 0, 2]), MODELS, [-4, 4])).toHaveLength(2)
+    expect(intersectionPoints(named('c', 'circle', [0, 0, 2]), f, MODELS, [-4, 4])).toHaveLength(2)
+    expect(intersectionPoints(f, named('r', 'polarRose', [2, 3, 0]), MODELS, [-4, 4]).length).toBeGreaterThan(0)
+    // a NaN parameter says nothing
     expect(intersectionPoints(f, named('g', 'line', [Number.NaN, 1]), MODELS, [-4, 4])).toEqual([])
+    expect(intersectionPoints(f, named('c', 'circle', [0, Number.NaN, 2]), MODELS, [-4, 4])).toEqual([])
   })
 
   it('every reported point really is shared by both curves', () => {
@@ -1508,6 +1511,262 @@ describe('analyzeCurve — intersections', () => {
     expect(best, `took ${best.toFixed(3)}ms`).toBeLessThan(2)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Intersections in the plane — circles, typed conics, polar and parametric
+// curves. A sketched circle fits the implicit `circle` family and a typed
+// x² + y² = 25 is an implicit expression; neither is a function of x, and the
+// teacher's report was exactly that pair: "I sketched a circle and a parabola,
+// their intersection points were not viewed."
+// ---------------------------------------------------------------------------
+
+describe('intersectionPoints — in the plane', () => {
+  const MINUS = '−'
+  const RT = '√'
+  const named = (
+    id: string,
+    modelId: string,
+    params: number[],
+    domain: [number, number] | null = null,
+  ): FittedCurve => ({ ...curve(modelId, params, domain), id })
+
+  function typed(id: string, src: string): { c: FittedCurve; models: Record<string, ModelSpec> } {
+    const r = parseExpression(src)
+    if (!r.ok) throw new Error(`expected "${src}" to parse, got: ${r.error}`)
+    const modelId = `expr_${id}`
+    return {
+      c: { ...curve(modelId, r.plot.defaultParams, r.plot.domain), id, kind: r.plot.kind },
+      models: { [modelId]: r.plot.makeModel(modelId) },
+    }
+  }
+  function pair(a: string, b: string, range: [number, number] = [-10, 10]): SpecialPoint[] {
+    const A = typed('a', a)
+    const B = typed('b', b)
+    return intersectionPoints(A.c, B.c, { ...MODELS, ...A.models, ...B.models }, range)
+  }
+  const xy = (p: SpecialPoint) => [p.pos.x, p.pos.y]
+  const forms = (ps: SpecialPoint[]) => ps.map(p => [p.exactX, p.exactY])
+
+  it('x² + y² = 25 and y = x² − 5 meet at (−3, 4), (0, −5), (3, 4), exactly', () => {
+    const pts = pair('x^2 + y^2 = 25', 'y = x^2 - 5')
+    expect(pts.map(xy)).toEqual([[-3, 4], [0, -5], [3, 4]])
+    expect(forms(pts)).toEqual([[MINUS + '3', '4'], ['0', MINUS + '5'], ['3', '4']])
+    for (const p of pts) {
+      expect(p.kind).toBe('intersection')
+      expect(p.label).toBe('intersection')
+      expect(p.withId).toBe('b')
+    }
+    // the vertex sits on the circle's lowest point from inside: a touch
+    expect(pts.map(p => p.tangent === true)).toEqual([false, true, false])
+    // the same answer asked from the parabola's side
+    const rev = pair('y = x^2 - 5', 'x^2 + y^2 = 25')
+    expect(rev.map(xy)).toEqual([[-3, 4], [0, -5], [3, 4]])
+    expect(rev.every(p => p.withId === 'b')).toBe(true)
+  })
+
+  it('x² + y² = 4 and y = x + 2 meet at (−2, 0) and (0, 2)', () => {
+    const pts = pair('x^2 + y^2 = 4', 'y = x + 2')
+    expect(pts.map(xy)).toEqual([[-2, 0], [0, 2]])
+    expect(forms(pts)).toEqual([[MINUS + '2', '0'], ['0', '2']])
+    expect(pts.some(p => p.tangent)).toBe(false)
+  })
+
+  it('x² + y² = 1 and y = 1 touch once, at (0, 1)', () => {
+    const pts = pair('x^2 + y^2 = 1', 'y = 1')
+    expect(pts).toHaveLength(1)
+    expect(xy(pts[0])).toEqual([0, 1])
+    expect(pts[0].tangent).toBe(true)
+    expect(forms(pts)).toEqual([['0', '1']])
+  })
+
+  it('(x − 1)² + y² = 4 and (x + 1)² + y² = 4 meet at (0, ±√3)', () => {
+    const pts = pair('(x-1)^2 + y^2 = 4', '(x+1)^2 + y^2 = 4')
+    expect(pts).toHaveLength(2)
+    expect(forms(pts)).toEqual([['0', MINUS + RT + '3'], ['0', RT + '3']])
+    expect(pts[0].pos.y).toBe(-Math.sqrt(3))
+    expect(pts[1].pos.y).toBe(Math.sqrt(3))
+    // the sketched version: two circle-family fits
+    const fam = intersectionPoints(
+      named('a', 'circle', [1, 0, 2]), named('b', 'circle', [-1, 0, 2]), MODELS, [-10, 10],
+    )
+    expect(forms(fam)).toEqual(forms(pts))
+  })
+
+  it('a sketched circle [0, 0, 3] and a fitted parabola y = x² − 3', () => {
+    // the teacher's report: a circle-family fit and a poly2 fit
+    const pts = intersectionPoints(
+      named('c', 'circle', [0, 0, 3]), named('p', 'poly2', [-3, 0, 1]), MODELS, [-10, 10],
+    )
+    // x² + (x² − 3)² = 9  ->  x²(x² − 5) = 0
+    expect(pts.map(xy)).toEqual([[-Math.sqrt(5), 2], [0, -3], [Math.sqrt(5), 2]])
+    expect(forms(pts)).toEqual([[MINUS + RT + '5', '2'], ['0', MINUS + '3'], [RT + '5', '2']])
+    expect(pts[1].tangent).toBe(true)
+    expect(pts.every(p => p.withId === 'p')).toBe(true)
+    // and a sketch that meets it nowhere in particular gets no invented forms
+    const odd = intersectionPoints(
+      named('c', 'circle', [0.31, -0.23, 2.71]), named('p', 'poly2', [-2.1, 0.13, 0.93]),
+      MODELS, [-10, 10],
+    )
+    expect(odd).toHaveLength(2)
+    for (const p of odd) {
+      expect(p.exactX).toBeUndefined()
+      expect(Math.hypot(p.pos.x - 0.31, p.pos.y + 0.23)).toBeCloseTo(2.71, 10)
+      expect(p.pos.y).toBeCloseTo(-2.1 + 0.13 * p.pos.x + 0.93 * p.pos.x ** 2, 10)
+    }
+  })
+
+  it('an ellipse-family general conic and a line', () => {
+    // x² + 4y² = 4 and y = x/2 -> x = ±√2
+    const E = named('e', 'ellipse', [1, 0, 4, 0, 0, -4])
+    const pts = intersectionPoints(E, named('l', 'line', [0, 0.5]), MODELS, [-10, 10])
+    expect(forms(pts)).toEqual([[MINUS + RT + '2', MINUS + RT + '2/2'], [RT + '2', RT + '2/2']])
+    expect(pts[1].pos.x).toBe(Math.SQRT2)
+    // and a circle crossing it: x² + y² = 4 meets x² + 4y² = 9 four times
+    const four = intersectionPoints(
+      named('c', 'circle', [0, 0, 2]), named('e', 'ellipse', [1, 0, 4, 0, 0, -9]), MODELS, [-10, 10],
+    )
+    expect(four).toHaveLength(4)
+    expect(four.map(p => p.exactY)).toEqual([
+      MINUS + RT + '15/3', RT + '15/3', MINUS + RT + '15/3', RT + '15/3',
+    ])
+  })
+
+  it('r = 1 + cos θ and r = 1 meet at (0, ±1), and not at the pole', () => {
+    const pts = pair('r = 1 + cos(theta)', 'r = 1')
+    expect(forms(pts)).toEqual([['0', MINUS + '1'], ['0', '1']])
+    expect(pts.map(xy)).toEqual([[0, -1], [0, 1]])
+  })
+
+  it('r = sin θ and r = cos θ meet at (1/2, 1/2) AND at the pole', () => {
+    // the AP pitfall: solving sin θ = cos θ finds only θ = π/4; the pole is
+    // reached by each curve at a DIFFERENT θ (0 and π/2) and is shared too
+    const pts = pair('r = sin(theta)', 'r = cos(theta)')
+    expect(pts.map(xy)).toEqual([[0, 0], [0.5, 0.5]])
+    expect(forms(pts)).toEqual([['0', '0'], ['1/2', '1/2']])
+  })
+
+  it('the unit circle (cos t, sin t) meets y = x at (±√2/2, ±√2/2)', () => {
+    const pts = pair('(cos(t), sin(t))', 'y = x')
+    expect(forms(pts)).toEqual([
+      [MINUS + RT + '2/2', MINUS + RT + '2/2'],
+      [RT + '2/2', RT + '2/2'],
+    ])
+    expect(pts[1].pos.x).toBe(Math.SQRT1_2)
+  })
+
+  it('curves that do not meet report nothing', () => {
+    expect(intersectionPoints(
+      named('a', 'circle', [0, 0, 1]), named('b', 'circle', [5, 0, 1]), MODELS, [-10, 10],
+    )).toEqual([])
+    expect(intersectionPoints(
+      named('a', 'circle', [0, 0, 1]), named('b', 'poly2', [3, 0, 1]), MODELS, [-10, 10],
+    )).toEqual([])
+    expect(pair('x^2 + y^2 = 1', 'y = 1.01')).toEqual([])
+    expect(pair('r = 1', 'r = 3')).toEqual([])
+    expect(pair('(cos(t), sin(t))', 'y = x^2 + 2')).toEqual([])
+    // and a curve lying along another is not a list of points
+    const T = typed('t', 'x^2 + y^2 = 4')
+    expect(intersectionPoints(T.c, named('c', 'circle', [0, 0, 2]), { ...MODELS, ...T.models }, [-10, 10]))
+      .toEqual([])
+    expect(pair('(2cos(t), 2sin(t))', 'r = 2')).toEqual([])
+  })
+
+  it('a meeting off the range or outside a domain is not a meeting', () => {
+    // x² + y² = 25 and y = x² − 5 again, with the range stopping at x = 1
+    const pts = pair('x^2 + y^2 = 25', 'y = x^2 - 5', [-10, 1])
+    expect(pts.map(xy)).toEqual([[-3, 4], [0, -5]])
+    // a parabola restricted to x ≥ 1
+    const c = named('c', 'circle', [0, 0, 3])
+    expect(
+      intersectionPoints(c, named('p', 'poly2', [-3, 0, 1], [1, 5]), MODELS, [-10, 10]).map(xy),
+    ).toEqual([[Math.sqrt(5), 2]])
+    // half of the unit circle: t in [0, π] never reaches y = −x in the lower half
+    const half = intersectionPoints(
+      { ...named('h', 'fourier', [0, 0, 1, 0, 0, 1]), domain: [0, Math.PI] },
+      named('l', 'line', [0, -1]),
+      MODELS, [-10, 10],
+    )
+    expect(forms(half)).toEqual([[MINUS + RT + '2/2', RT + '2/2']])
+  })
+
+  it('tangent circles touch once', () => {
+    const pts = intersectionPoints(
+      named('a', 'circle', [0, 0, 1]), named('b', 'circle', [1.2, 1.6, 1]), MODELS, [-10, 10],
+    )
+    expect(pts).toHaveLength(1)
+    expect(forms(pts)).toEqual([['3/5', '4/5']])
+    expect(pts[0].tangent).toBe(true)
+  })
+
+  it('every point really is on both curves', () => {
+    const rose = named('r', 'polarRose', [2, 3, 0])
+    const circ = named('c', 'circle', [0, 0, 1])
+    const pts = intersectionPoints(rose, circ, MODELS, [-10, 10])
+    expect(pts).toHaveLength(6)
+    for (const p of pts) expect(Math.hypot(p.pos.x, p.pos.y)).toBeCloseTo(1, 12)
+  })
+
+  it('a circle and a parabola are intersected in under 3ms, two circles in under 5ms', () => {
+    const best = (fn: () => void) => {
+      for (let i = 0; i < 5; i++) fn()
+      let b = Infinity
+      for (let k = 0; k < 5; k++) {
+        const t0 = performance.now()
+        fn()
+        b = Math.min(b, performance.now() - t0)
+      }
+      return b
+    }
+    const C = typed('c', 'x^2 + y^2 = 25')
+    const P = typed('p', 'y = x^2 - 5')
+    const D = typed('d', '(x-1)^2 + y^2 = 4')
+    const m = { ...MODELS, ...C.models, ...P.models, ...D.models }
+    const cp = best(() => intersectionPoints(C.c, P.c, m, [-16, 16]))
+    expect(cp, `circle × parabola took ${cp.toFixed(3)}ms`).toBeLessThan(3)
+    const cc = best(() => intersectionPoints(C.c, D.c, m, [-16, 16]))
+    expect(cc, `circle × circle took ${cc.toFixed(3)}ms`).toBeLessThan(5)
+    const fam = best(() => intersectionPoints(
+      named('a', 'circle', [0, 0, 3]), named('b', 'poly2', [-3, 0, 1]), MODELS, [-16, 16],
+    ))
+    expect(fam, `fitted circle × parabola took ${fam.toFixed(3)}ms`).toBeLessThan(3)
+  })
+
+  it('two explicit curves give byte-for-byte what they gave before the plane solver', () => {
+    type Side = { fam: string; params: number[]; domain?: [number, number] } | { src: string }
+    const PAIRS: [Side, Side, [number, number]][] = [
+      [{ fam: 'poly2', params: [0, 0, 1] }, { fam: 'poly2', params: [2, 0, -1] }, [-5, 5]],
+      [{ fam: 'poly2', params: [0, 0, 1] }, { fam: 'line', params: [2, 0] }, [-5, 5]],
+      [{ src: 'y = sin(x)' }, { src: 'y = cos(x)' }, [0, 2 * Math.PI]],
+      [{ fam: 'sine', params: [1, 1, 0, 0] }, { fam: 'sine', params: [1, 1, Math.PI / 2, 0] }, [0, 2 * Math.PI]],
+      [{ fam: 'poly2', params: [0, 0, 1] }, { fam: 'line', params: [0, 1] }, [-5, 5]],
+      [{ fam: 'poly3', params: [0, 0, 0, 1] }, { fam: 'line', params: [0, 1] }, [-5, 5]],
+      [{ src: 'y = (x-1)^2' }, { src: 'y = 0' }, [-5, 5]],
+      [{ fam: 'poly2', params: [1, -2, 1] }, { fam: 'line', params: [0, 0] }, [-5, 5]],
+      [{ fam: 'recip', params: [1, 0, 0] }, { fam: 'line', params: [0, 1] }, [-3, 3]],
+      [{ fam: 'poly2', params: [0, 0, 1] }, { fam: 'line', params: [0, 1], domain: [0.5, 4] }, [-5, 5]],
+      [{ src: 'y = sin(x)*e^(x/3) + x^2' }, { src: 'y = 0.5x^2 + 2' }, [-10, 10]],
+      [{ src: 'y = e^x' }, { src: 'y = 3 - x^2' }, [-8, 8]],
+      [{ src: 'y = ln(x)' }, { src: 'y = x - 2' }, [-8, 8]],
+      [{ fam: 'exp', params: [1, 1, 0] }, { fam: 'poly3', params: [1, -2, 0, 0.5] }, [-6, 6]],
+    ]
+    const build = (s: Side, id: string, models: Record<string, ModelSpec>): FittedCurve => {
+      if ('fam' in s) return { ...named(id, s.fam, s.params, s.domain ?? null), error: 0 }
+      const t = typed(id, s.src)
+      Object.assign(models, t.models)
+      return { ...t.c, domain: null, error: 0 }
+    }
+    const got = PAIRS.map(([a, b, range]) => {
+      const models: Record<string, ModelSpec> = { ...MODELS }
+      const A = build(a, 'a', models)
+      const B = build(b, 'b', models)
+      return [intersectionPoints(A, B, models, range), intersectionPoints(B, A, models, range)]
+    })
+    expect(JSON.stringify(got)).toBe(EXPLICIT_SNAPSHOT)
+  })
+})
+
+/** intersectionPoints on explicit pairs, recorded before the plane solver. */
+const EXPLICIT_SNAPSHOT = '[[[{"kind":"intersection","pos":{"x":-1,"y":1},"label":"intersection","exact":true,"withId":"b","exactX":"−1","exactY":"1"},{"kind":"intersection","pos":{"x":1,"y":1},"label":"intersection","exact":true,"withId":"b","exactX":"1","exactY":"1"}],[{"kind":"intersection","pos":{"x":-1,"y":1},"label":"intersection","exact":true,"withId":"a","exactX":"−1","exactY":"1"},{"kind":"intersection","pos":{"x":1,"y":1},"label":"intersection","exact":true,"withId":"a","exactX":"1","exactY":"1"}]],[[{"kind":"intersection","pos":{"x":-1.4142135623730951,"y":2},"label":"intersection","exact":true,"withId":"b","exactX":"−√2","exactY":"2"},{"kind":"intersection","pos":{"x":1.4142135623730951,"y":2},"label":"intersection","exact":true,"withId":"b","exactX":"√2","exactY":"2"}],[{"kind":"intersection","pos":{"x":-1.4142135623730951,"y":2},"label":"intersection","exact":true,"withId":"a","exactX":"−√2","exactY":"2"},{"kind":"intersection","pos":{"x":1.4142135623730951,"y":2},"label":"intersection","exact":true,"withId":"a","exactX":"√2","exactY":"2"}]],[[{"kind":"intersection","pos":{"x":0.7853981633974483,"y":0.7071067811865476},"label":"intersection","exact":false,"withId":"b","exactX":"π/4","exactY":"√2/2"},{"kind":"intersection","pos":{"x":3.9269908169872414,"y":-0.7071067811865476},"label":"intersection","exact":false,"withId":"b","exactX":"5π/4","exactY":"−√2/2"}],[{"kind":"intersection","pos":{"x":0.7853981633974483,"y":0.7071067811865476},"label":"intersection","exact":false,"withId":"a","exactX":"π/4","exactY":"√2/2"},{"kind":"intersection","pos":{"x":3.9269908169872414,"y":-0.7071067811865476},"label":"intersection","exact":false,"withId":"a","exactX":"5π/4","exactY":"−√2/2"}]],[[{"kind":"intersection","pos":{"x":0.7853981633974483,"y":0.7071067811865476},"label":"intersection","exact":false,"withId":"b","exactX":"π/4","exactY":"√2/2"},{"kind":"intersection","pos":{"x":3.9269908169872414,"y":-0.7071067811865476},"label":"intersection","exact":false,"withId":"b","exactX":"5π/4","exactY":"−√2/2"}],[{"kind":"intersection","pos":{"x":0.7853981633974483,"y":0.7071067811865476},"label":"intersection","exact":false,"withId":"a","exactX":"π/4","exactY":"√2/2"},{"kind":"intersection","pos":{"x":3.9269908169872414,"y":-0.7071067811865476},"label":"intersection","exact":false,"withId":"a","exactX":"5π/4","exactY":"−√2/2"}]],[[{"kind":"intersection","pos":{"x":0,"y":0},"label":"intersection","exact":true,"withId":"b","exactX":"0","exactY":"0"},{"kind":"intersection","pos":{"x":1,"y":1},"label":"intersection","exact":true,"withId":"b","exactX":"1","exactY":"1"}],[{"kind":"intersection","pos":{"x":0,"y":0},"label":"intersection","exact":true,"withId":"a","exactX":"0","exactY":"0"},{"kind":"intersection","pos":{"x":1,"y":1},"label":"intersection","exact":true,"withId":"a","exactX":"1","exactY":"1"}]],[[{"kind":"intersection","pos":{"x":-1,"y":-1},"label":"intersection","exact":false,"withId":"b","exactX":"−1","exactY":"−1"},{"kind":"intersection","pos":{"x":0,"y":0},"label":"intersection","exact":false,"withId":"b","exactX":"0","exactY":"0"},{"kind":"intersection","pos":{"x":1,"y":1},"label":"intersection","exact":false,"withId":"b","exactX":"1","exactY":"1"}],[{"kind":"intersection","pos":{"x":-1,"y":-1},"label":"intersection","exact":false,"withId":"a","exactX":"−1","exactY":"−1"},{"kind":"intersection","pos":{"x":0,"y":0},"label":"intersection","exact":false,"withId":"a","exactX":"0","exactY":"0"},{"kind":"intersection","pos":{"x":1,"y":1},"label":"intersection","exact":false,"withId":"a","exactX":"1","exactY":"1"}]],[[{"kind":"intersection","pos":{"x":1,"y":0},"label":"intersection","exact":false,"withId":"b","tangent":true,"exactX":"1","exactY":"0"}],[{"kind":"intersection","pos":{"x":1,"y":0},"label":"intersection","exact":false,"withId":"a","tangent":true,"exactX":"1","exactY":"0"}]],[[{"kind":"intersection","pos":{"x":1,"y":0},"label":"intersection","exact":true,"withId":"b","tangent":true,"exactX":"1","exactY":"0"}],[{"kind":"intersection","pos":{"x":1,"y":0},"label":"intersection","exact":true,"withId":"a","tangent":true,"exactX":"1","exactY":"0"}]],[[{"kind":"intersection","pos":{"x":-1,"y":-1},"label":"intersection","exact":false,"withId":"b","exactX":"−1","exactY":"−1"},{"kind":"intersection","pos":{"x":1,"y":1},"label":"intersection","exact":false,"withId":"b","exactX":"1","exactY":"1"}],[{"kind":"intersection","pos":{"x":-1,"y":-1},"label":"intersection","exact":false,"withId":"a","exactX":"−1","exactY":"−1"},{"kind":"intersection","pos":{"x":1,"y":1},"label":"intersection","exact":false,"withId":"a","exactX":"1","exactY":"1"}]],[[{"kind":"intersection","pos":{"x":1,"y":1},"label":"intersection","exact":true,"withId":"b","exactX":"1","exactY":"1"}],[{"kind":"intersection","pos":{"x":1,"y":1},"label":"intersection","exact":true,"withId":"a","exactX":"1","exactY":"1"}]],[[{"kind":"intersection","pos":{"x":-2.1878409924227546,"y":4.393324104062691},"label":"intersection","exact":false,"withId":"b"},{"kind":"intersection","pos":{"x":1.1498054663679602,"y":2.661026305244821},"label":"intersection","exact":false,"withId":"b"}],[{"kind":"intersection","pos":{"x":-2.1878409924227546,"y":4.3933241040626925},"label":"intersection","exact":false,"withId":"a"},{"kind":"intersection","pos":{"x":1.1498054663679602,"y":2.661026305244821},"label":"intersection","exact":false,"withId":"a"}]],[[{"kind":"intersection","pos":{"x":-1.677232708532538,"y":0.18689044142860645},"label":"intersection","exact":false,"withId":"b"},{"kind":"intersection","pos":{"x":0.8344868653087588,"y":2.3036316716271616},"label":"intersection","exact":false,"withId":"b"}],[{"kind":"intersection","pos":{"x":-1.677232708532538,"y":0.1868904414286061},"label":"intersection","exact":false,"withId":"a"},{"kind":"intersection","pos":{"x":0.8344868653087588,"y":2.303631671627161},"label":"intersection","exact":false,"withId":"a"}]],[[{"kind":"intersection","pos":{"x":0.15859433956303937,"y":-1.8414056604369606},"label":"intersection","exact":false,"withId":"b"},{"kind":"intersection","pos":{"x":3.1461932206205825,"y":1.1461932206205825},"label":"intersection","exact":false,"withId":"b"}],[{"kind":"intersection","pos":{"x":0.15859433956303937,"y":-1.8414056604369606},"label":"intersection","exact":false,"withId":"a"},{"kind":"intersection","pos":{"x":3.1461932206205825,"y":1.1461932206205825},"label":"intersection","exact":false,"withId":"a"}]],[[{"kind":"intersection","pos":{"x":-2.193211046525917,"y":0.11155795509013167},"label":"intersection","exact":false,"withId":"b"},{"kind":"intersection","pos":{"x":0,"y":1},"label":"intersection","exact":false,"withId":"b","exactX":"0","exactY":"1"}],[{"kind":"intersection","pos":{"x":-2.193211046525917,"y":0.11155795509013067},"label":"intersection","exact":false,"withId":"a"},{"kind":"intersection","pos":{"x":0,"y":1},"label":"intersection","exact":false,"withId":"a","exactX":"0","exactY":"1"}]]]'
 
 // ---------------------------------------------------------------------------
 // Steps, jumps and flat stretches.
