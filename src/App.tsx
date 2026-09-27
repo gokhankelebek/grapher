@@ -141,6 +141,7 @@ import {
   boundCalls,
   callableNames,
   createResolver,
+  createSingularityResolver,
   dependencyKeys,
   ensureCalls,
   ensureNames,
@@ -163,6 +164,15 @@ import {
 } from './ui/nameLinks'
 import type { InverseInfo, NameState } from './ui/nameLinks'
 import type { FunctionEnv } from './core/functionEnv'
+import type { CurveViews } from './core/persist'
+import type { ViewStates } from './ui/curveViews'
+import {
+  collectCurveViews,
+  curveViewsKey,
+  pruneViewStates,
+  restoreViewStates,
+  viewStatesFrom,
+} from './ui/curveViews'
 import {
   boardIntersections,
   cardIntersections,
@@ -573,6 +583,13 @@ interface Snapshot {
   figure: FigureStyleId
   /** The teacher's own caption, or null while the board derives one. */
   caption: string | null
+  /**
+   * The per-curve view settings (show construction, show parent, a polar
+   * area, the Motion switches, a factored curve's point) as they were. Not
+   * an undo step of their own: applying a snapshot only hands them back to
+   * curves it brings back (src/ui/curveViews.ts restoreViewStates).
+   */
+  views: CurveViews
   candidates: Map<string, FitResult[]>
   /**
    * What the action was, in three or four words: "set zero", "edit equation",
@@ -617,6 +634,8 @@ interface StatePatch {
   inverses?: InverseLink[]
   figure?: FigureStyleId
   caption?: string | null
+  /** Undo / redo only: the view settings for curves the patch brings back. */
+  views?: CurveViews
   candidates?: Map<string, FitResult[]>
 }
 
@@ -656,9 +675,11 @@ export default function App() {
    * Curves built THROUGH A POINT from "Build from roots": curve id → the
    * point. While a curve is in here its leading coefficient is re-solved on
    * every root edit and every root drag, so it keeps passing through the
-   * point. UI-side and deliberately not persisted or undone: it is a promise
-   * about how edits behave, not part of the function, and the equation on the
-   * card is always the whole truth about the curve.
+   * point. A promise about how edits behave, not part of the function — the
+   * equation on the card is always the whole truth about the curve — but one
+   * the teacher set up, so it is saved with the document (board.curveViews,
+   * src/ui/curveViews.ts). Not an undo step of its own; a curve brought back
+   * by undo brings its point back.
    */
   const [factorThrough, setFactorThrough] = useState<Record<string, Vec2>>({})
   const factorThroughRef = useRef<Record<string, Vec2>>({})
@@ -729,7 +750,7 @@ export default function App() {
    * The card's "show construction" switch, per curve: a conic whose foci,
    * directrix, asymptotes and box are FIGURE content — drawn whether or not
    * it is selected, and exported. Like "show parent", a way of looking at the
-   * board kept for the session, not saved with the document.
+   * board: saved with the document (board.curveViews), never an undo step.
    */
   const [construction, setConstruction] = useState<Record<string, boolean>>({})
   const constructionRef = useRef(construction)
@@ -739,8 +760,9 @@ export default function App() {
   /**
    * The Motion section's player, per parametric / polar curve: t, play /
    * pause, speed, the acceleration switch, "show particle in export", and a
-   * polar curve's shaded area. A way of looking at the board kept for the
-   * session, never saved with the document (as "show construction").
+   * polar curve's shaded area. The switches and the area are saved with the
+   * document (board.curveViews, as "show construction"); t, play / pause and
+   * speed are the demonstration in progress and are not.
    */
   const [motionPlay, setMotionPlay] = useState<Record<string, MotionPlayState>>({})
   const motionPlayRef = useRef(motionPlay)
@@ -756,9 +778,46 @@ export default function App() {
   /**
    * The card's "show parent" switch, per curve, as the teacher left it —
    * absent means the section's own default (shown when it opens by itself).
-   * A way of looking at the board, not part of the document: never saved.
+   * A way of looking at the board: saved with the document (board.curveViews)
+   * as the teacher left it, never an undo step.
    */
   const [showParent, setShowParent] = useState<Record<string, boolean>>({})
+  const showParentRef = useRef(showParent)
+  showParentRef.current = showParent
+  /** The four per-curve view maps, as one value (src/ui/curveViews.ts). */
+  const readViewStates = useCallback(
+    (): ViewStates => ({
+      construction: constructionRef.current,
+      showParent: showParentRef.current,
+      factorThrough: factorThroughRef.current,
+      motion: motionPlayRef.current,
+    }),
+    [],
+  )
+  /** Replace whichever of the four maps changed — refs now, state for the render. */
+  const writeViewStates = useCallback((next: ViewStates): void => {
+    if (next.construction !== constructionRef.current) {
+      constructionRef.current = next.construction
+      setConstruction(next.construction)
+    }
+    if (next.showParent !== showParentRef.current) {
+      showParentRef.current = next.showParent
+      setShowParent(next.showParent)
+    }
+    if (next.factorThrough !== factorThroughRef.current) {
+      factorThroughRef.current = next.factorThrough
+      setFactorThrough(next.factorThrough)
+    }
+    if (next.motion !== motionPlayRef.current) {
+      motionPlayRef.current = next.motion
+      setMotionPlay(next.motion)
+    }
+  }, [])
+  /** What the document's curveViews map says, as a string that ignores the particle. */
+  const curveViewsSig = useMemo(
+    () => curveViewsKey(collectCurveViews({ construction, showParent, factorThrough, motion: motionPlay })),
+    [construction, showParent, factorThrough, motionPlay],
+  )
   const [extraModels, setExtraModels] = useState<Record<string, ModelSpec>>({})
   /**
    * Tangent lines, derivative curves, shaded areas and Riemann sums, as the
@@ -1144,11 +1203,26 @@ export default function App() {
       })),
     [],
   )
+  /**
+   * Where the curve NAMED f is undefined — its poles, holes and exclusions —
+   * read off the live board (FunctionEnv.singularities). What lets
+   * g(x) = 2f(x − 1) + 3 with f = 1/x find its own asymptote at x = 1.
+   */
+  const singularOf = useMemo(
+    () =>
+      createSingularityResolver(() => ({
+        curves: curvesRef.current,
+        names: namesRef.current,
+        models: modelsRef.current,
+        calls: callsRef.current,
+      })),
+    [],
+  )
   /** The env one typed line is parsed against: its calls, plus its own head. */
   const envFor = useCallback(
     (lineCalls: readonly string[], head: string | null): FunctionEnv | undefined =>
-      lineCalls.length > 0 || head ? lineEnv(resolveName, lineCalls, head) : undefined,
-    [resolveName],
+      lineCalls.length > 0 || head ? lineEnv(resolveName, lineCalls, head, singularOf) : undefined,
+    [resolveName, singularOf],
   )
   /** linkId -> the inverse relation's facts (sentence, t-range, latex), kept current below. */
   const inverseInfoRef = useRef<Record<string, InverseInfo>>({})
@@ -1348,16 +1422,27 @@ export default function App() {
       inverses: inversesRef.current,
       figure: figureStyleRef.current,
       caption: figureCaptionRef.current,
+      views: collectCurveViews(readViewStates()),
       candidates: candidatesRef.current,
       label,
     }),
-    [],
+    [readViewStates],
   )
 
   const applyState = useCallback((s: StatePatch): void => {
     if (s.curves) {
+      const before = curvesRef.current
       curvesRef.current = s.curves
       setCurves(s.curves)
+      // A curve that leaves takes its view settings with it; one that comes
+      // back through undo / redo gets back the ones its snapshot recorded.
+      if (before !== s.curves) {
+        const cur = readViewStates()
+        const next = s.views
+          ? restoreViewStates(cur, s.views, new Set(before.map((c) => c.id)), s.curves)
+          : pruneViewStates(cur, new Set(s.curves.map((c) => c.id)))
+        if (next !== cur) writeViewStates(next)
+      }
     }
     if (s.items) {
       itemsRef.current = s.items
@@ -1453,7 +1538,7 @@ export default function App() {
     }
     // Replaced wholesale, never mutated in place, so snapshots stay immutable.
     if (s.candidates) candidatesRef.current = s.candidates
-  }, [])
+  }, [readViewStates, writeViewStates])
 
   /**
    * Apply new state and push the previous snapshot onto the undo stack.
@@ -1680,6 +1765,7 @@ export default function App() {
       figure: 'screen',
       caption: '',
       captionAuto: true,
+      curveViews: {},
       viewport: { center: { x: 0, y: 0 }, pxPerUnit: 60 },
       selectedId: null,
       mode: 'draw',
@@ -1716,6 +1802,7 @@ export default function App() {
       // board that never had a caption.
       caption: figureCaptionRef.current ?? '',
       captionAuto: figureCaptionRef.current === null,
+      curveViews: collectCurveViews(readViewStates()),
       viewport: {
         center: vpRef.current.center,
         pxPerUnit: vpRef.current.pxPerUnit,
@@ -1909,6 +1996,9 @@ export default function App() {
     setPreviewFigure(false)
     setArmedField(null)
     setEdits({})
+    // The view settings the document stored — and nothing left over from the
+    // document this tab had open before.
+    writeViewStates(viewStatesFrom(board.curveViews, board.curves))
     {
       // One live model per inverse link, under its curve's model id.
       const inv: Record<string, ModelSpec> = {}
@@ -1951,7 +2041,7 @@ export default function App() {
     if (id) {
       const json = readDocJSON(id)
       if (json !== null) {
-        const res = deserializeDoc(json, { resolve: resolveName })
+        const res = deserializeDoc(json, { resolve: resolveName, singularities: singularOf })
         if (res.meta && res.board) {
           applyHydrated(res.meta, res.board)
           docStoredRef.current = true
@@ -2047,6 +2137,10 @@ export default function App() {
     // handout would come back tomorrow as a screen board.
     figureStyle,
     figureCaption,
+    // And a curve's view settings — a construction, a shaded polar area, a
+    // factored curve's point. The key ignores the particle, so a playing
+    // particle never schedules a write.
+    curveViewsSig,
     selectedId,
     docMeta.name,
     scheduleSave,
@@ -2074,7 +2168,7 @@ export default function App() {
   const reloadCurrentDoc = useCallback((): void => {
     const id = docMetaRef.current.id
     const json = id ? readDocJSON(id) : null
-    const res = json === null ? null : deserializeDoc(json, { resolve: resolveName })
+    const res = json === null ? null : deserializeDoc(json, { resolve: resolveName, singularities: singularOf })
     if (!res || !res.meta || !res.board) {
       setLoadNotice({
         problems: res?.problems ?? ['That document is no longer in storage.'],
@@ -2167,7 +2261,7 @@ export default function App() {
       if (id === docMetaRef.current.id) return
       if (!saveBeforeSwitch()) return
       const json = readDocJSON(id)
-      const res = json === null ? null : deserializeDoc(json, { resolve: resolveName })
+      const res = json === null ? null : deserializeDoc(json, { resolve: resolveName, singularities: singularOf })
       if (!res || !res.meta || !res.board) {
         setLoadNotice({
           problems: res?.problems ?? ['That document could not be found.'],
@@ -2248,7 +2342,7 @@ export default function App() {
       const next = remaining[0]
       if (next) {
         const json = readDocJSON(next.id)
-        const res = json === null ? null : deserializeDoc(json, { resolve: resolveName })
+        const res = json === null ? null : deserializeDoc(json, { resolve: resolveName, singularities: singularOf })
         if (res?.meta && res.board) {
           applyHydrated(res.meta, res.board)
           docStoredRef.current = true
@@ -2289,7 +2383,7 @@ export default function App() {
       file
         .text()
         .then((text) => {
-          const res = deserializeDoc(text, { resolve: resolveName })
+          const res = deserializeDoc(text, { resolve: resolveName, singularities: singularOf })
           if (!res.board || !res.meta) {
             setLoadNotice({
               problems: res.problems.length ? res.problems : ['That file could not be read.'],

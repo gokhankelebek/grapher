@@ -41,6 +41,7 @@ import type { FittedCurve, ModelSpec, Vec2 } from '../core/types'
 import type { FunctionEnv } from '../core/functionEnv'
 import { dependencyOrder, inverseRelation } from '../core/functionEnv'
 import { namedCallSites } from '../core/parse'
+import { findHoles, findPoles } from '../core/holes'
 import type { CalcLink, InverseLink } from '../core/persist'
 import { NAME_POOL, typedName } from '../render/curveNames'
 
@@ -697,10 +698,164 @@ export function createResolver(read: () => BoardView): Resolver {
  * which is what turns `f(x) = f(x − 1)` into the parser's self-reference
  * error. `eval` is the board's resolver.
  */
-export function lineEnv(resolve: Resolver, calls: readonly string[], head: string | null): FunctionEnv {
+export function lineEnv(
+  resolve: Resolver,
+  calls: readonly string[],
+  head: string | null,
+  singular?: SingularityResolver,
+): FunctionEnv {
   const has = new Set(calls)
   if (head) has.add(head)
-  return { has: (n) => has.has(n), eval: (n, x) => resolve(n, x) }
+  const env: FunctionEnv = { has: (n) => has.has(n), eval: (n, x) => resolve(n, x) }
+  if (singular) env.singularities = (n, range) => singular(n, range)
+  return env
+}
+
+// ----------------------------------------------------------------------------
+// singularities: where a NAMED curve is undefined
+// ----------------------------------------------------------------------------
+
+/** FunctionEnv.singularities for the board: the named curve's, in [lo, hi]. */
+export type SingularityResolver = (name: string, range: [number, number]) => number[]
+
+/** A board view that also knows which names each typed line calls. */
+export interface SingularView extends BoardView {
+  /** curveId -> the names it calls: what keeps a cached answer honest. */
+  calls?: Calls
+}
+
+/** Entries kept before the cache starts over: a board has a handful of names. */
+const SING_CACHE_MAX = 256
+
+/**
+ * The range a question is answered over: [lo, hi] rounded OUTWARD to the
+ * power-of-ten step of its own width, so panning a little asks the same
+ * question (and hits the cache) until an edge crosses a step. The answer is
+ * then clipped back to the range that was asked.
+ */
+export function roundedRange(lo: number, hi: number): [number, number] {
+  const w = hi - lo
+  const step = 10 ** Math.floor(Math.log10(w))
+  const a = Math.floor(lo / step) * step
+  const b = Math.ceil(hi / step) * step
+  return Number.isFinite(a) && Number.isFinite(b) && b > a ? [a, b] : [lo, hi]
+}
+
+/** Sorted, with values within 1e-9 (relative) of each other counted once. */
+function sortedUnique(xs: readonly number[]): number[] {
+  const s = xs.filter(Number.isFinite).sort((p, q) => p - q)
+  const out: number[] = []
+  for (const x of s) {
+    const last = out[out.length - 1]
+    if (last !== undefined && Math.abs(x - last) <= 1e-9 * Math.max(1, Math.abs(x))) continue
+    out.push(x)
+  }
+  return out
+}
+
+/**
+ * Where the curve NAMED `name` is undefined as written, in [lo, hi] of x:
+ * its model's own `singularities` (a typed line's poles, holes and `{x ≠ c}`
+ * exclusions), plus the x of every vertical asymptote findPoles finds and
+ * every hole findHoles finds — which is what answers for a SKETCHED family
+ * (a recip's pole at x = b) that carries no `singularities` of its own.
+ * Deduped and sorted. Nothing for a name nobody holds, a curve that is not a
+ * function of x, or a name re-entered while it is being answered (f and g
+ * calling each other).
+ *
+ * Memoised per (curve, model, params, domain, rounded range) plus the state
+ * of every curve it reaches through its calls — so a line that calls f is
+ * asked again when f's slider moves, and not on every frame otherwise. The
+ * cache starts over whenever the model table changes identity (a retyped line
+ * registers a new closure).
+ */
+export function createSingularityResolver(read: () => SingularView): SingularityResolver {
+  let curvesKey: readonly FittedCurve[] | null = null
+  let namesKey: Names | null = null
+  let modelsKey: Readonly<Record<string, ModelSpec>> | null = null
+  let owner = new Map<string, FittedCurve>()
+  const cache = new Map<string, number[]>()
+  const active = new Set<string>()
+
+  const stateOf = (c: FittedCurve): string =>
+    `${c.modelId}:${c.params.join(',')}:${c.domain ? c.domain.join(',') : ''}`
+
+  /** The state of everything `id` reaches through its calls, as dependencyKeys does. */
+  const depOf = (id: string, calls: Calls | undefined): string => {
+    const list = calls?.[id]
+    if (!calls || !list || list.length === 0) return ''
+    const parts: string[] = []
+    const seen = new Set<string>([id])
+    const stack = [...list]
+    while (stack.length > 0) {
+      const L = stack.shift()!
+      const c = owner.get(L)
+      if (!c) {
+        parts.push(`${L}=∅`)
+        continue
+      }
+      if (seen.has(c.id)) continue
+      seen.add(c.id)
+      parts.push(`${L}=${stateOf(c)}`)
+      for (const u of calls[c.id] ?? []) stack.push(u)
+    }
+    return parts.join('|')
+  }
+
+  return (name, range) => {
+    const view = read()
+    if (view.models !== modelsKey) {
+      modelsKey = view.models
+      cache.clear()
+    }
+    if (view.curves !== curvesKey || view.names !== namesKey) {
+      curvesKey = view.curves
+      namesKey = view.names
+      owner = new Map()
+      for (const c of view.curves) {
+        const n = view.names[c.id]
+        if (n && !owner.has(n)) owner.set(n, c)
+      }
+    }
+    const c = owner.get(name)
+    if (!c || c.kind !== 'explicit' || active.has(c.id)) return []
+    const spec = view.models[c.modelId]
+    if (!spec?.evalExplicit) return []
+    const lo = Math.min(range[0], range[1])
+    const hi = Math.max(range[0], range[1])
+    if (!Number.isFinite(lo) || !Number.isFinite(hi) || !(hi > lo)) return []
+    const r = roundedRange(lo, hi)
+    const key = `${c.id}|${stateOf(c)}|${r[0]}|${r[1]}|${depOf(c.id, view.calls)}`
+    let xs = cache.get(key)
+    if (!xs) {
+      active.add(c.id)
+      try {
+        const models = view.models as Record<string, ModelSpec>
+        const found: number[] = []
+        try {
+          found.push(...(spec.singularities?.(c.params, r) ?? []))
+        } catch {
+          /* a model that cannot say contributes nothing */
+        }
+        found.push(...findPoles(c, models, r))
+        for (const h of findHoles(c, models, r)) found.push(h.x)
+        // A sketch is the stretch that was drawn: only what lies strictly
+        // inside it is a singularity of the curve (an end is an end).
+        let dLo = -Infinity
+        let dHi = Infinity
+        if (c.domain) {
+          dLo = Math.min(c.domain[0], c.domain[1])
+          dHi = Math.max(c.domain[0], c.domain[1])
+        }
+        xs = sortedUnique(found.filter((x) => x > dLo && x < dHi))
+      } finally {
+        active.delete(c.id)
+      }
+      if (cache.size >= SING_CACHE_MAX) cache.clear()
+      cache.set(key, xs)
+    }
+    return xs.filter((x) => x >= lo && x <= hi)
+  }
 }
 
 /** The explicit curves' letters, in sidebar order — what the equation box offers. */

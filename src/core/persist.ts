@@ -612,6 +612,88 @@ const MAX_STROKE_IN = 20000
 const STROKE_DP = 4
 const CANDIDATE_DP = 6
 
+// ------------------------------------------------------- per-curve view settings
+//
+// The switches on a curve's card that say how to LOOK at it — a conic's
+// construction, a transformation's parent, a polar curve's shaded area, the
+// Motion section's acceleration and "particle in export", and a factored
+// curve built through a point (its `a` re-solved to keep passing through it).
+// None of them is the curve: the equation is the whole truth about that. But a
+// teacher who set them up for a lesson expects them to be there tomorrow, so
+// they travel with the document in ONE map, `board.curveViews`, keyed by curve
+// id — every field omitted at its default, an entry with nothing to say
+// omitted, and the whole key omitted when no curve says anything. A document
+// that never touched one serialises byte-for-byte as it did before.
+//
+// NOT here: the particle's position, play / pause and speed. They are the
+// state of a demonstration in progress, and t moves on every animation frame
+// — persisting it would rewrite the document sixty times a second.
+
+/** A polar curve's shaded area ½∫r²dθ: on or off, and its θ-bounds as typed. */
+export interface CurveViewArea {
+  on: boolean
+  /** θ from, as typed ("π/6"). */
+  a: string
+  /** θ to, as typed. */
+  b: string
+}
+
+/** One curve's view settings. Every field absent at its default. */
+export interface CurveView {
+  /** Conic: its foci, directrix, asymptotes and box are figure content. */
+  construction?: true
+  /** Transformation: the parent's ghost, as the teacher left it. Absent = the section's default. */
+  showParent?: boolean
+  /** Polar: the shaded area. Absent = never turned on. */
+  area?: CurveViewArea
+  /** Motion: draw the acceleration vector too. */
+  accel?: true
+  /** Motion: the particle and its vectors go into the exported figure. */
+  exportParticle?: true
+  /** Built from roots THROUGH this point: `a` is solved from it on every edit. */
+  through?: Vec2
+}
+export type CurveViews = Record<string, CurveView>
+
+/** The same, as JSON: the point flat, like a stroke. */
+export interface StoredCurveView {
+  construction?: true
+  showParent?: boolean
+  area?: CurveViewArea
+  accel?: true
+  exportParticle?: true
+  through?: [number, number]
+}
+
+/** A typed θ-bound longer than this is not a bound anybody typed. */
+const MAX_VIEW_TEXT = 64
+
+/**
+ * One curve's settings with every default dropped, or null when nothing is
+ * left to say. The one normaliser both directions go through, so what is
+ * written and what is read back are the same object.
+ */
+export function normalizeCurveView(v: CurveView | undefined | null): CurveView | null {
+  if (!v) return null
+  const out: CurveView = {}
+  if (v.construction === true) out.construction = true
+  if (typeof v.showParent === 'boolean') out.showParent = v.showParent
+  if (
+    v.area &&
+    typeof v.area.on === 'boolean' &&
+    typeof v.area.a === 'string' &&
+    typeof v.area.b === 'string'
+  ) {
+    out.area = { on: v.area.on, a: v.area.a.slice(0, MAX_VIEW_TEXT), b: v.area.b.slice(0, MAX_VIEW_TEXT) }
+  }
+  if (v.accel === true) out.accel = true
+  if (v.exportParticle === true) out.exportParticle = true
+  if (v.through && isNum(v.through.x) && isNum(v.through.y)) {
+    out.through = { x: v.through.x, y: v.through.y }
+  }
+  return Object.keys(out).length > 0 ? out : null
+}
+
 // ---------------------------------------------------------------- stored shape
 
 export interface StoredCandidate {
@@ -786,6 +868,12 @@ export interface StoredBoard {
    * the document. Written only when there is one, by the same rule.
    */
   caption?: string
+  /**
+   * Per-curve view settings (see CurveView), keyed by curve id, in board
+   * order. Omitted when no curve has one — every document written before
+   * this existed — so such a board serialises byte-for-byte as it did.
+   */
+  curveViews?: Record<string, StoredCurveView>
 }
 
 /**
@@ -1006,6 +1094,8 @@ export interface BoardInput {
    * did: blank writes nothing.
    */
   captionAuto?: boolean
+  /** curveId -> its view settings. Absent, empty or all-default writes nothing. */
+  curveViews?: Readonly<CurveViews>
   /** pxPerUnitY present = Independent axes (see StoredBoard.viewport.ppuY). */
   viewport: { center: Vec2; pxPerUnit: number; pxPerUnitY?: number }
   selectedId: string | null
@@ -1083,6 +1173,11 @@ export interface HydratedBoard {
    * blank they deliberately left.
    */
   captionAuto: boolean
+  /**
+   * curveId -> the view settings the document stored, for curves still on
+   * the board. An entry that could not be read is dropped and REPORTED.
+   */
+  curveViews: CurveViews
   /** pxPerUnitY present = Independent axes; absent = equal. */
   viewport: { center: Vec2; pxPerUnit: number; pxPerUnitY?: number }
   selectedId: string | null
@@ -1332,6 +1427,28 @@ export function boardToStored(input: BoardInput): StoredBoard {
     /* the board writes this one; the document stays silent */
   } else if (caption !== '') board.caption = caption
   else if (input.captionAuto === false) board.caption = ''
+
+  // And the per-curve view settings: only curves on the board, in board
+  // order, only fields off their defaults — and no key at all when that is
+  // nothing, which is every board that never touched one.
+  if (input.curveViews) {
+    const views: Record<string, StoredCurveView> = {}
+    let any = false
+    for (const c of input.curves) {
+      const v = normalizeCurveView(input.curveViews[c.id])
+      if (!v) continue
+      const st: StoredCurveView = {}
+      if (v.construction) st.construction = true
+      if (v.showParent !== undefined) st.showParent = v.showParent
+      if (v.area) st.area = { on: v.area.on, a: v.area.a, b: v.area.b }
+      if (v.accel) st.accel = true
+      if (v.exportParticle) st.exportParticle = true
+      if (v.through) st.through = [v.through.x, v.through.y]
+      views[c.id] = st
+      any = true
+    }
+    if (any) board.curveViews = views
+  }
 
   return board
 }
@@ -2008,6 +2125,13 @@ export interface HydrateOptions {
    * the loaded document's curves as they were stored (tests, previews).
    */
   resolve?: (name: string, x: number) => number
+  /**
+   * Where the curve NAMED `name` is undefined (FunctionEnv.singularities) —
+   * the board's own answer, so a loaded `g(x) = 2f(x − 1) + 3` finds f's
+   * asymptote exactly as a freshly typed one does. Absent: a named call
+   * contributes no singularities (tests, previews).
+   */
+  singularities?: (name: string, range: [number, number]) => number[]
 }
 
 export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResult {
@@ -2128,7 +2252,7 @@ export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResu
         ? [...new Set(stored.calls.filter(isNameLetter))]
         : []
       if (lineCalls.length > 0) calls[curve.id] = lineCalls
-      const env = storedLineEnv(resolve, lineCalls, source, stored.name)
+      const env = storedLineEnv(resolve, lineCalls, source, stored.name, opts.singularities)
       const rebuilt = rebuildExprModel(curve.modelId, source, env)
       if ('spec' in rebuilt) {
         extraModels[curve.modelId] = rebuilt.spec
@@ -2579,6 +2703,52 @@ export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResu
   // document written before captions followed the board.
   const captionAuto = !isStr(rawBoard.caption)
 
+  // ---- per-curve view settings. Absent is the default and says nothing. An
+  // entry for a curve that is no longer here, or one that cannot be read, is
+  // dropped and REPORTED — a construction a lesson was built around does not
+  // quietly vanish; a field that cannot be read is dropped from its entry and
+  // the rest of the entry kept.
+  const curveViews: CurveViews = {}
+  if (rawBoard.curveViews !== undefined) {
+    if (!isObj(rawBoard.curveViews)) {
+      problems.push('The curves’ view settings were unreadable and were reset.')
+      degraded = true
+    } else {
+      const ids = new Set(curves.map((c) => c.id))
+      let orphans = 0
+      let damaged = 0
+      for (const [id, raw] of Object.entries(rawBoard.curveViews)) {
+        if (!ids.has(id)) {
+          orphans++
+          continue
+        }
+        if (!isObj(raw)) {
+          damaged++
+          continue
+        }
+        const v = readStoredCurveView(raw)
+        if (v.damaged) damaged++
+        if (v.view) curveViews[id] = v.view
+      }
+      if (orphans > 0) {
+        problems.push(
+          orphans === 1
+            ? 'A curve’s view settings were dropped: the curve is no longer in this document.'
+            : `${orphans} curves’ view settings were dropped: those curves are no longer in this document.`,
+        )
+        degraded = true
+      }
+      if (damaged > 0) {
+        problems.push(
+          damaged === 1
+            ? 'A curve’s view settings could not all be read; the unreadable ones were reset.'
+            : `${damaged} curves’ view settings could not all be read; the unreadable ones were reset.`,
+        )
+        degraded = true
+      }
+    }
+  }
+
   // ---- axis units. Unreadable or absent is not a repair: it is the default.
   const rawAxis = isObj(rawBoard.axisUnits) ? rawBoard.axisUnits : {}
   const axisUnits: AxisUnitChoices = {
@@ -2625,6 +2795,7 @@ export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResu
       figure,
       caption,
       captionAuto,
+      curveViews,
       viewport,
       selectedId,
       mode,
@@ -2634,6 +2805,48 @@ export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResu
     problems,
     degraded,
   }
+}
+
+/**
+ * One stored entry read back: every field that is what it claims to be, and
+ * whether any field was not. An unknown key is a newer writer's, not damage.
+ */
+function readStoredCurveView(raw: Record<string, unknown>): { view: CurveView | null; damaged: boolean } {
+  let damaged = false
+  const v: CurveView = {}
+  if (raw.construction !== undefined) {
+    if (raw.construction === true) v.construction = true
+    else damaged = true
+  }
+  if (raw.showParent !== undefined) {
+    if (typeof raw.showParent === 'boolean') v.showParent = raw.showParent
+    else damaged = true
+  }
+  if (raw.area !== undefined) {
+    const a = raw.area
+    if (
+      isObj(a) &&
+      typeof a.on === 'boolean' &&
+      isStr(a.a) && a.a.length <= MAX_VIEW_TEXT &&
+      isStr(a.b) && a.b.length <= MAX_VIEW_TEXT
+    ) {
+      v.area = { on: a.on, a: a.a, b: a.b }
+    } else damaged = true
+  }
+  if (raw.accel !== undefined) {
+    if (raw.accel === true) v.accel = true
+    else damaged = true
+  }
+  if (raw.exportParticle !== undefined) {
+    if (raw.exportParticle === true) v.exportParticle = true
+    else damaged = true
+  }
+  if (raw.through !== undefined) {
+    const t = raw.through
+    if (Array.isArray(t) && t.length === 2 && isNum(t[0]) && isNum(t[1])) v.through = { x: t[0], y: t[1] }
+    else damaged = true
+  }
+  return { view: normalizeCurveView(v), damaged }
 }
 
 /**
@@ -2685,13 +2898,16 @@ function storedLineEnv(
   lineCalls: readonly string[],
   source: string,
   name: unknown,
+  singularities?: (name: string, range: [number, number]) => number[],
 ): FunctionEnv | undefined {
   const head = namedCallSites(source).head
   const own = isNameLetter(name) && head === name ? name : null
   if (lineCalls.length === 0 && own === null) return undefined
   const has = new Set(lineCalls)
   if (own !== null) has.add(own)
-  return { has: (n) => has.has(n), eval: (n, x) => resolve(n, x) }
+  const env: FunctionEnv = { has: (n) => has.has(n), eval: (n, x) => resolve(n, x) }
+  if (singularities) env.singularities = (n, range) => singularities(n, range)
+  return env
 }
 
 function blankHydrated(): HydratedBoard {
@@ -2718,6 +2934,7 @@ function blankHydrated(): HydratedBoard {
     figure: 'screen',
     caption: '',
     captionAuto: true,
+    curveViews: {},
     viewport: { center: { x: 0, y: 0 }, pxPerUnit: 60 },
     selectedId: null,
     mode: 'draw',

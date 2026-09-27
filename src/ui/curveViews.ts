@@ -1,0 +1,191 @@
+// ============================================================================
+// src/ui/curveViews.ts — the per-curve view settings, between the App's four
+// session maps and the document's one map (src/core/persist.ts CurveView).
+//
+// The App keeps each setting where the section that owns it reads it:
+//
+//     construction   curveId -> the conic's "show construction"
+//     showParent     curveId -> the transformation's "show parent"
+//     factorThrough  curveId -> the point a factored curve is built through
+//     motion         curveId -> the Motion player (t, playing, speed, accel,
+//                               exportParticle, a polar curve's area)
+//
+// and the document stores them as one CurveViews map. This file is the whole
+// translation, both ways, plus the two history rules:
+//
+//   * a curve that LEAVES the board takes its settings with it (prune), and
+//   * a curve that ARRIVES back through undo / redo brings the settings its
+//     snapshot recorded (restore). A curve that was there all along keeps the
+//     settings it has now: switching a construction on is not an undo step,
+//     so undoing an unrelated edit must not switch it back off.
+//
+// The particle's t, play / pause and speed are not document state (see
+// CurveView) and are never written; a restored curve's player starts at the
+// beginning of its interval, paused, at normal speed.
+//
+// Pure: no React, no DOM.
+// ============================================================================
+
+import type { FittedCurve, Vec2 } from '../core/types'
+import type { CurveView, CurveViews } from '../core/persist'
+import { normalizeCurveView } from '../core/persist'
+import type { MotionPlayState } from './motionLinks'
+import { defaultPlay, motionInterval } from './motionLinks'
+
+export interface ViewStates {
+  construction: Record<string, boolean>
+  showParent: Record<string, boolean>
+  factorThrough: Record<string, Vec2>
+  motion: Record<string, MotionPlayState>
+}
+
+export const emptyViewStates = (): ViewStates => ({
+  construction: {},
+  showParent: {},
+  factorThrough: {},
+  motion: {},
+})
+
+/** One curve's settings out of the four maps, defaults dropped (null = none). */
+export function curveViewOf(s: ViewStates, id: string): CurveView | null {
+  const v: CurveView = {}
+  if (s.construction[id] === true) v.construction = true
+  if (typeof s.showParent[id] === 'boolean') v.showParent = s.showParent[id]
+  const m = s.motion[id]
+  if (m) {
+    if (m.area) v.area = { on: m.area.on, a: m.area.a, b: m.area.b }
+    if (m.accel) v.accel = true
+    if (m.exportParticle) v.exportParticle = true
+  }
+  const p = s.factorThrough[id]
+  if (p) v.through = { x: p.x, y: p.y }
+  return normalizeCurveView(v)
+}
+
+/** The document's map: every curve that has something to say, nothing else. */
+export function collectCurveViews(s: ViewStates): CurveViews {
+  const ids = new Set<string>([
+    ...Object.keys(s.construction),
+    ...Object.keys(s.showParent),
+    ...Object.keys(s.factorThrough),
+    ...Object.keys(s.motion),
+  ])
+  const out: CurveViews = {}
+  for (const id of ids) {
+    const v = curveViewOf(s, id)
+    if (v) out[id] = v
+  }
+  return out
+}
+
+/**
+ * A key that changes exactly when the document's map does — NOT when the
+ * particle moves. The autosave listens to this, so a playing particle never
+ * schedules a write.
+ */
+export function curveViewsKey(views: CurveViews): string {
+  return JSON.stringify(Object.keys(views).sort().map((id) => [id, views[id]]))
+}
+
+/** A Motion player carrying one curve's stored switches, paused at its start. */
+function playFrom(v: CurveView, curve: FittedCurve | undefined): MotionPlayState {
+  const base = defaultPlay(curve ? motionInterval(curve) : [0, 2 * Math.PI])
+  return {
+    ...base,
+    accel: v.accel === true,
+    exportParticle: v.exportParticle === true,
+    area: v.area ? { on: v.area.on, a: v.area.a, b: v.area.b } : null,
+  }
+}
+
+/** Write one curve's stored settings INTO fresh copies of the four maps. */
+function put(s: ViewStates, id: string, v: CurveView, curve: FittedCurve | undefined): void {
+  if (v.construction) s.construction[id] = true
+  if (v.showParent !== undefined) s.showParent[id] = v.showParent
+  if (v.through) s.factorThrough[id] = { x: v.through.x, y: v.through.y }
+  if (v.area || v.accel || v.exportParticle) s.motion[id] = playFrom(v, curve)
+}
+
+/** The four maps a freshly loaded document opens with. */
+export function viewStatesFrom(views: Readonly<CurveViews>, curves: readonly FittedCurve[]): ViewStates {
+  const out = emptyViewStates()
+  const byId = new Map(curves.map((c) => [c.id, c]))
+  for (const [id, raw] of Object.entries(views)) {
+    const v = normalizeCurveView(raw)
+    if (v && byId.has(id)) put(out, id, v, byId.get(id))
+  }
+  return out
+}
+
+/** A map without the keys `live` does not hold — the SAME object when none go. */
+function keepLive<T>(m: Record<string, T>, live: ReadonlySet<string>): Record<string, T> {
+  let dropped = false
+  for (const id of Object.keys(m)) {
+    if (!live.has(id)) {
+      dropped = true
+      break
+    }
+  }
+  if (!dropped) return m
+  const out: Record<string, T> = {}
+  for (const [id, v] of Object.entries(m)) if (live.has(id)) out[id] = v
+  return out
+}
+
+/**
+ * Forget the settings of every curve that is no longer on the board. Each
+ * map comes back as the same object when nothing in it went, so a slider
+ * frame (curves change, ids do not) re-renders nothing.
+ */
+export function pruneViewStates(s: ViewStates, live: ReadonlySet<string>): ViewStates {
+  const construction = keepLive(s.construction, live)
+  const showParent = keepLive(s.showParent, live)
+  const factorThrough = keepLive(s.factorThrough, live)
+  const motion = keepLive(s.motion, live)
+  if (
+    construction === s.construction &&
+    showParent === s.showParent &&
+    factorThrough === s.factorThrough &&
+    motion === s.motion
+  ) {
+    return s
+  }
+  return { construction, showParent, factorThrough, motion }
+}
+
+/**
+ * Undo / redo: the curves in `curves` that were NOT on the board before
+ * (`before`) get back the settings `recorded` holds for them; every curve
+ * that stayed keeps what it has now; every curve that left loses its own.
+ */
+export function restoreViewStates(
+  s: ViewStates,
+  recorded: Readonly<CurveViews>,
+  before: ReadonlySet<string>,
+  curves: readonly FittedCurve[],
+): ViewStates {
+  const live = new Set(curves.map((c) => c.id))
+  const pruned = pruneViewStates(s, live)
+  let out: ViewStates | null = null
+  for (const c of curves) {
+    if (before.has(c.id)) continue
+    const v = normalizeCurveView(recorded[c.id])
+    if (!v) continue
+    if (!out) {
+      out = {
+        construction: { ...pruned.construction },
+        showParent: { ...pruned.showParent },
+        factorThrough: { ...pruned.factorThrough },
+        motion: { ...pruned.motion },
+      }
+    }
+    // An arriving curve starts from what it recorded, not from anything
+    // stale under its id.
+    delete out.construction[c.id]
+    delete out.showParent[c.id]
+    delete out.factorThrough[c.id]
+    delete out.motion[c.id]
+    put(out, c.id, v, c)
+  }
+  return out ?? pruned
+}
