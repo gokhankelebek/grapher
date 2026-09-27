@@ -50,6 +50,17 @@ import {
 } from './ui/calcLinks'
 import type { CalcChange, CalcKind, CalcLink, CardCalc } from './ui/calcLinks'
 import {
+  TAYLOR_NEEDS_FORMULA,
+  TAYLOR_N_DEFAULT,
+  clampTaylorN,
+  defaultTaylorA,
+  safePoly,
+  snapCenter,
+  taylorChildModel,
+  taylorSourceFor,
+  withTaylorNames,
+} from './ui/taylorLinks'
+import {
   carryParams,
   compileFields,
   fieldCard,
@@ -175,6 +186,7 @@ import {
 } from './ui/curveViews'
 import {
   boardIntersections,
+  taylorApart,
   cardIntersections,
   crossingsClearOf,
   intersectionKey,
@@ -331,7 +343,7 @@ import { PresentBar } from './ui/PresentBar'
 import { PresentLegend } from './ui/PresentLegend'
 import { DEFAULT_PRESENT_TYPE, curveLegend, itemLegend, presentScale } from './ui/present'
 import { copyDocName, nextDocName } from './ui/docName'
-import { ACCUM_MODEL_PREFIX, DERIV_MODEL_PREFIX, INV_MODEL_PREFIX } from './core/persist'
+import { ACCUM_MODEL_PREFIX, DERIV_MODEL_PREFIX, INV_MODEL_PREFIX, TAYLOR_MODEL_PREFIX } from './core/persist'
 import type { InverseLink } from './core/persist'
 import {
   AUTO_AXIS_UNITS,
@@ -1249,7 +1261,23 @@ export default function App() {
    * does — g does — so every memo that caches a curve by its params appends
    * this.
    */
-  const depKeys = useMemo(() => dependencyKeys(curves, names, calls), [curves, names, calls])
+  const depKeys = useMemo(() => {
+    const keys = dependencyKeys(curves, names, calls)
+    // A curve a link DRIVES has no params of its own to change: a Taylor
+    // polynomial's shape is its link's a and n, an accumulation function's
+    // its a and C. Every value-keyed cache (analysis, crossings) reads
+    // depKeys, so the link's numbers go in here — or P₃'s zeros stay on the
+    // board after n is stepped to 10.
+    for (const l of calcLinks) {
+      if (l.kind !== 'taylor' && l.kind !== 'accumulation' && l.kind !== 'tangent') continue
+      const sig =
+        l.kind === 'taylor' ? `T${l.a},${l.n}`
+        : l.kind === 'accumulation' ? `A${l.a},${l.C}`
+        : `L${l.x}`
+      keys[l.curveId] = keys[l.curveId] ? `${keys[l.curveId]};${sig}` : sig
+    }
+    return keys
+  }, [curves, names, calls, calcLinks])
   const depKeysRef = useRef(depKeys)
   depKeysRef.current = depKeys
 
@@ -1331,7 +1359,12 @@ export default function App() {
       .filter((c) => c.visible && c.id !== selectedId)
       .map((curve) => ({ curve, points: analysisFor(curve) }))
       .filter((m) => m.points.length > 0)
-  }, [showAnalysis, kind, curves, selectedId, analysisFor])
+    // depKeys and models: a linked curve (Taylor Pₙ) changes shape with no
+    // change to `curves` at all — its link moves first (depKeys) and its model
+    // is registered a render later (models, which also empties the cache).
+    // analysisFor reads both through refs, so they are named here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showAnalysis, kind, curves, selectedId, analysisFor, depKeys, models])
 
   // -------------------------------------------------------------- axis units
   //
@@ -3229,6 +3262,49 @@ export default function App() {
       const linkId = nextId()
       const win = viewWindow()
 
+      if (kind === 'taylor') {
+        // Pₙ about a: the Maclaurin polynomial when f is analytic at 0 and 0
+        // is in view, otherwise the nearest nice number to the middle of the
+        // view. Its own curve, in its own colour, under tay_<link id>.
+        const src = taylorSourceFor(parent, models, (callsRef.current[parentId]?.length ?? 0) > 0)
+        if (!src) {
+          showToast(`${TAYLOR_NEEDS_FORMULA}.`)
+          return
+        }
+        const n = TAYLOR_N_DEFAULT
+        const a = defaultTaylorA((t) => safePoly(src, t, n) !== null, win, parent.domain)
+        if (a === null) {
+          showToast('This curve has no point in view where a Taylor polynomial can be centred.')
+          return
+        }
+        const wantId = `${TAYLOR_MODEL_PREFIX}${linkId}`
+        const built = taylorChildModel(safePoly(src, a, n), wantId, n)
+        setExtraModels((prev) => ({ ...prev, [wantId]: built }))
+        modelsRef.current = { ...modelsRef.current, [wantId]: built }
+        const curve: FittedCurve = {
+          id: nextId(),
+          modelId: wantId,
+          params: [],
+          kind: 'explicit',
+          domain: null,
+          color: pickColor(),
+          strokeWidth: 2.5,
+          visible: true,
+          error: 0,
+        }
+        commitState(
+          {
+            curves: [...curvesRef.current, curve],
+            calc: [...calcRef.current, { kind: 'taylor', id: linkId, parentId, curveId: curve.id, a, n }],
+          },
+          'add Taylor polynomial',
+        )
+        // The parent stays selected: its card holds n, a and the probe, and
+        // the centre is dragged along it.
+        setSelectedId(parentId)
+        return
+      }
+
       if (kind === 'tangent') {
         const x = defaultTangentX(parent, models, win)
         let t: ReturnType<typeof tangentAt> = null
@@ -3394,7 +3470,7 @@ export default function App() {
       }
       setSelectedId(parentId)
     },
-    [commitState, showToast, viewWindow],
+    [commitState, pickColor, showToast, viewWindow],
   )
 
   // ------------------------------------------------- area between two curves
@@ -3560,6 +3636,33 @@ export default function App() {
       } else if (change.kind === 'accumC' && l.kind === 'accumulation') {
         if (!Number.isFinite(change.C) || change.C === l.C) return
         next = { ...l, C: change.C }
+      } else if (change.kind === 'taylorA' && l.kind === 'taylor') {
+        if (!Number.isFinite(change.a) || change.a === l.a) return
+        next = { ...l, a: change.a }
+      } else if (change.kind === 'taylorN' && l.kind === 'taylor') {
+        const n = clampTaylorN(change.n)
+        if (n === l.n) return
+        next = { ...l, n }
+      } else if (change.kind === 'taylorX' && l.kind === 'taylor') {
+        if (change.x === null) {
+          if (l.x === undefined) return
+          const { x: _gone, ...rest } = l
+          void _gone
+          next = rest
+        } else {
+          if (!Number.isFinite(change.x) || change.x === l.x) return
+          next = { ...l, x: change.x }
+        }
+      } else if (change.kind === 'taylorBand' && l.kind === 'taylor') {
+        if ((l.band === true) === change.on) return
+        const { band: _was, ...rest } = l
+        void _was
+        next = change.on ? { ...rest, band: true } : rest
+      } else if (change.kind === 'taylorIoc' && l.kind === 'taylor') {
+        if ((l.ioc === true) === change.on) return
+        const { ioc: _was, ...rest } = l
+        void _was
+        next = change.on ? { ...rest, ioc: true } : rest
       } else if (change.kind === 'accumX' && l.kind === 'accumulation') {
         if (change.x === null) {
           if (l.x === undefined) return
@@ -3644,17 +3747,34 @@ export default function App() {
         parent.domain ? parent.domain.join(',') : ''
       }|${depKeysRef.current[parent.id] ?? ''}|${parent.color}|${link.kind === 'tangent' ? link.x : ''}|${
         link.kind === 'accumulation' ? `${link.a}|${link.C}` : ''
-      }`
+      }|${link.kind === 'taylor' ? `${link.a}|${link.n}|${(callsRef.current[parent.id]?.length ?? 0) > 0}` : ''}`
       if (!parentSpec) continue
+      // A Taylor curve whose model is not registered (a document just loaded,
+      // an undo that brought the curve back) is rebuilt whatever the sig says.
+      const tayStale =
+        link.kind === 'taylor' &&
+        (child.modelId !== `${TAYLOR_MODEL_PREFIX}${link.id}` || !models[child.modelId])
       const accStale =
         link.kind === 'accumulation' &&
         !MODELS[child.modelId] &&
         !isAccumulationOf(models[child.modelId], parentSpec, parent.params.length)
-      if (calcSigRef.current.get(link.id) === sig && !accStale) continue
+      if (calcSigRef.current.get(link.id) === sig && !accStale && !tayStale) continue
       calcSigRef.current.set(link.id, sig)
 
       let patch: Partial<FittedCurve> | null = null
-      if (link.kind === 'accumulation') {
+      if (link.kind === 'taylor') {
+        // Always a closure over Pₙ's own coefficients — rebuilt from the
+        // parent as it is NOW. No polynomial (a moved onto a pole) is a model
+        // that draws nothing, never a hidden curve: the card says why, and a
+        // curve the teacher hid stays theirs to show.
+        const wantId = `${TAYLOR_MODEL_PREFIX}${link.id}`
+        const src = taylorSourceFor(parent, models, (callsRef.current[parent.id]?.length ?? 0) > 0)
+        register[wantId] = taylorChildModel(safePoly(src, link.a, link.n), wantId, link.n)
+        patch = { modelId: wantId, params: [], kind: 'explicit', domain: null }
+        if (calcAutoHiddenRef.current.delete(link.id) && !child.visible) patch.visible = true
+        patches.set(child.id, patch)
+        continue
+      } else if (link.kind === 'accumulation') {
         // F is a library family when its antiderivative is one (x³/3 − x IS a
         // cubic) and otherwise a closure under intf_<link id>. The closure is a
         // pure function of [...f's params, a, C], so it is only re-registered
@@ -7050,10 +7170,13 @@ export default function App() {
     }
     return out
   }, [kind, curves, models, motionAreaKey])
+  // A Taylor error band is sampled across the padded view, so it is the one
+  // overlay that has to follow a pan — and only it asks for the span.
+  const bandSpan = calcLinks.some((l) => l.kind === 'taylor' && l.band === true) ? crossSpan : null
   const overlays = useMemo<Overlay[]>(() => {
-    const base = kind === 'cartesian' ? overlaysFor(calcLinks, curves, models) : []
+    const base = kind === 'cartesian' ? overlaysFor(calcLinks, curves, models, bandSpan) : []
     return motionAreaOverlays.length > 0 ? [...base, ...motionAreaOverlays] : base
-  }, [kind, calcLinks, curves, models, motionAreaOverlays])
+  }, [kind, calcLinks, curves, models, motionAreaOverlays, bandSpan])
   const overlaysRef = useRef<Overlay[]>(overlays)
   overlaysRef.current = overlays
 
@@ -7062,11 +7185,13 @@ export default function App() {
     if (kind !== 'cartesian') return {}
     // The board's own letters, so an accumulation reads "g(x) = ∫₀ˣ f(t) dt"
     // with the names on the figure. Only asked for when there is one.
-    const letters = calcLinks.some((l) => l.kind === 'accumulation')
-      ? curveNames(curves, { ...displaySources, ...exprSources }, calcLinks)
+    // The STORED letters too, so "f isn't differentiable at a = 1" names the
+    // curve by the letter its own card wears.
+    const letters = calcLinks.some((l) => l.kind === 'accumulation' || l.kind === 'taylor')
+      ? curveNames(curves, { ...displaySources, ...exprSources }, calcLinks, names, inverses)
       : {}
-    return cardCalc(calcLinks, curves, models, curveLabel, letters)
-  }, [kind, calcLinks, curves, models, curveLabel, displaySources, exprSources])
+    return cardCalc(calcLinks, curves, models, curveLabel, letters, calls)
+  }, [kind, calcLinks, curves, models, curveLabel, displaySources, exprSources, calls, names, inverses])
   const calcFor = useCallback(
     (id: string): CardCalc | undefined => calcCards[id],
     [calcCards],
@@ -7135,6 +7260,49 @@ export default function App() {
           onDrag: (pos) =>
             changeCalc({ kind: 'tangentX', linkId: link.id, x: onCurve(parent, pos.x) }, true),
         })
+        continue
+      }
+      if (link.kind === 'taylor') {
+        // The centre rides the PARENT at (a, f(a)); the probe at (x, f(x)).
+        // Both snap to nice numbers — and, near one, to a multiple of π/12:
+        // "drag a to π/6" is the trig lesson.
+        if (link.parentId !== selectedId && link.curveId !== selectedId) continue
+        const src = taylorSourceFor(parent, models, (calls[parent.id]?.length ?? 0) > 0)
+        if (!src) continue
+        const yAt = (x: number): number => {
+          try {
+            const v = src.f(x)
+            return Number.isFinite(v) ? v : 0
+          } catch {
+            return 0
+          }
+        }
+        const snapX = (x: number): number => {
+          const vp = vpRef.current
+          return snapCenter(
+            x,
+            ppuX(vp),
+            (v) => snapCoord(v, vp, 'x'),
+            axisUnitsRef.current.x === 'pi',
+            (v) => snapPiX(v, ppuX(vp)),
+          )
+        }
+        out.push({
+          id: `calc:${link.id}:a`,
+          pos: { x: link.a, y: yAt(link.a) },
+          label: 'center a',
+          onDrag: (pos) =>
+            changeCalc({ kind: 'taylorA', linkId: link.id, a: onCurve(parent, snapX(pos.x)) }, true),
+        })
+        if (link.x !== undefined) {
+          out.push({
+            id: `calc:${link.id}:x`,
+            pos: { x: link.x, y: yAt(link.x) },
+            label: 'probe x',
+            onDrag: (pos) =>
+              changeCalc({ kind: 'taylorX', linkId: link.id, x: onCurve(parent, snapX(pos.x)) }, true),
+          })
+        }
         continue
       }
       if (link.kind === 'accumulation') {
@@ -7751,22 +7919,41 @@ export default function App() {
   const boardCurveNames = useMemo(
     () =>
       kind === 'cartesian'
-        ? curveNames(curves, { ...displaySources, ...exprSources }, calcLinks, names, inverses)
+        ? withTaylorNames(
+            curveNames(curves, { ...displaySources, ...exprSources }, calcLinks, names, inverses),
+            calcLinks,
+            new Set(curves.filter((c) => c.visible).map((c) => c.id)),
+          )
         : {},
     [kind, curves, displaySources, exprSources, calcLinks, names, inverses],
   )
   /** What each CARD is called — hidden curves included, which a caption leaves out. */
   const cardNames = useMemo(
     () =>
-      curveNames(
-        curves.map((c) => (c.visible ? c : { ...c, visible: true })),
-        { ...displaySources, ...exprSources },
+      withTaylorNames(
+        curveNames(
+          curves.map((c) => (c.visible ? c : { ...c, visible: true })),
+          { ...displaySources, ...exprSources },
+          calcLinks,
+          names,
+          inverses,
+        ),
         calcLinks,
-        names,
-        inverses,
+        new Set(curves.map((c) => c.id)),
       ),
     [curves, displaySources, exprSources, calcLinks, names, inverses],
   )
+  /**
+   * The letters a card may rename. A Taylor curve is called Pₙ by its degree,
+   * not by a letter the teacher chose, so its chip is not a rename field.
+   */
+  const renamableNames = useMemo(() => {
+    const tay = calcLinks.filter((l) => l.kind === 'taylor')
+    if (tay.length === 0) return names
+    const out = { ...names }
+    for (const l of tay) if (l.kind === 'taylor') delete out[l.curveId]
+    return out
+  }, [names, calcLinks])
   /** Why a typed line that calls another curve can't be drawn, per curve. */
   const linkErrors = useMemo(
     () => lineErrors({ curves, names, calls, models }),
@@ -7935,16 +8122,18 @@ export default function App() {
    * numbers in it.
    */
   const crossKey = crossingsOn ? intersectionKey(curves, crossSpan, depKeys) : ''
+  // a curve and its own Taylor polynomial are never solved as a pair
+  const crossApart = useMemo(() => taylorApart(calcLinks), [calcLinks])
   const curvesForCross = useRef(curves)
   curvesForCross.current = curves
 
   const crossings = useMemo<BoardIntersection[]>(() => {
     if (!crossingsOn) return EMPTY_CROSSINGS
-    const found = boardIntersections(curvesForCross.current, models, crossSpan)
+    const found = boardIntersections(curvesForCross.current, models, crossSpan, crossApart)
     return found.length > 0 ? found : EMPTY_CROSSINGS
     // The curve list is tracked through crossKey, not through its identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [crossingsOn, crossKey, models, crossSpan])
+  }, [crossingsOn, crossKey, models, crossSpan, crossApart])
   const crossingsRef = useRef(crossings)
   crossingsRef.current = crossings
 
@@ -8973,7 +9162,7 @@ export default function App() {
         onLogRestate={restateFactors}
         onShowInverse={showInverse}
         cardNames={cardNames}
-        storedNames={names}
+        storedNames={renamableNames}
         onRename={renameCurve}
         linkErrors={linkErrors}
         cardNotes={inverseNotes}

@@ -120,7 +120,8 @@ export function curveNames(
   const tangents = new Set<string>()
   const derivedFrom = new Map<string, string>()
   for (const l of links) {
-    if (l.kind === 'tangent') tangents.add(l.curveId)
+    // a Taylor polynomial is named Pₙ by its own card, never with a letter
+    if (l.kind === 'tangent' || l.kind === 'taylor') tangents.add(l.curveId)
     else if (l.kind === 'derivative') derivedFrom.set(l.curveId, l.parentId)
   }
   const inverseOf = new Map<string, string>()

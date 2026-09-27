@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import type {
   Asymptote,
@@ -42,6 +42,7 @@ import { axisKeys, featureAxes } from './featureEdit'
 import { curveEquationText, displayEquationLatex } from './equationText'
 import { N_MAX, N_MIN, RIEMANN_METHODS } from './calcLinks'
 import type { CalcChange, CalcKind, CardCalc } from './calcLinks'
+import { TaylorSection } from './TaylorSection'
 import type { CurveIntersections } from './intersections'
 
 interface Props {
@@ -262,6 +263,7 @@ const CALC_ITEMS: { kind: CalcKind; label: string }[] = [
   { kind: 'area', label: 'Area under curve' },
   { kind: 'riemann', label: 'Riemann sum' },
   { kind: 'accumulation', label: 'Accumulation function \u222b\u2090\u02e3 f' },
+  { kind: 'taylor', label: 'Taylor polynomial P\u2099' },
 ]
 
 const METHOD_LABELS: Record<string, string> = {
@@ -1658,7 +1660,26 @@ export function CurveCard({
                   <div className="card-menu-sep" />
                   <div className="card-menu-title">Calculus</div>
                   {CALC_ITEMS.map((item) =>
-                    menuItem(item.label, () => onAddCalc(item.kind)),
+                    item.kind === 'taylor' && calc.taylorBlocked ? (
+                      // Offered, and greyed out with the reason: a teacher who
+                      // typed f(x − 1) is owed WHY, not a menu that forgot.
+                      <button
+                        key={item.kind}
+                        type="button"
+                        role="menuitem"
+                        className="card-menu-item card-menu-item-off"
+                        aria-disabled="true"
+                        title={`${calc.taylorBlocked}.`}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {item.label}
+                        <span className="card-menu-why">{calc.taylorBlocked}</span>
+                      </button>
+                    ) : (
+                      <Fragment key={item.kind}>
+                        {menuItem(item.label, () => onAddCalc(item.kind))}
+                      </Fragment>
+                    ),
                   )}
                   {between?.canAdd &&
                     menuItem('Area between curves…', onAddAreaBetween)}
@@ -2224,6 +2245,7 @@ export function CurveCard({
             (calc.areas.length > 0 ||
               calc.riemanns.length > 0 ||
               calc.accums.length > 0 ||
+              calc.taylors.length > 0 ||
               betweenNotes.length > 0) && (
             <div className="calc-section">
               <div className="calc-title">Calculus</div>
@@ -2350,6 +2372,17 @@ export function CurveCard({
                     )}
                     {g.problem && <div className="calc-why">{g.problem}</div>}
                   </div>
+                ))}
+
+                {calc.taylors.map((t) => (
+                  <TaylorSection
+                    key={t.linkId}
+                    row={t}
+                    onCalcChange={onCalcChange}
+                    onRemove={() => onCalcRemove(t.linkId)}
+                    onEditStart={onParamEditStart}
+                    onEditEnd={onParamEditEnd}
+                  />
                 ))}
 
                 {calc.riemanns.map((r) => (

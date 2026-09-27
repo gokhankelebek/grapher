@@ -41,6 +41,7 @@
 import type { CurveKind, ModelSpec, ParamMeta, ParseOutcome, ParsedPlot, PieceInfo } from '../types'
 import type { FunctionEnv } from '../functionEnv'
 import { evalExactAt } from './exactEval'
+import { jetAt } from './jets'
 import {
   CondError,
   compactLatex,
@@ -1841,6 +1842,7 @@ function makePlot(
         if (exactBody) {
           const body = exactBody
           spec.evalExact = (params, x) => evalExactAt(body, params, x)
+          spec.taylor = (params, a, n) => jetAt(body, params, a, n)
         }
       } else if (kind === 'polar') {
         spec.evalPolar = (params, theta) => ev(params, theta, 0)

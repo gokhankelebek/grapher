@@ -11,6 +11,21 @@
 //   region  a closed polygon in math coords — the general "shade this region"
 //           primitive, for inequalities today and for graphfree's shade-by-
 //           point tomorrow. The App builds the boundary; this only fills it.
+//   band    the strip between two sampled boundaries over the same x's — a
+//           Taylor polynomial's Lagrange error band Pₙ(x) ± R(x). NaN in either
+//           boundary breaks the strip, exactly as a pole breaks a stroke.
+//   axisStrip  a thick translucent bar ON the x-axis over [from, to], with the
+//           number line's own endpoint vocabulary: ● included, ○ excluded, an
+//           arrowhead where the interval runs to ±∞ — the interval of
+//           convergence of a series, drawn where a class reads intervals.
+//
+// And two MARKS, painted after the curves rather than under them (a dot under
+// a 2.5px stroke is a dot with a line through it):
+//
+//   segment a straight segment between two math points, optionally dashed —
+//           the probe from Pₙ(x) up to f(x), whose length IS the error.
+//   dot     one point: filled, or hollow (ground-filled centre, as on the
+//           number line, so nothing reads through it).
 //
 // These are FIGURE, not chrome: they carry the mathematics the lesson is
 // about, so they go through the one render routine and reach the exported PNG
@@ -72,6 +87,64 @@ export type Overlay =
       color?: string
       alpha?: number
     }
+  | {
+      kind: 'band'
+      /** Whose colour the band takes. */
+      curveId: string
+      /** Sample x's, ascending; lo[i] and hi[i] are the band's edges there. */
+      xs: readonly number[]
+      lo: ArrayLike<number>
+      hi: ArrayLike<number>
+      color?: string
+      alpha?: number
+    }
+  | {
+      kind: 'axisStrip'
+      /** Whose colour the strip takes. */
+      curveId: string
+      /** Either end may be ±Infinity: the strip then runs off the board with an arrow. */
+      from: number
+      to: number
+      /** What each finite end says. 'none' draws the bar's end and no mark. */
+      left: StripEnd
+      right: StripEnd
+      color?: string
+      alpha?: number
+    }
+  | {
+      kind: 'segment'
+      /** Whose colour it takes, when no colour is stated. */
+      curveId?: string
+      from: Vec2
+      to: Vec2
+      dashed?: boolean
+      color?: string
+    }
+  | {
+      kind: 'dot'
+      curveId?: string
+      at: Vec2
+      hollow?: boolean
+      color?: string
+    }
+
+/** An axis strip's endpoint: ● included, ○ excluded, or nothing said. */
+export type StripEnd = 'closed' | 'open' | 'none'
+
+/** The overlay kinds painted ON TOP of the curves (see `layer`). */
+export const OVERLAY_MARK_KINDS: ReadonlySet<Overlay['kind']> = new Set(['segment', 'dot'])
+
+/** True when any of these overlays is a mark — the board then paints in two passes. */
+export function hasOverlayMarks(overlays: readonly Overlay[]): boolean {
+  return overlays.some((ov) => ov && OVERLAY_MARK_KINDS.has(ov.kind))
+}
+
+/** The axis strip's bar weight and its alpha when none is stated, in CSS px. */
+export const AXIS_STRIP_WIDTH = 9
+export const AXIS_STRIP_ALPHA = 0.38
+/** A mark dot's radius and a probe segment's weight, CSS px before `present.stroke`. */
+export const MARK_DOT_RADIUS = 4.5
+export const MARK_LINE_WIDTH = 1.75
 
 /** Fill alpha when the overlay does not state one. */
 export const OVERLAY_FILL_ALPHA = 0.18
@@ -104,6 +177,17 @@ export interface OverlayPaintOpts {
    * normal case) leaves every overlay's own alpha exactly as it was.
    */
   fillAlpha?: number | null
+  /**
+   * The ground colour, for a hollow dot's centre (an excluded endpoint must
+   * not let the bar read through it). Absent: the centre is left unfilled.
+   */
+  bg?: string | null
+  /**
+   * Which overlays this call paints: 'fills' (everything but the marks —
+   * under the curves), 'marks' (segments and dots — over them), or absent for
+   * all of them in the order given.
+   */
+  layer?: 'fills' | 'marks' | null
 }
 
 // ---------------------------------------------------------------------------
@@ -370,6 +454,163 @@ function drawRects(
 }
 
 /**
+ * The strip between two sampled edges: one polygon per run of samples where
+ * both edges are finite, each edge held inside the overdraw box (a band next
+ * to a pole is the full height of the canvas, not a wedge that stops short).
+ */
+function drawBand(
+  ctx: CanvasRenderingContext2D,
+  ov: Extract<Overlay, { kind: 'band' }>,
+  fr: Frame,
+  color: string,
+  alpha: number,
+): void {
+  const n = Math.min(ov.xs.length, ov.lo.length, ov.hi.length)
+  let top: Vec2[] = []
+  let bot: Vec2[] = []
+  const flush = (): void => {
+    if (top.length >= 2) {
+      const poly = top.slice()
+      for (let i = bot.length - 1; i >= 0; i--) poly.push(bot[i])
+      fillPolygon(ctx, poly, color, alpha)
+    }
+    top = []
+    bot = []
+  }
+  for (let i = 0; i < n; i++) {
+    const x = ov.xs[i]
+    const a = ov.lo[i]
+    const b = ov.hi[i]
+    if (!Number.isFinite(x) || !Number.isFinite(a) || !Number.isFinite(b)) {
+      flush()
+      continue
+    }
+    const px = clamp(sx(fr, x), fr.bx0, fr.bx1)
+    top.push({ x: px, y: clamp(sy(fr, Math.max(a, b)), fr.by0, fr.by1) })
+    bot.push({ x: px, y: clamp(sy(fr, Math.min(a, b)), fr.by0, fr.by1) })
+  }
+  flush()
+}
+
+/** A filled arrowhead pointing along ±x, its tip at (x, y). */
+function arrowTip(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  dir: -1 | 1,
+  len: number,
+  half: number,
+): void {
+  ctx.beginPath()
+  ctx.moveTo(x, y)
+  ctx.lineTo(x - dir * len, y - half)
+  ctx.lineTo(x - dir * len, y + half)
+  ctx.closePath()
+  ctx.fill()
+}
+
+/** ● or ○ at a screen point — hollow is ground-filled first, as on the number line. */
+function markDot(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  r: number,
+  color: string,
+  hollow: boolean,
+  bg: string | null | undefined,
+  ring: number,
+): void {
+  ctx.globalAlpha = 1
+  ctx.beginPath()
+  ctx.arc(x, y, r, 0, Math.PI * 2)
+  if (hollow) {
+    if (bg) {
+      ctx.fillStyle = bg
+      ctx.fill()
+    }
+    ctx.lineWidth = ring
+    ctx.strokeStyle = color
+    ctx.stroke()
+  } else {
+    ctx.fillStyle = color
+    ctx.fill()
+  }
+}
+
+/**
+ * The interval of convergence, ON the x-axis: a thick translucent bar with the
+ * number line's endpoint marks — ● included, ○ excluded — and an arrowhead
+ * where the interval runs to ±∞ (to the board's own edge).
+ */
+function drawAxisStrip(
+  ctx: CanvasRenderingContext2D,
+  ov: Extract<Overlay, { kind: 'axisStrip' }>,
+  fr: Frame,
+  vp: Viewport,
+  color: string,
+  alpha: number,
+  stroke: number,
+  bg: string | null | undefined,
+): void {
+  const lo = Math.min(ov.from, ov.to)
+  const hi = Math.max(ov.from, ov.to)
+  if (Number.isNaN(lo) || Number.isNaN(hi) || !(hi >= lo)) return
+  const y = sy(fr, 0)
+  // The axis is off the board: there is nowhere to read the interval from.
+  if (y < -AXIS_STRIP_WIDTH * stroke || y > vp.heightPx + AXIS_STRIP_WIDTH * stroke) return
+  const w = AXIS_STRIP_WIDTH * stroke
+  const tipLen = w * 1.3
+  const infLo = lo === -Infinity
+  const infHi = hi === Infinity
+  const a = infLo ? 2 : clamp(sx(fr, lo), fr.bx0, fr.bx1)
+  const b = infHi ? vp.widthPx - 2 : clamp(sx(fr, hi), fr.bx0, fr.bx1)
+  if (b < 0 || a > vp.widthPx) return
+  const barA = infLo ? a + tipLen - 1 : a
+  const barB = infHi ? b - tipLen + 1 : b
+  ctx.globalAlpha = alpha
+  ctx.strokeStyle = color
+  ctx.fillStyle = color
+  ctx.lineWidth = w
+  ctx.lineCap = 'butt'
+  if (barB > barA) {
+    ctx.beginPath()
+    ctx.moveTo(barA, y)
+    ctx.lineTo(barB, y)
+    ctx.stroke()
+  }
+  // Arrowheads and endpoint marks at full strength: they are the statement.
+  ctx.globalAlpha = 1
+  if (infLo) arrowTip(ctx, a, y, -1, tipLen, w * 0.9 + 2)
+  if (infHi) arrowTip(ctx, b, y, 1, tipLen, w * 0.9 + 2)
+  const r = Math.max(MARK_DOT_RADIUS * stroke, w * 0.62)
+  const ring = Math.max(2, w * 0.3)
+  if (!infLo && ov.left !== 'none') markDot(ctx, a, y, r, color, ov.left === 'open', bg, ring)
+  if (!infHi && ov.right !== 'none') markDot(ctx, b, y, r, color, ov.right === 'open', bg, ring)
+}
+
+/** A straight segment between two math points, clipped to the overdraw box. */
+function drawSegment(
+  ctx: CanvasRenderingContext2D,
+  ov: Extract<Overlay, { kind: 'segment' }>,
+  fr: Frame,
+  color: string,
+  stroke: number,
+): void {
+  const { from, to } = ov
+  if (![from.x, from.y, to.x, to.y].every(Number.isFinite)) return
+  ctx.globalAlpha = 1
+  ctx.strokeStyle = color
+  ctx.lineWidth = MARK_LINE_WIDTH * stroke
+  ctx.lineCap = 'round'
+  if (ov.dashed) ctx.setLineDash([5 * stroke, 4 * stroke])
+  ctx.beginPath()
+  ctx.moveTo(clamp(sx(fr, from.x), fr.bx0, fr.bx1), clamp(sy(fr, from.y), fr.by0, fr.by1))
+  ctx.lineTo(clamp(sx(fr, to.x), fr.bx0, fr.bx1), clamp(sy(fr, to.y), fr.by0, fr.by1))
+  ctx.stroke()
+  if (ov.dashed) ctx.setLineDash([])
+}
+
+/**
  * Paint every overlay, in the order given, into the current transform.
  *
  * Called between the grid and the curves so a curve's own stroke lands on top
@@ -392,9 +633,12 @@ export function drawOverlays(
   // colour the App picked, and it keeps overlay and stroke in one palette.
   const paint = o.paint ?? ((c: string): string => c)
 
+  const layer = o.layer ?? null
+
   ctx.save()
   for (const ov of overlays) {
     if (!ov) continue
+    if (layer !== null && OVERLAY_MARK_KINDS.has(ov.kind) !== (layer === 'marks')) continue
     try {
       const forced =
         typeof o.fillAlpha === 'number' && Number.isFinite(o.fillAlpha)
@@ -403,7 +647,7 @@ export function drawOverlays(
       const alpha =
         forced !== null
           ? forced
-          : ov.kind === 'rects'
+          : ov.kind === 'rects' || ov.kind === 'segment' || ov.kind === 'dot'
           ? OVERLAY_FILL_ALPHA
           : clamp(
               typeof ov.alpha === 'number' && Number.isFinite(ov.alpha)
@@ -412,7 +656,10 @@ export function drawOverlays(
               0,
               1,
             )
-      const named = ov.kind === 'region' ? undefined : o.curves.find((c) => c.id === ov.curveId)
+      const named =
+        ov.kind === 'region' || ov.curveId === undefined
+          ? undefined
+          : o.curves.find((c) => c.id === ov.curveId)
       const color = paint(ov.color ?? named?.color ?? FALLBACK_COLOR)
 
       switch (ov.kind) {
@@ -422,6 +669,33 @@ export function drawOverlays(
         case 'rects':
           drawRects(ctx, ov, fr, color, stroke)
           break
+        case 'band':
+          drawBand(ctx, ov, fr, color, alpha)
+          break
+        case 'axisStrip': {
+          // Its own, stronger default: a bar on the axis at the area's 0.18
+          // would vanish into the axis line it sits on.
+          const own =
+            forced !== null
+              ? forced
+              : typeof ov.alpha === 'number' && Number.isFinite(ov.alpha)
+                ? clamp(ov.alpha, 0, 1)
+                : AXIS_STRIP_ALPHA
+          drawAxisStrip(ctx, ov, fr, vp, color, own, stroke, o.bg)
+          break
+        }
+        case 'segment':
+          drawSegment(ctx, ov, fr, color, stroke)
+          break
+        case 'dot': {
+          const p = ov.at
+          if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) break
+          const x = sx(fr, p.x)
+          const y = sy(fr, p.y)
+          if (x < fr.bx0 || x > fr.bx1 || y < fr.by0 || y > fr.by1) break
+          markDot(ctx, x, y, MARK_DOT_RADIUS * stroke, color, ov.hollow === true, o.bg, 2 * stroke)
+          break
+        }
         case 'region': {
           const pts: Vec2[] = []
           for (const p of ov.boundary) {

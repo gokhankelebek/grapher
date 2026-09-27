@@ -45,7 +45,19 @@ import type {
   DerivativeLink,
   RiemannLink,
   TangentLink,
+  TaylorLink,
 } from '../core/persist'
+import {
+  pName,
+  taylorBlocked,
+  taylorLegend,
+  taylorLegendTex,
+  taylorOverlays,
+  taylorProblem,
+  taylorRow,
+  taylorSourceFor,
+} from './taylorLinks'
+import type { TaylorRow } from './taylorLinks'
 import {
   ACCUM_MODEL_PREFIX,
   RIEMANN_N_DEFAULT,
@@ -68,6 +80,8 @@ export type {
   RiemannLink,
   RiemannMethod,
   TangentLink,
+  TaylorLink,
+  TaylorRow,
 }
 export { isCurveLink }
 
@@ -145,6 +159,8 @@ export function linkNoun(kind: CalcKind): string {
       return 'Riemann sum'
     case 'accumulation':
       return 'accumulation function'
+    case 'taylor':
+      return 'Taylor polynomial'
   }
 }
 
@@ -171,6 +187,11 @@ export function overlaysFor(
   links: readonly CalcLink[],
   curves: readonly FittedCurve[],
   models: Record<string, ModelSpec>,
+  /**
+   * The x-range a Taylor error band is sampled over — the view, padded.
+   * Absent: no band (everything else draws as before).
+   */
+  span: [number, number] | null = null,
 ): Overlay[] {
   const out: Overlay[] = []
   for (const l of links) {
@@ -228,6 +249,16 @@ export function overlaysFor(
     }
     if (rects.length === 0) continue
     out.push({ kind: 'rects', curveId: parent.id, rects })
+  }
+  // Taylor polynomials: the band and the axis strip wash under the curves,
+  // the centre and the probe mark on top of them (src/ui/taylorLinks.ts).
+  const taylors = links.filter((l): l is TaylorLink => l.kind === 'taylor')
+  if (taylors.length > 0) {
+    try {
+      out.push(...taylorOverlays(taylors, curves, models, span))
+    } catch {
+      /* the Taylor marks are lost this frame; the rest of the figure stands */
+    }
   }
   return out
 }
@@ -1392,6 +1423,13 @@ export function labelLegend<T extends LegendLike>(
         text: `∫ from ${a} of f — ${e.text}`,
       }
     }
+    if (link.kind === 'taylor') {
+      return {
+        ...e,
+        tex: e.tex ? `${e.tex}\\quad ${taylorLegendTex(link)}` : taylorLegendTex(link),
+        text: taylorLegend(link),
+      }
+    }
     const x = fixed(link.x, 2).replace(MINUS, '-')
     return {
       ...e,
@@ -1421,11 +1459,19 @@ export interface CardCalc {
   riemanns: RiemannRow[]
   /** The accumulation functions built FROM this curve, with their probes. */
   accums: AccumRow[]
+  /** The Taylor polynomials built FROM this curve: the degree, centre, probe, bounds. */
+  taylors: TaylorRow[]
+  /**
+   * Why "Taylor polynomial Pₙ" is greyed out on this curve's menu (a line
+   * that calls another curve, a family with no formula), or null when it is
+   * offered.
+   */
+  taylorBlocked: string | null
 }
 
 export interface OriginRow {
   linkId: string
-  kind: 'tangent' | 'derivative' | 'accumulation'
+  kind: 'tangent' | 'derivative' | 'accumulation' | 'taylor'
   /** "tangent to Cubic at x = 2.00 · slope 9.00" / "f′ of Cubic". */
   text: string
   /**
@@ -1502,6 +1548,11 @@ export type CalcChange =
   | { kind: 'accumA'; linkId: string; a: number }
   | { kind: 'accumC'; linkId: string; C: number }
   | { kind: 'accumX'; linkId: string; x: number | null }
+  | { kind: 'taylorA'; linkId: string; a: number }
+  | { kind: 'taylorN'; linkId: string; n: number }
+  | { kind: 'taylorX'; linkId: string; x: number | null }
+  | { kind: 'taylorBand'; linkId: string; on: boolean }
+  | { kind: 'taylorIoc'; linkId: string; on: boolean }
 
 /** The undo entry each change deserves, in a teacher's words. */
 export function changeLabel(change: CalcChange): string {
@@ -1522,6 +1573,16 @@ export function changeLabel(change: CalcChange): string {
       return 'change starting value'
     case 'accumX':
       return 'move probe'
+    case 'taylorA':
+      return 'move Taylor center'
+    case 'taylorN':
+      return 'change Taylor degree'
+    case 'taylorX':
+      return 'move Taylor probe'
+    case 'taylorBand':
+      return 'switch error band'
+    case 'taylorIoc':
+      return 'switch interval of convergence'
   }
 }
 
@@ -1543,14 +1604,22 @@ export function cardCalc(
    * "g(x) = ∫₀ˣ f(t) dt" with the names on the figure. Absent: f and g.
    */
   letters: Readonly<Record<string, string>> = {},
+  /**
+   * The letters each typed line calls (curve id → letters). A line that calls
+   * another curve by name has no Taylor polynomial, and its menu says so.
+   */
+  calls: Readonly<Record<string, readonly string[]>> = {},
 ): Record<string, CardCalc> {
   const out: Record<string, CardCalc> = {}
+  const callsOthers = (id: string): boolean => (calls[id]?.length ?? 0) > 0
   const blank = (curve: FittedCurve): CardCalc => ({
     canAdd: models[curve.modelId]?.kind === 'explicit',
     origin: null,
     areas: [],
     riemanns: [],
     accums: [],
+    taylors: [],
+    taylorBlocked: null,
   })
   const slot = (id: string): CardCalc | null => {
     const curve = curveById(curves, id)
@@ -1562,7 +1631,17 @@ export function cardCalc(
   // Every curve gets an entry, whether or not it carries anything yet: the
   // card asks this whether it may OFFER a tangent, which is a question about
   // the curve (is it a function of x?) rather than about the links.
-  for (const curve of curves) out[curve.id] = blank(curve)
+  for (const curve of curves) {
+    const card = blank(curve)
+    if (card.canAdd) {
+      try {
+        card.taylorBlocked = taylorBlocked(curve, models, callsOthers(curve.id))
+      } catch {
+        card.taylorBlocked = null
+      }
+    }
+    out[curve.id] = card
+  }
 
   for (const link of links) {
     const parent = curveById(curves, link.parentId)
@@ -1668,6 +1747,32 @@ export function cardCalc(
           problem,
           x: null,
           facts,
+        }
+        break
+      }
+      case 'taylor': {
+        const fName = letters[link.parentId] ?? 'f'
+        let src: ReturnType<typeof taylorSourceFor> = null
+        try {
+          src = taylorSourceFor(parent, models, callsOthers(link.parentId))
+        } catch {
+          src = null
+        }
+        const row = taylorRow(link, parent, src, fName)
+        const own = slot(link.parentId)
+        if (own) own.taylors.push(row)
+        const here = slot(link.curveId)
+        if (!here) break
+        const of = parent ? nameOf(parent) : 'that curve'
+        const lead = `${pName(link.n)}: Taylor polynomial of ${fName} about a = ${row.aText}`
+        here.origin = {
+          linkId: link.id,
+          kind: 'taylor',
+          text: `${lead} · ${of}`,
+          lead,
+          tail: '',
+          problem: row.problem ?? (parent ? null : taylorProblem(link, parent, src, fName)),
+          x: null,
         }
         break
       }

@@ -104,7 +104,8 @@ export function joinNames(ns: readonly string[]): string {
 
 /**
  * The curves that are a measurement of another and hold no letter of their
- * own: tangent lines, derivative curves (f′), inverse relations (f⁻¹).
+ * own: tangent lines, derivative curves (f′), Taylor polynomials (Pₙ),
+ * inverse relations (f⁻¹).
  */
 export function derivedIds(
   calc: readonly CalcLink[] = [],
@@ -112,7 +113,7 @@ export function derivedIds(
 ): Set<string> {
   const out = new Set<string>()
   for (const l of calc) {
-    if (l.kind === 'tangent' || l.kind === 'derivative') out.add(l.curveId)
+    if (l.kind === 'tangent' || l.kind === 'derivative' || l.kind === 'taylor') out.add(l.curveId)
   }
   for (const l of inverses) out.add(l.curveId)
   return out

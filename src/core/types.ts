@@ -130,6 +130,16 @@ export interface ModelSpec {
    * keeps the ordinary evaluation). Absent for everything else.
    */
   evalExact?(params: number[], x: ExactPoint): number | undefined
+  /**
+   * For a typed explicit expression: its Taylor coefficients at x = a,
+   * c[k] = f⁽ᵏ⁾(a)/k! for k = 0…n, by Taylor-mode automatic differentiation
+   * over the formula (src/core/parse/jets.ts) — exact up to rounding at any
+   * degree, never a finite difference. Null where f is not analytic at a
+   * (outside its domain, at a pole, |x| at 0, a step's edge, √ at 0) or the
+   * formula has something jets cannot carry (a named call). Absent for
+   * everything else; src/core/taylor.ts is the only caller.
+   */
+  taylor?(params: number[], a: number, n: number): number[] | null
   latex(params: number[]): string    // KaTeX-renderable string
   paramMeta(params: number[]): ParamMeta[]  // ranges centered on current values
   /** Optional: return params translated by (dx, dy) in math units (for drag-editing).

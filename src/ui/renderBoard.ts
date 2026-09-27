@@ -50,7 +50,7 @@ import type { PieceMarks } from '../render/pieceDots'
 import { drawPieceDots, pieceMarks } from '../render/pieceDots'
 import { findAsymptotes, findHoles } from '../core/holes'
 import type { Overlay } from '../render/overlays'
-import { drawOverlays } from '../render/overlays'
+import { drawOverlays, hasOverlayMarks } from '../render/overlays'
 import type { Polyline, SlopeField } from '../render/fields'
 import { drawPolylines, drawSlopeFields } from '../render/fields'
 import type { Shape } from '../render/shapes'
@@ -1662,6 +1662,10 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
   // sits on top of its own shading rather than under it — and before all
   // chrome, because they are part of the figure.
   const overlays = scene.overlays
+  // Marks (a probe's segment, a centre dot) go ON the curves, so a board that
+  // has any paints its overlays in two passes. A board with none makes exactly
+  // the one call it always made.
+  const marks = overlays !== undefined && overlays.length > 0 && hasOverlayMarks(overlays)
   if (overlays && overlays.length > 0) {
     try {
       drawOverlays(ctx, overlays, {
@@ -1671,6 +1675,9 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
         paint: ink,
         scale,
         fillAlpha: washAlpha,
+        // Only a hollow endpoint reads it; nothing else paints with it.
+        bg: theme.bg,
+        ...(marks ? { layer: 'fills' as const } : {}),
       })
     } catch {
       /* overlay render failed — the figure still stands */
@@ -1893,6 +1900,24 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
     }
     ctx.setLineDash([])
     ctx.globalAlpha = 1
+  }
+
+  // The overlays' marks: on every curve, under the data and the labels.
+  if (marks && overlays) {
+    try {
+      drawOverlays(ctx, overlays, {
+        vp,
+        curves: scene.curves,
+        models,
+        paint: ink,
+        scale,
+        fillAlpha: washAlpha,
+        layer: 'marks',
+        bg: theme.bg,
+      })
+    } catch {
+      /* a mark that could not be drawn must not take the figure with it */
+    }
   }
 
   // Data: on top of every curve (the fit is judged by the points against it),

@@ -20,6 +20,7 @@
 import type { FittedCurve, ModelSpec, SpecialPoint } from '../core/types'
 import { intersectionPoints } from '../core/analyze'
 import type { BoardIntersection } from './renderBoard'
+import type { CalcLink } from '../core/persist'
 
 export type { BoardIntersection }
 
@@ -104,18 +105,39 @@ export function intersectionKey(
   return `${parts.join('|')}#${span[0]},${span[1]}`
 }
 
+/** One unordered pair of curve ids, as a set key. */
+export function pairKey(a: string, b: string): string {
+  return a < b ? `${a}|${b}` : `${b}|${a}`
+}
+
+/**
+ * A curve and its own Taylor polynomial are not a pair to solve. They agree
+ * to order n at the centre — the centre handle already marks that point —
+ * and the solver, handed a difference that is flat to 1e-15 around it,
+ * reports crossings that are only rounding (f and P₅ of sin "met" at
+ * 0.001126). Where they part far from the centre is the error, which the
+ * card and the band say better than a chip does.
+ */
+export function taylorApart(calc: readonly CalcLink[]): Set<string> {
+  const out = new Set<string>()
+  for (const l of calc) if (l.kind === 'taylor') out.add(pairKey(l.parentId, l.curveId))
+  return out
+}
+
 /**
  * The pairs this board solves, each ordered (a, b) with a first in sidebar
  * order — so the pair (f, g) is asked ONCE and never again as (g, f).
  */
 export function intersectionPairs(
   curves: readonly FittedCurve[],
+  apart?: ReadonlySet<string>,
 ): [FittedCurve, FittedCurve][] {
   const open = curves.filter(crossable)
   const out: [FittedCurve, FittedCurve][] = []
   for (let i = 0; i < open.length; i++) {
     for (let j = i + 1; j < open.length; j++) {
       if (out.length >= MAX_PAIRS) return out
+      if (apart?.has(pairKey(open[i].id, open[j].id))) continue
       out.push([open[i], open[j]])
     }
   }
@@ -133,10 +155,12 @@ export function boardIntersections(
   curves: readonly FittedCurve[],
   models: Record<string, ModelSpec>,
   span: readonly [number, number],
+  /** pairs never solved (pairKey): see taylorApart */
+  apart?: ReadonlySet<string>,
 ): BoardIntersection[] {
   const range: [number, number] = [span[0], span[1]]
   const out: BoardIntersection[] = []
-  for (const [a, b] of intersectionPairs(curves)) {
+  for (const [a, b] of intersectionPairs(curves, apart)) {
     let pts: SpecialPoint[] = []
     try {
       const got = intersectionPoints(a, b, models, range)

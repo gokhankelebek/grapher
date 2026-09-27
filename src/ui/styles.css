@@ -5918,3 +5918,75 @@ button.calc-field-btn {
   padding: 2px var(--sp-2);
   font-size: var(--fs-sm);
 }
+
+/* ------------------------------------------------------ Taylor polynomials */
+/*
+ * The Taylor row on the parent's card borrows the calc-* vocabulary (tag,
+ * read, chips, fields, facts). What it adds: the polynomial in KaTeX, which
+ * at n = 30 is wider than any card and scrolls rather than wraps; the degree
+ * row, a stepper either side of the slider plus the ▶ demo; and the interval
+ * of convergence line, which is always there.
+ */
+.taylor-name {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.taylor-tex {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0 var(--sp-1);
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+.taylor-n {
+  display: grid;
+  grid-template-columns: 14px auto 1fr auto 28px auto;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.taylor-step,
+.taylor-play {
+  min-width: 26px;
+  text-align: center;
+}
+
+.taylor-step:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.taylor-probe .calc-fact {
+  overflow-wrap: anywhere;
+}
+
+.taylor-ioc {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.taylor-ioc-note {
+  white-space: normal;
+}
+
+/* A menu item offered but not available here: greyed, with the reason under it. */
+.card-menu-item-off {
+  color: var(--faint);
+  cursor: default;
+}
+
+.card-menu-item-off:hover {
+  background: transparent;
+}
+
+.card-menu-why {
+  display: block;
+  margin-top: 2px;
+  color: var(--faint);
+  font-size: var(--fs-xs);
+  line-height: 1.35;
+}

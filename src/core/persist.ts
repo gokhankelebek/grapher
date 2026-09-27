@@ -30,6 +30,7 @@ import { parseSlopeField } from './parse/slopeField'
 import { parseShape } from './parse/shapes'
 import { MODELS } from './fit/models'
 import { accumulationModel, derivativeModel } from './calculus'
+import { TAYLOR_N_DEFAULT, TAYLOR_N_MAX, TAYLOR_N_MIN } from './taylor'
 import type { RiemannMethod } from './calculus'
 import type { RegressionKind } from './data'
 
@@ -89,7 +90,7 @@ export type StyleMap = Record<string, CurveStyle>
 // core may not reach into src/ui.
 
 /** Which of the calculus objects a link describes. */
-export type CalcKind = 'tangent' | 'derivative' | 'area' | 'riemann' | 'accumulation'
+export type CalcKind = 'tangent' | 'derivative' | 'area' | 'riemann' | 'accumulation' | 'taylor'
 
 /** A tangent line at one point of `parentId`, drawn as the curve `curveId`. */
 export interface TangentLink {
@@ -168,13 +169,45 @@ export interface AccumulationLink {
   x?: number
 }
 
-export type CalcLink = TangentLink | DerivativeLink | AreaLink | RiemannLink | AccumulationLink
+/**
+ * The Taylor polynomial Pₙ of `parentId` about x = a, drawn as the curve
+ * `curveId` (model `tay_<link id>`, rebuilt from the parent on load and on
+ * every change — nothing computed is stored).
+ *
+ * `x` is the probe: where the card reads Pₙ(x), f(x), the actual error and
+ * the Lagrange (and, when it applies, alternating series) bound. `band` shows
+ * the Lagrange error band Pₙ ± R(x) on the board; `ioc` shades the interval
+ * of convergence on the x-axis. Both default off and are not written when
+ * off, nor is an absent probe.
+ *   src/core/taylor.ts   taylorSourceOf / taylorPolynomial / taylorModel /
+ *                        lagrangeBound / alternatingBound / errorBand /
+ *                        convergence
+ */
+export interface TaylorLink {
+  kind: 'taylor'
+  id: string
+  parentId: string
+  curveId: string
+  /** the center */
+  a: number
+  /** the degree, an integer in [TAYLOR_N_MIN, TAYLOR_N_MAX] */
+  n: number
+  /** the probe x, when there is one */
+  x?: number
+  band?: boolean
+  ioc?: boolean
+}
+
+/** The model id a Taylor polynomial registers under: this prefix + the link id. */
+export const TAYLOR_MODEL_PREFIX = 'tay_'
+
+export type CalcLink = TangentLink | DerivativeLink | AreaLink | RiemannLink | AccumulationLink | TaylorLink
 
 /** The links that own a curve of their own. */
-export type CurveLink = TangentLink | DerivativeLink | AccumulationLink
+export type CurveLink = TangentLink | DerivativeLink | AccumulationLink | TaylorLink
 
 export const isCurveLink = (l: CalcLink): l is CurveLink =>
-  l.kind === 'tangent' || l.kind === 'derivative' || l.kind === 'accumulation'
+  l.kind === 'tangent' || l.kind === 'derivative' || l.kind === 'accumulation' || l.kind === 'taylor'
 
 // --- inverses and names -----------------------------------------------------
 //
@@ -499,6 +532,17 @@ export const RIEMANN_N_DEFAULT = 8
 export function clampRiemannN(v: unknown): number {
   const n = typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : RIEMANN_N_DEFAULT
   return Math.min(RIEMANN_N_MAX, Math.max(RIEMANN_N_MIN, n))
+}
+
+/**
+ * Integerise and clamp a Taylor degree — the card's stepper and the loader
+ * agree exactly. Junk is the default degree rather than a refusal: the centre
+ * is what defines the polynomial, and a degree nobody can read is the one the
+ * card would have offered anyway.
+ */
+export function clampTaylorN(v: unknown): number {
+  const n = typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : TAYLOR_N_DEFAULT
+  return Math.min(TAYLOR_N_MAX, Math.max(TAYLOR_N_MIN, n))
 }
 
 const RIEMANN_METHODS: readonly RiemannMethod[] = ['left', 'right', 'midpoint', 'trapezoid']
@@ -990,6 +1034,9 @@ export interface StoredCalcLink {
   /** Accumulation only: the lower limit, and g(a) when it is not 0. */
   a?: number
   C?: number
+  /** Taylor only, and only when on: the error band and the interval of convergence. */
+  band?: boolean
+  ioc?: boolean
 }
 
 export interface StoredDoc {
@@ -1787,6 +1834,20 @@ export function calcLinkToStored(l: CalcLink): StoredCalcLink {
         ...(l.C !== 0 && Number.isFinite(l.C) ? { C: l.C } : {}),
         ...(l.x !== undefined && Number.isFinite(l.x) ? { x: l.x } : {}),
       }
+    case 'taylor':
+      return {
+        kind: 'taylor',
+        id: l.id,
+        parentId: l.parentId,
+        curveId: l.curveId,
+        a: l.a,
+        n: clampTaylorN(l.n),
+        // Off is the default for both switches, and no probe is the default
+        // probe: none of the three is written until somebody asks for it.
+        ...(l.x !== undefined && Number.isFinite(l.x) ? { x: l.x } : {}),
+        ...(l.band === true ? { band: true } : {}),
+        ...(l.ioc === true ? { ioc: true } : {}),
+      }
   }
 }
 
@@ -1852,6 +1913,25 @@ export function storedToCalcLink(raw: unknown): CalcLink | null {
         ...(isNum(raw.x) ? { x: raw.x } : {}),
       }
     }
+    case 'taylor': {
+      if (!isStr(curveId) || !curveId) return null
+      // The centre IS the polynomial; without it there is nothing to rebuild.
+      // A degree that is present but not a number is damage (the file says
+      // something, and it is not a degree); an absent one is the default.
+      if (!isNum(raw.a)) return null
+      if (raw.n !== undefined && !isNum(raw.n)) return null
+      return {
+        kind: 'taylor',
+        id,
+        parentId,
+        curveId,
+        a: raw.a,
+        n: clampTaylorN(raw.n),
+        ...(isNum(raw.x) ? { x: raw.x } : {}),
+        ...(raw.band === true ? { band: true } : {}),
+        ...(raw.ioc === true ? { ioc: true } : {}),
+      }
+    }
     default:
       return null
   }
@@ -1870,6 +1950,8 @@ export function calcNoun(kind: CalcKind): string {
       return 'Riemann sum'
     case 'accumulation':
       return 'accumulation function'
+    case 'taylor':
+      return 'Taylor polynomial'
   }
 }
 
@@ -2464,6 +2546,30 @@ export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResu
       for (let i = curves.length - 1; i >= 0; i--) {
         if (lost.has(`curve:${curves[i].id}`)) curves.splice(i, 1)
       }
+    }
+  }
+
+  // A Taylor polynomial is always a closure, rebuilt by the board from its
+  // parent and the link's own a and n (src/ui/calcLinks.ts — a sketched
+  // parent is read through its equation text, which core cannot reach). All
+  // this loader can check is that every such curve still has a link to be
+  // rebuilt from: one that lost it has nothing that could ever draw it.
+  {
+    const claimed = new Set<string>()
+    for (const link of calc) if (link.kind === 'taylor') claimed.add(link.curveId)
+    const orphan = curves.filter(
+      (c) => c.modelId.startsWith(TAYLOR_MODEL_PREFIX) && !claimed.has(c.id),
+    )
+    if (orphan.length > 0) {
+      const gone = new Set(orphan.map((c) => c.id))
+      for (let i = curves.length - 1; i >= 0; i--) {
+        if (gone.has(curves[i].id)) curves.splice(i, 1)
+      }
+      for (const id of gone) delete names[id]
+      problems.push(
+        `${orphan.length === 1 ? 'A Taylor polynomial' : `${orphan.length} Taylor polynomials`} could not be rebuilt without the curve ${orphan.length === 1 ? 'it' : 'they'} came from, so ${orphan.length === 1 ? 'it was' : 'they were'} removed.`,
+      )
+      degraded = true
     }
   }
 
