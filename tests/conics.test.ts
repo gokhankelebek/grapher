@@ -9,6 +9,7 @@ import {
   conicFromParabola,
   conicSource,
   readConic,
+  readRotatedConic,
   type Built,
   type ConicSpec,
 } from '../src/core/conics'
@@ -594,3 +595,188 @@ describe('round trip', () => {
     }
   })
 })
+
+// ---------------------------------------------------------------------------
+// readRotatedConic
+// ---------------------------------------------------------------------------
+
+describe('readRotatedConic', () => {
+  const S2 = Math.SQRT2
+  const txt = (p: { xText: string; yText: string }) => `(${p.xText}, ${p.yText})`
+  const dist = (p: { x: number; y: number }, q: { x: number; y: number }) => Math.hypot(p.x - q.x, p.y - q.y)
+
+  it('xy = 1: a hyperbola turned π/4 — vertices (±1, ±1), foci (±√2, ±√2), the axes as asymptotes', () => {
+    const r = readRotatedConic('xy = 1')!
+    expect(r.kind).toBe('hyperbola')
+    expect(r.theta).toBeCloseTo(Math.PI / 4, 14)
+    expect(r.thetaText).toBe('π/4')
+    expect([r.cosText, r.sinText]).toEqual(['√2/2', '√2/2'])
+    expect(r.spec).toEqual({ kind: 'hyperbola', h: '0', k: '0', a: 'sqrt(2)', b: 'sqrt(2)', opens: 'x' })
+    expect(conicSource(r.spec)).toBe('x^2/2 - y^2/2 = 1')
+    expect(r.primeText).toBe('x′²/2 − y′²/2 = 1')
+    const f = r.features
+    expect(txt(f.center!)).toBe('(0, 0)')
+    expect(f.vertices.map(txt)).toEqual(['(−1, −1)', '(1, 1)'])
+    expect(f.vertices.map((p) => [p.x, p.y])).toEqual([[-1, -1], [1, 1]])
+    expect(f.foci.map(txt)).toEqual(['(−√2, −√2)', '(√2, √2)'])
+    expect(f.foci[1].x).toBeCloseTo(S2, 14)
+    expect(f.asymptotes.map((a) => a.text)).toEqual(['x = 0', 'y = 0'])
+    expect(f.asymptotes.map((a) => a.slope)).toEqual([Infinity, 0])
+    expect(f.box!.map((p) => [p.x, p.y])).toEqual([[0, -2], [2, 0], [0, 2], [-2, 0]])
+    expect(f.eccentricity).toBeCloseTo(S2, 14)
+    expect(f.directrix).toBeNull()
+    expect(f.sentences[0]).toBe('rotated 45°: in axes x′, y′ this is x′²/2 − y′²/2 = 1')
+    expect(f.sentences).toContain('asymptotes x = 0 and y = 0')
+    expect(f.sentences).toContain('the transverse axis is on the line y = x')
+    expect(r.classSentence).toBe('B² − 4AC = 1 > 0: a hyperbola, rotated 45°')
+  })
+
+  it('x² + xy + y² = 3: an ellipse turned 45°, x′²/2 + y′²/6 = 1, axes 2√6 and 2√2', () => {
+    const r = readRotatedConic('x^2 + xy + y^2 = 3')!
+    expect(r.kind).toBe('ellipse')
+    expect(r.thetaText).toBe('π/4')
+    expect(r.primeText).toBe('x′²/2 + y′²/6 = 1')
+    expect(r.features.sentences).toContain('major axis 2√6, minor axis 2√2')
+    expect(r.features.sentences).toContain('the major axis is on the line y = −x')
+    expect(r.features.vertices.map(txt)).toEqual(['(√3, −√3)', '(−√3, √3)'])
+    expect(r.features.foci.map(txt)).toEqual(['(√2, −√2)', '(−√2, √2)'])
+    expect(r.features.eccentricity).toBeCloseTo(Math.sqrt(6) / 3, 14)
+  })
+
+  it('5x² − 6xy + 5y² = 8: turned 45° (not −45°), x′²/4 + y′² = 1, vertices (±√2, ±√2)', () => {
+    const r = readRotatedConic('5x^2 - 6xy + 5y^2 = 8')!
+    expect(r.kind).toBe('ellipse')
+    expect(r.degreesText).toBe('45°')
+    expect(r.spec).toEqual({ kind: 'ellipse', h: '0', k: '0', a: '2', b: '1' })
+    expect(r.primeText).toBe('x′²/4 + y′² = 1')
+    expect(r.features.vertices.map(txt)).toEqual(['(−√2, −√2)', '(√2, √2)'])
+    expect(r.features.coVertices.map(txt)).toEqual(['(√2/2, −√2/2)', '(−√2/2, √2/2)'])
+    expect(r.features.foci.map(txt)).toEqual(['(−√6/2, −√6/2)', '(√6/2, √6/2)'])
+    // classify's θ is in (−45°, 45°]; the reading restates its sentence with this θ
+    expect(r.classSentence).toBe('B² − 4AC = −64 < 0: an ellipse, rotated 45°')
+  })
+
+  it('x² + 2xy + y² − 8x + 8y = 0: a parabola turned 45°, vertex (0, 0), focus (1, −1), directrix x − y = −2', () => {
+    const r = readRotatedConic('x^2 + 2xy + y^2 - 8x + 8y = 0')!
+    expect(r.kind).toBe('parabola')
+    expect(r.thetaText).toBe('π/4')
+    expect(r.center).toBeNull()
+    expect(r.spec).toEqual({ kind: 'parabola', h: '0', k: '0', a: '-sqrt(2)', opens: 'y', p: '-sqrt(2)' })
+    expect(r.primeText).toBe('x′² = −4√2y′')
+    const f = r.features
+    expect(f.vertices.map(txt)).toEqual(['(0, 0)'])
+    expect(f.foci.map(txt)).toEqual(['(1, −1)'])
+    expect(f.directrixLine!.text).toBe('x − y = −2')
+    for (const p of f.directrixLine!.pts) expect(p.x - p.y).toBeCloseTo(-2, 12)
+    expect(f.sentences).toContain('axis of symmetry y = −x')
+    expect(f.sentences).toContain('directrix x − y = −2')
+  })
+
+  it('an angle that is not a nice multiple of π: 5x² + 4xy + 2y² = 1 turns 26.57°, cos θ = 2√5/5', () => {
+    const r = readRotatedConic('5x^2 + 4xy + 2y^2 = 1')!
+    expect(r.thetaText).toBe('26.57°')
+    expect(Math.tan(2 * r.theta)).toBeCloseTo(4 / 3, 12)
+    expect([r.cosText, r.sinText]).toEqual(['2√5/5', '√5/5'])
+    expect(r.features.sentences[1]).toBe('cot 2θ = (A − C)/B = 3/4, so θ = ½·arccot(3/4) ≈ 26.57°')
+    // 7x² − 6√3xy + 13y² = 16 turns π/6
+    const s = readRotatedConic('7x^2 - 6sqrt(3)xy + 13y^2 = 16')!
+    expect(s.thetaText).toBe('π/6')
+    expect(s.primeText).toBe('x′²/4 + y′² = 1')
+    expect(s.features.vertices.map(txt)).toEqual(['(−√3, −1)', '(√3, 1)'])
+    // x² + xy = 1: π/8, its semi-axes √(−2 + 2√2) kept exact in the spec
+    const t = readRotatedConic('x^2 + xy = 1')!
+    expect(t.thetaText).toBe('π/8')
+    expect(t.spec.a).toBe('sqrt(-2+2sqrt(2))')
+  })
+
+  it('a translated one: xy + 2x − y = 5 has center (1, −2) and asymptotes x = 1, y = −2', () => {
+    const r = readRotatedConic('x y + 2x - y = 5')!
+    expect(txt(r.center!)).toBe('(1, −2)')
+    expect(r.features.asymptotes.map((a) => a.text)).toEqual(['x = 1', 'y = −2'])
+    expect(r.features.vertices.map(txt)).toEqual(['(1−√3, −2−√3)', '(1+√3, −2+√3)'])
+  })
+
+  it('null for B = 0, a degenerate quadratic and anything not a conic', () => {
+    for (const s of ['x^2 + y^2 = 1', '(x-2)^2/9 + (y+1)^2/4 = 1', 'xy = 0', 'x^2 + 2xy + y^2 = 1', '2x^2 + xy + y^2 = 0',
+      'x^2 + 2xy + y^2 + 1 = 0', 'x^3 + xy = 1', 'y = x^2', 'a xy = 1', '']) {
+      expect(readRotatedConic(s), s).toBeNull()
+    }
+  })
+
+  it('any spec, rotated by a random θ: vertices on the curve, the focal property, the asymptotes (90 random)', () => {
+    const rng = makeRng(7171)
+    const kinds: ConicSpec[] = [
+      { kind: 'ellipse', h: '1', k: '-2', a: '3', b: '1' },
+      { kind: 'ellipse', h: '-1/2', k: '0', a: '1', b: '5/2' },
+      { kind: 'hyperbola', h: '-1', k: '2', a: '2', b: '1', opens: 'x' },
+      { kind: 'hyperbola', h: '0', k: '3', a: '1', b: '3', opens: 'y' },
+      { kind: 'parabola', h: '2', k: '1', a: '1/2', opens: 'y', p: '1/2' },
+      { kind: 'parabola', h: '-1', k: '1', a: '-3/2', opens: 'x', p: '-3/2' },
+    ]
+    for (let i = 0; i < 90; i++) {
+      const s = kinds[i % kinds.length]
+      let th = (rng() - 0.5) * Math.PI * 0.98
+      if (Math.abs(th) < 0.02) th = 0.3
+      const F = implicitOf(conicSource(s))
+      const c = Math.cos(th), sn = Math.sin(th)
+      const G = (x: number, y: number) => F(c * x + sn * y, -sn * x + c * y)
+      const q = [
+        (G(1, 0) + G(-1, 0) - 2 * G(0, 0)) / 2, (G(1, 1) - G(1, -1) - G(-1, 1) + G(-1, -1)) / 4,
+        (G(0, 1) + G(0, -1) - 2 * G(0, 0)) / 2, (G(1, 0) - G(-1, 0)) / 2, (G(0, 1) - G(0, -1)) / 2, G(0, 0),
+      ]
+      const t = q.map((v) => v.toPrecision(17))
+      const src = `(${t[0]})x^2 + (${t[1]})x*y + (${t[2]})y^2 + (${t[3]})x + (${t[4]})y + (${t[5]}) = 0`
+      const r = readRotatedConic(src)
+      expect(r, src).not.toBeNull()
+      if (!r) continue
+      expect(r.kind, src).toBe(s.kind)
+      expect(r.theta > 0 && r.theta < Math.PI / 2, src).toBe(true)
+      // the axes agree with th up to a quarter turn
+      const d = (r.theta - th) / (Math.PI / 2)
+      expect(Math.abs(d - Math.round(d)), src).toBeLessThan(1e-7)
+      const Fx = implicitOf(src)
+      const scale = Math.max(...q.map(Math.abs))
+      const f = r.features
+      for (const v of f.vertices) expect(Math.abs(Fx(v.x, v.y)) / scale, `${src} vertex ${txt(v)}`).toBeLessThan(1e-7)
+      if (r.kind === 'ellipse' || r.kind === 'hyperbola') {
+        const [v1, v2] = f.vertices
+        const [f1, f2] = f.foci
+        const twoA = dist(v1, v2)
+        // points on the curve: the vertices and co-vertices (ellipse), the vertices (hyperbola)
+        const pts = r.kind === 'ellipse' ? [...f.vertices, ...f.coVertices] : f.vertices
+        for (const p of pts) {
+          const d1 = dist(p, f1), d2 = dist(p, f2)
+          expect(r.kind === 'ellipse' ? d1 + d2 : Math.abs(d1 - d2), src).toBeCloseTo(twoA, 7)
+        }
+        // the center is the midpoint of the foci
+        expect(dist(f.center!, { x: (f1.x + f2.x) / 2, y: (f1.y + f2.y) / 2 }), src).toBeLessThan(1e-7)
+        if (r.kind === 'hyperbola') {
+          // an asymptote's direction kills the quadratic part: A + Bm + Cm² = 0 (or C = 0 for a vertical one)
+          const [A, B, C] = q
+          for (const a of f.asymptotes) {
+            const val = Number.isFinite(a.slope) ? A + B * a.slope + C * a.slope * a.slope : C
+            expect(Math.abs(val) / scale, src).toBeLessThan(1e-7)
+          }
+        }
+      } else {
+        // the parabola: |PF| = distance to the directrix, for points on the curve
+        const line = f.directrixLine!
+        const n = Math.hypot(line.a, line.b)
+        const toLine = (p: { x: number; y: number }) => Math.abs(line.a * p.x + line.b * p.y - line.c) / n
+        const [vx] = f.vertices
+        const pv = Math.abs(val(r.spec.p))
+        expect(dist(vx, f.foci[0]), src).toBeCloseTo(pv, 7)
+        expect(toLine(vx), src).toBeCloseTo(pv, 7)
+        // two more points: the ends of the latus rectum, 2|p| either side of the focus across the axis
+        const ax = { x: f.foci[0].x - vx.x, y: f.foci[0].y - vx.y }
+        const L = Math.hypot(ax.x, ax.y)
+        for (const sgn of [1, -1]) {
+          const p = { x: f.foci[0].x - sgn * 2 * pv * ax.y / L, y: f.foci[0].y + sgn * 2 * pv * ax.x / L }
+          expect(Math.abs(Fx(p.x, p.y)) / scale, src).toBeLessThan(1e-7)
+          expect(dist(p, f.foci[0]), src).toBeCloseTo(toLine(p), 7)
+        }
+      }
+    }
+  })
+})
+

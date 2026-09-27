@@ -16,6 +16,7 @@ import {
   conicSpecFromDraft,
   conicValues,
   parabolaOpens,
+  prettyConic,
   safeConicFeatures,
   safeConicSource,
   setConicField,
@@ -49,7 +50,11 @@ import type {
 //     — standard or general form, including a hand-typed
 //     x^2 + y^2 - 4x + 6y - 3 = 0. COMMITTED: a field is an edit on Enter or
 //     blur, "write in standard form" restates a general-form line in place;
-//     each is one undo entry. A rotated or degenerate quadratic gets the
+//     each is one undo entry. A ROTATED conic (an xy term) is read in its own
+//     axes x′, y′ — θ, h′, k′, a, b (or p) as read-only fields, the
+//     discriminant sentence, and its center, vertices, foci, asymptotes,
+//     directrix in x, y — and is changed by retyping the line (no field
+//     edits, no board handles). A degenerate quadratic gets the
 //     discriminant sentence, read-only.
 //
 // Both only ever produce an ordinary typed equation (src/core/conics.ts
@@ -519,6 +524,7 @@ export function ConicSection({ info, onRestate, construction = false, onConstruc
   const [error, setError] = useState<string | null>(null)
   const spec: ConicSpec | null = info.kind === 'conic' ? info.spec : null
   useEffect(() => setError(null), [spec])
+  const kindName = info.kind === 'conic' ? KIND_NAME[info.spec.kind] : info.kind === 'rotated' ? KIND_NAME[info.rot.kind] : null
 
   const title = (
     <button
@@ -530,7 +536,8 @@ export function ConicSection({ info, onRestate, construction = false, onConstruc
         setOpen((o) => !o)
       }}
     >
-      Conic{spec ? ` · ${KIND_NAME[spec.kind]}` : ''} <span className="fe-caret">{open ? '▾' : '▸'}</span>
+      Conic{kindName ? ` · ${kindName}` : ''}
+      {info.kind === 'rotated' ? `, rotated ${info.rot.degreesText}` : ''} <span className="fe-caret">{open ? '▾' : '▸'}</span>
     </button>
   )
 
@@ -542,6 +549,74 @@ export function ConicSection({ info, onRestate, construction = false, onConstruc
           <div className="co-class" data-testid="conic-class">
             {info.sentence}
           </div>
+        )}
+      </div>
+    )
+  }
+
+  if (info.kind === 'rotated') {
+    const r = info.rot
+    const ro = (tag: string, value: string, label: string, key: string) => (
+      <span key={key} className="co-field">
+        <span className="calc-tag">{tag}</span>
+        <input
+          className="calc-input fe-input xe-input fe-input-part co-readonly"
+          type="text"
+          readOnly
+          tabIndex={-1}
+          aria-label={label}
+          title={label}
+          data-testid={`conic-rotated-${key}`}
+          value={value}
+          style={{ width: `calc(${Math.min(12, Math.max(3, value.length + 1))}ch + 12px)` }}
+          onClick={(ev) => ev.stopPropagation()}
+        />
+      </span>
+    )
+    return (
+      <div
+        className="field-section fe-section xe-section co-section"
+        data-testid="conic-section"
+        data-kind={r.kind}
+        data-rotated="true"
+      >
+        {title}
+        {open && (
+          <>
+            <div className="co-class" data-testid="conic-class">
+              {info.sentence}
+            </div>
+            <div className="fe-a-row co-fields" data-testid="conic-rotated-fields">
+              {ro('θ =', r.thetaText, 'The rotation angle θ of the axes x′, y′ (cot 2θ = (A − C)/B)', 'theta')}
+              {conicFieldsOf(r.spec).map((fd) =>
+                ro(
+                  fd.tag.replace(/^([hkabp])/, (l) => (l === 'h' || l === 'k' ? `${l}′` : l)),
+                  prettyConic(conicFieldText(r.spec, fd.field)),
+                  `${fd.label} — in the rotated axes x′, y′ (read-only)`,
+                  fd.field,
+                ),
+              )}
+            </div>
+            <ExpFacts sentences={r.features.sentences} features={[]} testPrefix="conic" />
+            {onConstruction && (
+              <label className="te-check" onClick={(ev) => ev.stopPropagation()}>
+                <input
+                  type="checkbox"
+                  checked={construction}
+                  data-testid="conic-construction"
+                  onChange={(ev) => onConstruction(ev.target.checked)}
+                />
+                <span>
+                  show construction (foci
+                  {r.kind === 'parabola' ? ', directrix' : r.kind === 'hyperbola' ? ', asymptotes, box' : ''}) in exports
+                </span>
+              </label>
+            )}
+            <div className="field-hint">
+              Its axes are tilted {r.degreesText}: h′, k′ are the center’s coordinates along x′, y′. These are read-only —
+              retype the equation to change the conic.
+            </div>
+          </>
         )}
       </div>
     )

@@ -34,6 +34,12 @@
 //       center, vertices, co-vertices, foci, directrix, asymptotes, the
 //       hyperbola's fundamental rectangle, eccentricity, the lengths of the
 //       axes and the latus rectum — numbers and exact text (√5, 2 + √13).
+//   export function readRotatedConic(src): RotatedConic | null
+//       a ROTATED conic (B·xy ≠ 0): the angle θ (cot 2θ = (A − C)/B, 0 < θ
+//       < 90°), the conic in its own axes x′, y′ as an ordinary ConicSpec
+//       (so conicSource / conicFeatures read it there), and its features
+//       mapped back to x, y — vertices, foci, asymptotes, the directrix as
+//       a general line "x − y = −2". Degenerate or B = 0 → null. See below.
 //   builders — each returns a spec or a refusal reason:
 //     conicFromCircle(center, radius | pointOnCircle)
 //     conicFromEllipse({center, vertex, focus? | coVertex? | e?})
@@ -86,13 +92,58 @@ export interface ConicFeatures {
   foci: Labeled[]
   /** Parabola: the directrix as "y = −2" / "x = 3" with its value. */
   directrix: { axis: 'x' | 'y'; value: number; text: string } | null
-  /** Hyperbola: the two asymptotes as lines through the center. */
+  /**
+   * Hyperbola: the two asymptotes as lines through the center. A rotated
+   * conic's asymptote can be vertical: its slope is then ±Infinity and its
+   * text "x = h".
+   */
   asymptotes: { slope: number; text: string }[]
   /** Hyperbola: corners of the fundamental rectangle. */
   box: Vec2[] | null
   eccentricity: number
   /** "major axis 6, minor axis 4, focal distance √5", "latus rectum 8". */
   sentences: string[]
+  /**
+   * A rotated parabola's directrix (its `directrix` is then null: the line
+   * is neither horizontal nor vertical). Absent for an axis-aligned conic.
+   */
+  directrixLine?: ConicLine | null
+}
+
+/** The line a·x + b·y = c, its text ("x − y = −2") and two points on it, one unit apart. */
+export interface ConicLine {
+  a: number
+  b: number
+  c: number
+  text: string
+  pts: [Vec2, Vec2]
+}
+
+/**
+ * A conic with an xy term, read in its own axes. x′ = x cos θ + y sin θ,
+ * y′ = −x sin θ + y cos θ; `spec` is the standard form in x′, y′ (its h, k
+ * are the center's x′, y′ coordinates), `features` are in the ORIGINAL x, y.
+ */
+export interface RotatedConic {
+  kind: 'ellipse' | 'hyperbola' | 'parabola'
+  /** Radians, 0 < θ < π/2 (cot 2θ = (A − C)/B, the textbook choice). */
+  theta: number
+  /** "π/4" when θ is a multiple of π/12 or of π/8, else "26.57°". */
+  thetaText: string
+  /** Always degrees: "45°", "26.57°". */
+  degreesText: string
+  /** cos θ and sin θ as text: "√2/2", "2√5/5", else 6 digits. */
+  cosText: string
+  sinText: string
+  /** Ellipse / hyperbola: the center (x, y). Parabola: null. */
+  center: Labeled | null
+  /** The conic in its own axes: conicSource(spec) is its equation in x′, y′. */
+  spec: ConicSpec
+  /** That equation as display text: "x′²/2 + y′²/6 = 1". */
+  primeText: string
+  features: ConicFeatures
+  /** classify's sentence, stated with this θ: "B² − 4AC = −64 < 0: an ellipse, rotated 45°". */
+  classSentence: string
 }
 
 export type Built = ConicSpec | { error: string }
@@ -1211,6 +1262,322 @@ export function conicFeatures(spec: ConicSpec): ConicFeatures {
       `eccentricity ${uni(c / a)}`,
       `latus rectum ${uni((2 * b2) / a)}`,
     ],
+  }
+}
+
+// ----------------------------------------------------------------------------
+// readRotatedConic
+//
+// METHOD. The coefficients come from quadOf exactly as for classify (exact
+// differences on the integer grid, snapped rationals). The angle is the
+// textbook one, cot 2θ = (A − C)/B with 0 < θ < 90° — i.e. θ = ½·atan2(B,
+// A − C), plus 90° when B < 0 — so xy = 1, x² + xy + y² = 3 and 5x² − 6xy +
+// 5y² = 8 are all turned by 45°. cos θ and sin θ come from the half-angle
+// formulas on cos 2θ = ±(A − C)/R, sin 2θ = |B|/R, R = √((A − C)² + B²),
+// whichever of the two is not a cancellation (A = C: exactly √½ each).
+//
+// The typed F is then COMPOSED with the rotation, F′(x′, y′) = F(x′cos θ −
+// y′sin θ, x′sin θ + y′cos θ), and F′ goes through the very same machinery
+// as a typed axis-aligned line: quadOf (its B′ snaps to 0), `aligned`
+// (completing the square: the center solves ∇ = 0, h′ = −D′/2A′,
+// k′ = −E′/2C′), and conicFeatures. The spec's texts are numSrc / sqrtSrc of
+// the numbers (fractions, surds, else 12 digits) and the spec is VERIFIED
+// like readConic's: its own coefficients must be proportional to F′'s.
+//
+// Each feature point is mapped back, x = x′cos θ − y′sin θ, y = x′sin θ +
+// y′cos θ, and its coordinates written EXACTLY when they are a fraction or a
+// closed form of exact.ts (never a multiple of π: a coordinate that "is"
+// 3π/4 is a coincidence) — the point is then placed at that exact value. A
+// vertex's exact pair must also satisfy F = 0 (relative 1e-9 of the terms),
+// else both coordinates fall back to 6 digits. The center is the solution of
+// the 2 × 2 gradient system in x, y (a fraction for a rational F).
+//
+// Lines: an asymptote is the rotated direction (1, ±m′) through the center —
+// "y = 0", "x = 0" for xy = 1, "y = (2+√3)x" elsewhere; the directrix is
+// n·(x, y) = d for the unit normal n of its rotated axis, scaled to integer
+// coefficients when b/a is a fraction ("x − y = −2"), else x + (b/a)y = c/a.
+// ----------------------------------------------------------------------------
+
+/** A coordinate as exact text when it is one (fraction, surd, quadratic surd), with that exact value. */
+function exactCoord(v: number): { text: string; value: number; exact: boolean } {
+  if (Math.abs(v) < 1e-12) return { text: '0', value: 0, exact: true }
+  const r = snapRat(v)
+  if (r) return { text: ratSrc(r).replace('-', MINUS), value: r[0] / r[1], exact: true }
+  const e = exactForm(v)
+  if (e && !e.text.includes('π')) return { text: e.text, value: e.value, exact: true }
+  return { text: decText(v), value: v, exact: false }
+}
+
+/** 6 significant digits, Unicode minus. */
+const decText = (v: number): string => String(Number(v.toPrecision(6)) + 0).replace('-', MINUS)
+
+/** A number as a coefficient/constant: exact when it is one (no π), else 6 digits. */
+const numText = (v: number): string => exactCoord(v).text
+
+/** The line through p with direction d: "y = −x + 2", "x = 3". */
+function lineThrough(p: Vec2, d: Vec2): string {
+  const L = Math.hypot(d.x, d.y)
+  if (Math.abs(d.x) <= 1e-12 * L) return `x = ${numText(p.x)}`
+  let m = d.y / d.x
+  if (Math.abs(m) <= 1e-12) m = 0
+  const mm = exactCoord(m)
+  const slope = mm.exact ? mm.value : m
+  return lineText(slope, snapped(p.y - slope * p.x))
+}
+
+/** a·x + b·y = c as text, scaled to integer coefficients when b/a (or a/b) is a small fraction. */
+function generalLineText(a: number, b: number, c: number): string {
+  const S = Math.max(Math.abs(a), Math.abs(b))
+  if (Math.abs(b) <= 1e-12 * S) return `x = ${numText(c / a)}`
+  if (Math.abs(a) <= 1e-12 * S) return `y = ${numText(c / b)}`
+  let A: number, B: number, G: number
+  const r = snapRat(b / a, 100, 1e-10)
+  if (r) {
+    A = r[1]; B = r[0]; G = (c * r[1]) / a
+  } else {
+    A = 1; B = b / a; G = c / a
+  }
+  if (A < 0) { A = -A; B = -B; G = -G }
+  const term = (k: number, v: string, first: boolean): string => {
+    const mag = Math.abs(k)
+    const t = near(mag, 1) ? v : `${numText(mag)}${v}`
+    if (first) return k < 0 ? `${MINUS}${t}` : t
+    return ` ${k < 0 ? MINUS : '+'} ${t}`
+  }
+  return `${term(A, 'x', true)}${term(B, 'y', false)} = ${numText(snapped(G))}`
+}
+
+/** Standard-form source in x, y as display text in x′, y′: "x′²/2 + y′²/6 = 1". */
+function primeOf(src: string): string {
+  return src
+    .replace(/= 1y$/, '= y')
+    .replace(/\((\d*sqrt\(\d+\))\)([xy])/g, '$1$2')
+    .replace(/sqrt\(([^()]*)\)/g, (_m, inner: string) => (/^[\w.]+$/.test(inner) ? `√${inner}` : `√(${inner})`))
+    .replace(/\^2/g, '²')
+    .replace(/\*/g, '·')
+    .replace(/-/g, MINUS)
+    .replace(/x/g, 'x′')
+    .replace(/y/g, 'y′')
+}
+
+/**
+ * A semi-axis from its square: sqrtSrc (3, sqrt(5), 2sqrt(3)), or — when the
+ * square is a closed form whose root is not one (a² = −2 + 2√2 for x² + xy
+ * = 1) — sqrt of that closed form, which conicSource squares back exactly.
+ */
+function lenSrc(sq: number): string {
+  const t = sqrtSrc(sq)
+  if (!/^-?[\d.]+(e[-+]?\d+)?$/.test(t) || snapRat(Math.sqrt(sq))) return t
+  const inner = numSrc(sq)
+  return /^-?[\d.]+(e[-+]?\d+)?$/.test(inner) ? t : `sqrt(${inner})`
+}
+
+/** θ as "π/4" when it is a multiple of π/12 or π/8 (π/24 in all), else null. */
+function piTheta(theta: number): string | null {
+  const n = (theta * 24) / Math.PI
+  const r = Math.round(n)
+  if (r <= 0 || Math.abs(n - r) > 1e-9) return null
+  if (r % 2 !== 0 && r % 3 !== 0) return null // 7.5°, 37.5°: not a textbook angle
+  const g = gcd(r, 24)
+  const p = r / g
+  const q = 24 / g
+  return `${p === 1 ? '' : p}π${q === 1 ? '' : `/${q}`}`
+}
+
+export function readRotatedConic(src: string): RotatedConic | null {
+  const got = functionOf(src)
+  if (!got.ok || !got.implicit) return null
+  const f = got.f
+  const q = quadOf(f)
+  if (!q) return null
+  const cls = classifyQuad(q, f)
+  if (!cls.rotated) return null
+  if (cls.kind !== 'ellipse' && cls.kind !== 'hyperbola' && cls.kind !== 'parabola') return null
+  const kind = cls.kind
+  const [A, B, C, D, E, F] = q
+  const S2 = Math.max(Math.abs(A), Math.abs(B), Math.abs(C))
+  const dAC = A - C
+
+  // ---- the angle: cot 2θ = (A − C)/B, 0 < θ < 90°
+  let c: number
+  let s: number
+  if (Math.abs(dAC) <= 1e-12 * S2) {
+    c = Math.SQRT1_2
+    s = Math.SQRT1_2
+  } else {
+    const R = Math.hypot(dAC, B)
+    const cos2 = (B > 0 ? dAC : -dAC) / R
+    const sin2 = Math.abs(B) / R
+    if (cos2 >= 0) {
+      c = Math.sqrt((1 + cos2) / 2)
+      s = sin2 / (2 * c)
+    } else {
+      s = Math.sqrt((1 - cos2) / 2)
+      c = sin2 / (2 * s)
+    }
+  }
+  const theta = Math.atan2(s, c)
+  if (!(theta > 0 && theta < Math.PI / 2)) return null
+  const toXY = (u: number, v: number): Vec2 => ({ x: u * c - v * s, y: u * s + v * c })
+
+  // ---- the conic in x′, y′, through the axis-aligned machinery
+  const fr: Fxy = (u, v) => {
+    const p = toXY(u, v)
+    return f(p.x, p.y)
+  }
+  const qr = quadOf(fr)
+  if (!qr) return null
+  const al = aligned(qr, fr)
+  if (!al || al.kind !== kind) return null
+  const h = numSrc(al.h)
+  const k = numSrc(al.k)
+  let spec: ConicSpec
+  if (al.kind === 'parabola') {
+    const p = numSrc(al.p)
+    spec = { kind: 'parabola', h, k, a: p, opens: al.opens, p }
+  } else if (al.kind === 'ellipse') {
+    spec = { kind: 'ellipse', h, k, a: lenSrc(al.a2), b: lenSrc(al.b2) }
+  } else if (al.kind === 'hyperbola') {
+    spec = { kind: 'hyperbola', h, k, a: lenSrc(al.a2), b: lenSrc(al.b2), opens: al.opens }
+  } else {
+    return null
+  }
+  if (!proportional(qr, specQuad(spec))) return null
+  const rf = conicFeatures(spec)
+
+  // ---- back to x, y
+  const onCurve = (x: number, y: number): boolean => {
+    let v = NaN
+    try { v = f(x, y) } catch { v = NaN }
+    const scale = Math.abs(A * x * x) + Math.abs(B * x * y) + Math.abs(C * y * y) + Math.abs(D * x) + Math.abs(E * y) + Math.abs(F)
+    return Number.isFinite(v) && Math.abs(v) <= 1e-9 * Math.max(scale, 1e-300)
+  }
+  const mapLab = (l: Labeled, vertex = false): Labeled => {
+    const p = toXY(l.x, l.y)
+    const X = exactCoord(p.x)
+    const Y = exactCoord(p.y)
+    if (!X.exact || !Y.exact || (vertex && !onCurve(X.value, Y.value))) {
+      // one inexact coordinate: keep the exact one if it verifies alone (a vertex needs both)
+      if (vertex) return lab(p.x, p.y, decText(p.x), decText(p.y))
+      return lab(X.exact ? X.value : p.x, Y.exact ? Y.value : p.y, X.text, Y.text)
+    }
+    return lab(X.value, Y.value, X.text, Y.text)
+  }
+
+  let center: Labeled | null = null
+  if (kind !== 'parabola') {
+    // the 2 × 2 gradient system: 2A x + B y = −D, B x + 2C y = −E
+    const det = 4 * A * C - B * B
+    const x0 = snapped((B * E - 2 * C * D) / det)
+    const y0 = snapped((B * D - 2 * A * E) / det)
+    const X = exactCoord(x0)
+    const Y = exactCoord(y0)
+    center = lab(X.exact ? X.value : x0, Y.exact ? Y.value : y0, X.text, Y.text)
+  }
+  const vertices = rf.vertices.map((l) => mapLab(l, true))
+  const coVertices = rf.coVertices.map((l) => mapLab(l))
+  const foci = rf.foci.map((l) => mapLab(l))
+  const box = rf.box ? rf.box.map((b) => {
+    const p = toXY(b.x, b.y)
+    return { x: exactCoord(p.x).value, y: exactCoord(p.y).value }
+  }) : null
+
+  const asymptotes: { slope: number; text: string }[] = []
+  if (center) {
+    for (const a of rf.asymptotes) {
+      const d = toXY(1, a.slope)
+      const L = Math.hypot(d.x, d.y)
+      const vertical = Math.abs(d.x) <= 1e-12 * L
+      const m = d.y / d.x
+      const slope = vertical ? Infinity : Math.abs(m) <= 1e-12 ? 0 : exactCoord(m).value
+      asymptotes.push({ slope, text: lineThrough(center, d) })
+    }
+  }
+
+  let directrixLine: ConicLine | null = null
+  if (rf.directrix && vertices[0]) {
+    // x′ = d has unit normal (cos θ, sin θ); y′ = d has (−sin θ, cos θ)
+    const n = rf.directrix.axis === 'x' ? { x: c, y: s } : { x: -s, y: c }
+    const d = rf.directrix.value
+    const v0 = vertices[0]
+    const off = d - (n.x * v0.x + n.y * v0.y)
+    const foot = { x: v0.x + off * n.x, y: v0.y + off * n.y }
+    directrixLine = {
+      a: n.x,
+      b: n.y,
+      c: d,
+      text: generalLineText(n.x, n.y, d),
+      pts: [
+        { x: foot.x + n.y, y: foot.y - n.x },
+        { x: foot.x - n.y, y: foot.y + n.x },
+      ],
+    }
+  }
+
+  // ---- words
+  const degreesText = degText(theta)
+  const pi = piTheta(theta)
+  const thetaText = pi ?? degreesText
+  const cosText = numText(c)
+  const sinText = numText(s)
+  const primeText = primeOf(conicSource(spec))
+  const cot = numText(snapped(dAC / B))
+  const keep = (prefix: string) => rf.sentences.filter((t) => t.startsWith(prefix))
+  const pairOf = (ps: Labeled[]) => ps.map(pt).join(' and ')
+  const sentences: string[] = [
+    `rotated ${degreesText}: in axes x′, y′ this is ${primeText}`,
+    `cot 2θ = (A − C)/B = ${cot}, so θ = ${pi ? `${pi} (${degreesText})` : `½·arccot(${cot}) ≈ ${degreesText}`}`,
+    `cos θ = ${cosText}, sin θ = ${sinText}: x = x′cos θ − y′sin θ, y = x′sin θ + y′cos θ`,
+  ]
+  if (kind === 'parabola') {
+    const v0 = vertices[0]
+    const f0 = foci[0]
+    const p = valueOf(txt(spec.p))
+    const axisDir = rf.directrix?.axis === 'x' ? { x: c, y: s } : { x: -s, y: c }
+    if (v0) sentences.push(`vertex ${pt(v0)}`)
+    if (f0) sentences.push(`focus ${pt(f0)}, ${sqrtUni(p * p)} from the vertex (p = ${uni(p)} along the ${rf.directrix?.axis === 'x' ? 'x′' : 'y′'}-axis)`)
+    if (directrixLine) sentences.push(`directrix ${directrixLine.text}`)
+    if (v0) sentences.push(`axis of symmetry ${lineThrough(v0, axisDir)}`)
+    sentences.push(...keep('latus rectum'))
+  } else {
+    const ell = kind === 'ellipse'
+    if (center) sentences.push(`center ${pt(center)}`)
+    sentences.push(...keep(ell ? 'major axis' : 'transverse axis'))
+    if (center && vertices.length === 2) {
+      const dir = { x: vertices[1].x - vertices[0].x, y: vertices[1].y - vertices[0].y }
+      sentences.push(`the ${ell ? 'major' : 'transverse'} axis is on the line ${lineThrough(center, dir)}`)
+    }
+    sentences.push(`vertices ${pairOf(vertices)}`)
+    sentences.push(`co-vertices ${pairOf(coVertices)}`)
+    sentences.push(...keep('c² ='))
+    sentences.push(`foci ${pairOf(foci)}`)
+    if (asymptotes.length === 2) sentences.push(`asymptotes ${asymptotes[0].text} and ${asymptotes[1].text}`)
+    sentences.push(...keep('eccentricity'), ...keep('latus rectum'))
+  }
+
+  return {
+    kind,
+    theta,
+    thetaText,
+    degreesText,
+    cosText,
+    sinText,
+    center,
+    spec,
+    primeText,
+    features: {
+      center,
+      vertices,
+      coVertices,
+      foci,
+      directrix: null,
+      directrixLine,
+      asymptotes,
+      box,
+      eccentricity: rf.eccentricity,
+      sentences,
+    },
+    classSentence: cls.sentence.replace(/, rotated [^,]*$/, `, rotated ${degreesText}`),
   }
 }
 

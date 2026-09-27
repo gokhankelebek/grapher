@@ -31,7 +31,11 @@ import {
   dragConicHandle,
   fittedCircle,
   fittedEllipse,
+  constructionPoints,
   isStandardForm,
+  rotationOf,
+  safeReadConic,
+  safeReadRotated,
   lengthSource,
   parabolaOpens,
   parseDirectrix,
@@ -203,8 +207,13 @@ describe('standard form on the card', () => {
       general: true,
       spec: { kind: 'circle', h: '2', k: '-3', a: '4' },
     })
+    // a rotated conic is now READ (in its own axes x′, y′), still with the sentence
     const rot = conicSectionInfo('x^2 + xy + y^2 = 3', 'implicit')
-    expect(rot).toEqual({ kind: 'class', sentence: 'B² − 4AC = −3 < 0: an ellipse, rotated 45°.' })
+    expect(rot).toMatchObject({ kind: 'rotated', sentence: 'B² − 4AC = −3 < 0: an ellipse, rotated 45°.' })
+    expect(conicSectionInfo('xy = 0', 'implicit')).toEqual({
+      kind: 'class',
+      sentence: 'A degenerate conic: the two lines y = 0 and x = 0.',
+    })
     expect(conicSectionInfo('x^3 + y^3 = 1', 'implicit')).toBeNull()
   })
 
@@ -508,5 +517,93 @@ describe('zero intervals on the card', () => {
     const html = typedCard('y = floor(x)')
     expect(html).toContain('data-testid="zero-interval"')
     expect(html).toContain('0 ≤ x &lt; 1')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// rotated conics: read in x′, y′, drawn in x, y
+// ---------------------------------------------------------------------------
+
+describe('a rotated conic on the board and the card', () => {
+  const S2 = Math.SQRT2
+  const close = (p: { x: number; y: number }, x: number, y: number) =>
+    Math.abs(p.x - x) < 1e-9 && Math.abs(p.y - y) < 1e-9
+
+  it('safeReadConic reads xy = 1 as its x′, y′ spec, marked rotated; no handles, no drags', () => {
+    const spec = safeReadConic('xy = 1')
+    expect(spec).toEqual({ kind: 'hyperbola', h: '0', k: '0', a: 'sqrt(2)', b: 'sqrt(2)', opens: 'x' })
+    expect(rotationOf(spec!)?.thetaText).toBe('π/4')
+    // the same line gives the same object (App's memos stay put)
+    expect(safeReadConic('xy = 1')).toBe(spec)
+    expect(conicHandles(spec!)).toEqual([])
+    for (const which of ['center', 'a', 'b', 'focus'] as ConicHandleKind[]) {
+      expect(dragConicHandle(spec!, which, { x: 3, y: 3 })).toBeNull()
+    }
+    // an axis-aligned spec of the same numbers is not rotated
+    expect(rotationOf({ ...spec! })).toBeNull()
+    expect(safeReadRotated('x^2/2 - y^2/2 = 1')).toBeNull()
+    expect(writeStandard('xy = 1')).toBeNull()
+  })
+
+  it('xy = 1: marks and named foci at (±√2, ±√2), vertices (±1, ±1), in exact text', () => {
+    const spec = safeReadConic('xy = 1')!
+    const m = conicKeyMarks(spec)
+    const at = (label: string) => m.filter((p) => p.label.startsWith(label))
+    expect(at('vertex').map((p) => `(${p.exactX}, ${p.exactY})`)).toEqual(['(−1, −1)', '(1, 1)'])
+    expect(at('focus').map((p) => `(${p.exactX}, ${p.exactY})`)).toEqual(['(−√2, −√2)', '(√2, √2)'])
+    expect(close(at('focus')[1].pos, S2, S2)).toBe(true)
+    const named = constructionShapes(spec, '#f00', 'c')
+    expect(named.map((s) => (s.kind === 'point' ? s.label : null))).toEqual(['F₁', 'F₂'])
+    expect(named.every((s) => s.kind === 'point' && Math.abs(Math.abs(s.at.x) - S2) < 1e-9 && Math.abs(s.at.y - s.at.x) < 1e-12)).toBe(true)
+  })
+
+  it('xy = 1: the asymptotes are the axes (one vertical), the box a diamond', () => {
+    const lines = constructionPolylines(safeReadConic('xy = 1')!, '#f00', 'c')
+    const asym = lines.filter((l) => l.id.includes('asymptote'))
+    expect(asym).toHaveLength(2)
+    const vertical = asym.find((l) => l.pts[0].x === l.pts[1].x)!
+    const horizontal = asym.find((l) => l.pts[0].y === l.pts[1].y)!
+    expect(vertical.pts[0].x).toBe(0)
+    expect(horizontal.pts[0].y).toBe(0)
+    const box = lines.find((l) => l.id.endsWith(':box'))!
+    expect(box.pts).toHaveLength(5)
+    for (const p of box.pts) expect(Math.abs(p.x) + Math.abs(p.y)).toBeCloseTo(2, 12)
+    expect(constructionPoints(safeReadConic('xy = 1')!).length).toBeGreaterThan(4)
+  })
+
+  it('a rotated parabola: the directrix is drawn on x − y = −2', () => {
+    const spec = safeReadConic('x^2 + 2xy + y^2 - 8x + 8y = 0')!
+    expect(spec.kind).toBe('parabola')
+    const d = constructionPolylines(spec, '#f00', 'c').find((l) => l.id.endsWith(':directrix'))!
+    expect(d).toBeDefined()
+    for (const p of d.pts) expect(Math.abs(p.x - p.y + 2)).toBeLessThan(1e-6 * Math.max(1, Math.abs(p.x)))
+    expect(constructionShapes(spec, '#f00', 'c').map((s) => (s.kind === 'point' ? s.label : null))).toEqual(['F'])
+    const f = conicKeyMarks(spec).find((p) => p.label === 'focus')!
+    expect(`(${f.exactX}, ${f.exactY})`).toBe('(1, −1)')
+  })
+
+  it('conicSectionInfo and the Equation tab give the rotated reading', () => {
+    const info = conicSectionInfo('5x^2 - 6xy + 5y^2 = 8', 'implicit')
+    expect(info?.kind).toBe('rotated')
+    if (info?.kind !== 'rotated') return
+    expect(info.rot.primeText).toBe('x′²/4 + y′² = 1')
+    expect(info.sentence).toBe('B² − 4AC = −64 < 0: an ellipse, rotated 45°.')
+    const eq = conicSpecFromEquation({ text: 'x^2 + xy + y^2 = 3' })
+    expect(eq.spec).toBeNull()
+    expect(eq.error).toContain('In axes x′, y′ turned 45° it is x′²/2 + y′²/6 = 1.')
+  })
+
+  it('the card: θ and h′, k′, a, b read-only, the features in x, y, the construction toggle', () => {
+    const html = typedCard('5x^2 - 6xy + 5y^2 = 8')
+    expect(html).toContain('data-rotated="true"')
+    expect(html).toContain('Conic · Ellipse, rotated 45°')
+    expect(html).toContain('data-testid="conic-class"')
+    expect(html).toContain('data-testid="conic-rotated-theta"')
+    expect(html).toContain('value="π/4"')
+    expect(html).toMatch(/data-testid="conic-rotated-a"[^>]*value="2"|value="2"[^>]*data-testid="conic-rotated-a"/)
+    expect(html).toContain('rotated 45°: in axes x′, y′ this is x′²/4 + y′² = 1')
+    expect(html).toContain('vertices (−√2, −√2) and (√2, √2)')
+    expect(html).toContain('data-testid="conic-construction"')
+    expect(html).not.toContain('conic-write-standard')
   })
 })

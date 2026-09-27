@@ -25,6 +25,13 @@
 //     and the handles: center, the ends of the two semi-axes, a focus;
 //   * the note a SKETCHED circle or ellipse wears, and the line "Convert to
 //     typed conic" replaces it with.
+//   * a ROTATED conic (an xy term: xy = 1, 5x² − 6xy + 5y² = 8) is read by
+//     readRotatedConic. safeReadConic hands back its spec in the rotated
+//     axes x′, y′, remembered (rotationOf) as rotated, so every board output
+//     below — marks, foci, asymptotes, box, directrix — uses the features
+//     mapped back to x, y, and it has no handles (read-only: a rotated
+//     conic is changed by retyping its equation). The card reads it in
+//     x′, y′ (conicSectionInfo → { kind: 'rotated' }).
 //
 // Every result is an ordinary typed (implicit) curve. Nothing downstream knows.
 // ============================================================================
@@ -33,6 +40,7 @@ import type { Polyline, Shape, SpecialPoint, Vec2 } from '../core/types'
 import {
   classify,
   conicFeatures,
+  readRotatedConic,
   conicFromCircle,
   conicFromEllipse,
   conicFromFoci,
@@ -41,7 +49,7 @@ import {
   conicSource,
   readConic,
 } from '../core/conics'
-import type { Built, ConicClass, ConicFeatures, ConicKind, ConicSpec } from '../core/conics'
+import type { Built, ConicClass, ConicFeatures, ConicKind, ConicSpec, RotatedConic } from '../core/conics'
 import { parseExpression } from '../core/parse'
 import { evalText } from './factorLinks'
 import { numOut } from './expLinks'
@@ -204,8 +212,8 @@ export function conicProblems(spec: ConicSpec): ConicProblem[] {
 // the core, never throwing
 // ---------------------------------------------------------------------------
 
-/** A typed line read as a conic in standard or general form, or null. */
-export function safeReadConic(src: string | undefined): ConicSpec | null {
+/** An axis-aligned typed conic, standard or general form, or null. */
+function readAligned(src: string | undefined): ConicSpec | null {
   if (!src || !src.trim()) return null
   try {
     const s = readConic(src)
@@ -213,6 +221,49 @@ export function safeReadConic(src: string | undefined): ConicSpec | null {
   } catch {
     return null
   }
+}
+
+/** Specs that are a rotated conic's reading in x′, y′ — the board maps them back. */
+const ROTATED = new WeakMap<ConicSpec, RotatedConic>()
+const rotatedCache = new Map<string, RotatedConic | null>()
+
+/** A typed conic with an xy term, read in its own axes; null for anything else. Cached per line. */
+export function safeReadRotated(src: string | undefined): RotatedConic | null {
+  if (!src || !src.trim()) return null
+  const key = src.trim()
+  const hit = rotatedCache.get(key)
+  if (hit !== undefined) return hit
+  let r: RotatedConic | null = null
+  try {
+    r = readRotatedConic(key)
+    if (r && conicProblems(r.spec).length > 0) r = null
+  } catch {
+    r = null
+  }
+  if (rotatedCache.size > 64) rotatedCache.clear()
+  rotatedCache.set(key, r)
+  if (r) ROTATED.set(r.spec, r)
+  return r
+}
+
+/** The rotated reading a spec from safeReadConic came from, or null (an axis-aligned conic). */
+export function rotationOf(spec: ConicSpec): RotatedConic | null {
+  return ROTATED.get(spec) ?? null
+}
+
+/**
+ * A typed line read as a conic in standard or general form, or null. A
+ * ROTATED conic comes back too, as its spec in the rotated axes x′, y′ —
+ * marked, so that conicKeyMarks / construction* use its features mapped back
+ * to x, y and conicHandles gives it none (see rotationOf).
+ */
+export function safeReadConic(src: string | undefined): ConicSpec | null {
+  return readAligned(src) ?? safeReadRotated(src)?.spec ?? null
+}
+
+/** The features the board draws: a rotated conic's mapped back to x, y. */
+function featuresOf(spec: ConicSpec): ConicFeatures | null {
+  return rotationOf(spec)?.features ?? safeConicFeatures(spec)
 }
 
 export function safeConicSource(spec: ConicSpec): string | null {
@@ -481,12 +532,12 @@ export function conicSpecFromFoci(f: FociFields): ConicSpecResult {
 export function conicSpecFromEquation(f: EquationFields): ConicSpecResult {
   const text = (f.text ?? '').trim()
   if (text === '') return { spec: null, error: 'Type an equation in x and y, like 9x^2 + 4y^2 - 36x + 8y + 4 = 0.' }
-  let spec = safeReadConic(text)
+  let spec = readAligned(text)
   // y = f(x) is a FUNCTION to the parser; as lhs − rhs = 0 it is the equation it is
   if (!spec) {
     const parts = text.split('=')
     if (parts.length === 2 && parts[0].trim() !== '' && parts[1].trim() !== '') {
-      spec = safeReadConic(`(${parts[0].trim()}) - (${parts[1].trim()}) = 0`)
+      spec = readAligned(`(${parts[0].trim()}) - (${parts[1].trim()}) = 0`)
     }
   }
   const cls = safeClassify(text)
@@ -500,10 +551,12 @@ export function conicSpecFromEquation(f: EquationFields): ConicSpecResult {
     return { spec: null, error: `${sentence(cls.sentence)} There is no standard form to write.`, classSentence }
   }
   if (cls.rotated) {
+    const rot = safeReadRotated(text)
+    const reading = rot ? ` In axes x′, y′ turned ${rot.degreesText} it is ${rot.primeText}.` : ''
     return {
       spec: null,
-      error: `${sentence(cls.sentence)} Its axes are tilted, so it has no standard form with x and y — this app writes standard form for conics with horizontal and vertical axes.`,
-      classSentence,
+      error: `${sentence(rot ? rot.classSentence : cls.sentence)} Its axes are tilted, so it has no standard form with x and y — this app writes standard form for conics with horizontal and vertical axes.${reading}`,
+      classSentence: rot ? sentence(rot.classSentence) : classSentence,
     }
   }
   return { spec: null, error: `${sentence(cls.sentence)} It could not be completed to standard form.`, classSentence }
@@ -602,7 +655,7 @@ export function isStandardForm(src: string, spec: ConicSpec): boolean {
 
 /** The standard form to restate a general-form line as, or null when it already is one. */
 export function writeStandard(src: string | undefined): string | null {
-  const spec = safeReadConic(src)
+  const spec = readAligned(src)
   if (!spec || !src) return null
   if (isStandardForm(src, spec)) return null
   return safeConicSource(spec)
@@ -610,18 +663,22 @@ export function writeStandard(src: string | undefined): string | null {
 
 export type ConicSectionInfo =
   | { kind: 'conic'; spec: ConicSpec; general: boolean }
+  | { kind: 'rotated'; rot: RotatedConic; sentence: string }
   | { kind: 'class'; sentence: string }
 
 /**
  * What a TYPED curve's card says about it as a conic: an axis-aligned conic
- * (editable), or — for a rotated or degenerate quadratic — the discriminant
- * sentence, read-only. Only implicit lines: y = x² is a function and its card
- * already speaks for it.
+ * (editable); a rotated one read in its own axes x′, y′ with its features in
+ * x, y (read-only, with the discriminant sentence); for a degenerate
+ * quadratic the discriminant sentence alone. Only implicit lines: y = x² is a
+ * function and its card already speaks for it.
  */
 export function conicSectionInfo(src: string | undefined, curveKind: string): ConicSectionInfo | null {
   if (curveKind !== 'implicit' || !src) return null
-  const spec = safeReadConic(src)
+  const spec = readAligned(src)
   if (spec) return { kind: 'conic', spec, general: !isStandardForm(src, spec) }
+  const rot = safeReadRotated(src)
+  if (rot) return { kind: 'rotated', rot, sentence: sentence(rot.classSentence) }
   const cls = safeClassify(src)
   if (!cls || cls.kind === 'none') return null
   if (!cls.rotated && cls.kind !== 'degenerate') return null
@@ -749,7 +806,7 @@ export function commitConicSpec(
  * kinds of label are kept on opposite sides of the points they name.
  */
 export function conicKeyMarks(spec: ConicSpec): SpecialPoint[] {
-  const f = safeConicFeatures(spec)
+  const f = featuresOf(spec)
   if (!f) return []
   const out: SpecialPoint[] = []
   const add = (p: { x: number; y: number; xText: string; yText: string }, kind: SpecialPoint['kind'], label: string) => {
@@ -779,9 +836,26 @@ export const BOX_DASH = [2, 4]
  * asymptotes and its fundamental rectangle. In the curve's colour, thin.
  */
 export function constructionPolylines(spec: ConicSpec, color: string, idBase: string): Polyline[] {
-  const f = safeConicFeatures(spec)
+  const f = featuresOf(spec)
   if (!f) return []
   const out: Polyline[] = []
+  const dl = f.directrixLine
+  if (dl && dl.pts.every((p) => Number.isFinite(p.x) && Number.isFinite(p.y))) {
+    // a rotated parabola's directrix: the line through its two points, REACH either way
+    const [p, q] = dl.pts
+    const L = Math.hypot(q.x - p.x, q.y - p.y)
+    if (L > 0) {
+      const ux = (q.x - p.x) / L
+      const uy = (q.y - p.y) / L
+      out.push({
+        id: `${idBase}:directrix`,
+        pts: [{ x: p.x - REACH * ux, y: p.y - REACH * uy }, { x: p.x + REACH * ux, y: p.y + REACH * uy }],
+        color,
+        width: 1.25,
+        dash: CONSTRUCTION_DASH,
+      })
+    }
+  }
   if (f.directrix && Number.isFinite(f.directrix.value)) {
     const d = f.directrix.value
     const v = conicValues(spec)
@@ -801,11 +875,13 @@ export function constructionPolylines(spec: ConicSpec, color: string, idBase: st
   if (f.center && f.asymptotes.length > 0) {
     const { x: h, y: k } = f.center
     f.asymptotes.forEach((a, i) => {
-      if (!Number.isFinite(a.slope)) return
-      // a unit step along the line, then REACH of them either way
-      const L = Math.hypot(1, a.slope)
-      const dx = (REACH / L)
-      const dy = (REACH * a.slope) / L
+      if (Number.isNaN(a.slope)) return
+      // a unit step along the line, then REACH of them either way (a rotated
+      // conic's asymptote can be vertical: slope ±Infinity)
+      const vertical = !Number.isFinite(a.slope)
+      const L = vertical ? 1 : Math.hypot(1, a.slope)
+      const dx = vertical ? 0 : REACH / L
+      const dy = vertical ? REACH : (REACH * a.slope) / L
       out.push({
         id: `${idBase}:asymptote:${i}`,
         pts: [{ x: h - dx, y: k - dy }, { x: h + dx, y: k + dy }],
@@ -833,7 +909,7 @@ export function constructionPolylines(spec: ConicSpec, color: string, idBase: st
  * the construction as a figure (an export has no analysis chips to mark them).
  */
 export function constructionShapes(spec: ConicSpec, color: string, idBase: string, all = false): Shape[] {
-  const f = safeConicFeatures(spec)
+  const f = featuresOf(spec)
   if (!f) return []
   const out: Shape[] = []
   const pt = (id: string, p: { x: number; y: number }, label?: string): void => {
@@ -853,7 +929,7 @@ export function constructionShapes(spec: ConicSpec, color: string, idBase: strin
 
 /** Every point of the construction that has a place (for framing an export). */
 export function constructionPoints(spec: ConicSpec): Vec2[] {
-  const f = safeConicFeatures(spec)
+  const f = featuresOf(spec)
   if (!f) return []
   const pts: Vec2[] = []
   const push = (p: { x: number; y: number }) => {
@@ -900,6 +976,8 @@ function ptText(p: { xText: string; yText: string }): string {
 }
 
 export function conicHandles(spec: ConicSpec): ConicHandle[] {
+  // a rotated conic is read-only: its line is changed by retyping it
+  if (rotationOf(spec)) return []
   const v = conicValues(spec)
   const f = safeConicFeatures(spec)
   if (!f || ![v.h, v.k].every(Number.isFinite)) return []
@@ -959,6 +1037,7 @@ export function conicHandles(spec: ConicSpec): ConicHandle[] {
  */
 export function dragConicHandle(spec: ConicSpec, which: ConicHandleKind, to: Vec2): ConicSpec | null {
   if (!Number.isFinite(to.x) || !Number.isFinite(to.y)) return null
+  if (rotationOf(spec)) return null
   const v = conicValues(spec)
   if (![v.h, v.k, v.a, v.b].every(Number.isFinite)) return null
   const tiny = 1e-9 * Math.max(1, v.a, v.b)
