@@ -23,7 +23,7 @@
 // ============================================================================
 
 import type {
-  FittedCurve, ModelSpec, PieceInfo, SpecialPoint, SpecialPointKind, Vec2,
+  ExactPoint, FittedCurve, ModelSpec, PieceInfo, SpecialPoint, SpecialPointKind, Vec2,
 } from './types'
 import { conicToCenterForm } from './fit/optimize'
 import { findHoles } from './holes'
@@ -372,6 +372,26 @@ function snapBoundary(p: number, q: number, ends: number[]): number | null {
   return null
 }
 
+/**
+ * The nice number a snapped boundary IS, for ModelSpec.evalExact: p/q with
+ * q ≤ 64, or pπ/q with q ≤ 24 — the forms snapBoundary's exactForm returns.
+ * Null for anything else (a surd, or a piece end at 0.37).
+ */
+function exactPointOf(x: number): ExactPoint | null {
+  if (!Number.isFinite(x)) return null
+  for (let q = 1; q <= 64; q++) {
+    const p = Math.round(x * q)
+    if (Math.abs(p) < 2 ** 26 && p / q === x) return { p, q, pi: false }
+  }
+  for (let q = 1; q <= 24; q++) {
+    const p = Math.round((x * q) / Math.PI)
+    if (p !== 0 && Math.abs(p) < 2 ** 26 && Math.abs((p * Math.PI) / q - x) <= 4e-16 * Math.abs(x)) {
+      return { p, q, pi: true }
+    }
+  }
+  return null
+}
+
 /** Is x part of the curve's stated domain? True for a curve without pieces. */
 function coveredByPieces(pieces: PieceInfo[] | null, x: number): boolean {
   if (!pieces || pieces.length === 0) return true
@@ -622,6 +642,9 @@ function analyzeExplicitNumeric(
   hi: number,
   opts: NumericOpts,
   pieces: PieceInfo[] | null,
+  /** f at an exactly-known x in exact arithmetic (ModelSpec.evalExact), when
+   *  the model offers it and can certify the value; else undefined */
+  exactAt: (x: number) => number | undefined = () => undefined,
 ): SpecialPoint[] {
   const out: SpecialPoint[] = []
   const g = scanGrid(f, lo, hi, pieces)
@@ -808,8 +831,10 @@ function analyzeExplicitNumeric(
     }
     const c = b.at
     if (c === null) continue
+    // In exact arithmetic where the model can: the double nearest π makes
+    // sign(sin x) 1 there, and the zero at π would be lost.
     let v: number
-    try { v = f(c) } catch { continue }
+    try { v = exactAt(c) ?? f(c) } catch { continue }
     if (!Number.isFinite(v)) continue
     if (opts.zeros && Math.abs(v) <= zeroTol) {
       const p = pt('zero', c, 0, 'zero', true)
@@ -1477,7 +1502,14 @@ function analyzeExplicit(
     : { zeros: true, extrema: true, inflections: true }
 
   if (need.zeros || need.extrema || need.inflections) {
-    out.push(...analyzeExplicitNumeric(f, lo, hi, need, piecesOf(curve, spec)))
+    const evalExact = spec.evalExact
+    const exactAt = evalExact
+      ? (x: number): number | undefined => {
+          const at = exactPointOf(x)
+          return at ? evalExact.call(spec, curve.params, at) : undefined
+        }
+      : undefined
+    out.push(...analyzeExplicitNumeric(f, lo, hi, need, piecesOf(curve, spec), exactAt))
   }
 
   // y-intercept: a direct evaluation, so it is exact when it exists at all

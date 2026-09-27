@@ -1852,6 +1852,25 @@ describe('analyzeCurve — steps, jumps and flat stretches', () => {
     expect(of(pts, 'minimum')).toEqual([])
   })
 
+  it('sign(sin x): a zero at EVERY multiple of π, not only 0 (exact value at the jump)', () => {
+    const { pts, zi } = typed('y = sign(sin(x))', [-7, 7])
+    expect(zi).toEqual([])
+    const xs = xsOf(pts, 'zero')
+    expect(xs).toHaveLength(5)
+    for (const [i, k] of [-2, -1, 0, 1, 2].entries()) expect(xs[i]).toBeCloseTo(k * Math.PI, 12)
+    expect(of(pts, 'minimum')).toEqual([])
+    expect(of(pts, 'maximum')).toEqual([])
+  })
+
+  it('sign(cos x) at ±π/2 and sign(10x − 3) at 0.3 are zeros too', () => {
+    const cos = xsOf(typed('y = sign(cos(x))', [-3, 3]).pts, 'zero')
+    expect(cos).toHaveLength(2)
+    expect(cos[0]).toBeCloseTo(-Math.PI / 2, 12)
+    expect(cos[1]).toBeCloseTo(Math.PI / 2, 12)
+    // 10 · 0.3 is 3.0000000000000004 in doubles
+    expect(xsOf(typed('y = sign(10x - 3)', [0, 1]).pts, 'zero')).toEqual([0.3])
+  })
+
   it('x − floor(x): isolated zeros at the integers, each a genuine minimum; no maxima', () => {
     const { pts, zi } = typed('y = x - floor(x)')
     expect(zi).toEqual([])
