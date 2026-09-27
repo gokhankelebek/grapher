@@ -48,6 +48,15 @@ export interface FunctionEnv {
   has(name: string): boolean
   /** f(x) at the curve's current parameters; NaN where undefined. */
   eval(name: string, x: number): number
+  /**
+   * Where the named curve is undefined as written — its model's
+   * singularities (poles, holes, excluded points) and its vertical
+   * asymptotes, in [lo, hi] of ITS OWN variable. Optional: an env without
+   * it makes a named call contribute no singularities (the old behaviour).
+   * The parser maps them through the call's argument, so 2f(x − 1) + 3
+   * with f = 1/x reports its asymptote at x = 1.
+   */
+  singularities?(name: string, range: [number, number]): number[]
 }
 
 export interface NamedDef {
