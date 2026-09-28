@@ -20,6 +20,8 @@ import { LogSection } from './LogEditor'
 import { fittedLog, safeReadLogarithmic } from './logLinks'
 import { SinSection } from './SinEditor'
 import { fittedSine, safeReadSinusoid } from './sinLinks'
+import { LogisticSection } from './LogisticEditor'
+import { fittedLogistic, safeReadLogistic } from './logisticLinks'
 import { TransformSection } from './TransformEditor'
 import { safeReadTransform, transformOpenByDefault, transformOwnsHandles } from './transformLinks'
 import { PiecewiseSection } from './PiecewiseEditor'
@@ -172,6 +174,17 @@ interface Props {
    * the same restate path again. Absent = no section.
    */
   onSinRestate?(src: string, label: string): string | null
+  /**
+   * Rewrite this TYPED curve's line in place from its Logistic section — the
+   * same restate path again. Absent = no section on a typed logistic. (A
+   * SKETCHED logistic's section edits through onConvertTyped.)
+   */
+  onLogisticRestate?(src: string, label: string): string | null
+  /**
+   * "Show slope field" on the Logistic section: add dy/dx = k·y·(1 − y/L)
+   * with this curve's y(0) as a solution. Absent = no button.
+   */
+  onShowLogisticField?(): void
   /**
    * Rewrite this TYPED curve's line in place from its Transformation section
    * — the same restate path again. Absent = no section.
@@ -752,6 +765,8 @@ export function CurveCard({
   onLogRestate,
   onShowInverse,
   onSinRestate,
+  onLogisticRestate,
+  onShowLogisticField,
   onTransformRestate,
   onPiecewiseRestate,
   piecewiseEnvFor,
@@ -844,6 +859,26 @@ export function CurveCard({
   )
 
   /**
+   * The line read back as a LOGISTIC — "y = 1000/(1 + 49e^(-0.3x))",
+   * "P(t) = 10/(1 + e^(-2(t - 3))) + 1", e^x/(1 + e^x) — or null. Only a typed
+   * curve none of the sections above speaks for (none of their shapes is a
+   * quotient over 1 + an exponential; the order is kept anyway).
+   */
+  const logistic = useMemo(
+    () =>
+      isExpression &&
+      readable &&
+      curve.kind === 'explicit' &&
+      !factored &&
+      !exponential &&
+      !logarithmic &&
+      !sinusoidal
+        ? safeReadLogistic(exprSource)
+        : null,
+    [isExpression, readable, curve.kind, exprSource, factored, exponential, logarithmic, sinusoidal],
+  )
+
+  /**
    * The line read as a TRANSFORMED PARENT, y = a·f(b(x − h)) + k — a
    * hand-typed -2(x-3)^2+1, |2x-6|+1, sqrt(4-x), x^2 - 6x + 8 (vertex form),
    * 1/(x+2) - 3 — or null. Unlike the four sections above it does not step
@@ -897,6 +932,16 @@ export function CurveCard({
    */
   const fitted = useMemo(
     () => (!isExpression && !broken && curve.modelId === 'exp' ? fittedExp(curve.params) : null),
+    [isExpression, broken, curve.modelId, curve.params],
+  )
+
+  /**
+   * A sketch that fitted the library's logistic a/(1 + e^(−b(x − c))) + d,
+   * stated the AP way. It gets the whole Logistic section: its first edit
+   * makes it the typed line.
+   */
+  const fittedLg = useMemo(
+    () => (!isExpression && !broken && curve.modelId === 'logistic' ? fittedLogistic(curve.params) : null),
     [isExpression, broken, curve.modelId, curve.params],
   )
 
@@ -1663,6 +1708,14 @@ export function CurveCard({
                   })}
                 </>
               )}
+              {fittedLg && onConvertTyped && (
+                <>
+                  <div className="card-menu-sep" />
+                  {menuItem('Convert to typed logistic', () => {
+                    onConvertTyped(fittedLg.src, 'convert to typed logistic')
+                  })}
+                </>
+              )}
               {fittedCon && onConvertTyped && (
                 <>
                   <div className="card-menu-sep" />
@@ -1936,6 +1989,17 @@ export function CurveCard({
             <LogSection spec={logarithmic} onRestate={onLogRestate} onShowInverse={onShowInverse} />
           )}
           {sinusoidal && onSinRestate && <SinSection spec={sinusoidal} onRestate={onSinRestate} />}
+          {logistic && onLogisticRestate && (
+            <LogisticSection spec={logistic} onRestate={onLogisticRestate} onShowField={onShowLogisticField} />
+          )}
+          {fittedLg && onConvertTyped && (
+            <LogisticSection
+              spec={fittedLg.spec}
+              onRestate={onConvertTyped}
+              onShowField={onShowLogisticField}
+              sketched
+            />
+          )}
           {transform && onTransformRestate && (
             <TransformSection
               spec={transform}

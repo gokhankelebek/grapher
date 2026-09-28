@@ -1134,3 +1134,38 @@ export function expFeatures(spec: ExpSpec): ExpFeatures {
     endBehaviour: `as x → ${MINUS}∞, y → ${left}; as x → ∞, y → ${right}`,
   }
 }
+
+// ----------------------------------------------------------------------------
+// Shared with src/core/logistic.ts, which reads a logistic's denominator
+// through readExponential and writes its numbers by the same text rules.
+// ----------------------------------------------------------------------------
+
+export type { C as ConstText, Rat }
+export {
+  bareCoefficient,
+  cDiv,
+  cNeg,
+  cOf,
+  cSum,
+  cText,
+  coefficientText,
+  constantTail,
+  dec12,
+  exactOf,
+  hasVar,
+  isExactly,
+  joinSep,
+  negText,
+  nodeOf,
+  onlyVar,
+  prec,
+  rDiv,
+  ratDecText,
+  ratText,
+  shifted,
+  snapRat,
+  srcOf,
+  sumTerms,
+  usesVar,
+  valueOf,
+}

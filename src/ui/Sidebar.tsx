@@ -10,6 +10,7 @@ import type {
 } from '../core/types'
 import type { FactoredSpec } from '../core/factored'
 import type { ExpSpec } from '../core/exponential'
+import type { LogisticSpec } from '../core/logistic'
 import type { LogSpec } from '../core/logarithmic'
 import type { StyleMap } from '../App'
 import type { NLPart } from '../render/numberline'
@@ -33,6 +34,7 @@ import { NLCard } from './NLCard'
 import { ExprInput } from './ExprInput'
 import { FactorEditor } from './FactorEditor'
 import { ExpEditor } from './ExpEditor'
+import { LogisticEditor } from './LogisticEditor'
 import { LogEditor } from './LogEditor'
 import { SinEditor } from './SinEditor'
 import { TransformEditor } from './TransformEditor'
@@ -137,6 +139,15 @@ interface Props {
   onLogRestate?(id: string, src: string, label: string): string | null
   /** "Show inverse" on an Exponential or Logarithmic section. */
   onShowInverse?(id: string): void
+  /** "Build ▾ → Logistic" is open at the top of the list. */
+  logisticOpen?: boolean
+  onLogisticToggle?(): void
+  /** Put a logistic stated the AP way (L, k, y(0)) on the board. Error, or null. */
+  onLogisticBuild?(spec: LogisticSpec): string | null
+  /** Rewrite a typed curve's line in place from its Logistic section. */
+  onLogisticRestate?(id: string, src: string, label: string): string | null
+  /** "Show slope field" on a Logistic section. */
+  onShowLogisticField?(id: string): void
   /** "Build ▾ → Sinusoidal" is open at the top of the list. */
   sinOpen?: boolean
   onSinToggle?(): void
@@ -394,6 +405,11 @@ export function Sidebar({
   onLogBuild,
   logInverseSources,
   onLogRestate,
+  logisticOpen = false,
+  onLogisticToggle,
+  onLogisticBuild,
+  onLogisticRestate,
+  onShowLogisticField,
   sinOpen = false,
   onSinToggle,
   onSinBuild,
@@ -535,13 +551,15 @@ export function Sidebar({
             >
               +
             </button>
-            {!numberLine && (onFactorToggle || onExpToggle || onLogToggle || onSinToggle || onTransformToggle || onPiecewiseToggle || onConicToggle || onMotionToggle || onSeqToggle || onDataAdd) && (
+            {!numberLine && (onFactorToggle || onExpToggle || onLogisticToggle || onLogToggle || onSinToggle || onTransformToggle || onPiecewiseToggle || onConicToggle || onMotionToggle || onSeqToggle || onDataAdd) && (
               <BuildMenu
                 factorOpen={factorOpen}
                 expOpen={expOpen}
                 logOpen={logOpen}
                 onFactorToggle={onFactorToggle}
                 onExpToggle={onExpToggle}
+                logisticOpen={logisticOpen}
+                onLogisticToggle={onLogisticToggle}
                 onLogToggle={onLogToggle}
                 sinOpen={sinOpen}
                 onSinToggle={onSinToggle}
@@ -566,6 +584,9 @@ export function Sidebar({
           )}
           {!numberLine && expOpen && onExpBuild && onExpToggle && (
             <ExpEditor onBuild={onExpBuild} onClose={onExpToggle} />
+          )}
+          {!numberLine && logisticOpen && onLogisticBuild && onLogisticToggle && (
+            <LogisticEditor onBuild={onLogisticBuild} onClose={onLogisticToggle} />
           )}
           {!numberLine && logOpen && onLogBuild && onLogToggle && (
             <LogEditor onBuild={onLogBuild} onClose={onLogToggle} sources={logInverseSources} />
@@ -691,6 +712,10 @@ export function Sidebar({
               onSinRestate={
                 onSinRestate ? (src, label) => onSinRestate(curve.id, src, label) : undefined
               }
+              onLogisticRestate={
+                onLogisticRestate ? (src, label) => onLogisticRestate(curve.id, src, label) : undefined
+              }
+              onShowLogisticField={onShowLogisticField ? () => onShowLogisticField(curve.id) : undefined}
               onTransformRestate={
                 onTransformRestate
                   ? (src, label) => onTransformRestate(curve.id, src, label)

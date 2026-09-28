@@ -263,6 +263,21 @@ import { expSource } from './core/exponential'
 import type { ExpSpec } from './core/exponential'
 import { EXP_HANDLE_LABEL, dragExpHandle, expHandles, safeReadExponential } from './ui/expLinks'
 import type { ExpHandleKind } from './ui/expLinks'
+import { logisticSource } from './core/logistic'
+import type { LogisticSpec } from './core/logistic'
+import {
+  LOGISTIC_HANDLE_LABEL,
+  dragLogisticHandle,
+  fittedLogistic,
+  logisticAsymptotes,
+  logisticDot,
+  logisticFieldPlan,
+  logisticHandles,
+  logisticMarks,
+  safeReadLogistic,
+  withLogisticMarks,
+} from './ui/logisticLinks'
+import type { LogisticHandleKind } from './ui/logisticLinks'
 import { logSource } from './core/logarithmic'
 import type { LogSpec } from './core/logarithmic'
 import {
@@ -764,6 +779,15 @@ export default function App() {
     curveId: string
     bracket: unknown
     spec: ExpSpec
+  } | null>(null)
+  /** "Build ▾ → Logistic" open at the top of the list (src/ui/LogisticEditor.tsx). */
+  const [logisticOpen, setLogisticOpen] = useState(false)
+  /** The logistic handle being dragged, and the spec at the press (as expDragRef). */
+  const logisticDragRef = useRef<{
+    handleId: string
+    curveId: string
+    bracket: unknown
+    spec: LogisticSpec
   } | null>(null)
   /** "Build ▾ → Logarithmic" open at the top of the list (src/ui/LogEditor.tsx). */
   const [logOpen, setLogOpen] = useState(false)
@@ -6159,6 +6183,110 @@ export default function App() {
     [restateTypedCurve],
   )
 
+  // ======================================================= logistics
+  //
+  // y = L/(1 + A·e^(−kx)) + d is one more ordinary TYPED curve: "Build ▾ →
+  // Logistic" writes its line from L, k and y(0) (src/core/logistic.ts) and
+  // hands it to addExpression; the card's Logistic section and the three
+  // board handles rewrite it in place through restateTypedCurve — the
+  // exponential's path. A SKETCHED logistic's section converts it in place.
+
+  /** "Add to graph": the normal typed-equation path, one undo entry. */
+  const buildLogistic = useCallback(
+    (spec: LogisticSpec): string | null => {
+      let src: string
+      try {
+        src = logisticSource(spec)
+      } catch {
+        return 'This logistic could not be written out.'
+      }
+      const err = addExpression(src, 'build logistic')
+      if (err) return err
+      setLogisticOpen(false)
+      return null
+    },
+    [addExpression],
+  )
+
+  /**
+   * Drag one logistic handle: the inflection point anywhere (the whole S
+   * moves), or one asymptote vertically (that line moves, the other stays).
+   * Every frame is computed from the spec at the press, snapped, restated
+   * live inside the press's bracket: one undo per drag.
+   */
+  const dragLogistic = useCallback(
+    (curveId: string, which: LogisticHandleKind, handleId: string, to: Vec2): void => {
+      const bracket = preEditRef.current
+      let s = logisticDragRef.current
+      if (!s || s.handleId !== handleId || s.curveId !== curveId || s.bracket !== bracket || !bracket) {
+        const spec = safeReadLogistic(exprSourcesRef.current[curveId])
+        if (!spec) return
+        s = { handleId, curveId, bracket, spec }
+        logisticDragRef.current = s
+      }
+      const vp = vpRef.current
+      const next = dragLogisticHandle(s.spec, which, {
+        x: snapCoord(to.x, vp, 'x'),
+        y: snapCoord(to.y, vp, 'y'),
+      })
+      if (!next) return
+      let src: string
+      try {
+        src = logisticSource(next)
+      } catch {
+        return
+      }
+      restateTypedCurve(curveId, src, LOGISTIC_HANDLE_LABEL[which], true)
+    },
+    [restateTypedCurve],
+  )
+
+  /**
+   * "Show slope field" on a Logistic section: the differential equation the
+   * curve solves, dy/dx = k(y − d)(1 − (y − d)/L), added as an ordinary slope
+   * field (the same object the equation box makes from that line), with the
+   * curve's own initial condition (0, y(0)) as its solution — so the class
+   * sees the curve IS a solution. One undo entry. The curve stays selected.
+   */
+  const showLogisticField = useCallback(
+    (id: string): void => {
+      const curve = curvesRef.current.find((c) => c.id === id)
+      if (!curve) return
+      const spec = curve.modelId.startsWith('expr_')
+        ? safeReadLogistic(exprSourcesRef.current[id])
+        : curve.modelId === 'logistic'
+          ? fittedLogistic(curve.params)?.spec ?? null
+          : null
+      const plan = spec ? logisticFieldPlan(spec) : null
+      if (!plan) return
+      if (fieldsRef.current.some((f) => f.src === plan.src)) {
+        showFeatureNote({ kind: 'moved', key: Date.now(), text: `The slope field ${plan.src} is already on the board.` })
+        return
+      }
+      const outcome = readField(plan.src)
+      if (!outcome.ok) {
+        showFeatureNote({ kind: 'moved', key: Date.now(), text: outcome.error })
+        return
+      }
+      const field: BoardField = {
+        id: nextId(),
+        src: plan.src,
+        params: outcome.defaultParams.slice(),
+        color: curve.color,
+        spacingPx: FIELD_SPACING_DEFAULT,
+        visible: true,
+        solutions: plan.through ? [{ id: nextId(), x: plan.through.x, y: plan.through.y }] : [],
+      }
+      commitState({ fields: [...fieldsRef.current, field] }, 'show slope field')
+      showFeatureNote({
+        kind: 'moved',
+        key: Date.now(),
+        text: `Added the slope field ${plan.src}${plan.through ? ' — this curve is its solution through (0, y(0))' : ''}.`,
+      })
+    },
+    [commitState, showFeatureNote],
+  )
+
   // ======================================================= logarithms
   //
   // y = a·log_b(c(x − h)) + k is one more ordinary TYPED curve: "Build ▾ →
@@ -8085,11 +8213,40 @@ export default function App() {
       const exp = spec ? null : safeReadExponential(exprSources[typed.id])
       const log = spec || exp ? null : safeReadLogarithmic(exprSources[typed.id])
       const sin = spec || exp || log ? null : safeReadSinusoid(exprSources[typed.id])
+      const lg = spec || exp || log || sin ? null : safeReadLogistic(exprSources[typed.id])
       // A transformed parent carries its own two handles only when no family
       // above already has handles on this line (the Roots section's roots,
       // the exponential's asymptote …): one set of handles per curve.
       const tf =
-        spec || exp || log || sin ? null : safeReadTransform(exprSources[typed.id])
+        spec || exp || log || sin || lg ? null : safeReadTransform(exprSources[typed.id])
+      if (lg) {
+        for (const h of logisticHandles(lg)) {
+          const id = `logistic:${typed.id}:${h.which}`
+          // An asymptote is a whole line: its handle sits at the board edge
+          // the curve approaches it from, read live (the viewport pans
+          // without re-rendering App), as the exponential's asymptote does.
+          const edge = h.edge
+          const pos: Vec2 =
+            edge !== null
+              ? {
+                  get x(): number {
+                    const vp = vpRef.current
+                    const half = vp.widthPx / 2 / vp.pxPerUnit
+                    return edge === 'left'
+                      ? vp.center.x - half + 28 / vp.pxPerUnit
+                      : vp.center.x + half - 28 / vp.pxPerUnit
+                  },
+                  y: h.pos.y,
+                }
+              : h.pos
+          out.push({
+            id,
+            pos,
+            label: h.label,
+            onDrag: (p) => dragLogistic(typed.id, h.which, id, p),
+          })
+        }
+      }
       if (tf) {
         for (const h of transformHandles(tf)) {
           const id = `transform:${typed.id}:${h.which}`
@@ -8215,6 +8372,7 @@ export default function App() {
     calls,
     dragFactorRoot,
     dragExp,
+    dragLogistic,
     dragLog,
     dragSin,
     dragTransform,
@@ -8245,6 +8403,40 @@ export default function App() {
   const sinMarks = useMemo<SpecialPoint[]>(
     () => (selectedSin ? sinKeyMarks(selectedSin.spec) : []),
     [selectedSin],
+  )
+
+  // ----------------------------------------------- a selected logistic, marked
+  //
+  // While a logistic is selected — typed, or a sketch that fitted the
+  // library's logistic — the board draws both horizontal asymptotes dashed,
+  // puts a labelled dot on the inflection point ("fastest growth"), and gives
+  // the analysis its exact coordinates ("(20/3) ln 7"). Screen only: none of
+  // it is figure content, none of it reaches an export.
+  const selectedLogistic = useMemo<{ spec: LogisticSpec; color: string; id: string; typed: boolean } | null>(() => {
+    if (kind !== 'cartesian' || !selectedCurve) return null
+    const c = selectedCurve
+    if (!c.visible || c.kind !== 'explicit') return null
+    if (c.modelId === 'logistic') {
+      const f = fittedLogistic(c.params)
+      return f ? { spec: f.spec, color: c.color, id: c.id, typed: false } : null
+    }
+    if (!c.modelId.startsWith('expr_') || calls[c.id]?.length) return null
+    const src = exprSources[c.id]
+    if (!src) return null
+    // The same precedence as the card.
+    if (safeReadFactored(src) || safeReadExponential(src) || safeReadLogarithmic(src) || safeReadSinusoid(src)) {
+      return null
+    }
+    const spec = safeReadLogistic(src)
+    return spec ? { spec, color: c.color, id: c.id, typed: true } : null
+  }, [kind, selectedCurve, exprSources, calls])
+
+  // A typed logistic's inflection, exact. (A sketch's analysis already marks
+  // the library's own closed-form inflection; its rounded spec would only
+  // add a second ring next to it.)
+  const logisticMarksNow = useMemo<SpecialPoint[]>(
+    () => (selectedLogistic?.typed ? logisticMarks(selectedLogistic.spec) : []),
+    [selectedLogistic],
   )
 
   // ----------------------------------------------- a selected conic, marked
@@ -8561,8 +8753,10 @@ export default function App() {
     const withSin = sinMarks.length > 0 ? withKeyMarks(base, sinMarks) : base
     const withConic = conicMarks.length > 0 ? withKeyMarks(withSin, conicMarks) : withSin
     const withMotion = motionFeatureMarks.length > 0 ? withKeyMarks(withConic, motionFeatureMarks) : withConic
-    return transformMarks.length > 0 ? withKeyMarks(withMotion, transformMarks) : withMotion
-  }, [showAnalysis, analysis, sinMarks, conicMarks, motionFeatureMarks, transformMarks])
+    const withLogistic =
+      logisticMarksNow.length > 0 && showAnalysis ? withLogisticMarks(withMotion, logisticMarksNow) : withMotion
+    return transformMarks.length > 0 ? withKeyMarks(withLogistic, transformMarks) : withLogistic
+  }, [showAnalysis, analysis, sinMarks, conicMarks, motionFeatureMarks, transformMarks, logisticMarksNow])
 
   /**
    * The on-screen polylines: the fields' solutions, a sinusoid's midline, and
@@ -8574,6 +8768,10 @@ export default function App() {
       ? midlinePolyline(selectedSin.spec, selectedSin.color, `midline:${selectedSin.id}`)
       : null
     if (mid) out.push(mid)
+    // a logistic's two asymptotes
+    if (selectedLogistic) {
+      out.push(...logisticAsymptotes(selectedLogistic.spec, selectedLogistic.color, `logistic:${selectedLogistic.id}`))
+    }
     // a conic's construction: every one that is figure content, and the
     // selected one's while it is selected
     out.push(...constructionScene.polylines)
@@ -8592,7 +8790,7 @@ export default function App() {
     // a sequence's continuous partner, dashed through its dots
     if (partnerLines.length > 0) out.push(...partnerLines)
     return out.length === fieldPolylines.length ? fieldPolylines : out
-  }, [fieldPolylines, selectedSin, selectedTransform, ghostFrame, canvasTheme, constructionScene, selectedConic, construction, motionScene, partnerLines])
+  }, [fieldPolylines, selectedSin, selectedLogistic, selectedTransform, ghostFrame, canvasTheme, constructionScene, selectedConic, construction, motionScene, partnerLines])
 
   /** The on-screen shapes: the board's own, then a conic's named foci (F₁, F₂). */
   const screenShapes = useMemo<Shape[]>(() => {
@@ -8604,8 +8802,12 @@ export default function App() {
     // particle and its vectors on top
     extra.push(...motionArrows)
     if (motionScene) extra.push(...motionScene.shapes)
+    // a logistic's inflection point: "fastest growth"
+    if (selectedLogistic) {
+      extra.push(...logisticDot(selectedLogistic.spec, selectedLogistic.color, `logistic:${selectedLogistic.id}:dot`))
+    }
     return extra.length === 0 ? shapeScene : [...shapeScene, ...extra]
-  }, [shapeScene, constructionScene, selectedConic, construction, motionArrows, motionScene])
+  }, [shapeScene, constructionScene, selectedConic, construction, motionArrows, motionScene, selectedLogistic])
 
   const copyTimerRef = useRef(0)
 
@@ -9799,6 +10001,7 @@ export default function App() {
         onExprToggle={() => {
           setFactorOpen(false)
           setExpOpen(false)
+          setLogisticOpen(false)
           setLogOpen(false)
           setSinOpen(false)
           setTransformOpen(false)
@@ -9812,6 +10015,7 @@ export default function App() {
         onFactorToggle={() => {
           setExprOpen(false)
           setExpOpen(false)
+          setLogisticOpen(false)
           setLogOpen(false)
           setSinOpen(false)
           setTransformOpen(false)
@@ -9824,6 +10028,7 @@ export default function App() {
         expOpen={expOpen}
         onExpToggle={() => {
           setExprOpen(false)
+          setLogisticOpen(false)
           setFactorOpen(false)
           setLogOpen(false)
           setSinOpen(false)
@@ -9834,11 +10039,29 @@ export default function App() {
           setSeqOpen(false)
           setExpOpen((o) => !o)
         }}
+        logisticOpen={logisticOpen}
+        onLogisticToggle={() => {
+          setExprOpen(false)
+          setFactorOpen(false)
+          setExpOpen(false)
+          setLogOpen(false)
+          setSinOpen(false)
+          setTransformOpen(false)
+          setPiecewiseOpen(false)
+          setConicOpen(false)
+          setMotionOpen(false)
+          setSeqOpen(false)
+          setLogisticOpen((o) => !o)
+        }}
+        onLogisticBuild={buildLogistic}
+        onLogisticRestate={restateFactors}
+        onShowLogisticField={showLogisticField}
         logOpen={logOpen}
         onLogToggle={() => {
           setExprOpen(false)
           setFactorOpen(false)
           setExpOpen(false)
+          setLogisticOpen(false)
           setSinOpen(false)
           setTransformOpen(false)
           setPiecewiseOpen(false)
@@ -9852,6 +10075,7 @@ export default function App() {
           setExprOpen(false)
           setFactorOpen(false)
           setExpOpen(false)
+          setLogisticOpen(false)
           setLogOpen(false)
           setTransformOpen(false)
           setPiecewiseOpen(false)
@@ -9867,6 +10091,7 @@ export default function App() {
           setExprOpen(false)
           setFactorOpen(false)
           setExpOpen(false)
+          setLogisticOpen(false)
           setLogOpen(false)
           setSinOpen(false)
           setPiecewiseOpen(false)
@@ -9882,6 +10107,7 @@ export default function App() {
           setExprOpen(false)
           setFactorOpen(false)
           setExpOpen(false)
+          setLogisticOpen(false)
           setLogOpen(false)
           setSinOpen(false)
           setTransformOpen(false)
@@ -9896,6 +10122,7 @@ export default function App() {
           setExprOpen(false)
           setFactorOpen(false)
           setExpOpen(false)
+          setLogisticOpen(false)
           setLogOpen(false)
           setSinOpen(false)
           setTransformOpen(false)
@@ -9913,6 +10140,7 @@ export default function App() {
           setExprOpen(false)
           setFactorOpen(false)
           setExpOpen(false)
+          setLogisticOpen(false)
           setLogOpen(false)
           setSinOpen(false)
           setTransformOpen(false)
@@ -9927,6 +10155,7 @@ export default function App() {
           setExprOpen(false)
           setFactorOpen(false)
           setExpOpen(false)
+          setLogisticOpen(false)
           setLogOpen(false)
           setSinOpen(false)
           setTransformOpen(false)
@@ -10021,6 +10250,7 @@ export default function App() {
           setExprOpen(false)
           setFactorOpen(false)
           setExpOpen(false)
+          setLogisticOpen(false)
           setLogOpen(false)
           setSinOpen(false)
           setTransformOpen(false)

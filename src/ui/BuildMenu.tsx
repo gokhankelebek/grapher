@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from 'react'
 // The header has room for "+" and one more control, and there is more than one
 // way to BUILD a function from what a teacher states: from its roots (a
 // polynomial or a rational function), as an exponential (a starting value
-// and a rate), as a logarithm (its base, asymptote and shifts), as a
+// and a rate), as a logistic (L, k and y(0), the way a BC problem states it), as a logarithm (its base, asymptote and shifts), as a
 // sinusoid (amplitude, period, phase shift, midline) and as a transformed
 // parent (a·f(b(x − h)) + k, from a gallery of sixteen), as a piecewise or
 // step function, piece by piece in a table, and as a conic section (from its
@@ -22,6 +22,7 @@ import { useEffect, useRef, useState } from 'react'
 interface Props {
   factorOpen: boolean
   expOpen: boolean
+  logisticOpen?: boolean
   logOpen?: boolean
   sinOpen?: boolean
   transformOpen?: boolean
@@ -31,6 +32,8 @@ interface Props {
   seqOpen?: boolean
   onFactorToggle?(): void
   onExpToggle?(): void
+  /** "Logistic": L, k and y(0), the way a BC problem states it. */
+  onLogisticToggle?(): void
   onLogToggle?(): void
   onSinToggle?(): void
   onTransformToggle?(): void
@@ -46,6 +49,7 @@ interface Props {
 export function BuildMenu({
   factorOpen,
   expOpen,
+  logisticOpen = false,
   logOpen = false,
   sinOpen = false,
   transformOpen = false,
@@ -55,6 +59,7 @@ export function BuildMenu({
   seqOpen = false,
   onFactorToggle,
   onExpToggle,
+  onLogisticToggle,
   onLogToggle,
   onSinToggle,
   onTransformToggle,
@@ -87,7 +92,7 @@ export function BuildMenu({
     }
   }, [open])
 
-  const anyOpen = factorOpen || expOpen || logOpen || sinOpen || transformOpen || piecewiseOpen || conicOpen || motionOpen || seqOpen
+  const anyOpen = factorOpen || expOpen || logisticOpen || logOpen || sinOpen || transformOpen || piecewiseOpen || conicOpen || motionOpen || seqOpen
   const item = (
     label: string,
     on: boolean,
@@ -133,6 +138,7 @@ export function BuildMenu({
         <div className="card-menu build-menu" role="menu" aria-label="Build">
           {item('From roots (polynomial / rational)', factorOpen, onFactorToggle, 'build-roots')}
           {item('Exponential', expOpen, onExpToggle, 'build-exp')}
+          {item('Logistic', logisticOpen, onLogisticToggle, 'build-logistic')}
           {item('Logarithmic', logOpen, onLogToggle, 'build-log')}
           {item('Sinusoidal', sinOpen, onSinToggle, 'build-sin')}
           {item('Transformation', transformOpen, onTransformToggle, 'build-transform')}

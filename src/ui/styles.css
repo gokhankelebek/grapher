@@ -5327,6 +5327,31 @@ button.calc-field-btn {
   line-height: 1.45;
 }
 
+/* ------------------------------------------------------------ logistic */
+/*
+ * The "Build ▾ → Logistic" card and the Logistic section on a card
+ * (src/ui/LogisticEditor.tsx): the exponential's rows and facts, a title row
+ * that carries the AP Calc / Precalc switch, and the differential equation
+ * the curve solves, typeset.
+ */
+.lg-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.lg-forms .seg-btn {
+  padding: 1px var(--sp-2);
+  font-size: var(--fs-xs);
+}
+
+.lg-de {
+  color: var(--text);
+  font-size: var(--fs-sm);
+  overflow-x: auto;
+}
+
 /* A sinusoid's five key points: one cycle, exact text, as a class tabulates it. */
 .se-keys {
   border-collapse: collapse;
