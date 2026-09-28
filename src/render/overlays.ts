@@ -26,6 +26,13 @@
 //           the probe from Pₙ(x) up to f(x), whose length IS the error.
 //   dot     one point: filled, or hollow (ground-filled centre, as on the
 //           number line, so nothing reads through it).
+//   hline   a horizontal line across the whole board at a height — the
+//           horizontal line test.
+//
+// And one more under the curves:
+//
+//   ghost   a function's graph, faint and dashed — the part of f a
+//           restricted domain cut off, drawn behind the part it kept.
 //
 // These are FIGURE, not chrome: they carry the mathematics the lesson is
 // about, so they go through the one render routine and reach the exported PNG
@@ -127,12 +134,30 @@ export type Overlay =
       hollow?: boolean
       color?: string
     }
+  | {
+      kind: 'hline'
+      curveId?: string
+      /** The line's height in math units; it runs across the whole board. */
+      y: number
+      color?: string
+      dashed?: boolean
+    }
+  | {
+      kind: 'ghost'
+      /** Whose colour it takes, when no colour is stated. */
+      curveId?: string
+      /** The function to draw — NaN where it is undefined (the pen lifts). */
+      f: (x: number) => number
+      color?: string
+      /** Stroke alpha on screen. Under mono ink the board states its own. */
+      alpha?: number
+    }
 
 /** An axis strip's endpoint: ● included, ○ excluded, or nothing said. */
 export type StripEnd = 'closed' | 'open' | 'none'
 
 /** The overlay kinds painted ON TOP of the curves (see `layer`). */
-export const OVERLAY_MARK_KINDS: ReadonlySet<Overlay['kind']> = new Set(['segment', 'dot'])
+export const OVERLAY_MARK_KINDS: ReadonlySet<Overlay['kind']> = new Set(['segment', 'dot', 'hline'])
 
 /** True when any of these overlays is a mark — the board then paints in two passes. */
 export function hasOverlayMarks(overlays: readonly Overlay[]): boolean {
@@ -145,6 +170,15 @@ export const AXIS_STRIP_ALPHA = 0.38
 /** A mark dot's radius and a probe segment's weight, CSS px before `present.stroke`. */
 export const MARK_DOT_RADIUS = 4.5
 export const MARK_LINE_WIDTH = 1.75
+
+/** A ghost's stroke alpha when none is stated, and under mono ink (grey, still dashed). */
+export const GHOST_ALPHA = 0.38
+export const GHOST_MONO_ALPHA = 0.5
+/** A ghost's stroke weight and dash, CSS px before `present.stroke`. */
+export const GHOST_LINE_WIDTH = 2
+const GHOST_DASH = [7, 6]
+/** The horizontal line test's weight. */
+export const HLINE_WIDTH = 2
 
 /** Fill alpha when the overlay does not state one. */
 export const OVERLAY_FILL_ALPHA = 0.18
@@ -610,6 +644,60 @@ function drawSegment(
   if (ov.dashed) ctx.setLineDash([])
 }
 
+/** A horizontal line across the whole board, at math height `y`. */
+function drawHLine(
+  ctx: CanvasRenderingContext2D,
+  ov: Extract<Overlay, { kind: 'hline' }>,
+  fr: Frame,
+  vp: Viewport,
+  color: string,
+  stroke: number,
+): void {
+  if (!Number.isFinite(ov.y)) return
+  const y = sy(fr, ov.y)
+  if (y < -8 || y > vp.heightPx + 8) return
+  ctx.globalAlpha = 1
+  ctx.strokeStyle = color
+  ctx.lineWidth = HLINE_WIDTH * stroke
+  ctx.lineCap = 'butt'
+  if (ov.dashed) ctx.setLineDash([8 * stroke, 5 * stroke])
+  ctx.beginPath()
+  ctx.moveTo(0, y)
+  ctx.lineTo(vp.widthPx, y)
+  ctx.stroke()
+  if (ov.dashed) ctx.setLineDash([])
+}
+
+/** A function's graph, faint and dashed, over the visible x-range (padded). */
+function drawGhost(
+  ctx: CanvasRenderingContext2D,
+  ov: Extract<Overlay, { kind: 'ghost' }>,
+  fr: Frame,
+  vp: Viewport,
+  color: string,
+  alpha: number,
+  stroke: number,
+): void {
+  if (typeof ov.f !== 'function') return
+  const halfSpan = (0.6 * vp.widthPx) / fr.ppx
+  const lines = sampleExplicitPolylines(boxed(ov.f, fr), vp, fr.cx - halfSpan, fr.cx + halfSpan)
+  if (lines.length === 0) return
+  ctx.globalAlpha = alpha
+  ctx.strokeStyle = color
+  ctx.lineWidth = GHOST_LINE_WIDTH * stroke
+  ctx.lineCap = 'butt'
+  ctx.lineJoin = 'round'
+  ctx.setLineDash(GHOST_DASH.map((d) => d * stroke))
+  for (const line of lines) {
+    ctx.beginPath()
+    ctx.moveTo(line[0].x, line[0].y)
+    for (let i = 1; i < line.length; i++) ctx.lineTo(line[i].x, line[i].y)
+    ctx.stroke()
+  }
+  ctx.setLineDash([])
+  ctx.globalAlpha = 1
+}
+
 /**
  * Paint every overlay, in the order given, into the current transform.
  *
@@ -647,7 +735,7 @@ export function drawOverlays(
       const alpha =
         forced !== null
           ? forced
-          : ov.kind === 'rects' || ov.kind === 'segment' || ov.kind === 'dot'
+          : ov.kind === 'rects' || ov.kind === 'segment' || ov.kind === 'dot' || ov.kind === 'hline'
           ? OVERLAY_FILL_ALPHA
           : clamp(
               typeof ov.alpha === 'number' && Number.isFinite(ov.alpha)
@@ -687,6 +775,20 @@ export function drawOverlays(
         case 'segment':
           drawSegment(ctx, ov, fr, color, stroke)
           break
+        case 'hline':
+          drawHLine(ctx, ov, fr, vp, color, stroke)
+          break
+        case 'ghost': {
+          // Faint on screen; under mono ink a grey that survives a copier.
+          const own =
+            forced !== null
+              ? GHOST_MONO_ALPHA
+              : typeof ov.alpha === 'number' && Number.isFinite(ov.alpha)
+                ? clamp(ov.alpha, 0, 1)
+                : GHOST_ALPHA
+          drawGhost(ctx, ov, fr, vp, color, own, stroke)
+          break
+        }
         case 'dot': {
           const p = ov.at
           if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) break

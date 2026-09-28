@@ -39,6 +39,7 @@ import { parseExpression } from '../core/parse'
 import { exactForm } from '../core/exact'
 import { evalText } from './factorLinks'
 import { formatCoord } from './numeric'
+import { INV_MODEL_PREFIX } from '../core/persist'
 
 const TWO_PI = Math.PI * 2
 
@@ -57,6 +58,9 @@ const NOT_MOTION = new Set(['vline', 'fourier'])
 /** Whether this curve is a particle's path: a parametric or a polar curve the model can evaluate. */
 export function motionKindOf(curve: FittedCurve, models: Record<string, ModelSpec>): MotionKind | null {
   if (NOT_MOTION.has(curve.modelId)) return null
+  // An inverse relation (f(t), t) is drawn parametrically, but it is a
+  // reflection, not a particle: its "t" is just f's x.
+  if (curve.modelId.startsWith(INV_MODEL_PREFIX)) return null
   const spec = models[curve.modelId]
   if (!spec) return null
   if (curve.kind === 'parametric' && typeof spec.evalParametric === 'function') return 'parametric'

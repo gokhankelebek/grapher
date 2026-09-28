@@ -1583,3 +1583,22 @@ describe('typed parametric curves', () => {
     expect(plot('r = 2cos(3theta) {0 <= theta <= pi}').kind).toBe('polar')
   })
 })
+
+describe('real roots of negatives: an odd-denominator exponent', () => {
+  const at = (src: string, x: number): number => {
+    const r = parseExpression(src)
+    if (!r.ok) throw new Error(r.error)
+    return r.plot.makeModel('m').evalExplicit!(r.plot.defaultParams, x)
+  }
+  it('x^(1/3) and x^(2/3) are defined for x < 0, as in every Precalc book', () => {
+    expect(at('y = x^(1/3)', -8)).toBeCloseTo(-2, 12)
+    expect(at('y = x^(2/3)', -8)).toBeCloseTo(4, 12)
+    expect(at('y = x^(-1/3)', -8)).toBeCloseTo(-0.5, 12)
+    expect(at('y = x^(3/5)', -32)).toBeCloseTo(-8, 12)
+  })
+  it('an even denominator or an irrational exponent stays undefined', () => {
+    expect(at('y = x^(1/2)', -4)).toBeNaN()
+    expect(at('y = x^(3/4)', -16)).toBeNaN()
+    expect(at('y = x^pi', -2)).toBeNaN()
+  })
+})

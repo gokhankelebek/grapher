@@ -349,6 +349,12 @@ export interface Prefs {
    * the guess gets wrong.
    */
   wheel: WheelPref
+  /**
+   * How a card writes a domain or a range: interval notation "[0, ∞)" or
+   * set-builder words "x ≥ 0". A teacher's habit, not a lesson's, so it is
+   * remembered here rather than in the document.
+   */
+  setNotation: 'interval' | 'builder'
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -358,6 +364,7 @@ export const DEFAULT_PREFS: Prefs = {
   exportDefaults: { ...DEFAULT_EXPORT, ...defaultFit('cartesian') },
   presentScale: 2.5,
   wheel: 'auto',
+  setNotation: 'interval',
 }
 
 /** Never trust what came back from storage: a bad value falls back silently. */
@@ -398,6 +405,7 @@ export function readPrefs(): Prefs {
       exportDefaults,
       presentScale: clampPresentScale(parsed.presentScale),
       wheel: parsed.wheel === 'zoom' || parsed.wheel === 'pan' ? parsed.wheel : 'auto',
+      setNotation: parsed.setNotation === 'builder' ? 'builder' : 'interval',
     }
   } catch {
     return { ...DEFAULT_PREFS, exportByDoc: {} }

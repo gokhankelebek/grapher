@@ -13,6 +13,7 @@ import type { ExpSpec } from '../core/exponential'
 import type { LogSpec } from '../core/logarithmic'
 import type { StyleMap } from '../App'
 import type { NLPart } from '../render/numberline'
+import type { DomainActions, DomainPanel, SetNotation } from './domainLinks'
 import { CurveCard } from './CurveCard'
 import type { BetweenInfo } from './CurveCard'
 import type { CurveIntersections } from './intersections'
@@ -315,6 +316,10 @@ interface Props {
   depKeys?: Readonly<Record<string, string>>
   /** The board's callable names, offered as chips in the equation box. */
   exprNames?: readonly string[]
+  /** Domain / range / one-to-one / inverse rows for the selected card (src/ui/DomainSection.tsx). */
+  domainPanelFor?(id: string): DomainPanel | undefined
+  domainActions?: DomainActions
+  setNotation?: SetNotation
 }
 
 const NO_DATA: BoardData[] = []
@@ -490,6 +495,9 @@ export function Sidebar({
   cardNotes,
   onShowInverseOf,
   depKeys,
+  domainPanelFor,
+  domainActions,
+  setNotation,
   exprNames,
 }: Props) {
   const numberLine = kind === 'number-line'
@@ -711,6 +719,9 @@ export function Sidebar({
               note={cardNotes?.[curve.id]}
               onShowInverseOf={onShowInverseOf ? () => onShowInverseOf(curve.id) : undefined}
               depKey={depKeys?.[curve.id]}
+              domainPanel={curve.id === selectedId ? domainPanelFor?.(curve.id) : undefined}
+              domainActions={domainActions}
+              setNotation={setNotation}
             />
           ))}
           {!numberLine &&

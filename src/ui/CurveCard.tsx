@@ -44,6 +44,8 @@ import { N_MAX, N_MIN, RIEMANN_METHODS } from './calcLinks'
 import type { CalcChange, CalcKind, CardCalc } from './calcLinks'
 import { TaylorSection } from './TaylorSection'
 import type { CurveIntersections } from './intersections'
+import { DomainSection } from './DomainSection'
+import type { DomainActions, DomainPanel, SetNotation } from './domainLinks'
 
 interface Props {
   curve: FittedCurve
@@ -236,6 +238,15 @@ interface Props {
    * g's asymptotes follow f's slider although g's own params never move.
    */
   depKey?: string
+  /**
+   * Domain, range, one-to-one and the inverse — the rows at the top of the
+   * Analysis table (src/ui/DomainSection.tsx). Only the selected card is
+   * handed one; absent = no rows.
+   */
+  domainPanel?: DomainPanel
+  domainActions?: DomainActions
+  /** Interval notation or set-builder (a global preference). */
+  setNotation?: SetNotation
 }
 
 /**
@@ -757,6 +768,9 @@ export function CurveCard({
   linkError,
   note,
   onShowInverseOf,
+  domainPanel,
+  domainActions,
+  setNotation,
   depKey,
 }: Props) {
   const spec: ModelSpec | undefined = models[curve.modelId]
@@ -2017,12 +2031,21 @@ export function CurveCard({
             </div>
           )}
 
-          {(analysisGroups.length > 0 ||
+          {((domainPanel && domainActions) ||
+            analysisGroups.length > 0 ||
             asymptotes.length > 0 ||
             crossings.length > 0) && (
             <div className="an-section">
               <div className="an-title">Analysis</div>
               <div className="an-table">
+                {domainPanel && domainActions && (
+                  <DomainSection
+                    key={domainPanel.ownerId}
+                    panel={domainPanel}
+                    actions={domainActions}
+                    notation={setNotation ?? 'interval'}
+                  />
+                )}
                 {analysisGroups.map((g) => (
                   <div className="an-row" key={g.kind}>
                     <span className="an-label">

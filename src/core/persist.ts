@@ -696,6 +696,20 @@ export interface CurveView {
   exportParticle?: true
   /** Built from roots THROUGH this point: `a` is solved from it on every edit. */
   through?: Vec2
+  /**
+   * A restricted function: its whole natural-domain graph drawn behind it,
+   * faint and dashed — "show the cut-off part". Figure content when on.
+   */
+  ghost?: true
+  /** The horizontal line test: the line's height. Present = the line is shown. */
+  hlt?: number
+  /**
+   * The reflected-point probe: (a, f(a)) on f and (f(a), a) on f⁻¹, joined
+   * across y = x. Present = shown, at this a. Kept on f (not on an inverse
+   * link) because it reflects f itself — it works the same whether f⁻¹ is a
+   * linked reflection, an exact typed curve, or not drawn at all.
+   */
+  reflect?: number
 }
 export type CurveViews = Record<string, CurveView>
 
@@ -707,6 +721,9 @@ export interface StoredCurveView {
   accel?: true
   exportParticle?: true
   through?: [number, number]
+  ghost?: true
+  hlt?: number
+  reflect?: number
 }
 
 /** A typed θ-bound longer than this is not a bound anybody typed. */
@@ -735,6 +752,9 @@ export function normalizeCurveView(v: CurveView | undefined | null): CurveView |
   if (v.through && isNum(v.through.x) && isNum(v.through.y)) {
     out.through = { x: v.through.x, y: v.through.y }
   }
+  if (v.ghost === true) out.ghost = true
+  if (isNum(v.hlt)) out.hlt = v.hlt
+  if (isNum(v.reflect)) out.reflect = v.reflect
   return Object.keys(out).length > 0 ? out : null
 }
 
@@ -1491,6 +1511,9 @@ export function boardToStored(input: BoardInput): StoredBoard {
       if (v.accel) st.accel = true
       if (v.exportParticle) st.exportParticle = true
       if (v.through) st.through = [v.through.x, v.through.y]
+      if (v.ghost) st.ghost = true
+      if (v.hlt !== undefined) st.hlt = v.hlt
+      if (v.reflect !== undefined) st.reflect = v.reflect
       views[c.id] = st
       any = true
     }
@@ -2950,6 +2973,18 @@ function readStoredCurveView(raw: Record<string, unknown>): { view: CurveView | 
   if (raw.through !== undefined) {
     const t = raw.through
     if (Array.isArray(t) && t.length === 2 && isNum(t[0]) && isNum(t[1])) v.through = { x: t[0], y: t[1] }
+    else damaged = true
+  }
+  if (raw.ghost !== undefined) {
+    if (raw.ghost === true) v.ghost = true
+    else damaged = true
+  }
+  if (raw.hlt !== undefined) {
+    if (isNum(raw.hlt)) v.hlt = raw.hlt
+    else damaged = true
+  }
+  if (raw.reflect !== undefined) {
+    if (isNum(raw.reflect)) v.reflect = raw.reflect
     else damaged = true
   }
   return { view: normalizeCurveView(v), damaged }

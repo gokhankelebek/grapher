@@ -1652,8 +1652,23 @@ button.param-value:hover {
   transition: color 0.15s var(--ease);
 }
 
+/* In flight: a dot on the name, out of the flow. As a word it widened the
+   toolbar for half a second after every edit, and on a narrow board that
+   was enough to wrap the last button onto a second row and back — the
+   whole bar jumping each time a curve was touched. The word stays for
+   assistive tech (visually hidden) and in the title. */
 .doc-save-saving {
-  color: #c3cbe4; /* 11.4:1 — in flight reads brighter than at rest */
+  position: absolute;
+  top: 3px;
+  right: 22px;
+  width: 6px;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 50%;
+  background: #c3cbe4;
+  color: transparent;
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 .doc-save-error {
@@ -3193,7 +3208,8 @@ button.an-value {
 }
 
 .canvas-light .doc-save-saving {
-  color: #1b2133;
+  color: transparent;
+  background: #1b2133;
 }
 
 .canvas-light .exp-copy-done {
@@ -5989,4 +6005,152 @@ button.calc-field-btn {
   color: var(--faint);
   font-size: var(--fs-xs);
   line-height: 1.35;
+}
+
+/* ---- Domain, Range, One-to-one and the inverse (src/ui/DomainSection.tsx):
+   the first rows of the Analysis table, with their tools under them. ---- */
+.dr-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding-bottom: var(--sp-2);
+  margin-bottom: var(--sp-1);
+  border-bottom: 1px dashed var(--border-soft);
+}
+
+.dr-values {
+  gap: var(--sp-1);
+  align-items: center;
+}
+
+.dr-value {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.dr-unknown {
+  color: var(--faint);
+  cursor: help;
+}
+
+.dr-restrict,
+.dr-notation {
+  margin-left: auto;
+  padding: 0 var(--sp-2);
+  line-height: 18px;
+}
+
+.dr-notation {
+  margin-left: 0;
+}
+
+.dr-restrict:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.dr-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+/* Under the value column of the rows above: the label column left empty. */
+.dr-indent {
+  display: grid;
+  grid-template-columns: 78px 1fr;
+  gap: var(--sp-2);
+}
+
+.dr-indent > * {
+  grid-column: 2;
+  min-width: 0;
+}
+
+/* The editor needs the width: two fields and their brackets on one line. */
+.dr-indent > .dr-editor {
+  grid-column: 1 / -1;
+}
+
+.dr-bounds {
+  gap: 2px;
+}
+
+.dr-input {
+  width: 58px;
+  padding: 2px var(--sp-1);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--panel);
+}
+
+.dr-bracket {
+  min-width: 22px;
+  padding: 0 var(--sp-1);
+  font-weight: 600;
+}
+
+.dr-bracket:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.dr-comma {
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+
+.dr-hint {
+  color: var(--faint);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+
+.dr-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.dr-lead {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.dr-verdict {
+  padding: 1px var(--sp-2);
+  border-radius: 999px;
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+}
+
+.dr-fails {
+  color: #ffb08f;
+  background: rgba(255, 122, 69, 0.16);
+  border: 1px solid rgba(255, 122, 69, 0.5);
+}
+
+.dr-passes {
+  color: #9be8c4;
+  background: rgba(62, 207, 142, 0.14);
+  border: 1px solid rgba(62, 207, 142, 0.45);
+}
+
+.dr-inverse {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1);
+}
+
+.dr-formula {
+  color: var(--text);
+  font-size: var(--fs-md);
+}
+
+.dr-why {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
 }

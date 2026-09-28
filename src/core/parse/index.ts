@@ -145,6 +145,29 @@ const INVERSE_FN: ReadonlyMap<string, string> = new Map([
   ['tan', 'atan'],
 ])
 
+/** The odd denominators realPow recognises in an exponent: 1/3, 2/5, 4/7 … */
+const REAL_ROOT_MAX_Q = 15
+
+/**
+ * u^r as a textbook reads it. Math.pow is NaN for a negative base and a
+ * non-integer exponent, but x^(1/3) is the cube root and x^(2/3) is (∛x)²
+ * on ALL of ℝ in every Precalc book: an exponent that is p/q in lowest terms
+ * with q ODD has a real value, (−1)^p · |u|^r. An even q (x^(1/2)) stays
+ * undefined for u < 0, and so does an irrational exponent (x^π).
+ */
+function realPow(u: number, r: number): number {
+  const v = Math.pow(u, r)
+  if (!(u < 0) || v === v || !Number.isFinite(r)) return v
+  for (let q = 3; q <= REAL_ROOT_MAX_Q; q += 2) {
+    const pq = r * q
+    const pr = Math.round(pq)
+    if (Math.abs(pq - pr) > 1e-9 * Math.max(1, Math.abs(pq))) continue
+    const m = Math.pow(-u, r)
+    return pr % 2 === 0 ? m : -m
+  }
+  return v
+}
+
 /**
  * log_b(u) = ln(u)/ln(b). A base that is not positive, or is 1, has no
  * logarithm: NaN everywhere (a slider passing through b = 1 lifts the pen
@@ -965,7 +988,7 @@ function compile(n: Node): Evaluator {
             if (e === 3) return (p, a, b) => { const u = f(p, a, b); return u * u * u }
             if (e === 0.5) return (p, a, b) => Math.sqrt(f(p, a, b))
           }
-          return (p, a, b) => Math.pow(f(p, a, b), g(p, a, b))
+          return (p, a, b) => realPow(f(p, a, b), g(p, a, b))
         }
       }
       break

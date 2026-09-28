@@ -9,6 +9,9 @@
 //     factorThrough  curveId -> the point a factored curve is built through
 //     motion         curveId -> the Motion player (t, playing, speed, accel,
 //                               exportParticle, a polar curve's area)
+//     lens           curveId -> the Domain section's board switches: the
+//                               cut-off part's ghost, the horizontal line
+//                               test's height, the reflected point's a
 //
 // and the document stores them as one CurveViews map. This file is the whole
 // translation, both ways, plus the two history rules:
@@ -32,11 +35,19 @@ import { normalizeCurveView } from '../core/persist'
 import type { MotionPlayState } from './motionLinks'
 import { defaultPlay, motionInterval } from './motionLinks'
 
+/** The Domain section's board switches for one curve (every field absent at its default). */
+export interface DomainLens {
+  ghost?: true
+  hlt?: number
+  reflect?: number
+}
+
 export interface ViewStates {
   construction: Record<string, boolean>
   showParent: Record<string, boolean>
   factorThrough: Record<string, Vec2>
   motion: Record<string, MotionPlayState>
+  lens: Record<string, DomainLens>
 }
 
 export const emptyViewStates = (): ViewStates => ({
@@ -44,9 +55,53 @@ export const emptyViewStates = (): ViewStates => ({
   showParent: {},
   factorThrough: {},
   motion: {},
+  lens: {},
 })
 
-/** One curve's settings out of the four maps, defaults dropped (null = none). */
+/** A lens with its defaults dropped, or null when nothing is left. */
+export function normalizeLens(l: DomainLens | undefined | null): DomainLens | null {
+  if (!l) return null
+  const out: DomainLens = {}
+  if (l.ghost === true) out.ghost = true
+  if (typeof l.hlt === 'number' && Number.isFinite(l.hlt)) out.hlt = l.hlt
+  if (typeof l.reflect === 'number' && Number.isFinite(l.reflect)) out.reflect = l.reflect
+  return Object.keys(out).length > 0 ? out : null
+}
+
+/** One curve's lens, patched: `undefined` in the patch clears that field. The same map when nothing changed. */
+export function patchLens(
+  m: Record<string, DomainLens>,
+  id: string,
+  patch: { ghost?: boolean; hlt?: number | null; reflect?: number | null },
+): Record<string, DomainLens> {
+  const cur = m[id] ?? {}
+  const next: DomainLens = { ...cur }
+  if ('ghost' in patch) {
+    if (patch.ghost) next.ghost = true
+    else delete next.ghost
+  }
+  if ('hlt' in patch) {
+    if (typeof patch.hlt === 'number' && Number.isFinite(patch.hlt)) next.hlt = patch.hlt
+    else delete next.hlt
+  }
+  if ('reflect' in patch) {
+    if (typeof patch.reflect === 'number' && Number.isFinite(patch.reflect)) next.reflect = patch.reflect
+    else delete next.reflect
+  }
+  const norm = normalizeLens(next)
+  if (
+    (norm === null && !(id in m)) ||
+    (norm !== null && cur.ghost === norm.ghost && cur.hlt === norm.hlt && cur.reflect === norm.reflect && id in m)
+  ) {
+    return m
+  }
+  const out = { ...m }
+  if (norm) out[id] = norm
+  else delete out[id]
+  return out
+}
+
+/** One curve's settings out of the maps, defaults dropped (null = none). */
 export function curveViewOf(s: ViewStates, id: string): CurveView | null {
   const v: CurveView = {}
   if (s.construction[id] === true) v.construction = true
@@ -59,6 +114,12 @@ export function curveViewOf(s: ViewStates, id: string): CurveView | null {
   }
   const p = s.factorThrough[id]
   if (p) v.through = { x: p.x, y: p.y }
+  const l = normalizeLens(s.lens[id])
+  if (l) {
+    if (l.ghost) v.ghost = true
+    if (l.hlt !== undefined) v.hlt = l.hlt
+    if (l.reflect !== undefined) v.reflect = l.reflect
+  }
   return normalizeCurveView(v)
 }
 
@@ -69,6 +130,7 @@ export function collectCurveViews(s: ViewStates): CurveViews {
     ...Object.keys(s.showParent),
     ...Object.keys(s.factorThrough),
     ...Object.keys(s.motion),
+    ...Object.keys(s.lens),
   ])
   const out: CurveViews = {}
   for (const id of ids) {
@@ -104,6 +166,8 @@ function put(s: ViewStates, id: string, v: CurveView, curve: FittedCurve | undef
   if (v.showParent !== undefined) s.showParent[id] = v.showParent
   if (v.through) s.factorThrough[id] = { x: v.through.x, y: v.through.y }
   if (v.area || v.accel || v.exportParticle) s.motion[id] = playFrom(v, curve)
+  const l = normalizeLens({ ghost: v.ghost, hlt: v.hlt, reflect: v.reflect })
+  if (l) s.lens[id] = l
 }
 
 /** The four maps a freshly loaded document opens with. */
@@ -142,15 +206,17 @@ export function pruneViewStates(s: ViewStates, live: ReadonlySet<string>): ViewS
   const showParent = keepLive(s.showParent, live)
   const factorThrough = keepLive(s.factorThrough, live)
   const motion = keepLive(s.motion, live)
+  const lens = keepLive(s.lens, live)
   if (
     construction === s.construction &&
     showParent === s.showParent &&
     factorThrough === s.factorThrough &&
-    motion === s.motion
+    motion === s.motion &&
+    lens === s.lens
   ) {
     return s
   }
-  return { construction, showParent, factorThrough, motion }
+  return { construction, showParent, factorThrough, motion, lens }
 }
 
 /**
@@ -177,6 +243,7 @@ export function restoreViewStates(
         showParent: { ...pruned.showParent },
         factorThrough: { ...pruned.factorThrough },
         motion: { ...pruned.motion },
+        lens: { ...pruned.lens },
       }
     }
     // An arriving curve starts from what it recorded, not from anything
@@ -185,6 +252,7 @@ export function restoreViewStates(
     delete out.showParent[c.id]
     delete out.factorThrough[c.id]
     delete out.motion[c.id]
+    delete out.lens[c.id]
     put(out, c.id, v, c)
   }
   return out ?? pruned

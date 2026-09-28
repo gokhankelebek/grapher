@@ -176,7 +176,7 @@ import {
 import type { InverseInfo, NameState } from './ui/nameLinks'
 import type { FunctionEnv } from './core/functionEnv'
 import type { CurveViews } from './core/persist'
-import type { ViewStates } from './ui/curveViews'
+import type { DomainLens, ViewStates } from './ui/curveViews'
 import {
   collectCurveViews,
   curveViewsKey,
@@ -194,6 +194,37 @@ import {
 } from './ui/intersections'
 import type { BoardIntersection, CurveIntersections } from './ui/intersections'
 import { snapCoord, snapPlaced } from './ui/snap'
+import { curveDomain, curveRange, levelCrossings, naturalDomain, oneToOneInfo } from './core/domainRange'
+import type { OneToOne, RealSet } from './core/domainRange'
+import { invertFormula } from './core/inverse'
+import type { InverseFormula } from './core/inverse'
+import { curveEquationText } from './ui/equationText'
+import { patchLens } from './ui/curveViews'
+import {
+  WHY_PIECEWISE,
+  explicitF,
+  familyF,
+  hltStart,
+  hltVerdict,
+  inVariable,
+  inverseCurveLine,
+  inverseRestriction,
+  oneToOneChips,
+  probeX,
+  reflectProbe,
+  restrictedLine,
+  singleProperInterval,
+  sketchDomain,
+  splitTyped,
+} from './ui/domainLinks'
+import type {
+  DomainActions,
+  DomainPanel,
+  InversePanel,
+  Restriction,
+  RestrictMode,
+  SetNotation,
+} from './ui/domainLinks'
 import { ppuX, ppuY } from './core/types'
 import {
   INDEPENDENT_NEEDS_SQUARE,
@@ -796,13 +827,23 @@ export default function App() {
   const [showParent, setShowParent] = useState<Record<string, boolean>>({})
   const showParentRef = useRef(showParent)
   showParentRef.current = showParent
-  /** The four per-curve view maps, as one value (src/ui/curveViews.ts). */
+  /**
+   * The Domain section's board switches, per curve: the cut-off part's ghost,
+   * the horizontal line test's height and the reflected point. Ways of
+   * looking at the board, like "show parent": saved with the document
+   * (board.curveViews), never an undo step.
+   */
+  const [lens, setLens] = useState<Record<string, DomainLens>>({})
+  const lensRef = useRef(lens)
+  lensRef.current = lens
+  /** The per-curve view maps, as one value (src/ui/curveViews.ts). */
   const readViewStates = useCallback(
     (): ViewStates => ({
       construction: constructionRef.current,
       showParent: showParentRef.current,
       factorThrough: factorThroughRef.current,
       motion: motionPlayRef.current,
+      lens: lensRef.current,
     }),
     [],
   )
@@ -824,11 +865,15 @@ export default function App() {
       motionPlayRef.current = next.motion
       setMotionPlay(next.motion)
     }
+    if (next.lens !== lensRef.current) {
+      lensRef.current = next.lens
+      setLens(next.lens)
+    }
   }, [])
   /** What the document's curveViews map says, as a string that ignores the particle. */
   const curveViewsSig = useMemo(
-    () => curveViewsKey(collectCurveViews({ construction, showParent, factorThrough, motion: motionPlay })),
-    [construction, showParent, factorThrough, motionPlay],
+    () => curveViewsKey(collectCurveViews({ construction, showParent, factorThrough, motion: motionPlay, lens })),
+    [construction, showParent, factorThrough, motionPlay, lens],
   )
   const [extraModels, setExtraModels] = useState<Record<string, ModelSpec>>({})
   /**
@@ -967,7 +1012,7 @@ export default function App() {
     yes: string
     run(): void
   } | null>(null)
-  const [, bumpHistory] = useState(0)
+  const [historyTick, bumpHistory] = useState(0)
 
   // ---- documents / persistence
   const [docMeta, setDocMeta] = useState<DocMeta>(() => ({
@@ -1018,6 +1063,12 @@ export default function App() {
   const setWheelPref = useCallback((next: WheelPref): void => {
     setWheelPrefState(next)
     updatePrefs({ wheel: next })
+  }, [])
+  /** Domain / range rows: interval notation or set-builder. A person's habit, remembered like `wheel`. */
+  const [setNotation, setSetNotationState] = useState<SetNotation>(() => readPrefs().setNotation)
+  const changeSetNotation = useCallback((next: SetNotation): void => {
+    setSetNotationState(next)
+    updatePrefs({ setNotation: next })
   }, [])
   /**
    * How each axis is MEASURED, as this document states it.
@@ -6530,6 +6581,336 @@ export default function App() {
     [commitState, makeInverseSpec, plainSources, registerModels, showFeatureNote, showInverse, viewWindow],
   )
 
+  // ======================================================= domain and range
+  //
+  // The Domain, Range and One-to-one rows at the top of a card's Analysis
+  // table, the restriction editor and chips, the cut-off part's ghost, the
+  // horizontal line test, the reflected point and the inverse as an
+  // equation. The mathematics is src/core/domainRange.ts and
+  // src/core/inverse.ts; the text between it and the card is
+  // src/ui/domainLinks.ts. Nothing here is stored except the restriction
+  // itself (the typed line, or a sketch's domain) and the board switches
+  // (board.curveViews); every set is recomputed, cached per curve on the same
+  // value key the analysis uses.
+
+  interface DomainFacts {
+    natural: RealSet | null
+    domain: RealSet | null
+    range: RealSet | null
+    one: OneToOne | null
+  }
+  /**
+   * A typed RESTRICTED line's model without its restriction ("y = x^2" for
+   * "y = x^2 {x >= 0}"), cached per curve on its body: what the ghost of the
+   * cut-off part draws, and the natural domain the restriction is measured
+   * against. Null for a line with no restriction, a piecewise, or a sketch.
+   */
+  const baseModelCacheRef = useRef(new Map<string, { key: string; spec: ModelSpec | null }>())
+  const baseModelOf = useCallback(
+    (curve: FittedCurve): ModelSpec | null => {
+      if (curve.kind !== 'explicit' || !curve.modelId.startsWith('expr_')) return null
+      const split = splitTyped(exprSourcesRef.current[curve.id])
+      if (!split || split === 'piecewise' || split.cond === null) return null
+      const hit = baseModelCacheRef.current.get(curve.id)
+      if (hit && hit.key === split.base) return hit.spec
+      let spec: ModelSpec | null = null
+      try {
+        const o = parseExpression(split.base, envFor(callsRef.current[curve.id] ?? [], typedName(split.base)))
+        spec = o.ok && o.plot.kind === 'explicit' ? o.plot.makeModel(`base_${curve.id}`) : null
+      } catch {
+        spec = null
+      }
+      baseModelCacheRef.current.set(curve.id, { key: split.base, spec })
+      return spec
+    },
+    [envFor],
+  )
+  const domainFactsCacheRef = useRef(new Map<string, { key: string; facts: DomainFacts }>())
+  const domainFactsKey = useCallback(
+    (curve: FittedCurve): string =>
+      `${curve.modelId}|${curve.params.join(',')}|${curve.domain ? curve.domain.join(',') : ''}|${
+        depKeysRef.current[curve.id] ?? ''
+      }|${exprSourcesRef.current[curve.id] ?? ''}|${modelsRef.current[curve.modelId] ? 1 : 0}`,
+    [],
+  )
+  /**
+   * f's natural domain, curve domain, range and horizontal line test — cached
+   * per curve. `live` (a drag or a slider in flight): the last answer stands
+   * until the gesture ends — a scan of the whole line is ~20 ms, which a
+   * frame cannot afford — and the rows catch up the moment it is committed.
+   */
+  const domainFactsFor = useCallback(
+    (curve: FittedCurve, live = false): DomainFacts => {
+      const key = domainFactsKey(curve)
+      const hit = domainFactsCacheRef.current.get(curve.id)
+      if (hit && (hit.key === key || live)) return hit.facts
+      const models = modelsRef.current
+      const safe = <T,>(f: () => T): T | null => {
+        try {
+          return f() ?? null
+        } catch {
+          return null
+        }
+      }
+      // The natural domain of a restricted typed line is its BODY's: the
+      // restriction is what the teacher set, measured against it.
+      const base = baseModelOf(curve)
+      const facts: DomainFacts = {
+        natural: safe(() =>
+          base
+            ? naturalDomain({ ...curve, modelId: base.id, domain: null }, { ...models, [base.id]: base })
+            : naturalDomain(curve, models),
+        ),
+        domain: safe(() => curveDomain(curve, models)),
+        range: safe(() => curveRange(curve, models)),
+        one: safe(() => oneToOneInfo(curve, models)),
+      }
+      domainFactsCacheRef.current.set(curve.id, { key, facts })
+      return facts
+    },
+    [domainFactsKey, baseModelOf],
+  )
+
+  /** How this curve's domain can be restricted from its card. */
+  const restrictModeOf = useCallback((curve: FittedCurve): RestrictMode => {
+    if (curve.kind !== 'explicit') return { kind: 'none', why: 'Only a function y = f(x) has a domain to restrict here.' }
+    const src = exprSourcesRef.current[curve.id]
+    if (curve.modelId.startsWith('expr_') && src) {
+      const split = splitTyped(src)
+      if (split === 'piecewise') return { kind: 'none', why: WHY_PIECEWISE }
+      if (split === null) return { kind: 'none', why: 'This line has nothing to restrict.' }
+      return { kind: 'typed', cond: split.cond }
+    }
+    if (MODELS[curve.modelId]) return { kind: 'sketch', domain: curve.domain }
+    return {
+      kind: 'none',
+      why: 'This curve is drawn from another one — restrict the domain of the curve it comes from.',
+    }
+  }, [])
+
+  /** The line invertFormula reads: the typed line without its restriction, or a sketch's equation. */
+  const inverseSourceOf = useCallback((curve: FittedCurve): string | null => {
+    const src = exprSourcesRef.current[curve.id]
+    if (curve.modelId.startsWith('expr_') && src) {
+      const split = splitTyped(src)
+      return split && split !== 'piecewise' ? split.base : null
+    }
+    try {
+      return curveEquationText(curve, modelsRef.current[curve.modelId])
+    } catch {
+      return null
+    }
+  }, [])
+
+  const inverseFormulaCacheRef = useRef(new Map<string, { key: string; formula: InverseFormula | null }>())
+  /** f⁻¹ as an equation, on the stretch the teacher chose (null: no formula). */
+  const inverseFormulaFor = useCallback(
+    (curve: FittedCurve, facts: DomainFacts, name: string): InverseFormula | null => {
+      const src = inverseSourceOf(curve)
+      if (!src) return null
+      const restriction = inverseRestriction(facts.domain, facts.natural)
+      const key = `${src}|${name}|${
+        restriction
+          ? `${restriction.lo},${restriction.hi},${restriction.loClosed},${restriction.hiClosed}`
+          : '-'
+      }|${depKeysRef.current[curve.id] ?? ''}`
+      const hit = inverseFormulaCacheRef.current.get(curve.id)
+      if (hit && hit.key === key) return hit.formula
+      let formula: InverseFormula | null = null
+      try {
+        formula = invertFormula(src, restriction, name)
+      } catch {
+        formula = null
+      }
+      inverseFormulaCacheRef.current.set(curve.id, { key, formula })
+      return formula
+    },
+    [inverseSourceOf],
+  )
+
+  /** One curve's board switches, changed — ref now, state for the render. Never an undo step. */
+  const patchLensFor = useCallback(
+    (id: string, patch: { ghost?: boolean; hlt?: number | null; reflect?: number | null }): void => {
+      const next = patchLens(lensRef.current, id, patch)
+      if (next === lensRef.current) return
+      lensRef.current = next
+      setLens(next)
+    },
+    [],
+  )
+
+  /**
+   * Restrict (or, with null, un-restrict) a function's domain from its card.
+   * A typed line is rewritten with the restriction clause the parser reads —
+   * the body kept, any old restriction replaced; a sketch's domain is set.
+   * One undo entry either way. A new restriction switches the ghost of the
+   * cut-off part on, so the teacher sees what was cut.
+   */
+  const restrictDomain = useCallback(
+    (id: string, r: Restriction | null): string | null => {
+      const curve = curvesRef.current.find((c) => c.id === id)
+      if (!curve) return null
+      const mode = restrictModeOf(curve)
+      if (mode.kind === 'none') return mode.why
+      if (mode.kind === 'typed') {
+        const src = exprSourcesRef.current[id]
+        const line = restrictedLine(src, r ?? { lo: null, hi: null })
+        if (line === null) return WHY_PIECEWISE
+        const err = restateTypedCurve(id, line, r ? 'restrict domain' : 'clear restriction')
+        if (err) return err
+      } else {
+        const dom = r ? sketchDomain(r, curve.domain, viewWindow()) : null
+        if (r && !dom) return 'That leaves no domain at all.'
+        commitState(
+          { curves: curvesRef.current.map((c) => (c.id === id ? { ...c, domain: dom } : c)) },
+          r ? 'restrict domain' : 'clear restriction',
+        )
+      }
+      patchLensFor(id, { ghost: r !== null })
+      return null
+    },
+    [commitState, patchLensFor, restateTypedCurve, restrictModeOf, viewWindow],
+  )
+
+  /** The horizontal line test on or off; on starts where it fails, if it can. */
+  const toggleHlt = useCallback(
+    (id: string, on: boolean): void => {
+      if (!on) {
+        patchLensFor(id, { hlt: null })
+        return
+      }
+      const curve = curvesRef.current.find((c) => c.id === id)
+      if (!curve) return
+      const f = explicitF(curve, modelsRef.current)
+      const vp = vpRef.current
+      const y = hltStart(domainFactsFor(curve).one, f ? f(0) : Number.NaN, vp.center.y)
+      patchLensFor(id, { hlt: y })
+    },
+    [domainFactsFor, patchLensFor],
+  )
+
+  /** The reflected point on or off; it starts at a = 1 (or the nearest x where f is defined). */
+  const toggleReflect = useCallback(
+    (id: string, on: boolean): void => {
+      if (!on) {
+        patchLensFor(id, { reflect: null })
+        return
+      }
+      const curve = curvesRef.current.find((c) => c.id === id)
+      const f = curve ? explicitF(curve, modelsRef.current) : null
+      if (!f) return
+      const vp = vpRef.current
+      const start = Number.isFinite(f(1)) ? 1 : probeX(f, vp.center.x, 20 / vp.pxPerUnit)
+      patchLensFor(id, { reflect: start })
+    },
+    [patchLensFor],
+  )
+
+  /**
+   * "Add f⁻¹(x) as its own curve": the inverse's line typed as an ordinary
+   * explicit curve — analysis, a card, a name of its own — restricted to f's
+   * range when that is one interval short of ℝ, so its domain is the inverse
+   * function's. And y = x once, like every other inverse. One undo entry.
+   */
+  const addInverseCurve = useCallback(
+    (id: string): void => {
+      const curve = curvesRef.current.find((c) => c.id === id)
+      if (!curve) return
+      const facts = domainFactsFor(curve)
+      const name = boardCurveNamesRef.current[id] ?? namesRef.current[id] ?? 'f'
+      const formula = inverseFormulaFor(curve, facts, name)
+      if (!formula) {
+        showFeatureNote({ kind: 'moved', key: Date.now(), text: `There is no formula for ${name}⁻¹ to type.` })
+        return
+      }
+      const lines: { src: string; color: string; mirror: boolean }[] = [
+        { src: inverseCurveLine(formula.source, facts.range), color: inverseColor(curve.color), mirror: false },
+      ]
+      if (!plainSources().some(isIdentityLine)) lines.push({ src: MIRROR_SRC, color: MIRROR_COLOR, mirror: true })
+      const made: FittedCurve[] = []
+      const models: Record<string, ModelSpec> = {}
+      const sources: Record<string, string> = {}
+      let mirror: FittedCurve | undefined
+      for (const line of lines) {
+        let outcome: ReturnType<typeof parseExpression>
+        try {
+          outcome = parseExpression(line.src)
+        } catch {
+          return
+        }
+        if (!outcome.ok) {
+          showFeatureNote({ kind: 'moved', key: Date.now(), text: outcome.error })
+          return
+        }
+        const modelId = `expr_${++exprCounterRef.current}`
+        try {
+          models[modelId] = outcome.plot.makeModel(modelId)
+        } catch {
+          return
+        }
+        const c: FittedCurve = {
+          id: nextId(),
+          modelId,
+          params: outcome.plot.defaultParams.slice(),
+          kind: outcome.plot.kind,
+          domain: outcome.plot.domain,
+          color: line.color,
+          strokeWidth: 2.5,
+          visible: true,
+          error: 0,
+        }
+        made.push(c)
+        if (line.mirror) mirror = c
+        sources[c.id] = line.src
+      }
+      registerModels(models)
+      commitState(
+        {
+          curves: [...curvesRef.current, ...made],
+          exprSources: { ...exprSourcesRef.current, ...sources },
+          ...(mirror
+            ? {
+                styles: {
+                  ...stylesRef.current,
+                  [mirror.id]: { ...stylesRef.current[mirror.id], dash: MIRROR_DASH.slice() },
+                },
+              }
+            : {}),
+        },
+        'add inverse',
+      )
+      showFeatureNote({
+        kind: 'moved',
+        key: Date.now(),
+        text: `Added ${formula.text}${mirror ? ' — and the line y = x' : ''}.`,
+      })
+    },
+    [commitState, domainFactsFor, inverseFormulaFor, plainSources, registerModels, showFeatureNote],
+  )
+
+  /** The inverse link whose curve this is, if any. */
+  const inverseLinkOf = useCallback(
+    (curveId: string): InverseLink | undefined => inversesRef.current.find((l) => l.curveId === curveId),
+    [],
+  )
+
+  const domainActions = useMemo<DomainActions>(
+    () => ({
+      onRestrict: (id, r) => {
+        const err = restrictDomain(id, r)
+        if (err) showFeatureNote({ kind: 'refused', key: Date.now(), reason: err })
+        return err
+      },
+      onGhost: (id, on) => patchLensFor(id, { ghost: on }),
+      onHlt: toggleHlt,
+      onReflect: toggleReflect,
+      onShowInverse: (id) => showInverseOf(id),
+      onAddInverse: addInverseCurve,
+      onNotation: changeSetNotation,
+    }),
+    [restrictDomain, showFeatureNote, patchLensFor, toggleHlt, toggleReflect, showInverseOf, addInverseCurve, changeSetNotation],
+  )
+
   /**
    * Rename a curve from its card's name chip. Every line that calls the old
    * letter is rewritten to the new one — one commit, one undo, which takes
@@ -6830,8 +7211,31 @@ export default function App() {
   // change or an Axes switch is no exception.
 
   /** Pan/zoom happened: the marker layer rides the same viewport. */
+  /**
+   * Where the horizontal line test's drag handle sits: just inside the left
+   * edge of the window. Refreshed on a pan or zoom only while a line is shown,
+   * and only once the edge has moved by a few pixels.
+   */
+  const [hltEdgeX, setHltEdgeX] = useState(0)
+  const hltEdgeRef = useRef(hltEdgeX)
+  hltEdgeRef.current = hltEdgeX
+  const refreshHltEdge = useCallback((force = false): void => {
+    if (!force && !Object.values(lensRef.current).some((l) => l.hlt !== undefined)) return
+    const vp = vpRef.current
+    const px = ppuX(vp)
+    if (!(px > 0)) return
+    const edge = vp.center.x - vp.widthPx / 2 / px + 26 / px
+    if (Math.abs(edge - hltEdgeRef.current) * px < 3) return
+    hltEdgeRef.current = edge
+    setHltEdgeX(edge)
+  }, [])
+  useEffect(() => {
+    refreshHltEdge(true)
+  }, [lens, refreshHltEdge])
+
   const viewportChanged = useCallback((): void => {
     overlayRef.current?.redraw()
+    refreshHltEdge()
     // Where the curves cross is hunted over the window, so panning can bring a
     // crossing into view that was never solved for. Hot path: this is a pair
     // of comparisons unless the board has left the coarse span entirely.
@@ -6852,7 +7256,7 @@ export default function App() {
     setAxesMode(axesModeOf(vpRef.current))
     viewSubsRef.current.forEach((fn) => fn())
     scheduleSave()
-  }, [refreshCrossSpan, refreshSolveSpan, refreshPartnerSpan, refreshGhostFrame, refreshMotionFrame, scheduleSave])
+  }, [refreshCrossSpan, refreshSolveSpan, refreshPartnerSpan, refreshGhostFrame, refreshMotionFrame, refreshHltEdge, scheduleSave])
 
   /** The view was changed from outside the stage: redraw everything that rides it. */
   const viewMoved = useCallback((): void => {
@@ -7173,10 +7577,88 @@ export default function App() {
   // A Taylor error band is sampled across the padded view, so it is the one
   // overlay that has to follow a pan — and only it asks for the span.
   const bandSpan = calcLinks.some((l) => l.kind === 'taylor' && l.band === true) ? crossSpan : null
+  // --------------------------------------------- the Domain section on the board
+  //
+  // Figure content, like a shaded integral: a switch on a card puts it on the
+  // board AND in the export (under SAT / AP it comes out in the mono ink).
+  //   ghost    a restricted function's whole graph, faint and dashed, behind it
+  //   hlt      the horizontal line test: the line, and a dot at every crossing —
+  //            warning-coloured at two or more, the passing colour otherwise
+  //   reflect  (a, f(a)), its mirror (f(a), a), and the segment across y = x
+
+  /** What the ghost of the cut-off part draws: a typed line's body, or a sketch's family everywhere. */
+  const ghostFunctionOf = useCallback(
+    (curve: FittedCurve): ((x: number) => number) | null => {
+      if (curve.kind !== 'explicit') return null
+      if (curve.modelId.startsWith('expr_') && exprSources[curve.id]) {
+        const spec = baseModelOf(curve)
+        const ev = spec?.evalExplicit
+        if (!spec || !ev) return null
+        const params = curve.params.slice()
+        return (x: number): number => {
+          try {
+            const v = ev.call(spec, params, x)
+            return typeof v === 'number' ? v : Number.NaN
+          } catch {
+            return Number.NaN
+          }
+        }
+      }
+      if (MODELS[curve.modelId] && curve.domain) return familyF(curve, models)
+      return null
+    },
+    // exprSources / calls: the body (and what it calls) is what the ghost draws.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [exprSources, calls, baseModelOf, models],
+  )
+
+  const domainOverlays = useMemo<Overlay[]>(() => {
+    if (kind !== 'cartesian') return []
+    const ids = Object.keys(lens)
+    if (ids.length === 0) return []
+    const out: Overlay[] = []
+    const marks: Overlay[] = []
+    for (const c of curves) {
+      const l = lens[c.id]
+      if (!l || !c.visible || c.kind !== 'explicit') continue
+      if (l.ghost) {
+        const g = ghostFunctionOf(c)
+        if (g) out.push({ kind: 'ghost', curveId: c.id, f: g })
+      }
+      if (l.hlt !== undefined) {
+        let xs: number[] = []
+        try {
+          xs = levelCrossings(c, models, l.hlt, crossSpan)
+        } catch {
+          xs = []
+        }
+        const v = hltVerdict(xs)
+        marks.push({ kind: 'hline', curveId: c.id, y: l.hlt, color: v.color })
+        for (const x of xs) marks.push({ kind: 'dot', curveId: c.id, at: { x, y: l.hlt }, color: v.color })
+      }
+      if (l.reflect !== undefined) {
+        const f = explicitF(c, models)
+        const pr = f ? reflectProbe(f, l.reflect) : null
+        if (pr) {
+          marks.push({ kind: 'segment', curveId: c.id, from: pr.p, to: pr.q, dashed: true })
+          marks.push({ kind: 'dot', curveId: c.id, at: pr.p })
+          marks.push({ kind: 'dot', curveId: c.id, at: pr.q, color: inverseColor(c.color), hollow: false })
+        }
+      }
+    }
+    return out.length + marks.length === 0 ? [] : [...out, ...marks]
+    // depKeys: a line that calls f moves when f does.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind, lens, curves, models, crossSpan, ghostFunctionOf, depKeys])
+
   const overlays = useMemo<Overlay[]>(() => {
     const base = kind === 'cartesian' ? overlaysFor(calcLinks, curves, models, bandSpan) : []
-    return motionAreaOverlays.length > 0 ? [...base, ...motionAreaOverlays] : base
-  }, [kind, calcLinks, curves, models, motionAreaOverlays, bandSpan])
+    const more = motionAreaOverlays.length + domainOverlays.length
+    if (more === 0) return base
+    // The ghost goes first (under everything else); the marks sort themselves
+    // onto the curves by kind.
+    return [...domainOverlays, ...base, ...motionAreaOverlays]
+  }, [kind, calcLinks, curves, models, motionAreaOverlays, bandSpan, domainOverlays])
   const overlaysRef = useRef<Overlay[]>(overlays)
   overlaysRef.current = overlays
 
@@ -7845,10 +8327,56 @@ export default function App() {
       },
     }
   }, [selectedMotion, motionScene, patchMotion])
-  const boardHandles = useMemo<ExtraHandle[]>(
-    () => (motionHandle ? [...extraHandles, motionHandle] : extraHandles),
-    [extraHandles, motionHandle],
-  )
+  /**
+   * The Domain section's points: the horizontal line's grip at the left edge
+   * (drag it up and down — snapped like every other handle) and the
+   * reflected point, which slides along f. Only for the selected curve — or,
+   * for the reflected point, f's inverse card too.
+   */
+  const domainHandles = useMemo<ExtraHandle[]>(() => {
+    if (kind !== 'cartesian' || !selectedId) return []
+    const link = inverses.find((l) => l.curveId === selectedId)
+    const ownerId = link ? link.parentId : selectedId
+    const l = lens[ownerId]
+    const curve = curves.find((c) => c.id === ownerId)
+    if (!l || !curve || !curve.visible || curve.kind !== 'explicit') return []
+    const out: ExtraHandle[] = []
+    if (l.hlt !== undefined && ownerId === selectedId) {
+      out.push({
+        id: `domain:${ownerId}:hlt`,
+        pos: { x: hltEdgeX, y: l.hlt },
+        label: 'y',
+        color: curve.color,
+        onDrag: (p: Vec2) => patchLensFor(ownerId, { hlt: snapCoord(p.y, vpRef.current, 'y') }),
+      })
+    }
+    if (l.reflect !== undefined) {
+      const f = explicitF(curve, models)
+      const pr = f ? reflectProbe(f, l.reflect) : null
+      if (f && pr) {
+        out.push({
+          id: `domain:${ownerId}:reflect`,
+          pos: pr.p,
+          label: 'a',
+          color: curve.color,
+          onDrag: (p: Vec2) => {
+            const vp = vpRef.current
+            const live = curvesRef.current.find((c) => c.id === ownerId)
+            const g = live ? explicitF(live, modelsRef.current) : null
+            if (!g) return
+            patchLensFor(ownerId, { reflect: probeX(g, snapCoord(p.x, vp, 'x'), 4 / vp.pxPerUnit) })
+          },
+        })
+      }
+    }
+    return out
+  }, [kind, selectedId, inverses, lens, curves, models, hltEdgeX, patchLensFor])
+
+  const boardHandles = useMemo<ExtraHandle[]>(() => {
+    const more = motionHandle ? [motionHandle] : []
+    if (domainHandles.length > 0) more.push(...domainHandles)
+    return more.length > 0 ? [...extraHandles, ...more] : extraHandles
+  }, [extraHandles, motionHandle, domainHandles])
 
   /** What the board marks for the selected curve. */
   const boardAnalysis = useMemo<SpecialPoint[]>(() => {
@@ -8044,6 +8572,100 @@ export default function App() {
   }, [inverses, inverseInfos])
   const boardCurveNamesRef = useRef(boardCurveNames)
   boardCurveNamesRef.current = boardCurveNames
+
+  // ------------------------------------------------ the selected card's Domain rows
+  //
+  // Only the selected card is asked (the rows live in its open body), and
+  // only when a value it depends on changes: the facts are cached per curve
+  // on the analysis's own value key (domainFactsFor), so a hover, a toast or
+  // a pan re-renders the card without recomputing a single set.
+  const domainPanel = useMemo<DomainPanel | undefined>(() => {
+    if (kind !== 'cartesian' || !selectedId) return undefined
+    const link = inverses.find((l) => l.curveId === selectedId)
+    const owner = curves.find((c) => c.id === (link ? link.parentId : selectedId))
+    if (!owner || owner.kind !== 'explicit') return undefined
+    // A gesture in flight (an edit bracket is open): keep the last answer.
+    const facts = domainFactsFor(owner, preEditRef.current !== null)
+    const name = boardCurveNames[owner.id] ?? names[owner.id] ?? 'f'
+    const formula = inverseFormulaFor(owner, facts, name)
+    const shown = inverses.some((l) => l.parentId === owner.id)
+    const inverse: InversePanel = {
+      latex: formula ? formula.latex : null,
+      text: formula ? formula.text : null,
+      branch: formula ? formula.branch : null,
+      why: formula
+        ? null
+        : facts.one && !facts.one.oneToOne
+          ? `${name} isn\u2019t one-to-one \u2014 restrict its domain first`
+          : 'No formula for this inverse \u2014 it is still drawn by reflection',
+      addLine: formula ? inverseCurveLine(formula.source, facts.range) : null,
+      shown,
+    }
+    if (link) {
+      return {
+        role: 'inverse',
+        ownerId: owner.id,
+        name: `${name}\u207b\u00b9`,
+        domain: inVariable(facts.range, 'x'),
+        range: inVariable(facts.domain, 'y'),
+        oneToOne: null,
+        restrict: { kind: 'none', why: `Restrict ${name} instead — ${name}\u207b\u00b9 follows it.` },
+        current: null,
+        restricted: false,
+        chips: [],
+        ghost: false,
+        hlt: null,
+        reflect: false,
+        inverse,
+      }
+    }
+    const restrict = restrictModeOf(owner)
+    const l = lens[owner.id]
+    let current = null as DomainPanel['current']
+    let restricted = false
+    if (restrict.kind === 'typed' && restrict.cond !== null) {
+      restricted = true
+      current = singleProperInterval(facts.domain)
+    } else if (restrict.kind === 'sketch' && owner.domain) {
+      restricted = true
+      const lo = Math.min(owner.domain[0], owner.domain[1])
+      const hi = Math.max(owner.domain[0], owner.domain[1])
+      current = { lo, hi, loClosed: true, hiClosed: true, loExact: null, hiExact: null }
+    }
+    let hlt: DomainPanel['hlt'] = null
+    if (l?.hlt !== undefined) {
+      let xs: number[] = []
+      try {
+        xs = levelCrossings(owner, models, l.hlt, crossSpan)
+      } catch {
+        xs = []
+      }
+      hlt = { y: l.hlt, verdict: hltVerdict(xs) }
+    }
+    return {
+      role: 'function',
+      ownerId: owner.id,
+      name,
+      domain: facts.domain,
+      range: facts.range,
+      oneToOne: facts.one,
+      restrict,
+      current,
+      restricted,
+      chips: oneToOneChips(facts.one),
+      ghost: l?.ghost === true,
+      hlt,
+      reflect: l?.reflect !== undefined,
+      inverse,
+    }
+    // The facts are keyed on values, so these say WHEN to ask; historyTick
+    // is the end of a gesture (a committed drag), when stale facts refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind, selectedId, inverses, curves, models, exprSources, depKeys, boardCurveNames, names, lens, crossSpan, domainFactsFor, inverseFormulaFor, restrictModeOf, historyTick])
+  const domainPanelFor = useCallback(
+    (id: string): DomainPanel | undefined => (domainPanel && id === selectedId ? domainPanel : undefined),
+    [domainPanel, selectedId],
+  )
 
   /** The exponentials "Build ▾ → Logarithmic → Inverse of…" can pick, named. */
   const logInverseSources = useMemo(
@@ -9167,6 +9789,9 @@ export default function App() {
         linkErrors={linkErrors}
         cardNotes={inverseNotes}
         onShowInverseOf={showInverseOf}
+        domainPanelFor={domainPanelFor}
+        domainActions={domainActions}
+        setNotation={setNotation}
         depKeys={depKeys}
         exprNames={exprNames}
         onExpBuild={buildExponential}
