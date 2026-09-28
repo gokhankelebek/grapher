@@ -78,6 +78,17 @@ import {
 } from './ui/fieldLinks'
 import type { BoardField, CompiledField, FieldCardData } from './ui/fieldLinks'
 import {
+  defaultRun,
+  eulerLegend,
+  eulerScene,
+  needsTrueSolve,
+  patchRun,
+  runColor,
+  withRun,
+  withoutRun,
+} from './ui/eulerLinks'
+import type { EulerRun, EulerScene, RunPatch } from './ui/eulerLinks'
+import {
   compileShapes,
   looksLikeShape,
   moveVertex,
@@ -4187,6 +4198,56 @@ export default function App() {
     [commitState, mapField],
   )
 
+  // ------------------------------------------------------- Euler's method
+  //
+  // A run is a start point, a step and a count stored on its field
+  // (src/ui/eulerLinks.ts); the table, the path, the true value and the
+  // verdict are all re-asked of the field on every change.
+
+  /** "+ Euler's method": the first run from the first solution point, later ones with h halved. */
+  const addEuler = useCallback(
+    (fieldId: string): void => {
+      const field = fieldsRef.current.find((f) => f.id === fieldId)
+      if (!field) return
+      const run: EulerRun = { id: nextId(), ...defaultRun(field) }
+      commitState({ fields: mapField(fieldId, (f) => withRun(f, run)) }, 'add Euler’s method')
+      setSelectedId(fieldId)
+    },
+    [commitState, mapField],
+  )
+
+  /**
+   * Change one run. `live` is the drag of its start point: inside the bracket
+   * the press opened, so the whole drag is one undo.
+   */
+  const patchEuler = useCallback(
+    (fieldId: string, runId: string, patch: RunPatch, live = false): void => {
+      const field = fieldsRef.current.find((f) => f.id === fieldId)
+      if (!field) return
+      const next = patchRun(field, runId, patch)
+      if (next === field) return
+      const change = { fields: mapField(fieldId, () => next) }
+      if (live) {
+        relabelEdit('move Euler start point')
+        applyState(change)
+      } else {
+        commitState(change, 'edit Euler’s method')
+      }
+    },
+    [applyState, commitState, mapField, relabelEdit],
+  )
+
+  const removeEuler = useCallback(
+    (fieldId: string, runId: string): void => {
+      const field = fieldsRef.current.find((f) => f.id === fieldId)
+      if (!field) return
+      const next = withoutRun(field, runId)
+      if (next === field) return
+      commitState({ fields: mapField(fieldId, () => next) }, 'remove Euler’s method')
+    },
+    [commitState, mapField],
+  )
+
   // -------------------------------------------------- what the fields draw
 
   /** Every field's closure, its LaTeX and its slider names, in one pass. */
@@ -4215,7 +4276,8 @@ export default function App() {
   solvedSpanRef.current = solvedSpan
   /** True while anything needs solving at all — checked on the pan hot path. */
   const hasSolutionsRef = useRef(false)
-  hasSolutionsRef.current = fields.some((f) => f.visible && f.solutions.length > 0)
+  hasSolutionsRef.current =
+    fields.some((f) => f.visible && f.solutions.length > 0) || needsTrueSolve(fields)
 
   /** Re-solve if the window has grown past the margin. Cheap, and idempotent. */
   const refreshSolveSpan = useCallback((): void => {
@@ -4294,10 +4356,28 @@ export default function App() {
     setMotionFrame(next)
   }, [])
 
-  const fieldPolylines = useMemo<Polyline[]>(
+  const fieldSolutionPolylines = useMemo<Polyline[]>(
     () => solutionPolylines(fields, fieldCompiled, solvedSpan),
     [fields, fieldCompiled, solvedSpan],
   )
+
+  /** Euler's-method paths and, where asked for, the true solutions through their starts. */
+  const eulerFigure = useMemo<EulerScene>(
+    () => eulerScene(fields, fieldCompiled, solvedSpan),
+    [fields, fieldCompiled, solvedSpan],
+  )
+  // The true solutions ride along with the solution curves — the same kind of
+  // figure, integrated across the same span — so every consumer of the
+  // field polylines (screen and export) gets them without a second path.
+  const fieldPolylines = useMemo<Polyline[]>(
+    () =>
+      eulerFigure.polylines.length > 0
+        ? [...fieldSolutionPolylines, ...eulerFigure.polylines]
+        : fieldSolutionPolylines,
+    [fieldSolutionPolylines, eulerFigure],
+  )
+  const eulerPathsRef = useRef(eulerFigure.paths)
+  eulerPathsRef.current = eulerFigure.paths
 
   const fieldSceneRef = useRef<SlopeField[]>(fieldScene)
   fieldSceneRef.current = fieldScene
@@ -7862,6 +7942,22 @@ export default function App() {
           },
         })
       }
+      // Each Euler run's start point. After the solution points on purpose:
+      // a run starts at the first solution point by default, and the hit test
+      // gives a tie to the LAST handle, so the press moves the run the
+      // teacher just added rather than the curve under it.
+      ;(field.eulers ?? []).forEach((run, i) => {
+        out.push({
+          id: `euler:${field.id}:${run.id}`,
+          pos: { x: run.x0, y: run.y0 },
+          label: `Euler start ${throughLabel(run.x0, run.y0).replace('through ', '')}`,
+          color: runColor(field.color, i),
+          onDrag: (pos) => {
+            const on = snapPlaced(pos, vpRef.current)
+            patchEuler(field.id, run.id, { x0: on.x, y0: on.y }, true)
+          },
+        })
+      })
     }
     // A function built from its roots: each real root is a handle ON the
     // x-axis, where a teacher points at it — the numerator's as "root", the
@@ -8031,6 +8127,7 @@ export default function App() {
     changeCalc,
     fields,
     moveSolution,
+    patchEuler,
     shapes,
     shapeCompiled,
     dragShapeVertex,
@@ -8940,6 +9037,10 @@ export default function App() {
               ...partners,
             ]
           : fieldPolylinesRef.current,
+      // Euler's method is the figure on an Euler lesson: the path, its dots
+      // and its "h = 0.5" tag go into the PNG by the same field the screen
+      // draws them with (their true solutions ride in the polylines above).
+      ...(eulerPathsRef.current.length > 0 ? { eulers: eulerPathsRef.current } : {}),
       // A triangle, a vector, a labelled point ARE the figure on a geometry
       // board — often the only thing on it — so they go into the exported
       // scene by the same field the screen uses rather than by a second code
@@ -9516,6 +9617,8 @@ export default function App() {
               // field has no card on the wall. Two fields projected side by
               // side would otherwise be two grey textures.
               ...fieldLegend(fields, fieldCompiled),
+              // Each Euler run by its step: "Euler's method, h = 0.5".
+              ...eulerLegend(fields, fieldCompiled),
               // And a shape: △ABC on the wall, so the class knows which
               // triangle the lesson is about when two are on the board.
               ...shapeLegend(shapes, shapeCompiled),
@@ -9821,6 +9924,9 @@ export default function App() {
         onFieldEquation={setFieldEquation}
         onSolutionSet={setSolutionCoord}
         onSolutionRemove={removeSolution}
+        onEulerAdd={addEuler}
+        onEulerPatch={patchEuler}
+        onEulerRemove={removeEuler}
         shapes={shapes}
         shapeCardFor={shapeCardFor}
         onShapeDelete={deleteShape}
@@ -9941,6 +10047,7 @@ export default function App() {
           overlays={overlays}
           fields={fieldScene}
           polylines={screenPolylines}
+          eulers={eulerFigure.paths}
           shapes={screenShapes}
           scatter={scatterScene}
           grid={boardGrid}

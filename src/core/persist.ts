@@ -281,6 +281,44 @@ export interface BoardField {
   spacingPx: number
   visible: boolean
   solutions: FieldSolution[]
+  /**
+   * Euler's-method runs on this field. Optional, and absent (not []) on a
+   * field that has none, so every field built before Euler existed is still
+   * the same object — and still the same bytes on disk.
+   */
+  eulers?: EulerRun[]
+}
+
+/**
+ * One run of Euler's method: the start point, the step and the number of
+ * steps. Exactly what a student is given on the exam, and nothing computed —
+ * the table, the path and the verdict are all re-asked of the field on every
+ * change (src/core/euler.ts), so a slider drag moves the whole table live.
+ */
+export interface EulerRun {
+  id: string
+  x0: number
+  y0: number
+  /** Step size. Nonzero; negative steps to the left. */
+  h: number
+  /** Number of steps, an integer in [EULER_N_MIN, EULER_N_MAX]. */
+  n: number
+  /** Also draw the true solution through (x0, y0), dashed. */
+  showTrue?: true
+  /** Label the points P₀, P₁, … on the board. */
+  labels?: true
+}
+
+/** Steps a run may take. 50 is already more rows than a card can show usefully. */
+export const EULER_N_MIN = 1
+export const EULER_N_MAX = 50
+/** Runs one field may carry — comparing h = 0.5, 0.25, 0.125 is three. */
+export const MAX_EULER_RUNS = 12
+
+/** Integerise and clamp a step count — the card's input and the loader agree. */
+export function clampEulerN(v: unknown): number {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return 4
+  return Math.min(EULER_N_MAX, Math.max(EULER_N_MIN, Math.round(v)))
 }
 
 /** Lattice spacings the card offers, coarse to fine. */
@@ -1035,6 +1073,22 @@ export interface StoredField {
   hidden?: true
   /** Initial conditions, flat [x0,y0,x1,y1,...]. Omitted when there are none. */
   through?: number[]
+  /** Euler's-method runs. Omitted when there are none. */
+  eulers?: StoredEuler[]
+}
+
+/**
+ * One Euler run as JSON. No id: like an initial condition's, it is minted on
+ * load, so a load/save cycle cannot change a byte. The flags are written only
+ * when on.
+ */
+export interface StoredEuler {
+  x0: number
+  y0: number
+  h: number
+  n: number
+  true?: true
+  labels?: true
 }
 
 /** One link, flattened. Only the fields its own kind uses are ever written. */
@@ -1744,7 +1798,54 @@ export function fieldToStored(f: BoardField): StoredField {
     for (const s of f.solutions.slice(0, MAX_SOLUTIONS)) flat.push(s.x, s.y)
     out.through = flat
   }
+  if (f.eulers && f.eulers.length > 0) {
+    out.eulers = f.eulers.slice(0, MAX_EULER_RUNS).map((r) => {
+      const e: StoredEuler = { x0: r.x0, y0: r.y0, h: r.h, n: clampEulerN(r.n) }
+      if (r.showTrue) e.true = true
+      if (r.labels) e.labels = true
+      return e
+    })
+  }
   return out
+}
+
+/**
+ * The Euler runs out of an untrusted blob. A run with no usable start, or a
+ * step size that is zero or not a number, cannot be stepped at all and is
+ * dropped — each one reported. A step count is clamped rather than refused:
+ * 80 steps is a request for "a lot", not a damaged record.
+ */
+export function storedToEulers(raw: unknown): { runs: EulerRun[]; problems: string[] } {
+  const runs: EulerRun[] = []
+  const problems: string[] = []
+  if (raw === undefined) return { runs, problems }
+  if (!Array.isArray(raw)) {
+    problems.push('Its list of Euler’s-method runs was unreadable.')
+    return { runs, problems }
+  }
+  let dropped = 0
+  for (const r of raw) {
+    if (runs.length >= MAX_EULER_RUNS) {
+      problems.push(`Only the first ${MAX_EULER_RUNS} Euler’s-method runs were loaded.`)
+      break
+    }
+    if (!isObj(r) || !isNum(r.x0) || !isNum(r.y0) || !isNum(r.h) || r.h === 0 || !isNum(r.n)) {
+      dropped++
+      continue
+    }
+    const run: EulerRun = { id: newId(), x0: r.x0, y0: r.y0, h: r.h, n: clampEulerN(r.n) }
+    if (r.true === true) run.showTrue = true
+    if (r.labels === true) run.labels = true
+    runs.push(run)
+  }
+  if (dropped > 0) {
+    problems.push(
+      dropped === 1
+        ? 'An Euler’s-method run with no usable start point or step size was removed.'
+        : `${dropped} Euler’s-method runs with no usable start point or step size were removed.`,
+    )
+  }
+  return { runs, problems }
 }
 
 /**
@@ -1754,7 +1855,9 @@ export function fieldToStored(f: BoardField): StoredField {
  * that no longer parses is not salvageable: null, with the parser's own
  * sentence, which the loader reports rather than swallowing.
  */
-export function storedToField(raw: unknown): { field: BoardField } | { error: string } {
+export function storedToField(
+  raw: unknown,
+): { field: BoardField; problems?: string[] } | { error: string } {
   if (!isObj(raw)) return { error: 'it was not readable' }
   const { id, src, color } = raw
   if (!isStr(id) || !id) return { error: 'it had no id' }
@@ -1788,17 +1891,20 @@ export function storedToField(raw: unknown): { field: BoardField } | { error: st
     solutions.push({ id: newId(), x, y })
   }
 
-  return {
-    field: {
-      id,
-      src,
-      params,
-      color: isStr(color) && color ? color : '#4f9cf9',
-      spacingPx: clampFieldSpacing(raw.spacing),
-      visible: raw.hidden !== true,
-      solutions,
-    },
+  const field: BoardField = {
+    id,
+    src,
+    params,
+    color: isStr(color) && color ? color : '#4f9cf9',
+    spacingPx: clampFieldSpacing(raw.spacing),
+    visible: raw.hidden !== true,
+    solutions,
   }
+  // Only a field that HAS runs grows the key, so a field from before Euler
+  // existed comes back as exactly the object it always did.
+  const euler = storedToEulers(raw.eulers)
+  if (euler.runs.length > 0) field.eulers = euler.runs
+  return euler.problems.length > 0 ? { field, problems: euler.problems } : { field }
 }
 
 /**
@@ -2680,6 +2786,10 @@ export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResu
     }
     seen.add(built.field.id)
     fields.push(built.field)
+    if (built.problems && built.problems.length > 0) {
+      for (const p of built.problems) problems.push(`The slope field “${built.field.src}”: ${p}`)
+      degraded = true
+    }
   }
 
   // ---- shapes

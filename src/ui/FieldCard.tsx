@@ -5,6 +5,8 @@ import { ParamRow } from './CurveCard'
 import { parseNumeric } from './numeric'
 import { SPACING_CHOICES, coord } from './fieldLinks'
 import type { BoardField, FieldCardData } from './fieldLinks'
+import { EulerSection } from './EulerSection'
+import type { RunPatch } from './eulerLinks'
 
 // ============================================================================
 // src/ui/FieldCard.tsx — a slope field in the sidebar list.
@@ -50,6 +52,10 @@ interface Props {
   /** Type an exact initial condition. */
   onSolutionSet(solutionId: string, to: { x?: number; y?: number }): void
   onSolutionRemove(solutionId: string): void
+  /** Add a run of Euler's method (the first from the first solution point). */
+  onEulerAdd(): void
+  onEulerPatch(runId: string, patch: RunPatch): void
+  onEulerRemove(runId: string): void
 }
 
 export function FieldCard({
@@ -70,6 +76,9 @@ export function FieldCard({
   onEquationCommit,
   onSolutionSet,
   onSolutionRemove,
+  onEulerAdd,
+  onEulerPatch,
+  onEulerRemove,
 }: Props) {
   // ---- the ⋯ menu (identical behaviour to a curve's, deliberately)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -272,6 +281,7 @@ export function FieldCard({
           {menuOpen && (
             <div className="card-menu" role="menu" onClick={(e) => e.stopPropagation()}>
               {menuItem('+ Solution through a point', onArmSolution)}
+              {menuItem('+ Euler’s method', onEulerAdd)}
               {menuItem(field.visible ? 'Hide' : 'Show', onToggleVisible)}
               {menuItem(copied ? 'Copied' : 'Copy LaTeX', copyLatex)}
               {menuItem('Delete', onDelete, 'card-menu-danger')}
@@ -441,6 +451,13 @@ export function FieldCard({
               <div className="field-hint">Click the board for another one.</div>
             )}
           </div>
+
+          <EulerSection
+            runs={data.eulers}
+            onAdd={onEulerAdd}
+            onPatch={onEulerPatch}
+            onRemove={onEulerRemove}
+          />
         </div>
       )}
     </div>

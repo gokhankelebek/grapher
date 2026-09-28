@@ -568,6 +568,23 @@ export interface Polyline {
   dash?: readonly number[]
 }
 
+/**
+ * Euler's method on the board: the path through (x₀, y₀), (x₁, y₁), … drawn as
+ * the tangent segments it is made of, a filled dot at every step and a larger
+ * ring at the start. Figure content (src/render/euler.ts): it exports, and it
+ * goes mono under SAT / AP like every other stroke.
+ */
+export interface EulerPath {
+  id: string
+  pts: readonly Vec2[]
+  color: string
+  dash?: readonly number[]
+  /** "P₀", "P₁", … one per point, when the run's labels are on. */
+  labels?: readonly string[]
+  /** "h = 0.5": a small tag past the last point — the figure's own legend. */
+  tag?: string
+}
+
 export type SlopeFieldOutcome =
   | {
       ok: true

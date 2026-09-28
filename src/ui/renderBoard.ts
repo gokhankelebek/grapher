@@ -55,6 +55,8 @@ import type { Polyline, SlopeField } from '../render/fields'
 import { drawPolylines, drawSlopeFields } from '../render/fields'
 import type { Shape } from '../render/shapes'
 import { drawShapes } from '../render/shapes'
+import type { EulerPath } from '../render/euler'
+import { drawEulerPaths } from '../render/euler'
 import type { ScatterSet } from '../render/scatter'
 import { drawScatter } from '../render/scatter'
 import { drawNLItem, drawNumberLineAxis, nlLanes } from '../render/numberline'
@@ -283,6 +285,18 @@ export interface BoardScene {
    */
   polylines?: readonly Polyline[]
   /**
+   * Euler's method: each run's path of tangent segments, a dot per step and a
+   * ring at the start (src/render/euler.ts). Painted after the curves and
+   * before the shapes — the path is judged against the solution it
+   * approximates, so it sits on top of it.
+   *
+   * FIGURE, not chrome: it exports, and goes mono under SAT / AP. Absent or
+   * empty draws exactly what the board drew before this field existed.
+   *
+   * Cartesian only; a number-line board ignores it.
+   */
+  eulers?: readonly EulerPath[]
+  /**
    * Points, segments, vectors and polygons — the figure a class MEASURES.
    *
    * Painted after every curve and before the analysis layer: a triangle, a
@@ -372,6 +386,7 @@ export { FIGURE_STYLES }
 export type { Overlay, OverlayRect } from '../render/overlays'
 export type { Polyline, SlopeField } from '../render/fields'
 export type { Shape } from '../render/shapes'
+export type { EulerPath } from '../render/euler'
 export type { ScatterMarker, ScatterSet } from '../render/scatter'
 
 /**
@@ -1935,6 +1950,17 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
       })
     } catch {
       /* data render failed — the figure still stands */
+    }
+  }
+
+  // Euler's method: on top of the curves (the true solution among them), under
+  // the shapes and the analysis layer.
+  const eulers = scene.eulers
+  if (eulers && eulers.length > 0) {
+    try {
+      drawEulerPaths(ctx, eulers, { vp, theme, paint: ink, scale, font: fig?.font ?? null })
+    } catch {
+      /* Euler render failed — the figure still stands */
     }
   }
 

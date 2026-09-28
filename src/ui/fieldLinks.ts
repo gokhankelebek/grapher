@@ -26,6 +26,8 @@ import { solveField } from '../core/ode'
 import type { BoardField, FieldSolution } from '../core/persist'
 import { FIELD_SPACINGS, FIELD_SPACING_DEFAULT, clampFieldSpacing } from '../core/persist'
 import type { LegendEntry } from './present'
+import { eulerCards } from './eulerLinks'
+import type { EulerRunCard } from './eulerLinks'
 
 // The field SHAPES live in src/core/persist.ts, beside the format that stores
 // and validates them (core may not import from src/ui). This module re-exports
@@ -366,6 +368,8 @@ export interface FieldCardData {
   params: FieldParamRow[]
   solutions: FieldSolutionRow[]
   spacing: SpacingChoice['key']
+  /** Euler's-method runs, each with its table and verdict already worked out. */
+  eulers: EulerRunCard[]
 }
 
 export function fieldCard(
@@ -388,6 +392,7 @@ export function fieldCard(
       text: throughLabel(s.x, s.y),
     })),
     spacing: spacingKey(field.spacingPx),
+    eulers: eulerCards(field, compiled),
   }
 }
 

@@ -4501,6 +4501,123 @@ button.calc-field-btn {
   width: 52px;
 }
 
+/* ------------------------------------------------------------ Euler's method */
+/*
+ * One block per run: the start, h and n as typeable fields, the table a
+ * student fills in, then the approximation, the true value and the verdict.
+ * The table is the one thing on the card allowed to be dense — it is read as
+ * a table, column by column, exactly as it would be on the exam.
+ */
+
+.euler-section {
+  margin-top: var(--sp-2);
+}
+
+.euler-run {
+  padding: var(--sp-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel) 60%, transparent);
+}
+
+.euler-swatch {
+  flex: 0 0 auto;
+}
+
+.euler-caption {
+  white-space: normal;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.euler-input {
+  width: 56px;
+}
+
+.euler-step {
+  min-width: 24px;
+  padding: 2px 6px;
+}
+
+.euler-target {
+  font-family: var(--font-mono);
+}
+
+.euler-table-wrap {
+  overflow-x: auto;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.euler-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.euler-table th {
+  position: sticky;
+  top: 0;
+  background: var(--panel-2, var(--panel));
+  color: var(--muted);
+  font-weight: 600;
+  text-align: right;
+  padding: 2px var(--sp-1);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.euler-table td {
+  padding: 0 var(--sp-1);
+  line-height: 1.6;
+  text-align: right;
+  color: var(--text);
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.euler-table th:first-child,
+.euler-table td.euler-k {
+  text-align: left;
+  color: var(--muted);
+}
+
+/* The last row's slope and Δy are not used by any step: stated, but quiet. */
+.euler-table td.euler-num-muted {
+  color: var(--faint);
+}
+
+.euler-verdict {
+  display: inline-block;
+  padding: 0 var(--sp-2);
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.euler-verdict-under,
+.euler-verdict-over {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.euler-d2 {
+  color: var(--text);
+}
+
+.euler-reason {
+  color: var(--muted);
+}
+
+.euler-caution {
+  color: var(--text);
+  border-left: 2px solid var(--danger);
+  padding-left: var(--sp-1);
+}
+
 /* Said once, in the place the answer will appear: where to click, and why. */
 .field-hint {
   color: var(--faint);

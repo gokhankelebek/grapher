@@ -34,6 +34,7 @@ import type {
   BoardIntersection,
   Overlay,
   Polyline,
+  EulerPath,
   ScatterSet,
   Shape,
   SlopeField,
@@ -150,6 +151,8 @@ interface Props {
    */
   fields?: readonly SlopeField[] | null
   polylines?: readonly Polyline[] | null
+  /** Euler's-method paths — figure content, straight into the scene. */
+  eulers?: readonly EulerPath[] | null
   /**
    * Points, segments, vectors and polygons — the figure a class MEASURES.
    * Straight into the scene beside the fields, so the screen and the exported
@@ -509,6 +512,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     overlays,
     fields,
     polylines,
+    eulers,
     shapes,
     scatter,
     grid,
@@ -544,6 +548,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   const overlaysRef = useRef<readonly Overlay[] | null | undefined>(overlays)
   const fieldsRef = useRef<readonly SlopeField[] | null | undefined>(fields)
   const polylinesRef = useRef<readonly Polyline[] | null | undefined>(polylines)
+  const eulersRef = useRef<readonly EulerPath[] | null | undefined>(eulers)
   const shapesRef = useRef<readonly Shape[] | null | undefined>(shapes)
   const scatterRef = useRef<readonly ScatterSet[] | null | undefined>(scatter)
   const gridRef = useRef<BoardGrid | null | undefined>(grid)
@@ -705,6 +710,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       overlays: overlaysRef.current ?? undefined,
       fields: fieldsRef.current ?? undefined,
       polylines: polylinesRef.current ?? undefined,
+      ...(eulersRef.current && eulersRef.current.length > 0 ? { eulers: eulersRef.current } : {}),
       shapes: shapesRef.current ?? undefined,
       ...(scatterRef.current && scatterRef.current.length > 0 ? { scatter: scatterRef.current } : {}),
       grid: gridRef.current ?? undefined,
@@ -789,6 +795,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     overlaysRef.current = overlays
     fieldsRef.current = fields
     polylinesRef.current = polylines
+    eulersRef.current = eulers
     shapesRef.current = shapes
     scatterRef.current = scatter
     gridRef.current = grid
@@ -812,6 +819,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     overlays,
     fields,
     polylines,
+    eulers,
     shapes,
     scatter,
     grid,

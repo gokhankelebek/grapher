@@ -20,6 +20,7 @@ import type { CurveIntersections } from './intersections'
 import type { CalcChange, CalcKind, CardCalc } from './calcLinks'
 import { FieldCard } from './FieldCard'
 import type { BoardField, FieldCardData } from './fieldLinks'
+import type { RunPatch } from './eulerLinks'
 import { ShapeCard } from './ShapeCard'
 import { DataCard } from './DataCard'
 import { SequenceCard } from './SequenceCard'
@@ -255,6 +256,9 @@ interface Props {
   onFieldEquation(id: string, src: string): string | null
   onSolutionSet(fieldId: string, solutionId: string, to: { x?: number; y?: number }): void
   onSolutionRemove(fieldId: string, solutionId: string): void
+  onEulerAdd(fieldId: string): void
+  onEulerPatch(fieldId: string, runId: string, patch: RunPatch): void
+  onEulerRemove(fieldId: string, runId: string): void
   /**
    * The shapes on this board — points, segments, vectors, polygons. In the
    * SAME list again, for the same reason: one column of objects a teacher
@@ -460,6 +464,9 @@ export function Sidebar({
   onFieldEquation,
   onSolutionSet,
   onSolutionRemove,
+  onEulerAdd,
+  onEulerPatch,
+  onEulerRemove,
   shapes,
   shapeCardFor,
   onShapeDelete,
@@ -748,6 +755,9 @@ export function Sidebar({
                   onEquationCommit={(src) => onFieldEquation(field.id, src)}
                   onSolutionSet={(solId, to) => onSolutionSet(field.id, solId, to)}
                   onSolutionRemove={(solId) => onSolutionRemove(field.id, solId)}
+                  onEulerAdd={() => onEulerAdd(field.id)}
+                  onEulerPatch={(runId, patch) => onEulerPatch(field.id, runId, patch)}
+                  onEulerRemove={(runId) => onEulerRemove(field.id, runId)}
                 />
               )
             })}
