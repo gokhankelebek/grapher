@@ -61,6 +61,7 @@ import {
   withTaylorNames,
 } from './ui/taylorLinks'
 import { defaultSecant } from './ui/secantLinks'
+import { defaultLimitA, limitSnapPoints, snapLimitA } from './ui/limitLinks'
 import {
   carryParams,
   compileFields,
@@ -3538,6 +3539,28 @@ export default function App() {
         return
       }
 
+      if (kind === 'limit') {
+        // The interesting point in view (a hole, a jump, a pole — nearest the
+        // middle), else 0 when f lives there, else the middle of the view. An
+        // overlay on f like the secant: f stays selected and carries a's handle.
+        let a: number | null = null
+        try {
+          a = defaultLimitA(parent, models, win)
+        } catch {
+          a = null
+        }
+        if (a === null) {
+          showToast('This curve is not a function of x, so it has no limit to take.')
+          return
+        }
+        commitState(
+          { calc: [...calcRef.current, { kind: 'limit', id: linkId, parentId, a }] },
+          'add limit',
+        )
+        setSelectedId(parentId)
+        return
+      }
+
       if (kind === 'secant') {
         // Two nice numbers in view where f is defined (continuous between
         // them when the view allows it). The secant is an overlay on f — no
@@ -3787,6 +3810,32 @@ export default function App() {
         const { avg: _was, ...rest } = l
         void _was
         next = change.on ? { ...rest, avg: true } : rest
+      } else if (change.kind === 'limitA' && l.kind === 'limit') {
+        // ±Infinity is a limit at infinity; NaN is nothing.
+        if (Number.isNaN(change.a) || change.a === l.a) return
+        const { side: _side, ...rest } = l
+        void _side
+        // One-sided means nothing at ±∞: the side goes with the finite a.
+        next = Number.isFinite(change.a) ? { ...l, a: change.a } : { ...rest, a: change.a }
+      } else if (change.kind === 'limitSide' && l.kind === 'limit') {
+        const was = l.side ?? 'both'
+        if (was === change.side) return
+        const { side: _was, ...rest } = l
+        void _was
+        next = change.side === 'both' ? rest : { ...rest, side: change.side }
+      } else if (change.kind === 'limitTable' && l.kind === 'limit') {
+        if ((l.table === true) === change.on) return
+        const { table: _was, ...rest } = l
+        void _was
+        next = change.on ? { ...rest, table: true } : rest
+      } else if (change.kind === 'limitEpsilon' && l.kind === 'limit') {
+        if ((l.epsilon === true) === change.on) return
+        const { epsilon: _was, ...rest } = l
+        void _was
+        next = change.on ? { ...rest, epsilon: true } : rest
+      } else if (change.kind === 'limitEps' && l.kind === 'limit') {
+        if (!Number.isFinite(change.eps) || !(change.eps > 0) || change.eps === l.eps) return
+        next = { ...l, eps: change.eps }
       } else if (change.kind === 'accumX' && l.kind === 'accumulation') {
         if (change.x === null) {
           if (l.x === undefined) return
@@ -7916,7 +7965,7 @@ export default function App() {
     // The STORED letters too, so "f isn't differentiable at a = 1" names the
     // curve by the letter its own card wears.
     const letters = calcLinks.some(
-      (l) => l.kind === 'accumulation' || l.kind === 'taylor' || l.kind === 'secant',
+      (l) => l.kind === 'accumulation' || l.kind === 'taylor' || l.kind === 'secant' || l.kind === 'limit',
     )
       ? curveNames(curves, { ...displaySources, ...exprSources }, calcLinks, names, inverses)
       : {}
@@ -8073,6 +8122,37 @@ export default function App() {
               ),
           })
         }
+        continue
+      }
+      if (link.kind === 'limit') {
+        // a lives ON the x-axis, where "x → a" points. It snaps to the hole,
+        // jump or pole within reach (the point the lesson is about), else to
+        // nice numbers — multiples of π/12 near one, or of π on a π axis. A
+        // limit at ±∞ has no a to hold.
+        if (link.parentId !== selectedId || !Number.isFinite(link.a)) continue
+        const vp = vpRef.current
+        const half = vp.widthPx / 2 / ppuX(vp)
+        const pts = limitSnapPoints(parent, models, [vp.center.x - half, vp.center.x + half])
+        const nice = (x: number): number => {
+          const v = vpRef.current
+          return snapCenter(
+            x,
+            ppuX(v),
+            (u) => snapCoord(u, v, 'x'),
+            axisUnitsRef.current.x === 'pi',
+            (u) => snapPiX(u, ppuX(v)),
+          )
+        }
+        out.push({
+          id: `calc:${link.id}:a`,
+          pos: { x: link.a, y: 0 },
+          label: 'a',
+          onDrag: (pos) =>
+            changeCalc(
+              { kind: 'limitA', linkId: link.id, a: snapLimitA(pos.x, pts, ppuX(vpRef.current), nice) },
+              true,
+            ),
+        })
         continue
       }
       if (link.kind === 'accumulation') {

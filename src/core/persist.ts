@@ -98,6 +98,7 @@ export type CalcKind =
   | 'accumulation'
   | 'taylor'
   | 'secant'
+  | 'limit'
 
 /** A tangent line at one point of `parentId`, drawn as the curve `curveId`. */
 export interface TangentLink {
@@ -232,6 +233,40 @@ export interface SecantLink {
   avg?: true
 }
 
+/**
+ * lim x→a of `parentId`: the left, right and two-sided limits, f(a), what
+ * kind of point a is and the AP continuity checklist — and, switched on, the
+ * table of values (`table`) and the ε–δ picture (`epsilon`, with ε in `eps`).
+ *
+ * `a` may be ±Infinity for a limit at infinity. JSON has no Infinity (it
+ * would write null), so in the FILE ±∞ is the string sentinel 'inf' / '-inf'
+ * (LIMIT_INF / LIMIT_NEG_INF); every finite a is an ordinary number. `side` is
+ * written only when it is not 'both', `table` and `epsilon` only when on, and
+ * `eps` only while the ε–δ picture is on and ε is not the default 0.5 — so
+ * nothing about a limit reaches a file that never had one.
+ *   src/core/limits.ts    limitAt / limitTable / deltaFor / limitPoints /
+ *                         limitSourceOf
+ *   src/ui/limitLinks.ts  limitRow / limitOverlays / defaultLimitA
+ */
+export interface LimitLink {
+  kind: 'limit'
+  id: string
+  parentId: string
+  /** The point approached; ±Infinity for x → ±∞. */
+  a: number
+  side?: 'both' | 'left' | 'right'
+  table?: true
+  epsilon?: true
+  /** ε for the ε–δ picture; absent means LIMIT_EPS_DEFAULT. */
+  eps?: number
+}
+
+/** ±∞ in a stored limit link (JSON cannot hold Infinity). */
+export const LIMIT_INF = 'inf'
+export const LIMIT_NEG_INF = '-inf'
+/** ε when the link does not say. */
+export const LIMIT_EPS_DEFAULT = 0.5
+
 export type CalcLink =
   | TangentLink
   | DerivativeLink
@@ -240,6 +275,7 @@ export type CalcLink =
   | AccumulationLink
   | TaylorLink
   | SecantLink
+  | LimitLink
 
 /** The links that own a curve of their own. */
 export type CurveLink = TangentLink | DerivativeLink | AccumulationLink | TaylorLink
@@ -1143,8 +1179,12 @@ export interface StoredCalcLink {
   abs?: boolean
   n?: number
   method?: RiemannMethod
-  /** Accumulation only: the lower limit, and g(a) when it is not 0. */
-  a?: number
+  /**
+   * Accumulation: the lower limit (and g(a) when it is not 0). Taylor: the
+   * centre. Secant: the left-hand point. Limit: the point approached — the
+   * string LIMIT_INF / LIMIT_NEG_INF for ±∞.
+   */
+  a?: number | typeof LIMIT_INF | typeof LIMIT_NEG_INF
   C?: number
   /** Taylor only, and only when on: the error band and the interval of convergence. */
   band?: boolean
@@ -1153,6 +1193,11 @@ export interface StoredCalcLink {
   b?: number
   mvt?: boolean
   avg?: boolean
+  /** Limit only: the side when not 'both', the two switches when on, ε when not 0.5. */
+  side?: 'left' | 'right'
+  table?: boolean
+  epsilon?: boolean
+  eps?: number
 }
 
 export interface StoredDoc {
@@ -2030,6 +2075,19 @@ export function calcLinkToStored(l: CalcLink): StoredCalcLink {
         ...(l.mvt === true ? { mvt: true } : {}),
         ...(l.avg === true ? { avg: true } : {}),
       }
+    case 'limit':
+      return {
+        kind: 'limit',
+        id: l.id,
+        parentId: l.parentId,
+        // JSON would write Infinity as null: ±∞ travels as a string sentinel.
+        a: l.a === Infinity ? LIMIT_INF : l.a === -Infinity ? LIMIT_NEG_INF : l.a,
+        // 'both' is the default, and one-sided is meaningless at ±∞.
+        ...((l.side === 'left' || l.side === 'right') && Number.isFinite(l.a) ? { side: l.side } : {}),
+        ...(l.table === true ? { table: true } : {}),
+        ...(l.epsilon === true ? { epsilon: true } : {}),
+        ...(l.epsilon === true && isNum(l.eps) && l.eps > 0 && l.eps !== LIMIT_EPS_DEFAULT ? { eps: l.eps } : {}),
+      }
   }
 }
 
@@ -2128,6 +2186,25 @@ export function storedToCalcLink(raw: unknown): CalcLink | null {
         ...(raw.avg === true ? { avg: true as const } : {}),
       }
     }
+    case 'limit': {
+      // The point IS the limit: a finite number, or the ±∞ sentinel. Anything
+      // else (null, a bare Infinity that JSON already lost) is refused. The
+      // side and the switches default when they are not what they should be.
+      const a = isNum(raw.a) ? raw.a : raw.a === LIMIT_INF ? Infinity : raw.a === LIMIT_NEG_INF ? -Infinity : null
+      if (a === null) return null
+      const side = Number.isFinite(a) && (raw.side === 'left' || raw.side === 'right') ? raw.side : undefined
+      const eps = raw.epsilon === true && isNum(raw.eps) && raw.eps > 0 ? raw.eps : undefined
+      return {
+        kind: 'limit',
+        id,
+        parentId,
+        a,
+        ...(side ? { side } : {}),
+        ...(raw.table === true ? { table: true as const } : {}),
+        ...(raw.epsilon === true ? { epsilon: true as const } : {}),
+        ...(eps !== undefined && eps !== LIMIT_EPS_DEFAULT ? { eps } : {}),
+      }
+    }
     default:
       return null
   }
@@ -2150,6 +2227,8 @@ export function calcNoun(kind: CalcKind): string {
       return 'Taylor polynomial'
     case 'secant':
       return 'secant line'
+    case 'limit':
+      return 'limit'
   }
 }
 

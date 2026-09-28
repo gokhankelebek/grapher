@@ -315,3 +315,34 @@ describe('averageValue', () => {
     expect(polyIntegral([1, 2, 3], -1, 2)).toBe(3 + 3 + 9)
   })
 })
+
+describe('mvtSourceOf — a piecewise line is not read as its polynomial', () => {
+  it('x² with f(2) defined apart: f(2) is the separate value, not 4', async () => {
+    const { parseExpression } = await import('../src/core/parse')
+    const { mvtSourceOf } = await import('../src/core/mvt')
+    const r = parseExpression('y = piecewise(x^2, x != 2, 5, x = 2)')
+    if (!r.ok) throw new Error(r.error)
+    const models = { m: r.plot.makeModel('m') }
+    const src = mvtSourceOf(
+      { id: 'c', modelId: 'm', params: [], kind: 'explicit', domain: r.plot.domain, color: '#fff', strokeWidth: 2, visible: true, error: 0 },
+      models,
+    )!
+    expect(src.poly).toBeNull()
+    expect(src.f(2)).toBe(5)
+    expect(src.f(3)).toBe(9)
+  })
+
+  it('a restricted x² is undefined outside its restriction', async () => {
+    const { parseExpression } = await import('../src/core/parse')
+    const { mvtSourceOf } = await import('../src/core/mvt')
+    const r = parseExpression('y = x^2 {x >= 0}')
+    if (!r.ok) throw new Error(r.error)
+    const models = { m: r.plot.makeModel('m') }
+    const src = mvtSourceOf(
+      { id: 'c', modelId: 'm', params: [], kind: 'explicit', domain: r.plot.domain, color: '#fff', strokeWidth: 2, visible: true, error: 0 },
+      models,
+    )!
+    expect(src.f(-1)).toBeNaN()
+    expect(src.f(2)).toBe(4)
+  })
+})

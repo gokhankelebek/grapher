@@ -43,6 +43,7 @@ import type {
   CalcLink,
   CurveLink,
   DerivativeLink,
+  LimitLink,
   RiemannLink,
   SecantLink,
   TangentLink,
@@ -50,6 +51,8 @@ import type {
 } from '../core/persist'
 import { secantOverlays, secantRow } from './secantLinks'
 import type { SecantRow } from './secantLinks'
+import { limitOverlays, limitRow } from './limitLinks'
+import type { LimitRow } from './limitLinks'
 import {
   pName,
   taylorBlocked,
@@ -80,6 +83,8 @@ export type {
   CalcLink,
   CurveLink,
   DerivativeLink,
+  LimitLink,
+  LimitRow,
   RiemannLink,
   RiemannMethod,
   SecantLink,
@@ -168,6 +173,8 @@ export function linkNoun(kind: CalcKind): string {
       return 'Taylor polynomial'
     case 'secant':
       return 'secant line'
+    case 'limit':
+      return 'limit'
   }
 }
 
@@ -275,6 +282,16 @@ export function overlaysFor(
       out.push(...secantOverlays(secants, curves, models))
     } catch {
       /* the secant marks are lost this frame; the rest of the figure stands */
+    }
+  }
+  // Limits: the ε–δ bands wash under the curves; the guide, the arrows, the
+  // ring and the dot mark on top (src/ui/limitLinks.ts).
+  const limits = links.filter((l): l is LimitLink => l.kind === 'limit')
+  if (limits.length > 0) {
+    try {
+      out.push(...limitOverlays(limits, curves, models))
+    } catch {
+      /* the limit marks are lost this frame; the rest of the figure stands */
     }
   }
   return out
@@ -1486,6 +1503,8 @@ export interface CardCalc {
   taylorBlocked: string | null
   /** The secants drawn on this curve: the average rate of change, the MVT, f_avg. */
   secants: SecantRow[]
+  /** The limits taken on this curve: one-sided, two-sided, at ±∞; table and ε–δ. */
+  limits: LimitRow[]
 }
 
 export interface OriginRow {
@@ -1575,6 +1594,12 @@ export type CalcChange =
   | { kind: 'secantBound'; linkId: string; which: 'a' | 'b'; value: number }
   | { kind: 'secantMvt'; linkId: string; on: boolean }
   | { kind: 'secantAvg'; linkId: string; on: boolean }
+  /** a may be ±Infinity: a limit at infinity. */
+  | { kind: 'limitA'; linkId: string; a: number }
+  | { kind: 'limitSide'; linkId: string; side: 'both' | 'left' | 'right' }
+  | { kind: 'limitTable'; linkId: string; on: boolean }
+  | { kind: 'limitEpsilon'; linkId: string; on: boolean }
+  | { kind: 'limitEps'; linkId: string; eps: number }
 
 /** The undo entry each change deserves, in a teacher's words. */
 export function changeLabel(change: CalcChange): string {
@@ -1611,6 +1636,16 @@ export function changeLabel(change: CalcChange): string {
       return 'switch Mean Value Theorem'
     case 'secantAvg':
       return 'switch average value'
+    case 'limitA':
+      return 'move limit point'
+    case 'limitSide':
+      return 'change limit side'
+    case 'limitTable':
+      return 'switch table of values'
+    case 'limitEpsilon':
+      return 'switch ε–δ'
+    case 'limitEps':
+      return 'change ε'
   }
 }
 
@@ -1649,6 +1684,7 @@ export function cardCalc(
     taylors: [],
     taylorBlocked: null,
     secants: [],
+    limits: [],
   })
   const slot = (id: string): CardCalc | null => {
     const curve = curveById(curves, id)
@@ -1818,6 +1854,18 @@ export function cardCalc(
           }
         }
         own.secants.push(row)
+        break
+      }
+      case 'limit': {
+        const own = slot(link.parentId)
+        if (!own) break
+        let row: LimitRow
+        try {
+          row = limitRow(link, parent, models, letters[link.parentId] ?? 'f')
+        } catch {
+          row = { ...limitRow(link, undefined, models), problem: 'this limit could not be measured' }
+        }
+        own.limits.push(row)
         break
       }
     }

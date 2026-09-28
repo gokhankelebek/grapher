@@ -34,6 +34,11 @@
 //   label   a small chip of text beside a math point ("c = 2√3/3"), ground-
 //           filled and ringed in its colour, stepped off the point along a
 //           stated screen direction.
+//   approach  arrowheads gliding along a curve toward x = a from one side —
+//           the picture of lim x→a⁻ — placed at fixed SCREEN distances from a,
+//           so they read the same at every zoom; up or down the line x = a
+//           when that side runs off to ±∞; out to the board's edge when a is
+//           ±∞.
 //
 // And one more under the curves:
 //
@@ -186,6 +191,29 @@ export type Overlay =
       dashed?: boolean
     }
   | {
+      kind: 'approach'
+      /** Whose colour it takes, when no colour is stated. */
+      curveId?: string
+      /**
+       * The function the arrowheads ride — NaN where it is undefined (that
+       * arrowhead is skipped). Absent with `run`: they ride the line x = a.
+       */
+      f?: (x: number) => number
+      /** The x approached; ±Infinity: toward that edge of the board. */
+      a: number
+      /** Which side of a the arrows come from (a finite a), or which edge (±∞). */
+      side: -1 | 1
+      /** Ride the vertical line x = a instead, running up (1) or down (−1). */
+      run?: -1 | 1
+      /**
+       * How far from a (math units) the curve runs on unbroken on that side:
+       * no arrowhead is placed beyond it, and a short run gets its arrowheads
+       * spaced along what there is (floor(x) — one unit per step).
+       */
+      reach?: number
+      color?: string
+    }
+  | {
       kind: 'ghost'
       /** Whose colour it takes, when no colour is stated. */
       curveId?: string
@@ -206,6 +234,7 @@ export const OVERLAY_MARK_KINDS: ReadonlySet<Overlay['kind']> = new Set([
   'hline',
   'line',
   'label',
+  'approach',
 ])
 
 /** True when any of these overlays is a mark — the board then paints in two passes. */
@@ -824,6 +853,174 @@ function drawLabel(
   placed?.push({ x, y, w, h })
 }
 
+/** How far along the curve (on screen) the approach arrowheads sit from a, in CSS px (farthest first). */
+export const APPROACH_STEPS_PX = [150, 100, 54]
+/** An approach arrowhead's length and half-width, CSS px before `present.stroke`. */
+export const APPROACH_HEAD_LEN = 11
+export const APPROACH_HEAD_HALF = 5.5
+
+/** A step along the curve for its direction: 3 px, or less when u is smaller. */
+const nudgeOf = (fr: Frame, u: number): number => Math.min(3 / fr.ppx, 0.5 * u)
+
+/** A filled arrowhead centred on (x, y), pointing along the unit screen vector d. */
+function headAt(ctx: CanvasRenderingContext2D, x: number, y: number, d: Vec2, len: number, half: number): void {
+  const tx = x + (d.x * len) / 2
+  const ty = y + (d.y * len) / 2
+  const bx = x - (d.x * len) / 2
+  const by = y - (d.y * len) / 2
+  ctx.beginPath()
+  ctx.moveTo(tx, ty)
+  ctx.lineTo(bx - d.y * half, by + d.x * half)
+  ctx.lineTo(bx + d.y * half, by - d.x * half)
+  ctx.closePath()
+  ctx.fill()
+}
+
+/**
+ * Arrowheads gliding toward x = a along a curve (or up / down the line x = a,
+ * or out to an edge when a is ±∞). Each head points along the curve's own
+ * screen direction at its point, toward a.
+ */
+function drawApproach(
+  ctx: CanvasRenderingContext2D,
+  ov: Extract<Overlay, { kind: 'approach' }>,
+  fr: Frame,
+  vp: Viewport,
+  color: string,
+  stroke: number,
+): void {
+  const side = ov.side === -1 ? -1 : 1
+  const len = APPROACH_HEAD_LEN * stroke
+  const half = APPROACH_HEAD_HALF * stroke
+  const W = vp.widthPx
+  const H = vp.heightPx
+  const onBoard = (x: number, y: number): boolean => x >= 0 && x <= W && y >= 0 && y <= H
+  ctx.globalAlpha = 1
+  ctx.fillStyle = color
+  const unit = (dx: number, dy: number): Vec2 | null => {
+    const n = Math.hypot(dx, dy)
+    return n > 1e-9 && Number.isFinite(n) ? { x: dx / n, y: dy / n } : null
+  }
+  const f = ov.f
+  const val = (x: number): number => {
+    if (typeof f !== 'function') return Number.NaN
+    try {
+      const v = f(x)
+      return typeof v === 'number' ? v : Number.NaN
+    } catch {
+      return Number.NaN
+    }
+  }
+  if (ov.run === 1 || ov.run === -1) {
+    if (!Number.isFinite(ov.a)) return
+    // Up (or down) toward the asymptote: ON the curve where it crosses these
+    // heights of the board, else beside the line x = a.
+    const targets = ov.run === 1 ? [0.46, 0.3, 0.14] : [0.54, 0.7, 0.86]
+    const up = { x: 0, y: ov.run === 1 ? -1 : 1 }
+    const T = Math.min(
+      typeof ov.reach === 'number' && ov.reach > 0 ? ov.reach : Infinity,
+      W / fr.ppx,
+    )
+    const ax = sx(fr, ov.a)
+    for (const t of targets) {
+      const target = t * H
+      let placed = false
+      if (typeof f === 'function' && Number.isFinite(T)) {
+        // g(u) = screen y of f at a + side·u, minus the target: it runs from
+        // the far end toward ∓∞ as u → 0⁺, so bisect for the crossing.
+        const g = (u: number): number => sy(fr, val(ov.a + side * u)) - target
+        let lo = 0.5 / fr.ppx
+        let hi = T
+        const glo = g(lo)
+        const ghi = g(hi)
+        if (Number.isFinite(glo) && Number.isFinite(ghi) && Math.sign(glo) !== Math.sign(ghi)) {
+          for (let k = 0; k < 50; k++) {
+            const m = 0.5 * (lo + hi)
+            const gm = g(m)
+            if (!Number.isFinite(gm)) break
+            if (Math.sign(gm) === Math.sign(glo)) lo = m
+            else hi = m
+          }
+          const u = 0.5 * (lo + hi)
+          const x = ov.a + side * u
+          const p = { x: sx(fr, x), y: sy(fr, val(x)) }
+          const q = { x: sx(fr, x - side * nudgeOf(fr, u)), y: sy(fr, val(x - side * nudgeOf(fr, u))) }
+          const d = unit(q.x - p.x, q.y - p.y)
+          if (d && onBoard(p.x, p.y) && Math.abs(p.x - ax) > 2) {
+            headAt(ctx, p.x, p.y, d, len, half)
+            placed = true
+          }
+        }
+      }
+      if (!placed) {
+        const x = ax + side * 7 * stroke
+        if (x >= -len && x <= W + len) headAt(ctx, x, target, up, len, half)
+      }
+    }
+    return
+  }
+  if (typeof f !== 'function') return
+  const nudge = 3 / fr.ppx
+  if (ov.a === Infinity || ov.a === -Infinity) {
+    // Out to the edge: at fixed distances in from it, pointing outward.
+    const toward = ov.a > 0 ? 1 : -1
+    for (const step of APPROACH_STEPS_PX) {
+      const x = mathX(fr, ov.a > 0 ? W - step : step)
+      const y = val(x)
+      const y2 = val(x + toward * nudge)
+      if (!Number.isFinite(y) || !Number.isFinite(y2)) continue
+      const p = { x: sx(fr, x), y: sy(fr, y) }
+      if (!onBoard(p.x, p.y)) continue
+      const d = unit(sx(fr, x + toward * nudge) - p.x, sy(fr, y2) - p.y)
+      if (d) headAt(ctx, p.x, p.y, d, len, half)
+    }
+    return
+  }
+  if (!Number.isFinite(ov.a)) return
+  // Toward a finite a: walk the curve outward from a in one-pixel steps of x,
+  // measuring its length ON SCREEN, and put a head at each of the step
+  // distances — so a steep curve (x² near 2) gets its arrows beside a rather
+  // than off the top of the board. The walk stops at the reach (the next
+  // break in f) and wherever f is undefined.
+  const reachPx =
+    typeof ov.reach === 'number' && ov.reach >= 0 ? Math.min(ov.reach * fr.ppx, 2 * W) : 2 * W
+  const dx = 1 / fr.ppx
+  let prev: Vec2 | null = null
+  let run = 0
+  let total = 0
+  const pts: { p: Vec2; x: number; at: number }[] = []
+  // Strictly short of the reach: the break itself (floor's next step) is not on the track.
+  const maxSteps = Math.max(0, Math.ceil(reachPx) - 2)
+  for (let i = 1; i <= maxSteps; i++) {
+    const x = ov.a + side * i * dx
+    const y = val(x)
+    if (!Number.isFinite(y)) break
+    const p = { x: sx(fr, x), y: sy(fr, y) }
+    if (prev) {
+      const seg = Math.hypot(p.x - prev.x, p.y - prev.y)
+      // A leap across the whole board is a break the reach did not know about.
+      if (seg > H) break
+      run += seg
+    }
+    prev = p
+    pts.push({ p, x, at: run })
+    total = run
+    if (run > APPROACH_STEPS_PX[0] + 2 * len) break
+  }
+  if (total < 3 * len) return
+  // Short piece (a step of floor(x)): spread the heads along what there is.
+  const steps =
+    total < APPROACH_STEPS_PX[0] + len ? [0.82, 0.56, 0.3].map((t) => t * total) : APPROACH_STEPS_PX
+  for (const step of steps) {
+    const hit = pts.find((q) => q.at >= step)
+    if (!hit || !onBoard(hit.p.x, hit.p.y)) continue
+    const y2 = val(hit.x - side * nudge)
+    if (!Number.isFinite(y2)) continue
+    const d = unit(sx(fr, hit.x - side * nudge) - hit.p.x, sy(fr, y2) - hit.p.y)
+    if (d) headAt(ctx, hit.p.x, hit.p.y, d, len, half)
+  }
+}
+
 /** A horizontal line across the whole board, at math height `y`. */
 function drawHLine(
   ctx: CanvasRenderingContext2D,
@@ -921,7 +1118,8 @@ export function drawOverlays(
               ov.kind === 'dot' ||
               ov.kind === 'hline' ||
               ov.kind === 'line' ||
-              ov.kind === 'label'
+              ov.kind === 'label' ||
+              ov.kind === 'approach'
           ? OVERLAY_FILL_ALPHA
           : clamp(
               typeof ov.alpha === 'number' && Number.isFinite(ov.alpha)
@@ -969,6 +1167,9 @@ export function drawOverlays(
           break
         case 'label':
           drawLabel(ctx, ov, fr, vp, color, ps, o.bg, o.font, o.placed)
+          break
+        case 'approach':
+          drawApproach(ctx, ov, fr, vp, color, stroke)
           break
         case 'ghost': {
           // Faint on screen; under mono ink a grey that survives a copier.

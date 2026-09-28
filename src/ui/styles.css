@@ -6210,6 +6210,81 @@ button.calc-field-btn {
   font-weight: 600;
 }
 
+/* ------------------------------------------------------------- Limits */
+/*
+ * The limit row borrows the calc-* and secant-* vocabulary (tag, chips,
+ * fields, the ticked checklist). What it adds: the limit and its two sides in
+ * KaTeX (they scroll rather than wrap), the table of values as two compact
+ * columns side by side, and the ε slider.
+ */
+.limit-head-text {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.limit-tex {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0;
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+.limit-sides {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.limit-facts .calc-fact,
+.limit-delta {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.limit-checks {
+  list-style: none;
+}
+
+.limit-table-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.limit-table {
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.limit-table th {
+  color: var(--muted);
+  font-weight: 600;
+  text-align: right;
+  padding: 1px var(--sp-1);
+  border-bottom: 1px solid var(--border);
+}
+
+.limit-table thead tr:first-child th {
+  text-align: center;
+  border-bottom: none;
+}
+
+.limit-table td {
+  text-align: right;
+  padding: 1px var(--sp-1);
+}
+
+.limit-eps {
+  display: grid;
+  grid-template-columns: 14px 1fr 40px;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
 /* A menu item offered but not available here: greyed, with the reason under it. */
 .card-menu-item-off {
   color: var(--faint);

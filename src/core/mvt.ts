@@ -968,11 +968,18 @@ export function mvtSourceOf(curve: FittedCurve, models: Record<string, ModelSpec
       return Number.NaN
     }
   }
+  // A line with PIECES (a restriction, a piecewise, a point defined apart —
+  // `{x^2, x != 2 ; 5, x = 2}`) agrees with a polynomial almost everywhere,
+  // and polynomialOf, fitting samples, believes it; Horner would then carry
+  // the formula past the restriction and through the separate point. Only
+  // a curve with no pieces is read as its polynomial.
   let poly: number[] | null = null
-  try {
-    poly = polynomialOf(curve, models)
-  } catch {
-    poly = null
+  if (!spec.pieces) {
+    try {
+      poly = polynomialOf(curve, models)
+    } catch {
+      poly = null
+    }
   }
   const jets = spec.taylor ? spec.taylor.bind(spec) : null
   const d = (x: number): number => {
