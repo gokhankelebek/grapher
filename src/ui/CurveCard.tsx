@@ -47,6 +47,7 @@ import type { CalcChange, CalcKind, CardCalc } from './calcLinks'
 import { TaylorSection } from './TaylorSection'
 import { SecantSection } from './SecantSection'
 import { LimitSection } from './LimitSection'
+import { VolumeSection } from './VolumeSection'
 import type { CurveIntersections } from './intersections'
 import { DomainSection } from './DomainSection'
 import type { DomainActions, DomainPanel, SetNotation } from './domainLinks'
@@ -291,6 +292,7 @@ const CALC_ITEMS: { kind: CalcKind; label: string }[] = [
   { kind: 'area', label: 'Area under curve' },
   { kind: 'riemann', label: 'Riemann sum' },
   { kind: 'accumulation', label: 'Accumulation function \u222b\u2090\u02e3 f' },
+  { kind: 'volume', label: 'Volume of a solid\u2026' },
   { kind: 'taylor', label: 'Taylor polynomial P\u2099' },
 ]
 
@@ -2339,6 +2341,7 @@ export function CurveCard({
               calc.taylors.length > 0 ||
               calc.secants.length > 0 ||
               calc.limits.length > 0 ||
+              calc.volumes.length > 0 ||
               betweenNotes.length > 0) && (
             <div className="calc-section">
               <div className="calc-title">Calculus</div>
@@ -2484,6 +2487,17 @@ export function CurveCard({
                     row={sc}
                     onCalcChange={onCalcChange}
                     onRemove={() => onCalcRemove(sc.linkId)}
+                  />
+                ))}
+
+                {calc.volumes.map((v) => (
+                  <VolumeSection
+                    key={v.linkId}
+                    row={v}
+                    onCalcChange={onCalcChange}
+                    onRemove={() => onCalcRemove(v.linkId)}
+                    onEditStart={onParamEditStart}
+                    onEditEnd={onParamEditEnd}
                   />
                 ))}
 

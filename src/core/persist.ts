@@ -32,6 +32,8 @@ import { MODELS } from './fit/models'
 import { accumulationModel, derivativeModel } from './calculus'
 import { TAYLOR_N_DEFAULT, TAYLOR_N_MAX, TAYLOR_N_MIN } from './taylor'
 import type { RiemannMethod } from './calculus'
+import type { SectionShape, VolumeAxis, VolumeMethod } from './volume'
+import { isSectionShape } from './volume'
 import type { RegressionKind } from './data'
 
 /**
@@ -99,6 +101,7 @@ export type CalcKind =
   | 'taylor'
   | 'secant'
   | 'limit'
+  | 'volume'
 
 /** A tangent line at one point of `parentId`, drawn as the curve `curveId`. */
 export interface TangentLink {
@@ -267,6 +270,40 @@ export const LIMIT_NEG_INF = '-inf'
 /** ε when the link does not say. */
 export const LIMIT_EPS_DEFAULT = 0.5
 
+/**
+ * The volume of a solid built on the region between `parentId` and `otherId`
+ * (absent: the x-axis) over [a, b] — the same region the area-between link
+ * shades. `method` says how it is cut: washers/disks, shells, or known
+ * cross-sections perpendicular to the x-axis (`section`, with `ratio` for a
+ * rectangle's height). `axis` is the axis of revolution, y = at ('h') or
+ * x = at ('v'); absent means the x-axis. `x` is the representative slice —
+ * the slice's x for the dx methods and its y for the two that slice in dy
+ * (washers about a vertical axis, shells about a horizontal one); absent
+ * means the middle.
+ *
+ * Only what is not the default reaches a file: `method` when not 'washer',
+ * `axis` when not the x-axis, `section` only for sections and only when not
+ * 'square', `ratio` only for a rectangle and only when not 1, `x` only when
+ * set. Deleting either curve removes the link.
+ *   src/core/volume.ts     washerVolume / shellVolume / sectionVolume /
+ *                          horizontalBands / washerVolumeDy / shellVolumeDy /
+ *                          exactVolume
+ *   src/ui/volumeLinks.ts  volumeRow / volumeOverlays / defaultVolume
+ */
+export interface VolumeLink {
+  kind: 'volume'
+  id: string
+  parentId: string
+  otherId?: string
+  a: number
+  b: number
+  method: VolumeMethod
+  axis?: VolumeAxis
+  section?: SectionShape
+  ratio?: number
+  x?: number
+}
+
 export type CalcLink =
   | TangentLink
   | DerivativeLink
@@ -276,6 +313,7 @@ export type CalcLink =
   | TaylorLink
   | SecantLink
   | LimitLink
+  | VolumeLink
 
 /** The links that own a curve of their own. */
 export type CurveLink = TangentLink | DerivativeLink | AccumulationLink | TaylorLink
@@ -1178,7 +1216,8 @@ export interface StoredCalcLink {
   to?: number
   abs?: boolean
   n?: number
-  method?: RiemannMethod
+  /** Riemann: the rule. Volume: 'shell' or 'section' (washers are the default and are not written). */
+  method?: RiemannMethod | VolumeMethod
   /**
    * Accumulation: the lower limit (and g(a) when it is not 0). Taylor: the
    * centre. Secant: the left-hand point. Limit: the point approached — the
@@ -1198,6 +1237,10 @@ export interface StoredCalcLink {
   table?: boolean
   epsilon?: boolean
   eps?: number
+  /** Volume only: the axis when not the x-axis, the section when not a square, the rectangle's ratio when not 1. */
+  axis?: VolumeAxis
+  section?: SectionShape
+  ratio?: number
 }
 
 export interface StoredDoc {
@@ -2088,6 +2131,27 @@ export function calcLinkToStored(l: CalcLink): StoredCalcLink {
         ...(l.epsilon === true ? { epsilon: true } : {}),
         ...(l.epsilon === true && isNum(l.eps) && l.eps > 0 && l.eps !== LIMIT_EPS_DEFAULT ? { eps: l.eps } : {}),
       }
+    case 'volume': {
+      const axis = l.axis && isNum(l.axis.at) && (l.axis.dir === 'h' || l.axis.dir === 'v') ? l.axis : null
+      const section = l.method === 'section' && isSectionShape(l.section) ? l.section : 'square'
+      return {
+        kind: 'volume',
+        id: l.id,
+        parentId: l.parentId,
+        ...(l.otherId !== undefined && l.otherId !== '' ? { otherId: l.otherId } : {}),
+        a: l.a,
+        b: l.b,
+        // Washers about the x-axis with no slice chosen is the default solid:
+        // none of the switches below reach a file until somebody moves one.
+        ...(l.method === 'shell' || l.method === 'section' ? { method: l.method } : {}),
+        ...(axis && !(axis.dir === 'h' && axis.at === 0) ? { axis: { dir: axis.dir, at: axis.at } } : {}),
+        ...(l.method === 'section' && section !== 'square' ? { section } : {}),
+        ...(l.method === 'section' && section === 'rectangle' && isNum(l.ratio) && l.ratio > 0 && l.ratio !== 1
+          ? { ratio: l.ratio }
+          : {}),
+        ...(l.x !== undefined && isNum(l.x) ? { x: l.x } : {}),
+      }
+    }
   }
 }
 
@@ -2205,6 +2269,36 @@ export function storedToCalcLink(raw: unknown): CalcLink | null {
         ...(eps !== undefined && eps !== LIMIT_EPS_DEFAULT ? { eps } : {}),
       }
     }
+    case 'volume': {
+      // The interval IS the region's extent: without both ends there is no
+      // solid. Everything else defaults when it is not what it should be — an
+      // axis that is not {dir, finite at} is the x-axis, a method that is not
+      // one of the three is washers, a section that is not a shape is a square.
+      if (!isNum(raw.a) || !isNum(raw.b)) return null
+      const otherId = isStr(raw.otherId) && raw.otherId ? raw.otherId : undefined
+      const method: VolumeMethod = raw.method === 'shell' || raw.method === 'section' ? raw.method : 'washer'
+      const ax = raw.axis
+      const axis =
+        isObj(ax) && (ax.dir === 'h' || ax.dir === 'v') && isNum(ax.at) && !(ax.dir === 'h' && ax.at === 0)
+          ? { dir: ax.dir as 'h' | 'v', at: ax.at }
+          : undefined
+      const section = method === 'section' && isSectionShape(raw.section) && raw.section !== 'square' ? raw.section : undefined
+      const ratio =
+        section === 'rectangle' && isNum(raw.ratio) && raw.ratio > 0 && raw.ratio !== 1 ? raw.ratio : undefined
+      return {
+        kind: 'volume',
+        id,
+        parentId,
+        ...(otherId ? { otherId } : {}),
+        a: raw.a,
+        b: raw.b,
+        method,
+        ...(axis ? { axis } : {}),
+        ...(section ? { section } : {}),
+        ...(ratio !== undefined ? { ratio } : {}),
+        ...(isNum(raw.x) ? { x: raw.x } : {}),
+      }
+    }
     default:
       return null
   }
@@ -2229,6 +2323,8 @@ export function calcNoun(kind: CalcKind): string {
       return 'secant line'
     case 'limit':
       return 'limit'
+    case 'volume':
+      return 'volume'
   }
 }
 
@@ -2707,7 +2803,11 @@ export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResu
         degraded = true
         continue
       }
-      if (link.kind === 'area' && link.otherId !== undefined && !curveIds.has(link.otherId)) {
+      if (
+        (link.kind === 'area' || link.kind === 'volume') &&
+        link.otherId !== undefined &&
+        !curveIds.has(link.otherId)
+      ) {
         // The same loss as a missing parent, and reported the same way: the
         // region between f and a curve that is gone is not the region under f.
         problems.push(

@@ -6285,6 +6285,51 @@ button.calc-field-btn {
   gap: var(--sp-2);
 }
 
+/* ------------------------------------------------------------- Volumes */
+/*
+ * The volume row borrows the calc-* and secant-* vocabulary (tag, chips,
+ * fields, a KaTeX line that scrolls rather than wraps) and the limit row's
+ * slider grid for the representative slice. What it adds: the small words
+ * between the pickers ("Region between f and", "about"), and sentences that
+ * wrap (the parts, the warning, what a dy pairing needs).
+ */
+.volume-head {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.volume-label {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.volume-region,
+.volume-methods {
+  flex-wrap: wrap;
+}
+
+.volume-tex,
+.volume-value {
+  font-size: var(--fs-sm);
+}
+
+.volume-parts .calc-fact,
+.volume-warning,
+.volume-need {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.volume-row .calc-select {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.volume-need .calc-chip {
+  margin-top: 2px;
+}
+
 /* A menu item offered but not available here: greyed, with the reason under it. */
 .card-menu-item-off {
   color: var(--faint);

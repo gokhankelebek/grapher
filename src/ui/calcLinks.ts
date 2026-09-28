@@ -48,8 +48,12 @@ import type {
   SecantLink,
   TangentLink,
   TaylorLink,
+  VolumeLink,
 } from '../core/persist'
 import { secantOverlays, secantRow } from './secantLinks'
+import { regionChoices, volumeOverlays, volumeRow } from './volumeLinks'
+import type { VolumeRow } from './volumeLinks'
+import type { SectionShape, VolumeAxis, VolumeMethod } from '../core/volume'
 import type { SecantRow } from './secantLinks'
 import { limitOverlays, limitRow } from './limitLinks'
 import type { LimitRow } from './limitLinks'
@@ -92,6 +96,8 @@ export type {
   TangentLink,
   TaylorLink,
   TaylorRow,
+  VolumeLink,
+  VolumeRow,
 }
 export { isCurveLink }
 
@@ -140,7 +146,7 @@ export function dependentsOf(
       const doomed =
         deadCurves.has(l.parentId) ||
         (isCurveLink(l) && deadCurves.has(l.curveId)) ||
-        (l.kind === 'area' && l.otherId !== undefined && deadCurves.has(l.otherId))
+        ((l.kind === 'area' || l.kind === 'volume') && l.otherId !== undefined && deadCurves.has(l.otherId))
       if (!doomed) continue
       deadLinks.add(l.id)
       if (isCurveLink(l)) deadCurves.add(l.curveId)
@@ -175,6 +181,8 @@ export function linkNoun(kind: CalcKind): string {
       return 'secant line'
     case 'limit':
       return 'limit'
+    case 'volume':
+      return 'volume'
   }
 }
 
@@ -282,6 +290,17 @@ export function overlaysFor(
       out.push(...secantOverlays(secants, curves, models))
     } catch {
       /* the secant marks are lost this frame; the rest of the figure stands */
+    }
+  }
+  // Volumes: the region and its mirror wash under the curves; the axis, the
+  // slice, the disk, shell or section and their labels mark on top
+  // (src/ui/volumeLinks.ts).
+  const volumes = links.filter((l): l is VolumeLink => l.kind === 'volume')
+  if (volumes.length > 0) {
+    try {
+      out.push(...volumeOverlays(volumes, curves, models))
+    } catch {
+      /* the volume figure is lost this frame; the rest of the figure stands */
     }
   }
   // Limits: the ε–δ bands wash under the curves; the guide, the arrows, the
@@ -1322,11 +1341,11 @@ export function followDomains(
   const byId = new Map(curves.map((c) => [c.id, c]))
   let out: CalcLink[] | null = null
   links.forEach((link, i) => {
-    if (link.kind !== 'area' && link.kind !== 'riemann') return
+    if (link.kind !== 'area' && link.kind !== 'riemann' && link.kind !== 'volume') return
     if (!prev.has(link.parentId)) return
     const parent = byId.get(link.parentId)
     if (!parent) return
-    const otherId = link.kind === 'area' ? link.otherId : undefined
+    const otherId = link.kind === 'area' || link.kind === 'volume' ? link.otherId : undefined
     const other = otherId === undefined ? undefined : byId.get(otherId)
     if (otherId !== undefined && (!other || !prev.has(otherId))) return
     const was = both(
@@ -1347,6 +1366,14 @@ export function followDomains(
       // Not rounded: an end is wherever the drag left it, and a limit a
       // millionth past it would be refused as outside the domain.
       return x
+    }
+    if (link.kind === 'volume') {
+      const a = carry(link.a)
+      const b = carry(link.b)
+      if (a === link.a && b === link.b) return
+      if (!out) out = links.slice()
+      out[i] = { ...link, a, b }
+      return
     }
     const from = carry(link.from)
     const to = carry(link.to)
@@ -1505,6 +1532,8 @@ export interface CardCalc {
   secants: SecantRow[]
   /** The limits taken on this curve: one-sided, two-sided, at ±∞; table and ε–δ. */
   limits: LimitRow[]
+  /** The solids built on regions this curve bounds (it is the parent). */
+  volumes: VolumeRow[]
 }
 
 export interface OriginRow {
@@ -1600,6 +1629,15 @@ export type CalcChange =
   | { kind: 'limitTable'; linkId: string; on: boolean }
   | { kind: 'limitEpsilon'; linkId: string; on: boolean }
   | { kind: 'limitEps'; linkId: string; eps: number }
+  | { kind: 'volumeBound'; linkId: string; which: 'a' | 'b'; value: number }
+  | { kind: 'volumeMethod'; linkId: string; method: VolumeMethod }
+  | { kind: 'volumeAxis'; linkId: string; axis: VolumeAxis }
+  | { kind: 'volumeSection'; linkId: string; section: SectionShape }
+  | { kind: 'volumeRatio'; linkId: string; ratio: number }
+  /** null: back to the middle of the region. */
+  | { kind: 'volumeSlice'; linkId: string; x: number | null }
+  /** null: the x-axis. The App re-chooses a and b for the new region. */
+  | { kind: 'volumeOther'; linkId: string; otherId: string | null }
 
 /** The undo entry each change deserves, in a teacher's words. */
 export function changeLabel(change: CalcChange): string {
@@ -1646,6 +1684,20 @@ export function changeLabel(change: CalcChange): string {
       return 'switch ε–δ'
     case 'limitEps':
       return 'change ε'
+    case 'volumeBound':
+      return 'move volume bound'
+    case 'volumeMethod':
+      return 'change volume method'
+    case 'volumeAxis':
+      return 'change axis of revolution'
+    case 'volumeSection':
+      return 'change cross-section'
+    case 'volumeRatio':
+      return 'change rectangle height'
+    case 'volumeSlice':
+      return 'move slice'
+    case 'volumeOther':
+      return 'change region'
   }
 }
 
@@ -1672,6 +1724,11 @@ export function cardCalc(
    * another curve by name has no Taylor polynomial, and its menu says so.
    */
   calls: Readonly<Record<string, readonly string[]>> = {},
+  /**
+   * The typed lines (curve id → "y = sqrt(x)") a volume may write into its
+   * integral — R(x) = √x rather than R(x) = f(x). Absent: letters.
+   */
+  sources: Readonly<Record<string, string>> = {},
 ): Record<string, CardCalc> {
   const out: Record<string, CardCalc> = {}
   const callsOthers = (id: string): boolean => (calls[id]?.length ?? 0) > 0
@@ -1685,6 +1742,7 @@ export function cardCalc(
     taylorBlocked: null,
     secants: [],
     limits: [],
+    volumes: [],
   })
   const slot = (id: string): CardCalc | null => {
     const curve = curveById(curves, id)
@@ -1866,6 +1924,29 @@ export function cardCalc(
           row = { ...limitRow(link, undefined, models), problem: 'this limit could not be measured' }
         }
         own.limits.push(row)
+        break
+      }
+      case 'volume': {
+        const own = slot(link.parentId)
+        if (!own) break
+        const other = link.otherId === undefined ? undefined : curveById(curves, link.otherId)
+        const fName = letters[link.parentId] ?? 'f'
+        let gName = link.otherId !== undefined ? (letters[link.otherId] ?? 'g') : 'g'
+        if (gName === fName) gName = fName === 'g' ? 'h' : 'g'
+        const others = regionChoices(link.parentId, curves, models).map((c) => ({
+          id: c.id,
+          label: letters[c.id] ?? nameOf(c),
+        }))
+        let row: VolumeRow
+        try {
+          row = volumeRow(link, parent, other, models, { fName, gName, sources, others })
+        } catch {
+          row = {
+            ...volumeRow({ ...link, otherId: undefined }, undefined, undefined, models, { fName, others }),
+            problem: 'this volume could not be measured',
+          }
+        }
+        own.volumes.push(row)
         break
       }
     }

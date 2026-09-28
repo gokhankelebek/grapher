@@ -34,6 +34,10 @@
 //   label   a small chip of text beside a math point ("c = 2√3/3"), ground-
 //           filled and ringed in its colour, stepped off the point along a
 //           stated screen direction.
+//   path    a polyline in math coords, optionally closed and filled, dashed
+//           or faint — an edge-on disk (an ellipse), a representative slice,
+//           a cross-section standing on its base. `under` paints it with the
+//           fills instead (the ghost of a solid's silhouette).
 //   approach  arrowheads gliding along a curve toward x = a from one side —
 //           the picture of lim x→a⁻ — placed at fixed SCREEN distances from a,
 //           so they read the same at every zoom; up or down the line x = a
@@ -214,6 +218,27 @@ export type Overlay =
       color?: string
     }
   | {
+      kind: 'path'
+      /** Whose colour it takes, when no colour is stated. */
+      curveId?: string
+      /** A polyline in MATH coords; `closed` joins the last point to the first. */
+      points: readonly Vec2[]
+      closed?: boolean
+      /** Fill alpha for a closed path. Absent: not filled. */
+      fill?: number
+      /** Stroke alpha. Absent: 1; 0: not stroked. */
+      alpha?: number
+      dashed?: boolean
+      /** Stroke weight in CSS px before `present.stroke`. Absent: MARK_LINE_WIDTH. */
+      width?: number
+      color?: string
+      /**
+       * Paint with the fills, under the curves (a silhouette, a ghost of the
+       * region), instead of with the marks on top of them (a slice, a disk).
+       */
+      under?: boolean
+    }
+  | {
       kind: 'ghost'
       /** Whose colour it takes, when no colour is stated. */
       curveId?: string
@@ -237,9 +262,14 @@ export const OVERLAY_MARK_KINDS: ReadonlySet<Overlay['kind']> = new Set([
   'approach',
 ])
 
+/** True when this overlay paints with the marks, on top of the curves. */
+export function isOverlayMark(ov: Overlay): boolean {
+  return OVERLAY_MARK_KINDS.has(ov.kind) || (ov.kind === 'path' && ov.under !== true)
+}
+
 /** True when any of these overlays is a mark — the board then paints in two passes. */
 export function hasOverlayMarks(overlays: readonly Overlay[]): boolean {
-  return overlays.some((ov) => ov && OVERLAY_MARK_KINDS.has(ov.kind))
+  return overlays.some((ov) => ov && isOverlayMark(ov))
 }
 
 /** The axis strip's bar weight and its alpha when none is stated, in CSS px. */
@@ -1045,6 +1075,56 @@ function drawHLine(
   if (ov.dashed) ctx.setLineDash([])
 }
 
+/**
+ * A polyline in math coords — an ellipse seen edge-on, a slice's outline, a
+ * cross-section standing on its base. Filled first (closed paths with `fill`),
+ * then stroked. Under mono ink (`forced`, the board's one grey wash) the fill
+ * keeps its proportion to an ordinary region's wash and a faint stroke is
+ * raised to a grey that survives a copier, exactly as a ghost's is.
+ */
+function drawPath(
+  ctx: CanvasRenderingContext2D,
+  ov: Extract<Overlay, { kind: 'path' }>,
+  fr: Frame,
+  color: string,
+  stroke: number,
+  forced: number | null,
+): void {
+  const pts: Vec2[] = []
+  for (const p of ov.points) {
+    if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) continue
+    pts.push({ x: clamp(sx(fr, p.x), fr.bx0, fr.bx1), y: clamp(sy(fr, p.y), fr.by0, fr.by1) })
+  }
+  if (pts.length < 2) return
+  const trace = (): void => {
+    ctx.beginPath()
+    ctx.moveTo(pts[0].x, pts[0].y)
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y)
+    if (ov.closed) ctx.closePath()
+  }
+  const fill = typeof ov.fill === 'number' && Number.isFinite(ov.fill) ? clamp(ov.fill, 0, 1) : 0
+  if (ov.closed && fill > 0 && pts.length >= MIN_REGION_POINTS) {
+    ctx.globalAlpha = forced !== null ? Math.min(forced, (forced * fill) / OVERLAY_FILL_ALPHA) : fill
+    ctx.fillStyle = color
+    trace()
+    ctx.fill()
+  }
+  const own = typeof ov.alpha === 'number' && Number.isFinite(ov.alpha) ? clamp(ov.alpha, 0, 1) : 1
+  if (own > 0) {
+    ctx.globalAlpha = forced !== null ? Math.max(own, GHOST_MONO_ALPHA) : own
+    ctx.strokeStyle = color
+    const w = typeof ov.width === 'number' && Number.isFinite(ov.width) && ov.width > 0 ? ov.width : MARK_LINE_WIDTH
+    ctx.lineWidth = w * stroke
+    ctx.lineCap = 'round'
+    ctx.lineJoin = 'round'
+    if (ov.dashed) ctx.setLineDash([5 * stroke, 4 * stroke])
+    trace()
+    ctx.stroke()
+    if (ov.dashed) ctx.setLineDash([])
+  }
+  ctx.globalAlpha = 1
+}
+
 /** A function's graph, faint and dashed, over the visible x-range (padded). */
 function drawGhost(
   ctx: CanvasRenderingContext2D,
@@ -1104,7 +1184,7 @@ export function drawOverlays(
   ctx.save()
   for (const ov of overlays) {
     if (!ov) continue
-    if (layer !== null && OVERLAY_MARK_KINDS.has(ov.kind) !== (layer === 'marks')) continue
+    if (layer !== null && isOverlayMark(ov) !== (layer === 'marks')) continue
     try {
       const forced =
         typeof o.fillAlpha === 'number' && Number.isFinite(o.fillAlpha)
@@ -1182,6 +1262,9 @@ export function drawOverlays(
           drawGhost(ctx, ov, fr, vp, color, own, stroke)
           break
         }
+        case 'path':
+          drawPath(ctx, ov, fr, color, stroke, forced)
+          break
         case 'dot': {
           const p = ov.at
           if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) break

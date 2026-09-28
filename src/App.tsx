@@ -61,6 +61,7 @@ import {
   withTaylorNames,
 } from './ui/taylorLinks'
 import { defaultSecant } from './ui/secantLinks'
+import { applyVolumeChange, defaultVolume, isVolumeChange, volumeSliceHandle } from './ui/volumeLinks'
 import { defaultLimitA, limitSnapPoints, snapLimitA } from './ui/limitLinks'
 import {
   carryParams,
@@ -571,12 +572,16 @@ export function betweenCardInfo(
   }
   const byId = new Map(curves.map((c) => [c.id, c]))
   for (const l of links) {
-    if (l.kind !== 'area' || !l.otherId) continue
+    if ((l.kind !== 'area' && l.kind !== 'volume') || !l.otherId) continue
     const parent = byId.get(l.parentId)
     const here = out[l.otherId]
     if (!parent || !here) continue
     const name = nameOf(parent)
-    here.notes.push(`area between this and ${name} \u2014 see ${name}\u2019s card`)
+    here.notes.push(
+      l.kind === 'volume'
+        ? `solid on the region between this and ${name} \u2014 see ${name}\u2019s card`
+        : `area between this and ${name} \u2014 see ${name}\u2019s card`,
+    )
   }
   return out
 }
@@ -3585,6 +3590,48 @@ export default function App() {
         return
       }
 
+      if (kind === 'volume') {
+        // The region the area-between link would shade: between f and the one
+        // other function it meets twice in view, else between f and the
+        // x-axis (between two zeros, or from a lone zero — √x opens on
+        // [0, 4]). Disks about the x-axis to start; the card changes the rest.
+        // An overlay on f like the secant: f stays selected and carries the
+        // handles (a, b and the slice).
+        let start: ReturnType<typeof defaultVolume> = null
+        try {
+          start = defaultVolume(parent, curvesRef.current, models, win)
+        } catch {
+          start = null
+        }
+        if (!start) {
+          showToast('This curve has no region in view to build a solid on.')
+          return
+        }
+        commitState(
+          {
+            calc: [
+              ...calcRef.current,
+              {
+                kind: 'volume',
+                id: linkId,
+                parentId,
+                ...(start.otherId !== undefined ? { otherId: start.otherId } : {}),
+                a: start.a,
+                b: start.b,
+                method: 'washer',
+              },
+            ],
+          },
+          'add volume',
+        )
+        setSelectedId(parentId)
+        showToast(
+          `Solid on the region between ${start.otherId !== undefined ? 'the curves' : 'the curve and the x-axis'} from x = ${sayX(start.a)} to x = ${sayX(start.b)}, about the x-axis`,
+          { ms: 4500, action: { label: 'Undo', run: undo } },
+        )
+        return
+      }
+
       const [from, to] = defaultBounds(parent, win)
       if (kind === 'area') {
         commitState(
@@ -3604,7 +3651,7 @@ export default function App() {
       }
       setSelectedId(parentId)
     },
-    [commitState, pickColor, showToast, viewWindow],
+    [commitState, pickColor, showToast, undo, viewWindow],
   )
 
   // ------------------------------------------------- area between two curves
@@ -3748,7 +3795,14 @@ export default function App() {
       if (i < 0) return
       const l = links[i]
       let next: CalcLink | null = null
-      if (change.kind === 'tangentX' && l.kind === 'tangent') {
+      if (isVolumeChange(change)) {
+        if (l.kind !== 'volume') return
+        next = applyVolumeChange(l, change, {
+          curves: curvesRef.current,
+          models: modelsRef.current,
+          window: viewWindow(),
+        })
+      } else if (change.kind === 'tangentX' && l.kind === 'tangent') {
         if (!Number.isFinite(change.x) || change.x === l.x) return
         next = { ...l, x: change.x }
       } else if (change.kind === 'bound' && (l.kind === 'area' || l.kind === 'riemann')) {
@@ -3857,7 +3911,7 @@ export default function App() {
         commitState({ calc: list }, changeLabel(change))
       }
     },
-    [applyState, commitState, relabelEdit],
+    [applyState, commitState, relabelEdit, viewWindow],
   )
 
   /** Take one calculus object off the board, with its curve when it has one. */
@@ -7965,12 +8019,42 @@ export default function App() {
     // The STORED letters too, so "f isn't differentiable at a = 1" names the
     // curve by the letter its own card wears.
     const letters = calcLinks.some(
-      (l) => l.kind === 'accumulation' || l.kind === 'taylor' || l.kind === 'secant' || l.kind === 'limit',
+      (l) =>
+        l.kind === 'accumulation' ||
+        l.kind === 'taylor' ||
+        l.kind === 'secant' ||
+        l.kind === 'limit' ||
+        l.kind === 'volume',
     )
       ? curveNames(curves, { ...displaySources, ...exprSources }, calcLinks, names, inverses)
       : {}
-    return cardCalc(calcLinks, curves, models, curveLabel, letters, calls)
-  }, [kind, calcLinks, curves, models, curveLabel, displaySources, exprSources, calls, names, inverses])
+    // A volume writes its integral with the typed formulas — R(x) = √x, not
+    // f(x) — for the curves that are typed lines and call no other curve.
+    const sources: Record<string, string> = {}
+    for (const l of calcLinks) {
+      if (l.kind !== 'volume') continue
+      for (const id of [l.parentId, l.otherId]) {
+        if (!id || sources[id] !== undefined) continue
+        const c = curves.find((cc) => cc.id === id)
+        if (!c || !c.modelId.startsWith('expr_') || (calls[id]?.length ?? 0) > 0) continue
+        const src = inverseSourceOf(c)
+        if (src) sources[id] = src
+      }
+    }
+    return cardCalc(calcLinks, curves, models, curveLabel, letters, calls, sources)
+  }, [
+    kind,
+    calcLinks,
+    curves,
+    models,
+    curveLabel,
+    displaySources,
+    exprSources,
+    calls,
+    names,
+    inverses,
+    inverseSourceOf,
+  ])
   const calcFor = useCallback(
     (id: string): CardCalc | undefined => calcCards[id],
     [calcCards],
@@ -8173,6 +8257,46 @@ export default function App() {
             label: 'x',
             onDrag: (pos) =>
               changeCalc({ kind: 'accumX', linkId: link.id, x: onCurve(parent, pos.x) }, true),
+          })
+        }
+        continue
+      }
+      if (link.kind === 'volume') {
+        // a and b on the x-axis, as for an area — grabbable from either
+        // boundary's card — and the representative slice, which rides the
+        // middle of the region (the dx methods) or of the horizontal strip
+        // (the dy ones) and drags along x or y. Last, so it wins a tie.
+        const other = link.otherId ? byId.get(link.otherId) : undefined
+        if (link.parentId !== selectedId && !(other && other.id === selectedId)) continue
+        const clampX = (x: number): number => (other ? onCurve(other, onCurve(parent, x)) : onCurve(parent, x))
+        for (const which of ['a', 'b'] as const) {
+          out.push({
+            id: `calc:${link.id}:${which}`,
+            pos: { x: link[which], y: 0 },
+            label: which,
+            onDrag: (pos) =>
+              changeCalc({ kind: 'volumeBound', linkId: link.id, which, value: clampX(pos.x) }, true),
+          })
+        }
+        let h: ReturnType<typeof volumeSliceHandle> = null
+        try {
+          h = volumeSliceHandle(link, parent, other, models)
+        } catch {
+          h = null
+        }
+        if (h) {
+          const sh = h
+          out.push({
+            id: `calc:${link.id}:slice`,
+            pos: sh.pos,
+            label: sh.axis === 'x' ? 'slice x' : 'slice y',
+            onDrag: (pos) => {
+              const v = sh.axis === 'x' ? pos.x : pos.y
+              changeCalc(
+                { kind: 'volumeSlice', linkId: link.id, x: Math.min(Math.max(v, sh.lo), sh.hi) },
+                true,
+              )
+            },
           })
         }
         continue
