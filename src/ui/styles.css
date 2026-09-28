@@ -6106,6 +6106,85 @@ button.calc-field-btn {
   white-space: normal;
 }
 
+/* ------------------------------------------------ Secant, MVT, average value */
+/*
+ * The secant row borrows the calc-* vocabulary. What it adds: the difference
+ * quotient and f_avg in KaTeX (they scroll rather than wrap, like Pₙ), the
+ * secant line in point-slope form, and a block per switch — the theorem with
+ * its two hypotheses ticked or crossed, and the average value.
+ */
+.secant-head {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.secant-tex {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0;
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+.secant-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  max-width: 100%;
+  overflow-x: auto;
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+.secant-line-label {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.secant-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: var(--sp-1);
+}
+
+.secant-block-title {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.secant-hyp {
+  display: flex;
+  gap: var(--sp-1);
+}
+
+.secant-mark {
+  flex: none;
+  width: 1em;
+  font-weight: 700;
+}
+
+.secant-hyp-ok .secant-mark {
+  color: #3ecf8e;
+}
+
+.secant-hyp-bad {
+  color: var(--text);
+}
+
+.secant-hyp-bad .secant-mark {
+  color: var(--danger);
+}
+
+.secant-verdict-bad {
+  color: var(--text);
+  font-weight: 600;
+}
+
 /* A menu item offered but not available here: greyed, with the reason under it. */
 .card-menu-item-off {
   color: var(--faint);

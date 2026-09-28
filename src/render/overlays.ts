@@ -28,6 +28,12 @@
 //           number line, so nothing reads through it).
 //   hline   a horizontal line across the whole board at a height — the
 //           horizontal line test.
+//   line    a straight line of any slope across the whole board, through a
+//           point — a secant extended past its two points, the tangent at a
+//           Mean Value Theorem c. Optionally dashed, optionally faint.
+//   label   a small chip of text beside a math point ("c = 2√3/3"), ground-
+//           filled and ringed in its colour, stepped off the point along a
+//           stated screen direction.
 //
 // And one more under the curves:
 //
@@ -49,7 +55,7 @@
 import type { FittedCurve, ModelSpec, Vec2, Viewport } from '../core/types'
 import { ppuX, ppuY } from '../core/types'
 import { sampleExplicitPolylines } from './curves'
-import { paintScale, type PaintScale } from './grid'
+import { LABEL_PX, gridFont, labelFont, paintScale, type PaintScale } from './grid'
 
 // ---------------------------------------------------------------------------
 // The contract
@@ -126,6 +132,43 @@ export type Overlay =
       to: Vec2
       dashed?: boolean
       color?: string
+      /** Stroke weight in CSS px before `present.stroke`. Absent: MARK_LINE_WIDTH. */
+      width?: number
+    }
+  | {
+      kind: 'line'
+      /** Whose colour it takes, when no colour is stated. */
+      curveId?: string
+      /** A point the line passes through, in math units. */
+      at: Vec2
+      /** dy/dx in math units. */
+      slope: number
+      dashed?: boolean
+      color?: string
+      /** Stroke alpha (0–1). Absent: 1. */
+      alpha?: number
+      /** Stroke weight in CSS px before `present.stroke`. Absent: MARK_LINE_WIDTH. */
+      width?: number
+    }
+  | {
+      kind: 'label'
+      curveId?: string
+      /** The point the chip names, in math units. */
+      at: Vec2
+      text: string
+      /**
+       * Which way the chip steps off the point, in SCREEN terms (y down). It is
+       * normalised; absent is straight up.
+       */
+      dir?: Vec2
+      /**
+       * Step off PERPENDICULAR to a line of this slope (math units) instead —
+       * to the side below it when `below`, above it otherwise. The renderer
+       * knows the axes' scales, so a chip beside a tangent of slope 4 clears
+       * that tangent on a stretched board as well as on a square one.
+       */
+      across?: { slope: number; below: boolean }
+      color?: string
     }
   | {
       kind: 'dot'
@@ -157,7 +200,13 @@ export type Overlay =
 export type StripEnd = 'closed' | 'open' | 'none'
 
 /** The overlay kinds painted ON TOP of the curves (see `layer`). */
-export const OVERLAY_MARK_KINDS: ReadonlySet<Overlay['kind']> = new Set(['segment', 'dot', 'hline'])
+export const OVERLAY_MARK_KINDS: ReadonlySet<Overlay['kind']> = new Set([
+  'segment',
+  'dot',
+  'hline',
+  'line',
+  'label',
+])
 
 /** True when any of these overlays is a mark — the board then paints in two passes. */
 export function hasOverlayMarks(overlays: readonly Overlay[]): boolean {
@@ -222,6 +271,16 @@ export interface OverlayPaintOpts {
    * all of them in the order given.
    */
   layer?: 'fills' | 'marks' | null
+  /**
+   * The figure's label face, for `label` chips. Absent is the sans stack the
+   * grid uses; 'serif' is the exam figure.
+   */
+  font?: 'sans' | 'serif' | null
+  /**
+   * Every label chip painted is pushed here as its screen box, so a later
+   * label layer (the analysis plates) can step around it. Absent: not kept.
+   */
+  placed?: { x: number; y: number; w: number; h: number }[] | null
 }
 
 // ---------------------------------------------------------------------------
@@ -634,7 +693,8 @@ function drawSegment(
   if (![from.x, from.y, to.x, to.y].every(Number.isFinite)) return
   ctx.globalAlpha = 1
   ctx.strokeStyle = color
-  ctx.lineWidth = MARK_LINE_WIDTH * stroke
+  const w = typeof ov.width === 'number' && Number.isFinite(ov.width) && ov.width > 0 ? ov.width : MARK_LINE_WIDTH
+  ctx.lineWidth = w * stroke
   ctx.lineCap = 'round'
   if (ov.dashed) ctx.setLineDash([5 * stroke, 4 * stroke])
   ctx.beginPath()
@@ -642,6 +702,126 @@ function drawSegment(
   ctx.lineTo(clamp(sx(fr, to.x), fr.bx0, fr.bx1), clamp(sy(fr, to.y), fr.by0, fr.by1))
   ctx.stroke()
   if (ov.dashed) ctx.setLineDash([])
+}
+
+/**
+ * A straight line through `at` with slope `slope`, across the whole board.
+ *
+ * Clipped analytically to the visible x-range (padded) BEFORE projecting, and
+ * never by clamping the two ends separately — that would bend the line.
+ */
+function drawLine(
+  ctx: CanvasRenderingContext2D,
+  ov: Extract<Overlay, { kind: 'line' }>,
+  fr: Frame,
+  vp: Viewport,
+  color: string,
+  stroke: number,
+): void {
+  const { at, slope } = ov
+  if (!Number.isFinite(at.x) || !Number.isFinite(at.y) || !Number.isFinite(slope)) return
+  const pad = 0.1 * vp.widthPx
+  const x0 = mathX(fr, -pad)
+  const x1 = mathX(fr, vp.widthPx + pad)
+  const y0 = at.y + slope * (x0 - at.x)
+  const y1 = at.y + slope * (x1 - at.x)
+  let p0 = { x: sx(fr, x0), y: sy(fr, y0) }
+  let p1 = { x: sx(fr, x1), y: sy(fr, y1) }
+  // Clip in screen space against the overdraw band in y, keeping the direction.
+  const clipY = (p: Vec2, q: Vec2, yLim: number): Vec2 => {
+    const t = (yLim - p.y) / (q.y - p.y)
+    return { x: p.x + t * (q.x - p.x), y: yLim }
+  }
+  for (const lim of [fr.by0, fr.by1]) {
+    const out0 = lim === fr.by0 ? p0.y < lim : p0.y > lim
+    const out1 = lim === fr.by0 ? p1.y < lim : p1.y > lim
+    if (out0 && out1) return
+    if (out0) p0 = clipY(p0, p1, lim)
+    else if (out1) p1 = clipY(p1, p0, lim)
+  }
+  if (![p0.x, p0.y, p1.x, p1.y].every(Number.isFinite)) return
+  const alpha = typeof ov.alpha === 'number' && Number.isFinite(ov.alpha) ? clamp(ov.alpha, 0, 1) : 1
+  const w = typeof ov.width === 'number' && Number.isFinite(ov.width) && ov.width > 0 ? ov.width : MARK_LINE_WIDTH
+  ctx.globalAlpha = alpha
+  ctx.strokeStyle = color
+  ctx.lineWidth = w * stroke
+  ctx.lineCap = 'butt'
+  if (ov.dashed) ctx.setLineDash([7 * stroke, 5 * stroke])
+  ctx.beginPath()
+  ctx.moveTo(p0.x, p0.y)
+  ctx.lineTo(p1.x, p1.y)
+  ctx.stroke()
+  if (ov.dashed) ctx.setLineDash([])
+  ctx.globalAlpha = 1
+}
+
+/** A label chip's height and padding, in CSS px before `present.type`. */
+export const LABEL_CHIP_H = 17
+const LABEL_CHIP_PAD = 5
+const LABEL_CHIP_GAP = 5
+
+/**
+ * A chip of text stepped off a math point along `dir` (screen terms): ground
+ * fill, a hairline ring in the colour, the text in the colour. The step clears
+ * the mark dot and half the chip along that direction, so the chip never sits
+ * on the point it names.
+ */
+function drawLabel(
+  ctx: CanvasRenderingContext2D,
+  ov: Extract<Overlay, { kind: 'label' }>,
+  fr: Frame,
+  vp: Viewport,
+  color: string,
+  scale: { type: number; stroke: number },
+  bg: string | null | undefined,
+  font: 'sans' | 'serif' | null | undefined,
+  placed: { x: number; y: number; w: number; h: number }[] | null | undefined,
+): void {
+  const text = typeof ov.text === 'string' ? ov.text : ''
+  if (!text || !Number.isFinite(ov.at.x) || !Number.isFinite(ov.at.y)) return
+  const px = sx(fr, ov.at.x)
+  const py = sy(fr, ov.at.y)
+  if (px < -40 || py < -40 || px > vp.widthPx + 40 || py > vp.heightPx + 40) return
+  const type = scale.type
+  ctx.font = font ? labelFont({ font }, LABEL_PX * type) : gridFont(LABEL_PX * type)
+  const w = ctx.measureText(text).width + 2 * LABEL_CHIP_PAD * type
+  const h = LABEL_CHIP_H * type
+  let raw = ov.dir ?? { x: 0, y: -1 }
+  if (ov.across && Number.isFinite(ov.across.slope)) {
+    // Screen tangent (ppx, −m·ppy); its normal (m·ppy, ppx) points DOWN the screen.
+    const n = { x: ov.across.slope * fr.ppy, y: fr.ppx }
+    raw = ov.across.below ? n : { x: -n.x, y: -n.y }
+  }
+  const len = Math.hypot(raw.x, raw.y)
+  const d = len > 0 && Number.isFinite(len) ? { x: raw.x / len, y: raw.y / len } : { x: 0, y: -1 }
+  const r = MARK_DOT_RADIUS * scale.stroke
+  const step = r + Math.abs(d.x) * (w / 2) + Math.abs(d.y) * (h / 2) + LABEL_CHIP_GAP * type
+  let x = px + d.x * step - w / 2
+  let y = py + d.y * step - h / 2
+  // Kept on the board: a chip half off the edge is a chip nobody can read.
+  x = clamp(x, 2, Math.max(2, vp.widthPx - w - 2))
+  y = clamp(y, 2, Math.max(2, vp.heightPx - h - 2))
+  const rr = 4 * type
+  ctx.globalAlpha = 1
+  ctx.beginPath()
+  ctx.moveTo(x + rr, y)
+  ctx.arcTo(x + w, y, x + w, y + h, rr)
+  ctx.arcTo(x + w, y + h, x, y + h, rr)
+  ctx.arcTo(x, y + h, x, y, rr)
+  ctx.arcTo(x, y, x + w, y, rr)
+  ctx.closePath()
+  if (bg) {
+    ctx.fillStyle = bg
+    ctx.fill()
+  }
+  ctx.lineWidth = 1 * scale.stroke
+  ctx.strokeStyle = color
+  ctx.stroke()
+  ctx.fillStyle = color
+  ctx.textBaseline = 'middle'
+  ctx.textAlign = 'left'
+  ctx.fillText(text, x + LABEL_CHIP_PAD * type, y + h / 2)
+  placed?.push({ x, y, w, h })
 }
 
 /** A horizontal line across the whole board, at math height `y`. */
@@ -715,7 +895,8 @@ export function drawOverlays(
   const vp = o.vp
   if (vp.widthPx <= 0 || vp.heightPx <= 0 || !(vp.pxPerUnit > 0)) return
   const fr = frameOf(vp)
-  const { stroke } = paintScale(o.scale)
+  const ps = paintScale(o.scale)
+  const { stroke } = ps
   // Explicit colours go through the board's mapping too: toPrintColor passes
   // an unknown colour straight through, so this only ever helps a palette
   // colour the App picked, and it keeps overlay and stroke in one palette.
@@ -735,7 +916,12 @@ export function drawOverlays(
       const alpha =
         forced !== null
           ? forced
-          : ov.kind === 'rects' || ov.kind === 'segment' || ov.kind === 'dot' || ov.kind === 'hline'
+          : ov.kind === 'rects' ||
+              ov.kind === 'segment' ||
+              ov.kind === 'dot' ||
+              ov.kind === 'hline' ||
+              ov.kind === 'line' ||
+              ov.kind === 'label'
           ? OVERLAY_FILL_ALPHA
           : clamp(
               typeof ov.alpha === 'number' && Number.isFinite(ov.alpha)
@@ -777,6 +963,12 @@ export function drawOverlays(
           break
         case 'hline':
           drawHLine(ctx, ov, fr, vp, color, stroke)
+          break
+        case 'line':
+          drawLine(ctx, ov, fr, vp, color, stroke)
+          break
+        case 'label':
+          drawLabel(ctx, ov, fr, vp, color, ps, o.bg, o.font, o.placed)
           break
         case 'ghost': {
           // Faint on screen; under mono ink a grey that survives a copier.

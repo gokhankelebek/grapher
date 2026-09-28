@@ -90,7 +90,14 @@ export type StyleMap = Record<string, CurveStyle>
 // core may not reach into src/ui.
 
 /** Which of the calculus objects a link describes. */
-export type CalcKind = 'tangent' | 'derivative' | 'area' | 'riemann' | 'accumulation' | 'taylor'
+export type CalcKind =
+  | 'tangent'
+  | 'derivative'
+  | 'area'
+  | 'riemann'
+  | 'accumulation'
+  | 'taylor'
+  | 'secant'
 
 /** A tangent line at one point of `parentId`, drawn as the curve `curveId`. */
 export interface TangentLink {
@@ -201,7 +208,38 @@ export interface TaylorLink {
 /** The model id a Taylor polynomial registers under: this prefix + the link id. */
 export const TAYLOR_MODEL_PREFIX = 'tay_'
 
-export type CalcLink = TangentLink | DerivativeLink | AreaLink | RiemannLink | AccumulationLink | TaylorLink
+/**
+ * The secant line of `parentId` through (a, f(a)) and (b, f(b)): the average
+ * rate of change over [a, b], and — switched on — the Mean Value Theorem
+ * (`mvt`: its hypotheses, every c with f′(c) equal to the secant's slope, the
+ * tangent lines there) and the average value (`avg`: f_avg, the rectangle of
+ * that height, every c with f(c) = f_avg).
+ *
+ * The secant is the figure's own line, drawn as an overlay rather than a
+ * curve: it holds no letter and gets no analysis. Nothing computed is stored;
+ * the switches are written only when on.
+ *   src/core/mvt.ts        secantOf / continuityOn / differentiabilityOn /
+ *                          mvtPoints / averageValue / mvtSourceOf
+ *   src/ui/secantLinks.ts  secantRow / secantOverlays / defaultSecant
+ */
+export interface SecantLink {
+  kind: 'secant'
+  id: string
+  parentId: string
+  a: number
+  b: number
+  mvt?: true
+  avg?: true
+}
+
+export type CalcLink =
+  | TangentLink
+  | DerivativeLink
+  | AreaLink
+  | RiemannLink
+  | AccumulationLink
+  | TaylorLink
+  | SecantLink
 
 /** The links that own a curve of their own. */
 export type CurveLink = TangentLink | DerivativeLink | AccumulationLink | TaylorLink
@@ -1111,6 +1149,10 @@ export interface StoredCalcLink {
   /** Taylor only, and only when on: the error band and the interval of convergence. */
   band?: boolean
   ioc?: boolean
+  /** Secant only: the right-hand point (a is the left-hand one), and the two switches when on. */
+  b?: number
+  mvt?: boolean
+  avg?: boolean
 }
 
 export interface StoredDoc {
@@ -1977,6 +2019,17 @@ export function calcLinkToStored(l: CalcLink): StoredCalcLink {
         ...(l.band === true ? { band: true } : {}),
         ...(l.ioc === true ? { ioc: true } : {}),
       }
+    case 'secant':
+      return {
+        kind: 'secant',
+        id: l.id,
+        parentId: l.parentId,
+        a: l.a,
+        b: l.b,
+        // Both switches default off and are written only when on.
+        ...(l.mvt === true ? { mvt: true } : {}),
+        ...(l.avg === true ? { avg: true } : {}),
+      }
   }
 }
 
@@ -2061,6 +2114,20 @@ export function storedToCalcLink(raw: unknown): CalcLink | null {
         ...(raw.ioc === true ? { ioc: true } : {}),
       }
     }
+    case 'secant': {
+      // The two points ARE the secant: without both there is no line. The
+      // switches are true or absent — anything else is simply off.
+      if (!isNum(raw.a) || !isNum(raw.b)) return null
+      return {
+        kind: 'secant',
+        id,
+        parentId,
+        a: raw.a,
+        b: raw.b,
+        ...(raw.mvt === true ? { mvt: true as const } : {}),
+        ...(raw.avg === true ? { avg: true as const } : {}),
+      }
+    }
     default:
       return null
   }
@@ -2081,6 +2148,8 @@ export function calcNoun(kind: CalcKind): string {
       return 'accumulation function'
     case 'taylor':
       return 'Taylor polynomial'
+    case 'secant':
+      return 'secant line'
   }
 }
 

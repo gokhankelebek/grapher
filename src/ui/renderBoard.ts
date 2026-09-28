@@ -1917,7 +1917,9 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
     ctx.globalAlpha = 1
   }
 
-  // The overlays' marks: on every curve, under the data and the labels.
+  // The overlays' marks: on every curve, under the data and the labels. Their
+  // chips ("c = 2√3/3") are kept, so the analysis plates step around them.
+  const overlayPlates: LabelBox[] = []
   if (marks && overlays) {
     try {
       drawOverlays(ctx, overlays, {
@@ -1929,6 +1931,9 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
         fillAlpha: washAlpha,
         layer: 'marks',
         bg: theme.bg,
+        // A label chip ("c = 2√3/3") speaks in the figure's own face.
+        font: fig?.font ?? null,
+        placed: overlayPlates,
       })
     } catch {
       /* a mark that could not be drawn must not take the figure with it */
@@ -1996,7 +2001,7 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
 
   // One budget of plates for the whole board: the crossings' chips step around
   // the selected curve's, because they are labels on the same picture.
-  const plates: LabelBox[] = []
+  const plates: LabelBox[] = overlayPlates
 
   const an = scene.analysis ?? null
   if (an && an.points.length > 0 && an.curve.visible) {

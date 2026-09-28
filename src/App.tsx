@@ -60,6 +60,7 @@ import {
   taylorSourceFor,
   withTaylorNames,
 } from './ui/taylorLinks'
+import { defaultSecant } from './ui/secantLinks'
 import {
   carryParams,
   compileFields,
@@ -3513,6 +3514,30 @@ export default function App() {
         return
       }
 
+      if (kind === 'secant') {
+        // Two nice numbers in view where f is defined (continuous between
+        // them when the view allows it). The secant is an overlay on f — no
+        // curve, no letter — so f stays selected and carries the handles.
+        let ends: [number, number] | null = null
+        try {
+          const vp = vpRef.current
+          const halfY = vp.heightPx / 2 / ppuY(vp)
+          ends = defaultSecant(parent, models, win, [vp.center.y - halfY, vp.center.y + halfY])
+        } catch {
+          ends = null
+        }
+        if (!ends) {
+          showToast('This curve has no two points in view to draw a secant through.')
+          return
+        }
+        commitState(
+          { calc: [...calcRef.current, { kind: 'secant', id: linkId, parentId, a: ends[0], b: ends[1] }] },
+          'add secant line',
+        )
+        setSelectedId(parentId)
+        return
+      }
+
       const [from, to] = defaultBounds(parent, win)
       if (kind === 'area') {
         commitState(
@@ -3725,6 +3750,19 @@ export default function App() {
         const { ioc: _was, ...rest } = l
         void _was
         next = change.on ? { ...rest, ioc: true } : rest
+      } else if (change.kind === 'secantBound' && l.kind === 'secant') {
+        if (!Number.isFinite(change.value) || l[change.which] === change.value) return
+        next = { ...l, [change.which]: change.value }
+      } else if (change.kind === 'secantMvt' && l.kind === 'secant') {
+        if ((l.mvt === true) === change.on) return
+        const { mvt: _was, ...rest } = l
+        void _was
+        next = change.on ? { ...rest, mvt: true } : rest
+      } else if (change.kind === 'secantAvg' && l.kind === 'secant') {
+        if ((l.avg === true) === change.on) return
+        const { avg: _was, ...rest } = l
+        void _was
+        next = change.on ? { ...rest, avg: true } : rest
       } else if (change.kind === 'accumX' && l.kind === 'accumulation') {
         if (change.x === null) {
           if (l.x === undefined) return
@@ -7749,7 +7787,9 @@ export default function App() {
     // with the names on the figure. Only asked for when there is one.
     // The STORED letters too, so "f isn't differentiable at a = 1" names the
     // curve by the letter its own card wears.
-    const letters = calcLinks.some((l) => l.kind === 'accumulation' || l.kind === 'taylor')
+    const letters = calcLinks.some(
+      (l) => l.kind === 'accumulation' || l.kind === 'taylor' || l.kind === 'secant',
+    )
       ? curveNames(curves, { ...displaySources, ...exprSources }, calcLinks, names, inverses)
       : {}
     return cardCalc(calcLinks, curves, models, curveLabel, letters, calls)
@@ -7863,6 +7903,46 @@ export default function App() {
             label: 'probe x',
             onDrag: (pos) =>
               changeCalc({ kind: 'taylorX', linkId: link.id, x: onCurve(parent, snapX(pos.x)) }, true),
+          })
+        }
+        continue
+      }
+      if (link.kind === 'secant') {
+        // Both points ride the curve at (a, f(a)) and (b, f(b)), snapping to
+        // nice numbers — and to multiples of π on a π axis — exactly as a
+        // Taylor centre does. A drag never leaves the sketch.
+        if (link.parentId !== selectedId) continue
+        const spec = models[parent.modelId]
+        const ev = spec?.evalExplicit
+        if (!ev) continue
+        const yAt = (x: number): number => {
+          try {
+            const v = ev.call(spec, parent.params, x)
+            return Number.isFinite(v) ? v : 0
+          } catch {
+            return 0
+          }
+        }
+        const snapX = (x: number): number => {
+          const vp = vpRef.current
+          return snapCenter(
+            x,
+            ppuX(vp),
+            (v) => snapCoord(v, vp, 'x'),
+            axisUnitsRef.current.x === 'pi',
+            (v) => snapPiX(v, ppuX(vp)),
+          )
+        }
+        for (const which of ['a', 'b'] as const) {
+          out.push({
+            id: `calc:${link.id}:${which}`,
+            pos: { x: link[which], y: yAt(link[which]) },
+            label: which,
+            onDrag: (pos) =>
+              changeCalc(
+                { kind: 'secantBound', linkId: link.id, which, value: onCurve(parent, snapX(pos.x)) },
+                true,
+              ),
           })
         }
         continue

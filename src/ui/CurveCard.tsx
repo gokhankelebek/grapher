@@ -43,6 +43,7 @@ import { curveEquationText, displayEquationLatex } from './equationText'
 import { N_MAX, N_MIN, RIEMANN_METHODS } from './calcLinks'
 import type { CalcChange, CalcKind, CardCalc } from './calcLinks'
 import { TaylorSection } from './TaylorSection'
+import { SecantSection } from './SecantSection'
 import type { CurveIntersections } from './intersections'
 import { DomainSection } from './DomainSection'
 import type { DomainActions, DomainPanel, SetNotation } from './domainLinks'
@@ -269,6 +270,7 @@ const EMPTY_NOTES: string[] = []
 
 /** The order the ⋯ menu offers them: the order an AP class meets them. */
 const CALC_ITEMS: { kind: CalcKind; label: string }[] = [
+  { kind: 'secant', label: 'Average rate of change (secant)' },
   { kind: 'tangent', label: 'Tangent line' },
   { kind: 'derivative', label: 'Derivative f\u2032' },
   { kind: 'area', label: 'Area under curve' },
@@ -2269,6 +2271,7 @@ export function CurveCard({
               calc.riemanns.length > 0 ||
               calc.accums.length > 0 ||
               calc.taylors.length > 0 ||
+              calc.secants.length > 0 ||
               betweenNotes.length > 0) && (
             <div className="calc-section">
               <div className="calc-title">Calculus</div>
@@ -2395,6 +2398,15 @@ export function CurveCard({
                     )}
                     {g.problem && <div className="calc-why">{g.problem}</div>}
                   </div>
+                ))}
+
+                {calc.secants.map((sc) => (
+                  <SecantSection
+                    key={sc.linkId}
+                    row={sc}
+                    onCalcChange={onCalcChange}
+                    onRemove={() => onCalcRemove(sc.linkId)}
+                  />
                 ))}
 
                 {calc.taylors.map((t) => (

@@ -44,9 +44,12 @@ import type {
   CurveLink,
   DerivativeLink,
   RiemannLink,
+  SecantLink,
   TangentLink,
   TaylorLink,
 } from '../core/persist'
+import { secantOverlays, secantRow } from './secantLinks'
+import type { SecantRow } from './secantLinks'
 import {
   pName,
   taylorBlocked,
@@ -79,6 +82,8 @@ export type {
   DerivativeLink,
   RiemannLink,
   RiemannMethod,
+  SecantLink,
+  SecantRow,
   TangentLink,
   TaylorLink,
   TaylorRow,
@@ -161,6 +166,8 @@ export function linkNoun(kind: CalcKind): string {
       return 'accumulation function'
     case 'taylor':
       return 'Taylor polynomial'
+    case 'secant':
+      return 'secant line'
   }
 }
 
@@ -258,6 +265,16 @@ export function overlaysFor(
       out.push(...taylorOverlays(taylors, curves, models, span))
     } catch {
       /* the Taylor marks are lost this frame; the rest of the figure stands */
+    }
+  }
+  // Secants: the average-value rectangle washes under the curves; the secant,
+  // the MVT tangents, their dots and chips mark on top (src/ui/secantLinks.ts).
+  const secants = links.filter((l): l is SecantLink => l.kind === 'secant')
+  if (secants.length > 0) {
+    try {
+      out.push(...secantOverlays(secants, curves, models))
+    } catch {
+      /* the secant marks are lost this frame; the rest of the figure stands */
     }
   }
   return out
@@ -1467,6 +1484,8 @@ export interface CardCalc {
    * offered.
    */
   taylorBlocked: string | null
+  /** The secants drawn on this curve: the average rate of change, the MVT, f_avg. */
+  secants: SecantRow[]
 }
 
 export interface OriginRow {
@@ -1553,6 +1572,9 @@ export type CalcChange =
   | { kind: 'taylorX'; linkId: string; x: number | null }
   | { kind: 'taylorBand'; linkId: string; on: boolean }
   | { kind: 'taylorIoc'; linkId: string; on: boolean }
+  | { kind: 'secantBound'; linkId: string; which: 'a' | 'b'; value: number }
+  | { kind: 'secantMvt'; linkId: string; on: boolean }
+  | { kind: 'secantAvg'; linkId: string; on: boolean }
 
 /** The undo entry each change deserves, in a teacher's words. */
 export function changeLabel(change: CalcChange): string {
@@ -1583,6 +1605,12 @@ export function changeLabel(change: CalcChange): string {
       return 'switch error band'
     case 'taylorIoc':
       return 'switch interval of convergence'
+    case 'secantBound':
+      return 'move secant point'
+    case 'secantMvt':
+      return 'switch Mean Value Theorem'
+    case 'secantAvg':
+      return 'switch average value'
   }
 }
 
@@ -1620,6 +1648,7 @@ export function cardCalc(
     accums: [],
     taylors: [],
     taylorBlocked: null,
+    secants: [],
   })
   const slot = (id: string): CardCalc | null => {
     const curve = curveById(curves, id)
@@ -1774,6 +1803,21 @@ export function cardCalc(
           problem: row.problem ?? (parent ? null : taylorProblem(link, parent, src, fName)),
           x: null,
         }
+        break
+      }
+      case 'secant': {
+        const own = slot(link.parentId)
+        if (!own) break
+        let row: SecantRow
+        try {
+          row = secantRow(link, parent, models, letters[link.parentId] ?? 'f')
+        } catch {
+          row = {
+            ...secantRow({ ...link, mvt: undefined, avg: undefined }, undefined, models),
+            problem: 'this secant could not be measured',
+          }
+        }
+        own.secants.push(row)
         break
       }
     }
