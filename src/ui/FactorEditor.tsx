@@ -3,6 +3,7 @@ import type { Vec2 } from '../core/types'
 import type { Factor, FactoredSpec } from '../core/factored'
 import { endBehaviour } from '../core/factored'
 import { Latex } from './Latex'
+import { CardSection } from './CardSection'
 import {
   MULT_MAX,
   MULT_MIN,
@@ -292,7 +293,9 @@ function FactorList({
                 )
               }
             />
-            <span className={`fe-behaviour${hint ? '' : ' fe-behaviour-none'}`}>{hint ?? ''}</span>
+            <span className={`fe-behaviour${hint ? '' : ' fe-behaviour-none'}${hint && hint.length > 16 ? ' fe-behaviour-long' : ''}`}>
+              {hint ?? ''}
+            </span>
             <button
               type="button"
               className="calc-drop fe-drop"
@@ -548,7 +551,6 @@ interface SectionProps {
 }
 
 export function RootsSection({ spec, through, onRestate, onDropThrough }: SectionProps) {
-  const [open, setOpen] = useState(true)
   const [error, setError] = useState<string | null>(null)
   // A new spec is a new line: whatever was refused about the old one is moot.
   useEffect(() => setError(null), [spec])
@@ -572,20 +574,13 @@ export function RootsSection({ spec, through, onRestate, onDropThrough }: Sectio
   const rational = spec.den.length > 0
 
   return (
-    <div className="field-section fe-section" data-testid="roots-section">
-      <button
-        type="button"
-        className="an-title fe-toggle"
-        aria-expanded={open}
-        onClick={(e) => {
-          e.stopPropagation()
-          setOpen((o) => !o)
-        }}
-      >
-        Roots <span className="fe-caret">{open ? '▾' : '▸'}</span>
-      </button>
-      {open && (
-        <>
+    <CardSection
+      kind="roots"
+      title="Roots"
+      summary={rootsSummary(spec)}
+      className="field-section fe-section"
+      testId="roots-section"
+    >
           <div className="fe-a-row">
             <span className="calc-tag">a =</span>
             <FactorField
@@ -636,7 +631,7 @@ export function RootsSection({ spec, through, onRestate, onDropThrough }: Sectio
               />
               <button
                 type="button"
-                className="fe-link"
+                className="calc-chip fe-add fe-rational"
                 onClick={(e) => {
                   e.stopPropagation()
                   op({ kind: 'toggleRational' })
@@ -662,8 +657,21 @@ export function RootsSection({ spec, through, onRestate, onDropThrough }: Sectio
           <div className="field-hint">
             Drag a root along the x-axis on the board, or type it here.
           </div>
-        </>
-      )}
-    </div>
+    </CardSection>
   )
+}
+
+/** "zeros 0 (×2)" · "zeros 1 · poles −2, 3" — what a folded Roots section still says. */
+export function rootsSummary(spec: FactoredSpec): string {
+  const list = (fs: readonly Factor[]): string =>
+    fs
+      .map((f) => {
+        const r = f.root !== undefined ? f.root.trim().replace(/-/g, '−') : f.complex ? `${f.complex.re} ± ${f.complex.im}i` : '?'
+        return f.mult > 1 ? `${r} (×${f.mult})` : r
+      })
+      .join(', ')
+  const parts: string[] = []
+  if (spec.num.length > 0) parts.push(`zeros ${list(spec.num)}`)
+  if (spec.den.length > 0) parts.push(`poles ${list(spec.den)}`)
+  return parts.join(' · ')
 }

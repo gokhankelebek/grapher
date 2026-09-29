@@ -427,7 +427,9 @@ type S =
   | { t: 'yp' }
   | { t: 'p'; name: string }
   | { t: 'neg'; a: S }
-  | { t: 'add' | 'sub' | 'mul' | 'div' | 'pow'; a: S; b: S }
+  | { t: 'add' | 'sub' | 'mul' | 'pow'; a: S; b: S }
+  /** `tight`: a number·letter over something, printed 2y/L rather than (2y)/L (collectYp only). */
+  | { t: 'div'; a: S; b: S; tight?: true }
   | { t: 'fn'; fn: string; a: S }
 
 const N = (v: number): S => ({ t: 'n', v })
@@ -797,7 +799,8 @@ function subst(s: S, f: S): S {
     case 'mul':
       return mul(subst(s.a, f), subst(s.b, f))
     case 'div':
-      return div(subst(s.a, f), subst(s.b, f))
+      // A tight quotient is written by collectYp and holds no dy/dx.
+      return s.tight ? s : div(subst(s.a, f), subst(s.b, f))
     case 'pow':
       return pow(subst(s.a, f), subst(s.b, f))
   }
@@ -819,6 +822,366 @@ function hasYp(s: S): boolean {
     default:
       return hasYp(s.a) || hasYp(s.b)
   }
+}
+
+// ---- collecting like terms in dy/dx --------------------------------------
+//
+// The product rule leaves a logistic field's d²y/dx² as two terms that share
+// dy/dx: y(1 − y) gives (1 − y)·dy/dx − y·dy/dx. The AP answer (and every
+// teacher) writes (1 − 2y)·dy/dx — the factor whose sign IS the concavity. So
+// the top-level terms of the form A·dy/dx are collected when every A is a
+// polynomial in y whose coefficients are numbers times parameters (k, L) —
+// and the collected line is kept only when it agrees with the original at
+// several sample points. Anything else keeps the product rule's own line.
+
+/** One term of a polynomial in y: c · Π(factor^e) · y^ye. */
+interface PTerm {
+  c: number
+  ye: number
+  /** Parameters, constants and x, by key ("p:k", "c:pi", "x"), with their tree and exponent. */
+  fs: Map<string, { s: S; e: number }>
+}
+type Poly = Map<string, PTerm>
+
+const POLY_MAX_TERMS = 16
+
+function termKey(t: PTerm): string {
+  const f = [...t.fs.entries()].filter(([, v]) => v.e !== 0).map(([k, v]) => `${k}^${v.e}`).sort()
+  return `${t.ye}|${f.join('*')}`
+}
+
+function polyAdd(P: Poly, t: PTerm): void {
+  if (t.c === 0) return
+  const fs = new Map([...t.fs].filter(([, v]) => v.e !== 0))
+  const clean: PTerm = { c: t.c, ye: t.ye, fs }
+  const k = termKey(clean)
+  const hit = P.get(k)
+  if (hit) {
+    hit.c += t.c
+    if (Math.abs(hit.c) <= 1e-12 * Math.max(Math.abs(t.c), 1e-300)) P.delete(k)
+  } else P.set(k, clean)
+}
+
+function polyOf(c: number, ye = 0, fs: Map<string, { s: S; e: number }> = new Map()): Poly {
+  const P: Poly = new Map()
+  polyAdd(P, { c, ye, fs })
+  return P
+}
+
+function polyMul(A: Poly, B: Poly): Poly | null {
+  const out: Poly = new Map()
+  for (const a of A.values()) {
+    for (const b of B.values()) {
+      const fs = new Map<string, { s: S; e: number }>()
+      for (const [k, v] of a.fs) fs.set(k, { s: v.s, e: v.e })
+      for (const [k, v] of b.fs) {
+        const hit = fs.get(k)
+        if (hit) hit.e += v.e
+        else fs.set(k, { s: v.s, e: v.e })
+      }
+      polyAdd(out, { c: a.c * b.c, ye: a.ye + b.ye, fs })
+      if (out.size > POLY_MAX_TERMS) return null
+    }
+  }
+  return out
+}
+
+function polyScale(A: Poly, k: number): Poly {
+  const out: Poly = new Map()
+  for (const t of A.values()) polyAdd(out, { ...t, c: t.c * k })
+  return out
+}
+
+/** A tree as a polynomial in y over numbers × parameters, or null. */
+function toPoly(s: S): Poly | null {
+  switch (s.t) {
+    case 'n':
+      return polyOf(s.v)
+    case 'y':
+      return polyOf(1, 1)
+    case 'x':
+      return polyOf(1, 0, new Map([['x', { s, e: 1 }]]))
+    case 'p':
+      return polyOf(1, 0, new Map([[`p:${s.name}`, { s, e: 1 }]]))
+    case 'c':
+      return polyOf(1, 0, new Map([[`c:${s.name}`, { s, e: 1 }]]))
+    case 'neg': {
+      const a = toPoly(s.a)
+      return a ? polyScale(a, -1) : null
+    }
+    case 'add':
+    case 'sub': {
+      const a = toPoly(s.a)
+      const b = toPoly(s.b)
+      if (!a || !b) return null
+      const out: Poly = new Map()
+      for (const t of a.values()) polyAdd(out, t)
+      for (const t of b.values()) polyAdd(out, { ...t, c: s.t === 'sub' ? -t.c : t.c })
+      return out.size > POLY_MAX_TERMS ? null : out
+    }
+    case 'mul': {
+      const a = toPoly(s.a)
+      const b = toPoly(s.b)
+      return a && b ? polyMul(a, b) : null
+    }
+    case 'div': {
+      // Only by a single term: y/L, k/2 — never by a sum.
+      const a = toPoly(s.a)
+      const b = toPoly(s.b)
+      if (!a || !b || b.size !== 1) return null
+      const t = [...b.values()][0]
+      if (t.c === 0) return null
+      const inv = new Map<string, { s: S; e: number }>()
+      for (const [k, v] of t.fs) inv.set(k, { s: v.s, e: -v.e })
+      return polyMul(a, polyOf(1 / t.c, -t.ye, inv))
+    }
+    case 'pow': {
+      if (!isN(s.b) || !Number.isInteger(s.b.v) || s.b.v < 0 || s.b.v > 4) return null
+      const a = toPoly(s.a)
+      if (!a) return null
+      let out: Poly | null = polyOf(1)
+      for (let i = 0; i < s.b.v && out; i++) out = polyMul(out, a)
+      return out
+    }
+    default:
+      return null
+  }
+}
+
+/** p/q for a coefficient that is one (q ≤ 1000), else null. */
+function ratio(v: number): { p: number; q: number } | null {
+  if (!Number.isFinite(v)) return null
+  for (let q = 1; q <= 1000; q++) {
+    const p = Math.round(v * q)
+    if (Math.abs(p / q - v) <= 1e-12 * Math.max(1, Math.abs(v)) && Math.abs(p) <= 1e6) return { p, q }
+  }
+  return null
+}
+
+const tidyC = (v: number): number => Number(v.toPrecision(12))
+
+/**
+ * One term, sign dropped: |c|·factors·y^ye. `c` is a p/q when it is one — so
+ * y/5, 2y/L — else a decimal.
+ */
+function termS(t: PTerm, decimal = false): S {
+  const c = Math.abs(tidyC(t.c))
+  const r = ratio(c)
+  const top: S[] = []
+  const bottom: S[] = []
+  // A short decimal out front stays one: 0.5(1 − y/5), not (…)/2.
+  if (decimal && r && r.q !== 1 && String(c).length <= 8) top.push(N(c))
+  else if (r && r.q !== 1) {
+    if (r.p !== 1) top.push(N(r.p))
+    bottom.push(N(r.q))
+  } else if (c !== 1) top.push(N(r ? r.p : c))
+  for (const f of [...t.fs.values()].sort((a, b) => b.e - a.e)) {
+    if (f.e === 0) continue
+    const e = Math.abs(f.e)
+    ;(f.e > 0 ? top : bottom).push(e === 1 ? f.s : { t: 'pow', a: f.s, b: N(e) })
+  }
+  if (t.ye > 0) top.push(t.ye === 1 ? { t: 'y' } : { t: 'pow', a: { t: 'y' }, b: N(t.ye) })
+  if (top.length === 0) top.push(ONE)
+  const num = chain(top)
+  if (bottom.length === 0) return num
+  // "2y/L": a number beside one letter needs no bracket over the line.
+  const tight = top.length === 2 && top[0].t === 'n' && PREC[top[1].t] >= 6 && top[1].t !== 'n'
+  return tight ? { t: 'div', a: num, b: chain(bottom), tight: true } : { t: 'div', a: num, b: chain(bottom) }
+}
+
+/** Σ of the terms, constant first then rising powers of y. */
+function sumS(terms: PTerm[]): S {
+  const sorted = terms.slice().sort((a, b) => a.ye - b.ye || termKey(a).localeCompare(termKey(b)))
+  // Lead with a positive term when there is one: 2y − 1, not −1 + 2y.
+  const lead = sorted.findIndex((t) => tidyC(t.c) > 0)
+  if (lead > 0) sorted.unshift(...sorted.splice(lead, 1))
+  let out: S | null = null
+  for (const t of sorted) {
+    const body = termS(t)
+    const neg_ = tidyC(t.c) < 0
+    if (out === null) out = neg_ ? { t: 'neg', a: body } : body
+    else out = neg_ ? { t: 'sub', a: out, b: body } : { t: 'add', a: out, b: body }
+  }
+  return out ?? ZERO
+}
+
+/**
+ * The collected A, written the way it is taught: an integer gcd pulled out
+ * front (6 − 4y → 2(3 − 2y)); otherwise the constant term pulled out when the
+ * others are clean multiples of it (0.5 − 0.1y → 0.5(1 − y/5),
+ * k − 2ky/L → k(1 − 2y/L)); otherwise the plain sum.
+ */
+function polyS(P: Poly): S {
+  const terms = [...P.values()]
+  if (terms.length === 0) return ZERO
+  if (terms.length === 1) {
+    const b = termS(terms[0])
+    return tidyC(terms[0].c) < 0 ? neg(b) : b
+  }
+  const plainNums = terms.every((t) => t.fs.size === 0 && Number.isInteger(tidyC(t.c)))
+  if (plainNums) {
+    const g = terms.reduce((acc, t) => gcd(acc, tidyC(t.c)), 0)
+    if (g > 1) return { t: 'mul', a: N(g), b: sumS(terms.map((t) => ({ ...t, c: t.c / g }))) }
+    return sumS(terms)
+  }
+  const c0s = terms.filter((t) => t.ye === 0)
+  if (c0s.length === 1) {
+    const t0 = c0s[0]
+    const inner: PTerm[] = []
+    let ok = true
+    for (const t of terms) {
+      const rc = t.c / t0.c
+      if (t !== t0 && !ratio(Math.abs(tidyC(rc)))) ok = false
+      const fs = new Map<string, { s: S; e: number }>()
+      for (const [k, v] of t.fs) fs.set(k, { s: v.s, e: v.e })
+      for (const [k, v] of t0.fs) {
+        const hit = fs.get(k)
+        if (hit) hit.e -= v.e
+        else fs.set(k, { s: v.s, e: -v.e })
+      }
+      inner.push({ c: t === t0 ? 1 : rc, ye: t.ye, fs: new Map([...fs].filter(([, v]) => v.e !== 0)) })
+    }
+    if (ok) {
+      const front = termS({ ...t0, c: Math.abs(t0.c) }, true)
+      const body: S = { t: 'mul', a: front, b: sumS(inner) }
+      return tidyC(t0.c) < 0 ? { t: 'neg', a: body } : body
+    }
+  }
+  return sumS(terms)
+}
+
+/** The top-level terms of a sum, each with its sign. */
+function sumTerms(s: S, sign: 1 | -1, out: { s: S; sign: 1 | -1 }[]): void {
+  if (s.t === 'add' || s.t === 'sub') {
+    sumTerms(s.a, sign, out)
+    sumTerms(s.b, s.t === 'sub' ? (-sign as 1 | -1) : sign, out)
+  } else if (s.t === 'neg') sumTerms(s.a, -sign as 1 | -1, out)
+  else out.push({ s, sign })
+}
+
+const MATH_FN: Record<string, (v: number) => number> = {
+  sin: Math.sin, cos: Math.cos, tan: Math.tan,
+  sec: (v) => 1 / Math.cos(v), csc: (v) => 1 / Math.sin(v), cot: (v) => 1 / Math.tan(v),
+  exp: Math.exp, ln: Math.log, sqrt: Math.sqrt,
+  asin: Math.asin, acos: Math.acos, atan: Math.atan,
+  sinh: Math.sinh, cosh: Math.cosh, tanh: Math.tanh,
+}
+const CONST_VAL: Record<string, number> = { pi: Math.PI, tau: 2 * Math.PI, e: Math.E }
+
+/** s at x, y, dy/dx and the parameters' values (a parameter not given is NaN). */
+function evalS(s: S, env: { x: number; y: number; yp: number; p: (name: string) => number }): number {
+  switch (s.t) {
+    case 'n':
+      return s.v
+    case 'c':
+      return CONST_VAL[s.name] ?? Number.NaN
+    case 'x':
+      return env.x
+    case 'y':
+      return env.y
+    case 'yp':
+      return env.yp
+    case 'p':
+      return env.p(s.name)
+    case 'neg':
+      return -evalS(s.a, env)
+    case 'add':
+      return evalS(s.a, env) + evalS(s.b, env)
+    case 'sub':
+      return evalS(s.a, env) - evalS(s.b, env)
+    case 'mul':
+      return evalS(s.a, env) * evalS(s.b, env)
+    case 'div':
+      return evalS(s.a, env) / evalS(s.b, env)
+    case 'pow':
+      return Math.pow(evalS(s.a, env), evalS(s.b, env))
+    case 'fn': {
+      const g = MATH_FN[s.fn]
+      return g ? g(evalS(s.a, env)) : Number.NaN
+    }
+  }
+}
+
+/** Two trees that agree at seven sample points (x, y, dy/dx and every parameter varied). */
+function agreeNumerically(a: S, b: S): boolean {
+  let finite = 0
+  for (let i = 0; i < 7; i++) {
+    const vals = new Map<string, number>()
+    const p = (name: string): number => {
+      let v = vals.get(name)
+      if (v === undefined) {
+        let h = i * 131 + 7
+        for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) % 9973
+        v = 0.6 + (h % 997) / 400
+        vals.set(name, v)
+      }
+      return v
+    }
+    const env = { x: 0.37 + 0.41 * i, y: 0.23 + 0.53 * i, yp: -1.3 + 0.61 * i, p }
+    const u = evalS(a, env)
+    const v = evalS(b, env)
+    if (!Number.isFinite(u) && !Number.isFinite(v)) continue
+    if (!Number.isFinite(u) || !Number.isFinite(v)) return false
+    if (Math.abs(u - v) > 1e-9 * Math.max(1, Math.abs(u), Math.abs(v))) return false
+    finite++
+  }
+  return finite >= 4
+}
+
+/**
+ * Terms A·dy/dx + B·dy/dx + … collected into (A + B + …)·dy/dx, where every A
+ * is a polynomial in y over numbers and parameters. Null when there is
+ * nothing to collect, or the collected line does not check out numerically.
+ */
+function collectYp(s: S): S | null {
+  // y(2 − y)/3: collect over the numerator.
+  if (s.t === 'div' && !varies(s.b)) {
+    const top = collectYp(s.a)
+    const result = top ? div(top, s.b) : null
+    return result && agreeNumerically(s, result) ? result : null
+  }
+  const terms: { s: S; sign: 1 | -1 }[] = []
+  sumTerms(s, 1, terms)
+  if (terms.length < 2) return null
+  const yp: S = { t: 'yp' }
+  const total: Poly = new Map()
+  let firstAt = -1
+  let count = 0
+  const rest: ({ s: S; sign: 1 | -1 } | null)[] = []
+  for (const t of terms) {
+    const A = hasYp(t.s) ? div(t.s, yp) : null
+    const P = A && !hasYp(A) ? toPoly(A) : null
+    if (!P) {
+      rest.push(t)
+      continue
+    }
+    for (const pt of P.values()) polyAdd(total, { ...pt, c: pt.c * t.sign })
+    if (total.size > POLY_MAX_TERMS) return null
+    if (firstAt < 0) {
+      firstAt = rest.length
+      rest.push(null)
+    }
+    count++
+  }
+  if (count < 2) return null
+  for (const t of total.values()) if (t.ye < 0) return null
+  const A = polyS(total)
+  const collected: S | null = isN(A, 0) ? null : A.t === 'neg' ? neg(mul(A.a, yp)) : mul(A, yp)
+  let out: S | null = null
+  for (const t of rest) {
+    const piece = t === null ? (collected ? { s: collected, sign: 1 as const } : null) : t
+    if (!piece) continue
+    let body = piece.s
+    let sign: number = piece.sign
+    if (body.t === 'neg') {
+      body = body.a
+      sign = -sign
+    }
+    if (out === null) out = sign < 0 ? neg(body) : body
+    else out = sign < 0 ? { t: 'sub', a: out, b: body } : { t: 'add', a: out, b: body }
+  }
+  const result = out ?? ZERO
+  return agreeNumerically(s, result) ? result : null
 }
 
 // ---- printing ------------------------------------------------------------
@@ -876,7 +1239,7 @@ function text(s: S, parent = 0): string {
     }
     case 'div': {
       // "dy/dx/(2√y)" reads as a fraction of fractions; bracket the derivative
-      const top = s.a.t === 'yp' ? '(dy/dx)' : text(s.a, 5)
+      const top = s.a.t === 'yp' ? '(dy/dx)' : s.tight ? text(s.a, 3) : text(s.a, 5)
       return wrap(`${top}/${text(s.b, 5)}`)
     }
     case 'pow': {
@@ -956,8 +1319,10 @@ export function secondDerivativeOf(src: string): SecondDerivative | null {
   if (!ast.ok || ast.rhs !== null) return null
   const f = fromAst(ast.lhs)
   if (!f) return null
-  const d = D(f)
-  if (!d) return null
+  const raw = D(f)
+  if (!raw) return null
+  // (1 − y)·dy/dx − y·dy/dx → (1 − 2y)·dy/dx, when it checks out.
+  const d = collectYp(raw) ?? raw
   const out: SecondDerivative = { text: text(d), tex: tex(d), inXY: null }
   if (hasYp(d)) {
     const s = subst(d, f)

@@ -375,6 +375,13 @@ export interface EulerScene {
 
 const EMPTY_SCENE: EulerScene = { paths: [], polylines: [] }
 
+/** Every step point of every Euler path: what "Fit to curves" frames of them. */
+export function eulerFramePoints(paths: readonly EulerPath[]): Vec2[] {
+  const out: Vec2[] = []
+  for (const p of paths) for (const q of p.pts) out.push(q)
+  return out
+}
+
 /**
  * Every run on every visible field, as figure content. The true solution
  * through a run's start is integrated across `span` — the same span the

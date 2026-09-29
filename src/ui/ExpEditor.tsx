@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { CardSection, withoutDomainRange } from './CardSection'
 import type { ExpSpec } from '../core/exponential'
 import { Latex } from './Latex'
 import {
@@ -592,10 +593,11 @@ interface SectionProps {
   onRestate(src: string, label: string): string | null
   /** "Show inverse": add the exact inverse (a logarithm) and y = x. */
   onShowInverse?(): void
+  /** The card's Analysis states the domain and range as rows: do not say them twice here. */
+  hideDomainRange?: boolean
 }
 
-export function ExpSection({ spec, onRestate, onShowInverse }: SectionProps) {
-  const [open, setOpen] = useState(true)
+export function ExpSection({ spec, onRestate, onShowInverse, hideDomainRange = false }: SectionProps) {
   const [error, setError] = useState<string | null>(null)
   useEffect(() => setError(null), [spec])
 
@@ -608,7 +610,8 @@ export function ExpSection({ spec, onRestate, onShowInverse }: SectionProps) {
     commit(setExpField(spec, f, text), EXP_FIELD_LABEL[f])
 
   const rate = safeRate(spec)
-  const features = featureLines(safeFeatures(spec))
+  const allFeatures = featureLines(safeFeatures(spec))
+  const features = hideDomainRange ? withoutDomainRange(allFeatures) : allFeatures
   // The line cannot always say which statement it is — y = 100(1.05)^x is a
   // factor AND a percent — so the picker remembers what the teacher chose for
   // as long as the line is the one that choice wrote.
@@ -618,20 +621,7 @@ export function ExpSection({ spec, onRestate, onShowInverse }: SectionProps) {
   const baseE = isBaseE(spec)
 
   return (
-    <div className="field-section fe-section xe-section" data-testid="exp-section">
-      <button
-        type="button"
-        className="an-title fe-toggle"
-        aria-expanded={open}
-        onClick={(e) => {
-          e.stopPropagation()
-          setOpen((o) => !o)
-        }}
-      >
-        Exponential <span className="fe-caret">{open ? '▾' : '▸'}</span>
-      </button>
-      {open && (
-        <>
+    <CardSection kind="exponential" title="Exponential" className="field-section fe-section xe-section" testId="exp-section">
           <div className="fe-a-row">
             <span className="calc-tag">a =</span>
             <XField value={spec.a} mode="commit" label="Initial value a" className="fe-input-part" onCommit={field('a')} />
@@ -685,7 +675,10 @@ export function ExpSection({ spec, onRestate, onShowInverse }: SectionProps) {
               ))}
             </select>
           </div>
-          <ExpFacts sentences={rate?.sentences ?? []} features={features} />
+          <ExpFacts
+            sentences={hideDomainRange ? withoutDomainRange(rate?.sentences ?? []) : (rate?.sentences ?? [])}
+            features={features}
+          />
           {error && <div className="expr-error">{error}</div>}
           {onShowInverse && (
             <div className="fe-a-row">
@@ -706,8 +699,6 @@ export function ExpSection({ spec, onRestate, onShowInverse }: SectionProps) {
           <div className="field-hint">
             Drag the asymptote, the y-intercept or the point one period later on the board.
           </div>
-        </>
-      )}
-    </div>
+    </CardSection>
   )
 }

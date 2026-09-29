@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { CardSection, withoutDomainRange } from './CardSection'
 import type { LogSpec } from '../core/logarithmic'
 import { Latex } from './Latex'
 import { ExpFacts, XField, badText } from './ExpEditor'
@@ -375,10 +376,11 @@ interface SectionProps {
   onRestate(src: string, label: string): string | null
   /** "Show inverse": add the exact inverse (an exponential) and y = x. */
   onShowInverse?(): void
+  /** The card's Analysis states the domain and range as rows: do not say them twice here. */
+  hideDomainRange?: boolean
 }
 
-export function LogSection({ spec, onRestate, onShowInverse }: SectionProps) {
-  const [open, setOpen] = useState(true)
+export function LogSection({ spec, onRestate, onShowInverse, hideDomainRange = false }: SectionProps) {
   const [error, setError] = useState<string | null>(null)
   useEffect(() => setError(null), [spec])
 
@@ -394,20 +396,7 @@ export function LogSection({ spec, onRestate, onShowInverse }: SectionProps) {
   const current = rebaseKeyOf(spec)
 
   return (
-    <div className="field-section fe-section xe-section le-section" data-testid="log-section">
-      <button
-        type="button"
-        className="an-title fe-toggle"
-        aria-expanded={open}
-        onClick={(e) => {
-          e.stopPropagation()
-          setOpen((o) => !o)
-        }}
-      >
-        Logarithmic <span className="fe-caret">{open ? '▾' : '▸'}</span>
-      </button>
-      {open && (
-        <>
+    <CardSection kind="logarithmic" title="Logarithmic" className="field-section fe-section xe-section le-section" testId="log-section">
           <div className="fe-a-row">
             <span className="calc-tag">a =</span>
             <XField value={spec.a} mode="commit" label="Vertical stretch a" className="fe-input-part" onCommit={field('a')} />
@@ -443,7 +432,11 @@ export function LogSection({ spec, onRestate, onShowInverse }: SectionProps) {
               ))}
             </select>
           </div>
-          <ExpFacts sentences={facts.sentences} features={facts.features} testPrefix="log" />
+          <ExpFacts
+            sentences={hideDomainRange ? withoutDomainRange(facts.sentences) : facts.sentences}
+            features={hideDomainRange ? withoutDomainRange(facts.features) : facts.features}
+            testPrefix="log"
+          />
           {error && <div className="expr-error">{error}</div>}
           {onShowInverse && (
             <div className="fe-a-row">
@@ -464,8 +457,6 @@ export function LogSection({ spec, onRestate, onShowInverse }: SectionProps) {
           <div className="field-hint">
             Drag the asymptote on the x-axis, the anchor point or the base point on the board.
           </div>
-        </>
-      )}
-    </div>
+    </CardSection>
   )
 }

@@ -22,10 +22,11 @@
 //               radius "r = x" and the height "h" with the shell's rims; for
 //               cross-sections the base s and the section standing on it in
 //               oblique projection, with a few fainter slices to suggest the
-//               solid.
+//               solid — the base vertical at x for sections ⟂ x-axis, and
+//               horizontal at height y (x_left to x_right) for ⟂ y-axis.
 //
 // Everything is recomputed from the link { otherId?, a, b, method, axis?,
-// section?, ratio?, x? } on every change; nothing computed is stored. One
+// section?, ratio?, perp?, x? } on every change; nothing computed is stored. One
 // analysis per (curves, link without its slice) is cached, so a slice drag
 // re-draws without re-integrating.
 //
@@ -50,6 +51,7 @@ import {
   horizontalAxisThrough,
   sectionFactor,
   sectionVolume,
+  sectionVolumeDy,
   shellVolume,
   shellVolumeDy,
   sideX,
@@ -266,18 +268,22 @@ const constMinus = (k: number, A: Term): Term => sub(constTerm(k), A)
 // The analysis, cached
 // ---------------------------------------------------------------------------
 
-/** Which cut: washers in dx about y = k, shells in dx about x = k, the two dy pairings, sections. */
-export type VolumeMode = 'washer-h' | 'washer-v' | 'shell-v' | 'shell-h' | 'section'
+/**
+ * Which cut: washers in dx about y = k, shells in dx about x = k, the two dy
+ * pairings, sections ⟂ x-axis (dx) and sections ⟂ y-axis (dy).
+ */
+export type VolumeMode = 'washer-h' | 'washer-v' | 'shell-v' | 'shell-h' | 'section' | 'section-y'
 
-export function modeOf(link: Pick<VolumeLink, 'method' | 'axis'>): VolumeMode {
-  if (link.method === 'section') return 'section'
+export function modeOf(link: Pick<VolumeLink, 'method' | 'axis' | 'perp'>): VolumeMode {
+  if (link.method === 'section') return link.perp === 'y' ? 'section-y' : 'section'
   const dir = (link.axis ?? X_AXIS).dir
   if (link.method === 'shell') return dir === 'v' ? 'shell-v' : 'shell-h'
   return dir === 'h' ? 'washer-h' : 'washer-v'
 }
 
-/** True for the two pairings that slice in dy. */
-export const slicesInY = (mode: VolumeMode): boolean => mode === 'washer-v' || mode === 'shell-h'
+/** True for the cuts that slice in dy: the two dy pairings and sections ⟂ y-axis. */
+export const slicesInY = (mode: VolumeMode): boolean =>
+  mode === 'washer-v' || mode === 'shell-h' || mode === 'section-y'
 
 export interface VolumeAnalysis {
   region: Region | null
@@ -422,6 +428,30 @@ export function analyzeVolume(
   }
   const r = reg.region
   out.region = r
+  if (mode === 'section-y') {
+    // Sections ⟂ y-axis stand on horizontal slices: without the sideways
+    // description there is nothing to stand them on, and the card says so
+    // (no problem: the region is fine, the cut is not available).
+    try {
+      out.bands = horizontalBands(r)
+    } catch {
+      out.bands = null
+    }
+    if (!out.bands) return remember(key, out)
+    try {
+      out.result = sectionVolumeDy(r, out.bands, link.section ?? 'square', link.ratio ?? 1)
+    } catch {
+      out.result = null
+    }
+    if (!out.result) {
+      out.problem = 'the integral could not be measured on this region'
+      return remember(key, out)
+    }
+    out.dy = out.result
+    out.dyOk = true
+    out.exact = exactVolume(out.result.value, out.result.err)
+    return remember(key, out)
+  }
   try {
     if (mode === 'section') {
       out.result = sectionVolume(r, link.section ?? 'square', link.ratio ?? 1)
@@ -499,6 +529,8 @@ export interface VolumeRow {
   axisText: string
   section: SectionShape
   ratio: number
+  /** Sections only: perpendicular to the x-axis or the y-axis. */
+  perp: 'x' | 'y'
   /** The second curve, or null for the x-axis; and every curve it could be. */
   otherId: string | null
   others: RegionChoice[]
@@ -519,8 +551,11 @@ export interface VolumeRow {
   valueTex: string | null
   /** The axis runs through the region (said, not refused). */
   warning: string | null
-  /** What a dy pairing needs and does not have, with the method that works instead. */
-  need: { text: string; switchTo: VolumeMethod } | null
+  /**
+   * What a dy cut needs and does not have, with the method that works
+   * instead: `change` is the switch, `button` its words.
+   */
+  need: { text: string; switchTo: VolumeMethod; button: string; change: CalcChange } | null
   problem: string | null
   /** The representative slice: its coordinate, which variable, and its range. */
   slice: number | null
@@ -666,6 +701,7 @@ export function volumeRow(
     axisText: axisText(axis),
     section,
     ratio,
+    perp: link.method === 'section' && link.perp === 'y' ? 'y' : 'x',
     otherId: link.otherId ?? null,
     others: opts.others ?? [],
     head: '',
@@ -686,6 +722,17 @@ export function volumeRow(
   }
   const an = analyzeVolume(link, parent, other, models)
   row.head = headOf(mode, section, axis, an)
+  if (mode === 'section-y' && !an.problem && an.region && !an.bands) {
+    row.need = {
+      text:
+        'Cross-sections perpendicular to the y-axis stand on horizontal slices, so each side of the region must be x as a function of y. ' +
+        'This region is not one horizontal strip at every height. Use cross-sections perpendicular to the x-axis.',
+      switchTo: 'section',
+      button: 'Switch to ⟂ x-axis',
+      change: { kind: 'volumeSectionAxis', linkId: link.id, perp: 'x' },
+    }
+    return row
+  }
   if (an.problem || !an.region || !an.result) {
     row.problem = (an.problem ?? 'this volume could not be measured').replace(/\{f\}/g, fName).replace(/\{g\}/g, gName)
     return row
@@ -804,6 +851,14 @@ export function volumeRow(
       row.parts.push(areaFormula(section, ratio))
       break
     }
+    case 'section-y': {
+      if (!an.bands) break
+      const written = writeDy(mode, an.bands, r, 0, src, parent, other, fName, gName, factorTerm(section, ratio))
+      row.integral = written.integral
+      row.parts.push(...written.parts)
+      row.parts.push(areaFormula(section, ratio))
+      break
+    }
     case 'washer-v':
     case 'shell-h': {
       const alt: VolumeMethod = mode === 'washer-v' ? 'shell' : 'washer'
@@ -811,10 +866,14 @@ export function volumeRow(
         mode === 'washer-v'
           ? `Washers about a vertical axis slice in dy, so each side of the region must be x as a function of y.`
           : `Shells about a horizontal axis slice in dy, so each side of the region must be x as a function of y.`
+      const button = alt === 'shell' ? 'Switch to shells' : 'Switch to washers'
+      const change: CalcChange = { kind: 'volumeMethod', linkId: link.id, method: alt }
       if (!an.bands) {
         row.need = {
           text: `${needs} This region is not one horizontal strip at every height. Use ${alt === 'shell' ? 'shells' : 'washers'} for this axis.`,
           switchTo: alt,
+          button,
+          change,
         }
         break
       }
@@ -822,6 +881,8 @@ export function volumeRow(
         row.need = {
           text: `The axis passes through the region, so shells in dy would count the overlap twice. Use washers for this axis.`,
           switchTo: alt,
+          button,
+          change,
         }
         break
       }
@@ -829,6 +890,8 @@ export function volumeRow(
         row.need = {
           text: `${needs} The inverse could not be measured reliably here. Use ${alt === 'shell' ? 'shells' : 'washers'} for this axis.`,
           switchTo: alt,
+          button,
+          change,
         }
         break
       }
@@ -846,6 +909,8 @@ function headOf(mode: VolumeMode, section: SectionShape, axis: VolumeAxis, an: V
   switch (mode) {
     case 'section':
       return `${SECTION_LABELS[section].replace(/ \(.*\)$/, '')} ⟂ x-axis`
+    case 'section-y':
+      return `${SECTION_LABELS[section].replace(/ \(.*\)$/, '')} ⟂ y-axis`
     case 'shell-v':
     case 'shell-h':
       return `Shells ${about}`
@@ -886,10 +951,12 @@ const clampTo = (v: number, lo: number, hi: number): number => Math.min(Math.max
 /**
  * The dy integral: each band's left and right sides as x = (formula in y) —
  * the typed line's inverse on that monotone stretch, or the constant a / b of
- * a vertical edge — then R, r (washers) or radius and length (shells).
+ * a vertical edge — then R, r (washers), radius and length (shells), or the
+ * base s(y) = right − left of a cross-section ⟂ y-axis (with `factor`, A's
+ * constant, in front).
  */
 function writeDy(
-  mode: 'washer-v' | 'shell-h',
+  mode: 'washer-v' | 'shell-h' | 'section-y',
   bands: readonly Band[],
   r: Region,
   k: number,
@@ -898,6 +965,7 @@ function writeDy(
   other: FittedCurve | undefined,
   fName: string,
   gName: string,
+  factor: { text: string; tex: string } | null = null,
 ): { integral: { text: string; tex: string }; parts: string[] } {
   const inverseTerm = (side: SideRef): Term => {
     if (side.kind === 'edge') return constTerm(tidy(side.x))
@@ -927,7 +995,11 @@ function writeDy(
     const xr = sideX(r, band.right, ym)
     const y0 = tidy(band.y0)
     const y1 = tidy(band.y1)
-    if (mode === 'washer-v') {
+    if (mode === 'section-y') {
+      const s = sub(Rt, L)
+      parts.add(`s(y) = ${s.text}`)
+      pieces.push({ lo: y0, hi: y1, body: sq(s) })
+    } else if (mode === 'washer-v') {
       let R: Term
       let rr: Term
       if (xl >= k) {
@@ -949,7 +1021,8 @@ function writeDy(
       pieces.push({ lo: y0, hi: y1, body: mul(radius, len) })
     }
   }
-  const coef = mode === 'washer-v' ? { text: 'π', tex: '\\pi' } : { text: '2π', tex: '2\\pi' }
+  const coef =
+    mode === 'section-y' ? factor : mode === 'washer-v' ? { text: 'π', tex: '\\pi' } : { text: '2π', tex: '2\\pi' }
   return { integral: writeIntegral(coef, merged(pieces), 'y'), parts: [...parts].slice(0, 3) }
 }
 
@@ -985,13 +1058,27 @@ const OBLIQUE: Vec2 = { x: OBLIQUE_SCALE * Math.cos(OBLIQUE_ANGLE), y: OBLIQUE_S
  * the semicircle a half-ellipse, the triangles their three corners.
  */
 export function sectionOutline(shape: SectionShape, x: number, y0: number, y1: number, ratio = 1): Vec2[] {
-  const s = Math.abs(y1 - y0)
-  const lo = Math.min(y0, y1)
-  const hi = Math.max(y0, y1)
-  const B0 = { x, y: lo }
-  const B1 = { x, y: hi }
+  return sectionOutlineOn(shape, { x, y: Math.min(y0, y1) }, { x, y: Math.max(y0, y1) }, ratio)
+}
+
+/**
+ * The same, on a horizontal base from (x0, y) to (x1, y): a section ⟂ y-axis.
+ * The out-of-the-page direction is the same oblique one, so the square is a
+ * parallelogram leaning up and to the right off the slice.
+ */
+export function sectionOutlineH(shape: SectionShape, y: number, x0: number, x1: number, ratio = 1): Vec2[] {
+  return sectionOutlineOn(shape, { x: Math.min(x0, x1), y }, { x: Math.max(x0, x1), y }, ratio)
+}
+
+/** A cross-section standing on the base B0 → B1, in oblique projection. */
+function sectionOutlineOn(shape: SectionShape, B0: Vec2, B1: Vec2, ratio: number): Vec2[] {
+  const dx = B1.x - B0.x
+  const dy = B1.y - B0.y
+  const s = Math.hypot(dx, dy)
+  // The unit direction along the base (B0 → B1); any direction for a point.
+  const u: Vec2 = s > 0 ? { x: dx / s, y: dy / s } : { x: 0, y: 1 }
   const up = (p: Vec2, h: number): Vec2 => ({ x: p.x + h * OBLIQUE.x, y: p.y + h * OBLIQUE.y })
-  const mid = { x, y: (lo + hi) / 2 }
+  const mid = { x: (B0.x + B1.x) / 2, y: (B0.y + B1.y) / 2 }
   switch (shape) {
     case 'square':
       return [B0, B1, up(B1, s), up(B0, s)]
@@ -1009,7 +1096,8 @@ export function sectionOutline(shape: SectionShape, x: number, y0: number, y1: n
       const out: Vec2[] = []
       for (let i = 0; i <= 40; i++) {
         const t = (Math.PI * i) / 40
-        const p = { x, y: mid.y - (s / 2) * Math.cos(t) }
+        const along = -(s / 2) * Math.cos(t)
+        const p = { x: mid.x + u.x * along, y: mid.y + u.y * along }
         out.push(up(p, (s / 2) * Math.sin(t)))
       }
       return out
@@ -1047,6 +1135,22 @@ export function volumeSliceHandle(
   }
   const x = link.x !== undefined && Number.isFinite(link.x) ? clampTo(link.x, an.lo, an.hi) : (an.lo + an.hi) / 2
   return { pos: { x, y: (r.f(x) + r.g(x)) / 2 }, axis: 'x', lo: an.lo, hi: an.hi }
+}
+
+/**
+ * Where a dragged slice lands: snapped to a nice value (the board's `snap` —
+ * grid numbers, π/12 multiples on x), then held inside [lo, hi]. A snap that
+ * returns nothing usable leaves the raw value.
+ */
+export function snapSlice(v: number, lo: number, hi: number, snap: (v: number) => number): number {
+  let s = v
+  try {
+    const t = snap(v)
+    if (Number.isFinite(t)) s = t
+  } catch {
+    s = v
+  }
+  return clampTo(s, Math.min(lo, hi), Math.max(lo, hi))
 }
 
 function bandAt(bands: readonly Band[], y: number): Band | null {
@@ -1119,7 +1223,7 @@ export function volumeOverlays(
       outline.push({ x, y: bot(x) })
     }
     const reflect = (p: Vec2): Vec2 => (axis.dir === 'h' ? { x: p.x, y: 2 * k - p.y } : { x: 2 * k - p.x, y: p.y })
-    if (mode !== 'section') {
+    if (mode !== 'section' && mode !== 'section-y') {
       fills.push({
         kind: 'path',
         curveId: id,
@@ -1226,10 +1330,14 @@ export function volumeOverlays(
       continue
     }
 
-    // The two dy pairings: a horizontal slice at height y.
+    // The dy cuts: a horizontal slice at height y.
     if (!an.bands || !an.dyOk) continue
     const [ylo, yhi] = yRange(r)
     const y = link.x !== undefined && Number.isFinite(link.x) ? clampTo(link.x, ylo, yhi) : (ylo + yhi) / 2
+    if (mode === 'section-y') {
+      drawSectionY(link, r, an.bands, y, ylo, yhi, id, marks, chips)
+      continue
+    }
     const band = bandAt(an.bands, y)
     if (!band) continue
     const xl = sideX(r, band.left, y)
@@ -1375,6 +1483,62 @@ function drawSection(
   chips.push({ kind: 'label', curveId: id, at: { x, y: (t + u) / 2 }, text: 's', dir: { x: -1, y: 0 } })
 }
 
+/**
+ * Sections ⟂ y-axis: the base s drawn horizontally at height y from x_left to
+ * x_right, the section standing on it, and fainter sections at a few heights.
+ */
+function drawSectionY(
+  link: VolumeLink,
+  r: Region,
+  bands: readonly Band[],
+  y: number,
+  ylo: number,
+  yhi: number,
+  id: string,
+  marks: Overlay[],
+  chips: Overlay[],
+): void {
+  const shape = link.section ?? 'square'
+  const ratio = link.ratio ?? 1
+  const sides = (yy: number): [number, number] | null => {
+    const band = bandAt(bands, yy)
+    if (!band) return null
+    const xl = sideX(r, band.left, yy)
+    const xr = sideX(r, band.right, yy)
+    return Number.isFinite(xl) && Number.isFinite(xr) && xr - xl > 0 ? [xl, xr] : null
+  }
+  for (let i = 1; i <= GHOST_SLICES; i++) {
+    const yg = ylo + ((yhi - ylo) * i) / (GHOST_SLICES + 1)
+    if (Math.abs(yg - y) < (yhi - ylo) / (2 * (GHOST_SLICES + 1))) continue
+    const at = sides(yg)
+    if (!at) continue
+    marks.push({
+      kind: 'path',
+      curveId: id,
+      points: sectionOutlineH(shape, yg, at[0], at[1], ratio),
+      closed: true,
+      fill: 0.05,
+      alpha: GHOST_SLICE_ALPHA,
+      width: 1,
+    })
+  }
+  const at = sides(y)
+  if (!at) return
+  const [xl, xr] = at
+  marks.push({
+    kind: 'path',
+    curveId: id,
+    points: sectionOutlineH(shape, y, xl, xr, ratio),
+    closed: true,
+    fill: FACE_FILL_ALPHA * 1.6,
+    alpha: 1,
+    width: 1.75,
+  })
+  // The base s, across the region.
+  marks.push({ kind: 'segment', curveId: id, from: { x: xl, y }, to: { x: xr, y }, width: 3 })
+  chips.push({ kind: 'label', curveId: id, at: { x: (xl + xr) / 2, y }, text: 's', dir: { x: 0, y: 1 } })
+}
+
 // ---------------------------------------------------------------------------
 // Where a fresh one opens
 // ---------------------------------------------------------------------------
@@ -1485,6 +1649,7 @@ type VolumeChange = Extract<
       | 'volumeMethod'
       | 'volumeAxis'
       | 'volumeSection'
+      | 'volumeSectionAxis'
       | 'volumeRatio'
       | 'volumeSlice'
       | 'volumeOther'
@@ -1529,9 +1694,10 @@ export function applyVolumeChange(
         next = { ...next, axis: { dir: 'v', at: 0 } }
       }
       if (change.method !== 'section') {
-        const { section: _s, ratio: _r, ...rest } = next
+        const { section: _s, ratio: _r, perp: _p, ...rest } = next
         void _s
         void _r
+        void _p
         next = rest
       }
       if (slicesInY(modeOf(next)) !== slicesInY(modeOf(link))) next = sliceless(next)
@@ -1559,6 +1725,16 @@ export function applyVolumeChange(
         ...(change.section !== 'square' ? { section: change.section } : {}),
         ...(change.section === 'rectangle' && link.ratio !== undefined ? { ratio: link.ratio } : {}),
       }
+    }
+    case 'volumeSectionAxis': {
+      if (change.perp !== 'x' && change.perp !== 'y') return null
+      const was = link.method === 'section' && link.perp === 'y' ? 'y' : 'x'
+      if (link.method === 'section' && was === change.perp) return null
+      const { perp: _p, ...rest } = link
+      void _p
+      let next: VolumeLink = { ...rest, method: 'section', ...(change.perp === 'y' ? { perp: 'y' as const } : {}) }
+      if (slicesInY(modeOf(next)) !== slicesInY(modeOf(link))) next = sliceless(next)
+      return next
     }
     case 'volumeRatio': {
       if (!Number.isFinite(change.ratio) || !(change.ratio > 0)) return null

@@ -365,6 +365,14 @@ export interface Prefs {
   exportFormat: ExportFormat
   /** Physical width of a PDF / TikZ / pgfplots figure, in cm. */
   latexWidthCm: number
+  /**
+   * Which card sections the teacher has opened or collapsed, by section KIND
+   * ('analysis', 'taylor', 'transform:secondary' …), not by curve: collapsing
+   * Analysis once keeps it collapsed on every card. Only kinds somebody has
+   * actually toggled are here; everything else opens by its own default
+   * (src/ui/CardSection.tsx).
+   */
+  sections: Record<string, boolean>
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -377,6 +385,7 @@ export const DEFAULT_PREFS: Prefs = {
   setNotation: 'interval',
   exportFormat: 'png',
   latexWidthCm: DEFAULT_LATEX_WIDTH_CM,
+  sections: {},
 }
 
 /** Never trust what came back from storage: a bad value falls back silently. */
@@ -394,12 +403,12 @@ function exportOf(v: unknown, fallback: FitExportSettings): FitExportSettings {
 
 export function readPrefs(): Prefs {
   const s = storage()
-  if (!s) return { ...DEFAULT_PREFS, exportByDoc: {} }
+  if (!s) return { ...DEFAULT_PREFS, exportByDoc: {}, sections: {} }
   try {
     const raw = s.getItem(PREFS_KEY)
-    if (!raw) return { ...DEFAULT_PREFS, exportByDoc: {} }
+    if (!raw) return { ...DEFAULT_PREFS, exportByDoc: {}, sections: {} }
     const parsed: unknown = JSON.parse(raw)
-    if (!isObj(parsed)) return { ...DEFAULT_PREFS, exportByDoc: {} }
+    if (!isObj(parsed)) return { ...DEFAULT_PREFS, exportByDoc: {}, sections: {} }
     const exportDefaults = exportOf(parsed.exportDefaults, DEFAULT_PREFS.exportDefaults)
     const exportByDoc: Record<string, FitExportSettings> = {}
     if (isObj(parsed.exportByDoc)) {
@@ -421,10 +430,21 @@ export function readPrefs(): Prefs {
       exportFormat: isExportFormat(parsed.exportFormat) ? parsed.exportFormat : DEFAULT_PREFS.exportFormat,
       latexWidthCm:
         parsed.latexWidthCm === undefined ? DEFAULT_PREFS.latexWidthCm : clampLatexWidth(parsed.latexWidthCm),
+      sections: sectionsOf(parsed.sections),
     }
   } catch {
-    return { ...DEFAULT_PREFS, exportByDoc: {} }
+    return { ...DEFAULT_PREFS, exportByDoc: {}, sections: {} }
   }
+}
+
+/** Section open/closed choices: string keys, boolean values, nothing else. */
+function sectionsOf(v: unknown): Record<string, boolean> {
+  const out: Record<string, boolean> = {}
+  if (!isObj(v)) return out
+  for (const [k, open] of Object.entries(v)) {
+    if (typeof k === 'string' && k.length > 0 && k.length <= 64 && typeof open === 'boolean') out[k] = open
+  }
+  return out
 }
 
 /** Projected type is useful between 1.5x and 4x; outside that it is a mistake. */

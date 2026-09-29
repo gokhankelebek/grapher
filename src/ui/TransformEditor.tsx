@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { CardSection, withoutDomainRange } from './CardSection'
 import type { ParentId, TransformSpec } from '../core/transform'
 import type { Theme } from '../core/types'
 import { DARK_THEME } from '../core/types'
@@ -373,17 +374,22 @@ interface SectionProps {
   handles?: boolean
   /** Rewrite the curve's line in place. Error message, or null. */
   onRestate(src: string, label: string): string | null
+  /** Another family section speaks for this line first: this one is the second reading. */
+  secondary?: boolean
+  /** The card's Analysis states the domain and range as rows: do not say them twice here. */
+  hideDomainRange?: boolean
 }
 
 export function TransformSection({
   spec,
   defaultOpen,
+  secondary = false,
+  hideDomainRange = false,
   showParent,
   onShowParent,
   handles = true,
   onRestate,
 }: SectionProps) {
-  const [open, setOpen] = useState(defaultOpen)
   const [error, setError] = useState<string | null>(null)
   useEffect(() => setError(null), [spec])
 
@@ -399,21 +405,17 @@ export function TransformSection({
   const line = spec.parent === 'linear'
 
   return (
-    <div className="field-section fe-section te-section" data-testid="transform-section">
-      <button
-        type="button"
-        className="an-title fe-toggle"
-        aria-expanded={open}
-        onClick={(e) => {
-          e.stopPropagation()
-          setOpen((o) => !o)
-        }}
-      >
-        Transformation <span className="te-of">of {PARENT_TEXT[spec.parent]}</span>{' '}
-        <span className="fe-caret">{open ? '▾' : '▸'}</span>
-      </button>
-      {open && (
+    <CardSection
+      kind={secondary ? 'transform:secondary' : 'transform'}
+      title={
         <>
+          Transformation <span className="te-of">of {PARENT_TEXT[spec.parent]}</span>
+        </>
+      }
+      defaultOpen={defaultOpen}
+      className="field-section fe-section te-section"
+      testId="transform-section"
+    >
           <div className="xe-formula">y = a·f(b(x − h)) + k</div>
           <div className="fe-a-row">
             <span className="calc-tag">a =</span>
@@ -429,7 +431,7 @@ export function TransformSection({
           </div>
           <StepList steps={stepSentences(spec)} />
           <MapTable rows={pointRows(spec)} />
-          <FeatureList lines={featureLines(spec)} />
+          <FeatureList lines={hideDomainRange ? withoutDomainRange(featureLines(spec)) : featureLines(spec)} />
           {error && <div className="expr-error">{error}</div>}
           {onShowParent && (
             <label className="te-check" onClick={(e) => e.stopPropagation()}>
@@ -449,8 +451,6 @@ export function TransformSection({
               : `Drag the ${anchorWord} (moves h and k) or the other marked point (up/down: a, sideways: b) on the board.`}
             </div>
           )}
-        </>
-      )}
-    </div>
+    </CardSection>
   )
 }

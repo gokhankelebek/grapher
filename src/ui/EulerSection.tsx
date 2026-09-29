@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { CardSection } from './CardSection'
 import { Latex } from './Latex'
 import { parseNumeric } from './numeric'
 import { EULER_N_MAX, EULER_N_MIN } from './eulerLinks'
@@ -289,8 +290,16 @@ function RunBlock({
 
 export function EulerSection({ runs, onAdd, onPatch, onRemove }: Props): JSX.Element {
   return (
-    <div className="field-section euler-section">
-      <div className="an-title">Euler’s method</div>
+    <CardSection
+      kind="euler"
+      title="Euler’s method"
+      summary={
+        runs.length === 0
+          ? null
+          : runs.map((r) => r.caption.replace(/^Euler’s method,\s*/, '')).join(' · ')
+      }
+      className="field-section euler-section"
+    >
       {runs.length > 0 && (
         <div className="calc-list">
           {runs.map((run) => (
@@ -317,6 +326,6 @@ export function EulerSection({ runs, onAdd, onPatch, onRemove }: Props): JSX.Ele
           + Euler’s method
         </button>
       </div>
-    </div>
+    </CardSection>
   )
 }

@@ -13,6 +13,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { Latex } from './Latex'
+import { CardSection, SectionDrop } from './CardSection'
 import { parseNumeric } from './numeric'
 import type { CalcChange, SecantRow } from './calcLinks'
 
@@ -96,24 +97,27 @@ export function SecantSection({ row, onCalcChange, onRemove }: Props) {
   const avg = row.average
 
   return (
-    <div className="calc-row secant-row" data-link={linkId}>
+    <CardSection
+      kind="secant"
+      title="Avg. rate of change"
+      titleHint={row.value === null ? row.head : `${row.head} ${row.value.startsWith('≈') ? row.value : `= ${row.value}`}`}
+      summary={`[${row.aText}, ${row.bText}]${
+        row.value === null ? '' : ` ${row.value.startsWith('≈') ? row.value : `= ${row.value}`}`
+      }`}
+      actions={<SectionDrop what="secant line" onRemove={onRemove} />}
+      className="calc-row secant-row"
+      data={{ link: linkId }}
+    >
+      {/* The sentence, when there is no difference quotient to show it. */}
+      {!row.quotient && (
       <div className="calc-line">
-        <span className="calc-tag">AROC</span>
         <span className="calc-read secant-head">
           {row.value === null
             ? row.head
             : `${row.head} ${row.value.startsWith('≈') ? row.value : `= ${row.value}`}`}
         </span>
-        <button
-          type="button"
-          className="calc-drop"
-          title="Remove this secant line"
-          aria-label="Remove this secant line"
-          onClick={onRemove}
-        >
-          ×
-        </button>
       </div>
+      )}
 
       {row.quotient && (
         <div className="secant-tex" title={row.quotient.text} aria-label={row.quotient.text}>
@@ -188,6 +192,6 @@ export function SecantSection({ row, onCalcChange, onRemove }: Props) {
           )}
         </div>
       )}
-    </div>
+    </CardSection>
   )
 }

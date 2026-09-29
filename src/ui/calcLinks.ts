@@ -1534,6 +1534,13 @@ export interface CardCalc {
   limits: LimitRow[]
   /** The solids built on regions this curve bounds (it is the parent). */
   volumes: VolumeRow[]
+  /**
+   * The link ids of everything above that is ATTACHED to this curve (areas,
+   * sums, accumulations, Taylor, secants, limits, volumes), in the order they
+   * were added — the order the card lists them in. Absent: the card falls
+   * back to one kind after another.
+   */
+  order?: string[]
 }
 
 export interface OriginRow {
@@ -1633,6 +1640,8 @@ export type CalcChange =
   | { kind: 'volumeMethod'; linkId: string; method: VolumeMethod }
   | { kind: 'volumeAxis'; linkId: string; axis: VolumeAxis }
   | { kind: 'volumeSection'; linkId: string; section: SectionShape }
+  /** Cross-sections perpendicular to the x-axis ('x', the default) or the y-axis. */
+  | { kind: 'volumeSectionAxis'; linkId: string; perp: 'x' | 'y' }
   | { kind: 'volumeRatio'; linkId: string; ratio: number }
   /** null: back to the middle of the region. */
   | { kind: 'volumeSlice'; linkId: string; x: number | null }
@@ -1692,6 +1701,8 @@ export function changeLabel(change: CalcChange): string {
       return 'change axis of revolution'
     case 'volumeSection':
       return 'change cross-section'
+    case 'volumeSectionAxis':
+      return 'change cross-section axis'
     case 'volumeRatio':
       return 'change rectangle height'
     case 'volumeSlice':
@@ -1743,6 +1754,7 @@ export function cardCalc(
     secants: [],
     limits: [],
     volumes: [],
+    order: [],
   })
   const slot = (id: string): CardCalc | null => {
     const curve = curveById(curves, id)
@@ -1804,6 +1816,7 @@ export function cardCalc(
         if (!here) break
         const other = link.otherId === undefined ? undefined : curveById(curves, link.otherId)
         const r = areaReadout(link, parent, models, other)
+        here.order?.push(link.id)
         here.areas.push({
           linkId: link.id,
           from: link.from,
@@ -1820,6 +1833,7 @@ export function cardCalc(
         const here = slot(link.parentId)
         if (!here) break
         const r = riemannReadout(link, parent, models)
+        here.order?.push(link.id)
         here.riemanns.push({
           linkId: link.id,
           from: link.from,
@@ -1838,6 +1852,7 @@ export function cardCalc(
         const head = accumHead(link, gName, fName)
         const own = slot(link.parentId)
         if (own) {
+          own.order?.push(link.id)
           own.accums.push({
             linkId: link.id,
             a: link.a,
@@ -1883,7 +1898,10 @@ export function cardCalc(
         }
         const row = taylorRow(link, parent, src, fName)
         const own = slot(link.parentId)
-        if (own) own.taylors.push(row)
+        if (own) {
+          own.order?.push(link.id)
+          own.taylors.push(row)
+        }
         const here = slot(link.curveId)
         if (!here) break
         const of = parent ? nameOf(parent) : 'that curve'
@@ -1911,6 +1929,7 @@ export function cardCalc(
             problem: 'this secant could not be measured',
           }
         }
+        own.order?.push(link.id)
         own.secants.push(row)
         break
       }
@@ -1923,6 +1942,7 @@ export function cardCalc(
         } catch {
           row = { ...limitRow(link, undefined, models), problem: 'this limit could not be measured' }
         }
+        own.order?.push(link.id)
         own.limits.push(row)
         break
       }
@@ -1946,6 +1966,7 @@ export function cardCalc(
             problem: 'this volume could not be measured',
           }
         }
+        own.order?.push(link.id)
         own.volumes.push(row)
         break
       }

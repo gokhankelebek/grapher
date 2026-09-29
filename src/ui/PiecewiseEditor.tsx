@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { CardSection, withoutDomainRange } from './CardSection'
 import { Latex } from './Latex'
 import {
   STEP_KINDS,
@@ -716,7 +717,6 @@ interface SectionProps {
 
 export function PiecewiseSection({ src, onRestate, params, defaultOpen = true, envFor }: SectionProps) {
   const spec = useMemo(() => safeReadPiecewise(src), [src])
-  const [open, setOpen] = useState(defaultOpen)
   const [table, setTable] = useState<PieceTable | null>(() => (spec ? tableFromSpec(spec) : null))
   const [error, setError] = useState<string | null>(null)
   /** The line this section last wrote: reading it back must not reorder the rows under the teacher. */
@@ -760,28 +760,13 @@ export function PiecewiseSection({ src, onRestate, params, defaultOpen = true, e
   }
 
   return (
-    <div className="field-section fe-section xe-section pw-section" data-testid="piecewise-section">
-      <button
-        type="button"
-        className="an-title fe-toggle"
-        aria-expanded={open}
-        onClick={(e) => {
-          e.stopPropagation()
-          setOpen((o) => !o)
-        }}
-      >
-        Piecewise <span className="fe-caret">{open ? '▾' : '▸'}</span>
-      </button>
-      {open && (
-        <>
+    <CardSection kind={defaultOpen ? 'piecewise' : 'piecewise:secondary'} title="Piecewise" summary={`${table.rows.length} piece${table.rows.length === 1 ? '' : 's'}`} defaultOpen={defaultOpen} className="field-section fe-section xe-section pw-section" testId="piecewise-section">
           <PieceTableView table={table} mode="commit" problems={problems} testPrefix="pws" onChange={change} />
           <VerdictList verdicts={verdicts} testId="pws-verdicts" />
           {error && <div className="expr-error">{error}</div>}
           <div className="field-hint">
             Click &lt; / ≤ to open or close an end (○ / ●). An empty bound runs to ±∞.
           </div>
-        </>
-      )}
-    </div>
+    </CardSection>
   )
 }

@@ -25,8 +25,11 @@
 // in a ref and redraws without a React render — and is pure otherwise.
 // ============================================================================
 
-import type { Vec2, Viewport } from '../core/types'
+import type { FittedCurve, ModelSpec, Vec2, Viewport } from '../core/types'
 import { ppuX, ppuY, toMath } from '../core/types'
+import type { CalcLink } from '../core/persist'
+import { mvtSourceOf } from '../core/mvt'
+import { analyzeLimit } from './limitLinks'
 
 /**
  * Pixels per unit, either axis. Wide on purpose: a population axis needs
@@ -388,6 +391,89 @@ export function axisBandAt(vp: Viewport, pos: Vec2, typeScale = 1): Axis | null 
   if (inX) return 'x'
   if (inY) return 'y'
   return null
+}
+
+// ------------------------------------------------------ what "fit" frames
+
+/** Beyond this a key point is an asymptote running away, not part of the figure. */
+const FIT_RUNAWAY = 1e6
+
+const fitFinite = (p: Vec2): boolean =>
+  Number.isFinite(p.x) && Number.isFinite(p.y) && Math.abs(p.x) <= FIT_RUNAWAY && Math.abs(p.y) <= FIT_RUNAWAY
+
+/**
+ * `box` grown to take in `pts` (finite ones only) — the Euler steps and the
+ * calculus overlays' key points that "Fit to curves" frames besides the
+ * curves. With no such point the SAME box comes back, so a board without
+ * them fits exactly as it always did; with no box, the points' own box.
+ */
+export function withPoints(box: Box | null, pts: readonly Vec2[]): Box | null {
+  let out: Box | null = null
+  for (const p of pts) {
+    if (!p || !fitFinite(p)) continue
+    if (!out) out = box ? { min: { ...box.min }, max: { ...box.max } } : { min: { ...p }, max: { ...p } }
+    if (p.x < out.min.x) out.min.x = p.x
+    if (p.y < out.min.y) out.min.y = p.y
+    if (p.x > out.max.x) out.max.x = p.x
+    if (p.y > out.max.y) out.max.y = p.y
+  }
+  return out ?? box
+}
+
+/**
+ * The points a calculus overlay is ABOUT, which the curve's own extent in the
+ * current window may not reach: a secant's (a, f(a)) and (b, f(b)), a Taylor
+ * centre (a, f(a)), and a limit's (a, L) — both one-sided values at a jump,
+ * none at ±∞ or when the limit is infinite. Only for visible parents.
+ */
+export function calcFramePoints(
+  links: readonly CalcLink[],
+  curves: readonly FittedCurve[],
+  models: Record<string, ModelSpec>,
+): Vec2[] {
+  const out: Vec2[] = []
+  const at = (parent: FittedCurve, x: number): void => {
+    if (!Number.isFinite(x)) return
+    try {
+      const src = mvtSourceOf(parent, models)
+      const y = src ? src.f(x) : Number.NaN
+      if (Number.isFinite(y)) out.push({ x, y })
+    } catch {
+      /* no point to frame */
+    }
+  }
+  for (const link of links) {
+    if (link.kind !== 'secant' && link.kind !== 'taylor' && link.kind !== 'limit') continue
+    const parent = curves.find((c) => c.id === link.parentId)
+    if (!parent || !parent.visible) continue
+    if (link.kind === 'secant') {
+      at(parent, link.a)
+      at(parent, link.b)
+    } else if (link.kind === 'taylor') {
+      at(parent, link.a)
+    } else {
+      if (!Number.isFinite(link.a)) continue
+      let res: ReturnType<typeof analyzeLimit>['res'] = null
+      try {
+        res = analyzeLimit(link.a, parent, models).res
+      } catch {
+        res = null
+      }
+      if (!res) continue
+      const side = link.side ?? 'both'
+      const outcomes =
+        side === 'left' ? [res.left] : side === 'right' ? [res.right] : [res.two, res.left, res.right]
+      const seen = new Set<number>()
+      for (const o of outcomes) {
+        const L = o && typeof o.value === 'number' ? o.value : Number.NaN
+        if (!Number.isFinite(L) || seen.has(L)) continue
+        seen.add(L)
+        out.push({ x: link.a, y: L })
+        if (side === 'both' && o === res.two) break
+      }
+    }
+  }
+  return out
 }
 
 // --------------------------------------------------------- screen distances

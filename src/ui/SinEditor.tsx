@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { CardSection, withoutDomainRange } from './CardSection'
 import type { SinFn, SinSpec, SinStart } from '../core/sinusoidal'
 import { Latex } from './Latex'
 import { ExpFacts, XField, badText } from './ExpEditor'
@@ -435,10 +436,11 @@ interface SectionProps {
   spec: SinSpec
   /** Rewrite the curve's line in place. Error message, or null. */
   onRestate(src: string, label: string): string | null
+  /** The card's Analysis states the domain and range as rows: do not say them twice here. */
+  hideDomainRange?: boolean
 }
 
-export function SinSection({ spec, onRestate }: SectionProps) {
-  const [open, setOpen] = useState(true)
+export function SinSection({ spec, onRestate, hideDomainRange = false }: SectionProps) {
   const [error, setError] = useState<string | null>(null)
   useEffect(() => setError(null), [spec])
 
@@ -456,20 +458,7 @@ export function SinSection({ spec, onRestate }: SectionProps) {
   const negative = (sinValues(spec)?.a ?? 1) < 0
 
   return (
-    <div className="field-section fe-section xe-section se-section" data-testid="sin-section">
-      <button
-        type="button"
-        className="an-title fe-toggle"
-        aria-expanded={open}
-        onClick={(e) => {
-          e.stopPropagation()
-          setOpen((o) => !o)
-        }}
-      >
-        Sinusoidal <span className="fe-caret">{open ? '▾' : '▸'}</span>
-      </button>
-      {open && (
-        <>
+    <CardSection kind="sinusoidal" title="Sinusoidal" className="field-section fe-section xe-section se-section" testId="sin-section">
           <div className="fe-a-row">
             <FnPicker
               fn={fn}
@@ -528,15 +517,19 @@ export function SinSection({ spec, onRestate }: SectionProps) {
               </button>
             )}
           </div>
-          <ExpFacts sentences={features ? features.sentences : []} features={[]} testPrefix="sin" />
+          <ExpFacts
+            sentences={
+              features ? (hideDomainRange ? withoutDomainRange(features.sentences) : features.sentences) : []
+            }
+            features={[]}
+            testPrefix="sin"
+          />
           <KeyPointTable rows={keyRows(features)} />
           {error && <div className="expr-error">{error}</div>}
           <div className="field-hint">
             Drag the midline, the first maximum (up/down: amplitude, sideways: phase shift) or the
             end of the cycle (period) on the board.
           </div>
-        </>
-      )}
-    </div>
+    </CardSection>
   )
 }

@@ -16,6 +16,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { Latex } from './Latex'
+import { CardSection, SectionDrop } from './CardSection'
 import { parseNumeric } from './numeric'
 import type { CalcChange, VolumeRow } from './calcLinks'
 import { SECTION_LABELS, editableNum } from './volumeLinks'
@@ -43,7 +44,13 @@ function fillStyle(value: number, min: number, max: number): CSSProperties {
 const METHODS: { method: VolumeMethod; label: string; title: string }[] = [
   { method: 'washer', label: 'Disk/Washer', title: 'Disks or washers: slices perpendicular to the axis of revolution' },
   { method: 'shell', label: 'Shell', title: 'Cylindrical shells: slices parallel to the axis of revolution' },
-  { method: 'section', label: 'Cross-sections', title: 'Known cross-sections perpendicular to the x-axis, standing on the region' },
+  { method: 'section', label: 'Cross-sections', title: 'Known cross-sections standing on the region, perpendicular to the x-axis or the y-axis' },
+]
+
+/** Which axis the cross-sections are perpendicular to. */
+const PERPS: { perp: 'x' | 'y'; label: string; title: string }[] = [
+  { perp: 'x', label: '⟂ x-axis', title: 'Sections perpendicular to the x-axis: vertical slices, base s(x), integrate in dx' },
+  { perp: 'y', label: '⟂ y-axis', title: 'Sections perpendicular to the y-axis: horizontal slices, base s(y), integrate in dy' },
 ]
 
 /** Which entry of the axis picker an axis is. */
@@ -127,19 +134,16 @@ export function VolumeSection({ row, onCalcChange, onRemove, onEditStart, onEdit
   const step = (row.sliceHi - row.sliceLo) / 200 || 0.01
 
   return (
-    <div className="calc-row volume-row" data-link={linkId}>
+    <CardSection
+      kind="volume"
+      title="Volume"
+      summary={row.value ? `${row.head} · ${row.value}` : row.head}
+      actions={<SectionDrop what="solid" onRemove={onRemove} />}
+      className="calc-row volume-row"
+      data={{ link: linkId }}
+    >
       <div className="calc-line">
-        <span className="calc-tag">Volume</span>
         <span className="calc-read volume-head">{row.head}</span>
-        <button
-          type="button"
-          className="calc-drop"
-          title="Remove this solid"
-          aria-label="Remove this solid"
-          onClick={onRemove}
-        >
-          ×
-        </button>
       </div>
 
       <div className="calc-controls volume-region">
@@ -181,7 +185,7 @@ export function VolumeSection({ row, onCalcChange, onRemove, onEditStart, onEdit
             <select
               className="calc-select"
               aria-label="Cross-section shape"
-              title="The shape of each cross-section, standing on the base s(x) = top − bottom"
+              title={row.perp === 'y' ? 'The shape of each cross-section, standing on the base s(y) = right − left' : 'The shape of each cross-section, standing on the base s(x) = top − bottom'}
               value={row.section}
               onChange={(e) => onCalcChange({ kind: 'volumeSection', linkId, section: e.target.value as SectionShape })}
             >
@@ -193,6 +197,20 @@ export function VolumeSection({ row, onCalcChange, onRemove, onEditStart, onEdit
             </select>
             {row.section === 'rectangle' &&
               field('ratio', 'k', row.ratio, 'The rectangle’s height as a multiple of its base — type 2, 1/2 …')}
+            <span className="volume-perp" role="group" aria-label="Cross-sections perpendicular to">
+              {PERPS.map((p) => (
+                <button
+                  key={p.perp}
+                  type="button"
+                  className={`calc-chip${row.perp === p.perp ? ' calc-chip-on' : ''}`}
+                  aria-pressed={row.perp === p.perp}
+                  title={p.title}
+                  onClick={() => onCalcChange({ kind: 'volumeSectionAxis', linkId, perp: p.perp })}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </span>
           </>
         ) : (
           <>
@@ -261,9 +279,9 @@ export function VolumeSection({ row, onCalcChange, onRemove, onEditStart, onEdit
           <button
             type="button"
             className="calc-chip"
-            onClick={() => onCalcChange({ kind: 'volumeMethod', linkId, method: row.need!.switchTo })}
+            onClick={() => onCalcChange(row.need!.change)}
           >
-            {row.need.switchTo === 'shell' ? 'Switch to shells' : 'Switch to washers'}
+            {row.need.button}
           </button>
         </div>
       )}
@@ -290,6 +308,6 @@ export function VolumeSection({ row, onCalcChange, onRemove, onEditStart, onEdit
           <span className="calc-n-value limit-eps-value">{numText(Math.round(row.slice * 1000) / 1000)}</span>
         </div>
       )}
-    </div>
+    </CardSection>
   )
 }

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
+import { CardSection, withoutDomainRange } from './CardSection'
 import type { FittedCurve, ModelSpec } from '../core/types'
 import { Latex } from './Latex'
 import { ExpFacts, XField, badText } from './ExpEditor'
@@ -375,7 +376,6 @@ interface SectionProps {
 }
 
 export function MotionSection({ curve, models, kind, src, depKey, play, scales, onPlay, onInterval }: SectionProps) {
-  const [open, setOpen] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const interval = motionInterval(curve)
   const [lo, hi] = interval
@@ -418,20 +418,7 @@ export function MotionSection({ curve, models, kind, src, depKey, play, scales, 
   const sentences = f ? f.sentences.filter((t) => t.trim() !== '' && !rows.some((r) => r.covers?.test(t))) : []
 
   return (
-    <div className="field-section fe-section xe-section mo-section" data-testid="motion-section" data-kind={kind}>
-      <button
-        type="button"
-        className="an-title fe-toggle"
-        aria-expanded={open}
-        onClick={(ev) => {
-          ev.stopPropagation()
-          setOpen((o) => !o)
-        }}
-      >
-        Motion · {kind === 'parametric' ? 'parametric' : 'polar'} <span className="fe-caret">{open ? '▾' : '▸'}</span>
-      </button>
-      {open && (
-        <>
+    <CardSection kind={`motion`} title={`Motion · ${kind === 'parametric' ? 'parametric' : 'polar'}`} className="field-section fe-section xe-section mo-section" testId="motion-section" data={{ kind: kind }}>
           <div className="fe-a-row mo-interval" data-testid="motion-interval">
             <XField
               value={valueText(lo)}
@@ -623,8 +610,6 @@ export function MotionSection({ curve, models, kind, src, depKey, play, scales, 
                 }.`
               : null}
           </div>
-        </>
-      )}
-    </div>
+    </CardSection>
   )
 }

@@ -61,7 +61,7 @@ import {
   withTaylorNames,
 } from './ui/taylorLinks'
 import { defaultSecant } from './ui/secantLinks'
-import { applyVolumeChange, defaultVolume, isVolumeChange, volumeSliceHandle } from './ui/volumeLinks'
+import { applyVolumeChange, defaultVolume, isVolumeChange, snapSlice, volumeSliceHandle } from './ui/volumeLinks'
 import { defaultLimitA, limitSnapPoints, snapLimitA } from './ui/limitLinks'
 import {
   carryParams,
@@ -254,8 +254,11 @@ import {
   squareAxes,
   squareToContain,
   zoomAbout,
+  calcFramePoints,
+  withPoints,
 } from './ui/viewScale'
 import type { AxesMode, Box, ViewWindow } from './ui/viewScale'
+import { eulerFramePoints } from './ui/eulerLinks'
 import type { ViewSettings } from './ui/WindowPanel'
 import { factoredSource } from './core/factored'
 import type { FactoredSpec } from './core/factored'
@@ -7858,7 +7861,17 @@ export default function App() {
         const b = c ? sequenceBox(q, c) : null
         if (b) boxes.push(b)
       }
-      box = unionBoxes(boxes)
+      // And what the lesson is ABOUT, where the curves' extent in this window
+      // may not reach: the step points of every Euler path, and the key
+      // points of secant, Taylor and limit overlays. None of them: the same
+      // box as before.
+      let keyPts = eulerFramePoints(eulerPathsRef.current)
+      try {
+        keyPts = keyPts.concat(calcFramePoints(calcRef.current, curvesRef.current, modelsRef.current))
+      } catch {
+        /* the key points are extra; the curves still frame */
+      }
+      box = withPoints(unionBoxes(boxes), keyPts)
     }
     if (!box) {
       showToast('Nothing visible to frame.', { ms: 2000 })
@@ -8315,16 +8328,28 @@ export default function App() {
         }
         if (h) {
           const sh = h
+          // Snapped like every other handle — x to nice numbers and, near
+          // one, a multiple of π/12 (as a Taylor centre does); y to nice
+          // numbers — then held inside the region.
+          const snap = (v: number): number => {
+            const vp = vpRef.current
+            return sh.axis === 'x'
+              ? snapCenter(
+                  v,
+                  ppuX(vp),
+                  (u) => snapCoord(u, vp, 'x'),
+                  axisUnitsRef.current.x === 'pi',
+                  (u) => snapPiX(u, ppuX(vp)),
+                )
+              : snapCoord(v, vp, 'y')
+          }
           out.push({
             id: `calc:${link.id}:slice`,
             pos: sh.pos,
             label: sh.axis === 'x' ? 'slice x' : 'slice y',
             onDrag: (pos) => {
               const v = sh.axis === 'x' ? pos.x : pos.y
-              changeCalc(
-                { kind: 'volumeSlice', linkId: link.id, x: Math.min(Math.max(v, sh.lo), sh.hi) },
-                true,
-              )
+              changeCalc({ kind: 'volumeSlice', linkId: link.id, x: snapSlice(v, sh.lo, sh.hi, snap) }, true)
             },
           })
         }

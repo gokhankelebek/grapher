@@ -16,6 +16,9 @@
 //              V = 2π∫ₐᵇ |x − k|·h(x) dx,   h = top − bottom
 //   section  cross-sections perpendicular to the x-axis on the base
 //            s(x) = top − bottom:  V = ∫ₐᵇ A(s(x)) dx, A = factor · s²
+//            — or perpendicular to the y-axis on the horizontal slice
+//            w(y) = x_right − x_left:  V = ∫ A(w(y)) dy (`sectionVolumeDy`,
+//            over the same `horizontalBands` the dy pairings use)
 //
 // The other two pairings — washers about a VERTICAL axis and shells about a
 // HORIZONTAL one — slice in dy, which needs the region described sideways:
@@ -680,6 +683,38 @@ export function shellVolumeDy(r: Region, bands: readonly Band[], k: number): Vol
     err += q.err
   }
   return { value: 2 * Math.PI * total, through: false, err: 2 * Math.PI * err }
+}
+
+/**
+ * Known cross-sections perpendicular to the y-axis, over the bands: each
+ * section stands on the horizontal slice w(y) = x_right(y) − x_left(y), and
+ * V = ∫ A(w(y)) dy. A solid of its own — not the ⟂ x-axis solid measured
+ * another way — so there is no dx number to check it against.
+ */
+export function sectionVolumeDy(
+  r: Region,
+  bands: readonly Band[],
+  shape: SectionShape,
+  ratio = 1,
+): VolumeResult | null {
+  const factor = sectionFactor(shape, ratio)
+  let total = 0
+  let err = 0
+  for (const band of bands) {
+    const q = integratePieces(
+      (y) => {
+        const w = sideX(r, band.right, y) - sideX(r, band.left, y)
+        return w * w
+      },
+      band.y0,
+      band.y1,
+      [],
+    )
+    if (!q) return null
+    total += q.value
+    err += q.err
+  }
+  return { value: factor * total, through: false, err: factor * err }
 }
 
 // ---------------------------------------------------------------------------

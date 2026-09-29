@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { CardSection } from './CardSection'
 import type { ConicSpec } from '../core/conics'
 import { Latex } from './Latex'
 import { ExpFacts, XField, badText } from './ExpEditor'
@@ -520,37 +521,21 @@ interface SectionProps {
 }
 
 export function ConicSection({ info, onRestate, construction = false, onConstruction }: SectionProps) {
-  const [open, setOpen] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const spec: ConicSpec | null = info.kind === 'conic' ? info.spec : null
   useEffect(() => setError(null), [spec])
   const kindName = info.kind === 'conic' ? KIND_NAME[info.spec.kind] : info.kind === 'rotated' ? KIND_NAME[info.rot.kind] : null
 
-  const title = (
-    <button
-      type="button"
-      className="an-title fe-toggle"
-      aria-expanded={open}
-      onClick={(ev) => {
-        ev.stopPropagation()
-        setOpen((o) => !o)
-      }}
-    >
-      Conic{kindName ? ` · ${kindName}` : ''}
-      {info.kind === 'rotated' ? `, rotated ${info.rot.degreesText}` : ''} <span className="fe-caret">{open ? '▾' : '▸'}</span>
-    </button>
-  )
+  const title = `Conic${kindName ? ` · ${kindName}` : ''}${info.kind === 'rotated' ? `, rotated ${info.rot.degreesText}` : ''}`
+  const CLS = 'field-section fe-section xe-section co-section'
 
   if (info.kind === 'class') {
     return (
-      <div className="field-section fe-section xe-section co-section" data-testid="conic-section">
-        {title}
-        {open && (
-          <div className="co-class" data-testid="conic-class">
-            {info.sentence}
-          </div>
-        )}
-      </div>
+      <CardSection kind="conic" title={title} className={CLS} testId="conic-section">
+        <div className="co-class" data-testid="conic-class">
+          {info.sentence}
+        </div>
+      </CardSection>
     )
   }
 
@@ -574,15 +559,13 @@ export function ConicSection({ info, onRestate, construction = false, onConstruc
       </span>
     )
     return (
-      <div
-        className="field-section fe-section xe-section co-section"
-        data-testid="conic-section"
-        data-kind={r.kind}
-        data-rotated="true"
+      <CardSection
+        kind="conic"
+        title={title}
+        className={CLS}
+        testId="conic-section"
+        data={{ kind: r.kind, rotated: 'true' }}
       >
-        {title}
-        {open && (
-          <>
             <div className="co-class" data-testid="conic-class">
               {info.sentence}
             </div>
@@ -616,9 +599,7 @@ export function ConicSection({ info, onRestate, construction = false, onConstruc
               Its axes are tilted {r.degreesText}: h′, k′ are the center’s coordinates along x′, y′. These are read-only —
               retype the equation to change the conic.
             </div>
-          </>
-        )}
-      </div>
+      </CardSection>
     )
   }
 
@@ -637,10 +618,7 @@ export function ConicSection({ info, onRestate, construction = false, onConstruc
   const v = conicValues(s)
 
   return (
-    <div className="field-section fe-section xe-section co-section" data-testid="conic-section" data-kind={s.kind}>
-      {title}
-      {open && (
-        <>
+    <CardSection kind="conic" title={title} className={CLS} testId="conic-section" data={{ kind: s.kind }}>
           <div className="fe-a-row co-fields">
             {fields.map((fd) => (
               <span key={fd.field} className="co-field">
@@ -721,8 +699,6 @@ export function ConicSection({ info, onRestate, construction = false, onConstruc
                 ? 'Drag the center (h, k) or the point on the right (r) on the board.'
                 : 'Drag the center (h, k), the ends of the axes (a, b) or a focus (c) on the board.'}
           </div>
-        </>
-      )}
-    </div>
+    </CardSection>
   )
 }

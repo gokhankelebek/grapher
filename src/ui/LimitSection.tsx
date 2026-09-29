@@ -14,6 +14,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { Latex } from './Latex'
+import { CardSection, SectionDrop } from './CardSection'
 import { parseNumeric } from './numeric'
 import type { CalcChange, LimitRow } from './calcLinks'
 import { EPS_MAX, EPS_MIN, EPS_STEP } from './limitLinks'
@@ -110,27 +111,28 @@ export function LimitSection({ row, onCalcChange, onRemove, onEditStart, onEditE
   const where = row.infinity === 1 ? 'inf' : row.infinity === -1 ? '-inf' : 'a'
 
   return (
-    <div className="calc-row limit-row" data-link={linkId}>
-      <div className="calc-line">
-        <span className="calc-tag">Limit</span>
-        <span className="calc-read limit-head-text">{row.title}</span>
-        <button
-          type="button"
-          className="calc-drop"
-          title="Remove this limit"
-          aria-label="Remove this limit"
-          onClick={onRemove}
-        >
-          ×
-        </button>
-      </div>
+    <CardSection
+      kind="limit"
+      title="Limit"
+      titleHint={row.title}
+      summary={limitSummary(row)}
+      actions={<SectionDrop what="limit" onRemove={onRemove} />}
+      className="calc-row limit-row"
+      data={{ link: linkId }}
+    >
 
       <div className="limit-tex" title={row.head.text} aria-label={row.head.text}>
         <Latex tex={row.head.tex} />
       </div>
+      {/* The two one-sided limits, one per line: side by side they wrap
+          mid-formula in a 272px card. */}
       {row.sides && (
         <div className="limit-tex limit-sides" title={row.sides.text} aria-label={row.sides.text}>
-          <Latex tex={row.sides.tex} />
+          {row.sides.tex.split(/,\s*\\qquad\s*/).map((tex, i) => (
+            <div key={i}>
+              <Latex tex={tex} />
+            </div>
+          ))}
         </div>
       )}
 
@@ -277,6 +279,16 @@ export function LimitSection({ row, onCalcChange, onRemove, onEditStart, onEditE
           {row.delta && <div className="calc-read calc-accum-read limit-delta">{row.delta.text}</div>}
         </div>
       )}
-    </div>
+    </CardSection>
   )
+}
+
+/** "x → 3 = 6", "x → ∞ = 0" — the limit, folded into its header. */
+export function limitSummary(row: Pick<LimitRow, 'head'>): string {
+  return row.head.text
+    .replace(/^lim\s*/, '')
+    .replace(/\s+[^\s()]+\(x\)\s*/, ' ')
+    .replace(/(\S)→/, '$1 → ')
+    .replace(/→(\S)/, '→ $1')
+    .trim()
 }

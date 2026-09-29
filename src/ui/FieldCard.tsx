@@ -6,6 +6,7 @@ import { parseNumeric } from './numeric'
 import { SPACING_CHOICES, coord } from './fieldLinks'
 import type { BoardField, FieldCardData } from './fieldLinks'
 import { EulerSection } from './EulerSection'
+import { CardSection } from './CardSection'
 import type { RunPatch } from './eulerLinks'
 
 // ============================================================================
@@ -372,8 +373,9 @@ export function FieldCard({
       )}
 
       {selected && (
-        <div className="card-body" onClick={(e) => e.stopPropagation()}>
+        <div className="card-body card-body-sections" onClick={(e) => e.stopPropagation()}>
           {data.params.length > 0 && (
+            <CardSection kind="coefficients" title="Sliders" className="param-section">
             <div className="param-list">
               {data.params.map((p, i) => (
                 <ParamRow
@@ -392,10 +394,15 @@ export function FieldCard({
                 />
               ))}
             </div>
+            </CardSection>
           )}
 
-          <div className="field-section">
-            <div className="an-title">Lattice</div>
+          <CardSection
+            kind="lattice"
+            title="Lattice"
+            summary={SPACING_CHOICES.find((c) => c.key === data.spacing)?.label ?? null}
+            className="field-section"
+          >
             <div className="field-spacing" role="group" aria-label="Lattice spacing">
               {SPACING_CHOICES.map((c) => (
                 <button
@@ -410,12 +417,16 @@ export function FieldCard({
                 </button>
               ))}
             </div>
-          </div>
+          </CardSection>
 
           {/* The solution curves. One compact line each: the point it goes
               through, both coordinates typeable, and the × that removes it. */}
-          <div className="field-section">
-            <div className="an-title">Solution curves</div>
+          <CardSection
+            kind="solutions"
+            title="Solution curves"
+            summary={data.solutions.length === 0 ? null : data.solutions.map((s) => s.text).join(' · ')}
+            className="field-section"
+          >
             {data.solutions.length === 0 ? (
               <div className="field-hint">
                 {arming
@@ -450,7 +461,7 @@ export function FieldCard({
             {data.solutions.length > 0 && arming && (
               <div className="field-hint">Click the board for another one.</div>
             )}
-          </div>
+          </CardSection>
 
           <EulerSection
             runs={data.eulers}

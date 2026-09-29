@@ -13,6 +13,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { Latex } from './Latex'
+import { CardSection, SectionDrop } from './CardSection'
 import { parseNumeric } from './numeric'
 import type { CalcChange, TaylorRow } from './calcLinks'
 import { TAYLOR_N_MAX, TAYLOR_N_MIN, TAYLOR_PLAY_TO, TAYLOR_STEP_MS } from './taylorLinks'
@@ -149,23 +150,20 @@ export function TaylorSection({ row, onCalcChange, onRemove, onEditStart, onEdit
   }
 
   return (
-    <div className="calc-row taylor-row" data-link={linkId}>
+    <CardSection
+      kind="taylor"
+      title="Taylor"
+      summary={`${row.name} about ${row.aText}`}
+      actions={<SectionDrop what="Taylor polynomial" onRemove={onRemove} />}
+      className="calc-row taylor-row"
+      data={{ link: linkId }}
+    >
       <div className="calc-line">
-        <span className="calc-tag">Taylor</span>
         {/* What it is, in words; the polynomial itself is the KaTeX line below
             (or, when KaTeX has nothing to show, this line says it in text). */}
         <span className="calc-read taylor-name" title={row.text || undefined}>
           {row.tex ? `${row.name} about a = ${row.aText}` : row.text || `${row.name}(x) = —`}
         </span>
-        <button
-          type="button"
-          className="calc-drop"
-          title="Remove this Taylor polynomial"
-          aria-label="Remove this Taylor polynomial"
-          onClick={onRemove}
-        >
-          ×
-        </button>
       </div>
 
       {row.tex && (
@@ -298,6 +296,6 @@ export function TaylorSection({ row, onCalcChange, onRemove, onEditStart, onEdit
         <span className="calc-read calc-accum-read">{row.iocText}</span>
         {row.iocNote && <span className="calc-note taylor-ioc-note">{row.iocNote}</span>}
       </div>
-    </div>
+    </CardSection>
   )
 }

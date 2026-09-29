@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { CardSection, withoutDomainRange } from './CardSection'
 import type { LogisticSpec } from '../core/logistic'
 import { Latex } from './Latex'
 import { ExpFacts, XField, badText } from './ExpEditor'
@@ -211,10 +212,11 @@ interface SectionProps {
   onShowField?(): void
   /** The curve is a sketch: its first edit makes it a typed logistic. */
   sketched?: boolean
+  /** The card's Analysis states the domain and range as rows: do not say them twice here. */
+  hideDomainRange?: boolean
 }
 
-export function LogisticSection({ spec, onRestate, onShowField, sketched = false }: SectionProps) {
-  const [open, setOpen] = useState(true)
+export function LogisticSection({ spec, onRestate, onShowField, sketched = false, hideDomainRange = false }: SectionProps) {
   const [error, setError] = useState<string | null>(null)
   const [form, setForm] = useState<LogisticForm>(() => defaultForm(spec))
   useEffect(() => setError(null), [spec])
@@ -233,7 +235,8 @@ export function LogisticSection({ spec, onRestate, onShowField, sketched = false
 
   const vals = logisticFieldValues(spec)
   const features = safeLogisticFeatures(spec)
-  const facts = logisticFactLines(spec, form)
+  const allFacts = logisticFactLines(spec, form)
+  const facts = hideDomainRange ? withoutDomainRange(allFacts) : allFacts
   const base = spec.b !== undefined && spec.b.trim() !== ''
   const t = spec.v === 't' ? 't' : 'x'
   const input = (f: LogisticField, label: string, value = vals[f]): JSX.Element => (
@@ -251,44 +254,37 @@ export function LogisticSection({ spec, onRestate, onShowField, sketched = false
     </>
   )
 
-  return (
-    <div className="field-section fe-section xe-section" data-testid="logistic-section">
-      <div className="lg-head">
+  const forms = (
+    <div className="seg lg-forms" role="radiogroup" aria-label="State it the way">
+      {LOGISTIC_FORMS.map((f) => (
         <button
+          key={f.form}
           type="button"
-          className="an-title fe-toggle"
-          aria-expanded={open}
+          role="radio"
+          aria-checked={form === f.form}
+          data-form={f.form}
+          title={f.title}
+          className={`seg-btn${form === f.form ? ' seg-on' : ''}`}
           onClick={(e) => {
             e.stopPropagation()
-            setOpen((o) => !o)
+            setForm(f.form)
           }}
         >
-          Logistic <span className="fe-caret">{open ? '▾' : '▸'}</span>
+          {f.label}
         </button>
-        {open && (
-          <div className="seg lg-forms" role="radiogroup" aria-label="State it the way">
-            {LOGISTIC_FORMS.map((f) => (
-              <button
-                key={f.form}
-                type="button"
-                role="radio"
-                aria-checked={form === f.form}
-                data-form={f.form}
-                title={f.title}
-                className={`seg-btn${form === f.form ? ' seg-on' : ''}`}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  setForm(f.form)
-                }}
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-      {open && (
-        <>
+      ))}
+    </div>
+  )
+
+  return (
+    <CardSection
+      kind="logistic"
+      title="Logistic"
+      summary={vals.L ? `L = ${vals.L}` : null}
+      openActions={forms}
+      className="field-section fe-section xe-section"
+      testId="logistic-section"
+    >
           {form === 'ap' ? (
             <>
               <div className="fe-a-row">
@@ -360,8 +356,6 @@ export function LogisticSection({ spec, onRestate, onShowField, sketched = false
               ? 'Editing a value makes this sketch a typed logistic.'
               : 'Drag the inflection point or either asymptote on the board.'}
           </div>
-        </>
-      )}
-    </div>
+    </CardSection>
   )
 }

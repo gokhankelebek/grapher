@@ -283,8 +283,9 @@ export const LIMIT_EPS_DEFAULT = 0.5
  *
  * Only what is not the default reaches a file: `method` when not 'washer',
  * `axis` when not the x-axis, `section` only for sections and only when not
- * 'square', `ratio` only for a rectangle and only when not 1, `x` only when
- * set. Deleting either curve removes the link.
+ * 'square', `ratio` only for a rectangle and only when not 1, `perp: 'y'`
+ * only for sections perpendicular to the y-axis (absent: the x-axis — every
+ * older file), `x` only when set. Deleting either curve removes the link.
  *   src/core/volume.ts     washerVolume / shellVolume / sectionVolume /
  *                          horizontalBands / washerVolumeDy / shellVolumeDy /
  *                          exactVolume
@@ -301,6 +302,8 @@ export interface VolumeLink {
   axis?: VolumeAxis
   section?: SectionShape
   ratio?: number
+  /** Sections only: perpendicular to the y-axis. Absent: to the x-axis. */
+  perp?: 'y'
   x?: number
 }
 
@@ -1241,6 +1244,8 @@ export interface StoredCalcLink {
   axis?: VolumeAxis
   section?: SectionShape
   ratio?: number
+  /** Volume only: 'y' for cross-sections perpendicular to the y-axis. */
+  perp?: 'y'
 }
 
 export interface StoredDoc {
@@ -2149,6 +2154,7 @@ export function calcLinkToStored(l: CalcLink): StoredCalcLink {
         ...(l.method === 'section' && section === 'rectangle' && isNum(l.ratio) && l.ratio > 0 && l.ratio !== 1
           ? { ratio: l.ratio }
           : {}),
+        ...(l.method === 'section' && l.perp === 'y' ? { perp: 'y' as const } : {}),
         ...(l.x !== undefined && isNum(l.x) ? { x: l.x } : {}),
       }
     }
@@ -2296,6 +2302,7 @@ export function storedToCalcLink(raw: unknown): CalcLink | null {
         ...(axis ? { axis } : {}),
         ...(section ? { section } : {}),
         ...(ratio !== undefined ? { ratio } : {}),
+        ...(method === 'section' && raw.perp === 'y' ? { perp: 'y' as const } : {}),
         ...(isNum(raw.x) ? { x: raw.x } : {}),
       }
     }

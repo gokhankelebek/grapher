@@ -1,5 +1,5 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties } from 'react'
+import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react'
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from 'react'
 import type {
   Asymptote,
   EndCap,
@@ -50,6 +50,8 @@ import { LimitSection } from './LimitSection'
 import { VolumeSection } from './VolumeSection'
 import type { CurveIntersections } from './intersections'
 import { DomainSection } from './DomainSection'
+import { CardSection } from './CardSection'
+import { setRowText } from './domainLinks'
 import type { DomainActions, DomainPanel, SetNotation } from './domainLinks'
 
 interface Props {
@@ -283,17 +285,36 @@ export interface BetweenInfo {
 /** One array, so a card with nothing to say re-renders no more than before. */
 const EMPTY_NOTES: string[] = []
 
-/** The order the ⋯ menu offers them: the order an AP class meets them. */
-const CALC_ITEMS: { kind: CalcKind; label: string }[] = [
-  { kind: 'limit', label: 'Limit at a point' },
-  { kind: 'secant', label: 'Average rate of change (secant)' },
-  { kind: 'tangent', label: 'Tangent line' },
-  { kind: 'derivative', label: 'Derivative f\u2032' },
-  { kind: 'area', label: 'Area under curve' },
-  { kind: 'riemann', label: 'Riemann sum' },
-  { kind: 'accumulation', label: 'Accumulation function \u222b\u2090\u02e3 f' },
-  { kind: 'volume', label: 'Volume of a solid\u2026' },
-  { kind: 'taylor', label: 'Taylor polynomial P\u2099' },
+/**
+ * The calculus the ⋯ menu offers, grouped the way an AP course meets it:
+ * limits and derivatives (Units 1–2, and the secant of Unit 5's MVT), then
+ * integrals (Riemann sums and the definite integral of Unit 6, the areas and
+ * volumes of Unit 8), then series (BC Unit 10).
+ */
+export const CALC_GROUPS: { title: string; items: { kind: CalcKind | 'between'; label: string }[] }[] = [
+  {
+    title: 'Limits & derivatives',
+    items: [
+      { kind: 'limit', label: 'Limit at a point' },
+      { kind: 'secant', label: 'Average rate of change (secant)' },
+      { kind: 'tangent', label: 'Tangent line' },
+      { kind: 'derivative', label: 'Derivative f\u2032' },
+    ],
+  },
+  {
+    title: 'Integrals',
+    items: [
+      { kind: 'riemann', label: 'Riemann sum' },
+      { kind: 'area', label: 'Area under curve' },
+      { kind: 'between', label: 'Area between curves\u2026' },
+      { kind: 'accumulation', label: 'Accumulation function \u222b\u2090\u02e3 f' },
+      { kind: 'volume', label: 'Volume of a solid\u2026' },
+    ],
+  },
+  {
+    title: 'Series',
+    items: [{ kind: 'taylor', label: 'Taylor polynomial P\u2099' }],
+  },
 ]
 
 const METHOD_LABELS: Record<string, string> = {
@@ -929,6 +950,15 @@ export function CurveCard({
     sinusoidal: sinusoidal !== null,
   }
   const transformOpen = transform ? transformOpenByDefault(transform, transformOthers) : false
+  /**
+   * Another family section is on this card too (Roots, Exponential …): the
+   * Transformation reading is then the SECOND one, and starts collapsed. The
+   * board's ghost and key-point marks still follow transformOpenByDefault.
+   */
+  const transformSecondary =
+    factored !== null || exponential !== null || logarithmic !== null || sinusoidal !== null || logistic !== null
+  /** The card's Analysis states domain and range as rows of their own. */
+  const domainRows = Boolean(domainPanel && domainActions)
 
   /**
    * A SKETCH that fitted the library's a·e^{bx} + c, stated the precalculus
@@ -1216,6 +1246,27 @@ export function CurveCard({
   }, [analysis, zeroSpans])
 
   /**
+   * What a folded Analysis still says: the domain and the range when the
+   * rows above know them, then how many of each feature there are —
+   * "domain (−∞, ∞) · range [0, ∞) · zero · minimum".
+   */
+  const analysisSummary = useMemo(() => {
+    const parts: string[] = []
+    if (domainPanel && domainActions) {
+      const d = setRowText(domainPanel.domain, setNotation ?? 'interval')
+      const r = setRowText(domainPanel.range, setNotation ?? 'interval')
+      if (d) parts.push(`domain ${d}`)
+      if (r) parts.push(`range ${r}`)
+    }
+    for (const g of analysisGroups.slice(0, 3)) {
+      const n = g.seq.length
+      const name = (n > 1 ? (g.plural ?? g.label) : g.label).toLowerCase()
+      parts.push(n > 1 ? `${n} ${name}` : name)
+    }
+    return parts.join(' · ')
+  }, [domainPanel, domainActions, setNotation, analysisGroups])
+
+  /**
    * The asymptotes of this curve, already in words.
    *
    * These are NOT special points: an asymptote is a line the graph never
@@ -1449,6 +1500,69 @@ export function CurveCard({
     </button>
   )
 
+  /** A menu entry that is a switch: ✓ when on, announced as checked. */
+  const menuCheck = (label: string, on: boolean, run: () => void): JSX.Element => (
+    <button
+      type="button"
+      role="menuitemcheckbox"
+      aria-checked={on}
+      className={`card-menu-item card-menu-check${on ? ' card-menu-check-on' : ''}`}
+      onClick={(e) => {
+        e.stopPropagation()
+        setMenuOpen(false)
+        run()
+      }}
+    >
+      {label}
+      <span className="card-menu-tick" aria-hidden="true">
+        {on ? '\u2713' : ''}
+      </span>
+    </button>
+  )
+
+  /** Up / Down / Home / End walk the menu's items; Tab still leaves it. */
+  const onMenuKey = (e: ReactKeyboardEvent<HTMLDivElement>): void => {
+    if (!menuOpen) return
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') return
+    const items = Array.from(
+      menuRef.current?.querySelectorAll<HTMLElement>('.card-menu [role^="menuitem"]:not([aria-disabled="true"])') ?? [],
+    )
+    if (items.length === 0) return
+    e.preventDefault()
+    e.stopPropagation()
+    const at = items.indexOf(document.activeElement as HTMLElement)
+    const next =
+      e.key === 'Home'
+        ? 0
+        : e.key === 'End'
+          ? items.length - 1
+          : e.key === 'ArrowDown'
+            ? (at + 1) % items.length
+            : at <= 0
+              ? items.length - 1
+              : at - 1
+    items[next]?.focus()
+  }
+
+  /** A sketch that fitted a family the app can also TYPE: one item makes it the typed line. */
+  const convert: { label: string; run: () => void } | null = !onConvertTyped
+    ? null
+    : fitted
+      ? { label: 'Convert to typed exponential', run: () => void onConvertTyped(fitted.src, 'convert to typed exponential') }
+      : fittedLn
+        ? { label: 'Convert to typed logarithm', run: () => void onConvertTyped(fittedLn.src, 'convert to typed logarithm') }
+        : fittedSin
+          ? { label: 'Convert to typed sinusoid', run: () => void onConvertTyped(fittedSin.src, 'convert to typed sinusoid') }
+          : fittedLg
+            ? { label: 'Convert to typed logistic', run: () => void onConvertTyped(fittedLg.src, 'convert to typed logistic') }
+            : fittedCon
+              ? { label: 'Convert to typed conic', run: () => void onConvertTyped(fittedCon.src, 'convert to typed conic') }
+              : null
+  const showInverseItem = Boolean(onShowInverseOf && curve.kind === 'explicit' && !broken)
+  /** The Inverse & domain switches, on a function whose Analysis carries the rows. */
+  const domainFn = Boolean(domainPanel && domainActions && domainPanel.role === 'function' && !broken)
+  const menuUid = useId()
+
   const sliderEvents = {
     onPointerDown: onParamEditStart,
     onPointerUp: onParamEditEnd,
@@ -1544,6 +1658,262 @@ export function CurveCard({
       ×
     </button>
   )
+
+  // ------------------------------------------------------ attached tools
+  //
+  // Every object attached to this curve gets a section of its own, in the
+  // order it was added (calc.order), so a lesson that went limit → secant →
+  // Taylor reads top to bottom the way it was taught. Links without an order
+  // (an old CardCalc) fall back to one kind after another.
+  const calcTools: { id: string; node: JSX.Element }[] = []
+  if (calc) {
+    for (const a of calc.areas) {
+      const other = a.otherLabel ?? null
+      const samples =
+        a.samples !== null ? (
+          <span
+            className="calc-note"
+            title="This integral has no closed form, so it was measured — at this many evaluations of the function."
+          >
+            {`${a.samples} samples`}
+          </span>
+        ) : null
+      calcTools.push({
+        id: a.linkId,
+        node: (
+          <CardSection
+            kind="area"
+            title={other ? 'Between' : 'Area'}
+            summary={a.text}
+            actions={dropBtn(a.linkId, 'shaded area')}
+            className="calc-row"
+            data={{ link: a.linkId }}
+          >
+            {/* Between curves the first line says WHICH two, so the number
+                gets a line of its own rather than being squeezed in beside a
+                pair of equations. */}
+            {other && (
+              <div className="calc-line">
+                <span className="calc-read calc-between" title="The region between these two curves">
+                  {`${selfLabel} and ${other}`}
+                </span>
+              </div>
+            )}
+            <div className={other ? 'calc-line calc-line-read' : 'calc-line'}>
+              <span className="calc-read">{a.text}</span>
+              {samples}
+            </div>
+                    <div className="calc-controls">
+                      {boundFields(a.linkId, a.from, a.to)}
+                      <button
+                        type="button"
+                        className={`calc-chip${a.abs ? ' calc-chip-on' : ''}`}
+                        aria-pressed={a.abs}
+                        title={
+                          other
+                            ? a.abs
+                              ? 'Showing the area between the curves, ∫|f − g| — top minus bottom wherever they cross. Click for the signed integral ∫(f − g).'
+                              : 'Showing the signed integral ∫(f − g), which cancels where the curves swap over. Click for the area between them.'
+                            : a.abs
+                              ? 'Showing total area. Click for the signed integral (the AP convention).'
+                              : 'Showing the signed integral (the AP convention). Click for total area.'
+                        }
+                        onClick={() =>
+                          onCalcChange({ kind: 'abs', linkId: a.linkId, abs: !a.abs })
+                        }
+                      >
+                        {other ? (a.abs ? '|f − g|' : 'signed') : '|area|'}
+                      </button>
+                    </div>
+            {a.problem && <div className="calc-why">{a.problem}</div>}
+          </CardSection>
+        ),
+      })
+    }
+    for (const g of calc.accums) {
+      calcTools.push({
+        id: g.linkId,
+        node: (
+          <CardSection
+            kind="accumulation"
+            title="Accumulation"
+            summary={g.text ? `${g.head} · ${g.text}` : g.head}
+            actions={dropBtn(g.linkId, 'accumulation function')}
+            className="calc-row"
+            data={{ link: g.linkId }}
+          >
+            <div className="calc-line">
+              <span className="calc-read">{g.head}</span>
+            </div>
+                    <div className="calc-controls">
+                      {calcNumber(`${g.linkId}:a`, 'a', g.a, (v) =>
+                        onCalcChange({ kind: 'accumA', linkId: g.linkId, a: v }),
+                      )}
+                      {calcNumber(`${g.linkId}:C`, `${g.gName}(a)`, g.C, (v) =>
+                        onCalcChange({ kind: 'accumC', linkId: g.linkId, C: v }),
+                      )}
+                      {g.x !== null ? (
+                        calcNumber(`${g.linkId}:x`, 'x', g.x, (v) =>
+                          onCalcChange({ kind: 'accumX', linkId: g.linkId, x: v }),
+                        )
+                      ) : (
+                        <button
+                          type="button"
+                          className="calc-chip"
+                          title={`Read ${g.gName}(x) at a point, and shade from a to it`}
+                          onClick={() =>
+                            onCalcChange({
+                              kind: 'accumX',
+                              linkId: g.linkId,
+                              x: g.a + 1,
+                            })
+                          }
+                        >
+                          {`${g.gName}(x) at…`}
+                        </button>
+                      )}
+                    </div>
+                    {g.text && (
+                      <div className="calc-line calc-line-read">
+                        <span className="calc-read calc-accum-read">{g.text}</span>
+                      </div>
+                    )}
+            {g.problem && <div className="calc-why">{g.problem}</div>}
+          </CardSection>
+        ),
+      })
+    }
+    for (const lm of calc.limits) {
+      calcTools.push({
+        id: lm.linkId,
+        node: (
+          <LimitSection
+            row={lm}
+            onCalcChange={onCalcChange}
+            onRemove={() => onCalcRemove(lm.linkId)}
+            onEditStart={onParamEditStart}
+            onEditEnd={onParamEditEnd}
+          />
+        ),
+      })
+    }
+    for (const sc of calc.secants) {
+      calcTools.push({
+        id: sc.linkId,
+        node: <SecantSection row={sc} onCalcChange={onCalcChange} onRemove={() => onCalcRemove(sc.linkId)} />,
+      })
+    }
+    for (const v of calc.volumes) {
+      calcTools.push({
+        id: v.linkId,
+        node: (
+          <VolumeSection
+            row={v}
+            onCalcChange={onCalcChange}
+            onRemove={() => onCalcRemove(v.linkId)}
+            onEditStart={onParamEditStart}
+            onEditEnd={onParamEditEnd}
+          />
+        ),
+      })
+    }
+    for (const t of calc.taylors) {
+      calcTools.push({
+        id: t.linkId,
+        node: (
+          <TaylorSection
+            row={t}
+            onCalcChange={onCalcChange}
+            onRemove={() => onCalcRemove(t.linkId)}
+            onEditStart={onParamEditStart}
+            onEditEnd={onParamEditEnd}
+          />
+        ),
+      })
+    }
+    for (const r of calc.riemanns) {
+      calcTools.push({
+        id: r.linkId,
+        node: (
+          <CardSection
+            kind="riemann"
+            title="Riemann sum"
+            summary={r.text}
+            actions={dropBtn(r.linkId, 'Riemann sum')}
+            className="calc-row"
+            data={{ link: r.linkId }}
+          >
+            <div className="calc-line">
+              <span className="calc-read">{r.text}</span>
+            </div>
+                    <div className="calc-controls">
+                      {boundFields(r.linkId, r.from, r.to)}
+                      <select
+                        className="calc-select"
+                        aria-label="Riemann method"
+                        value={r.method}
+                        onChange={(e) =>
+                          onCalcChange({
+                            kind: 'method',
+                            linkId: r.linkId,
+                            method: e.target.value as typeof r.method,
+                          })
+                        }
+                      >
+                        {RIEMANN_METHODS.map((m) => (
+                          <option key={m} value={m}>
+                            {METHOD_LABELS[m] ?? m}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    {/* n is a slider because the lesson is watching it move:
+                        drag it to 200 and the sum walks onto the integral. */}
+                    <div className="calc-n">
+                      <span className="calc-n-label">n</span>
+                      <input
+                        type="range"
+                        min={N_MIN}
+                        max={N_MAX}
+                        step={1}
+                        value={r.n}
+                        aria-label="Number of rectangles"
+                        style={fillStyle(r.n, N_MIN, N_MAX)}
+                        onPointerDown={onParamEditStart}
+                        onPointerUp={onParamEditEnd}
+                        onKeyDown={onParamEditStart}
+                        onKeyUp={onParamEditEnd}
+                        onBlur={onParamEditEnd}
+                        onChange={(e) =>
+                          onCalcChange(
+                            { kind: 'n', linkId: r.linkId, n: Number(e.target.value) },
+                            true,
+                          )
+                        }
+                      />
+                      <span className="calc-n-value">{r.n}</span>
+                    </div>
+                    {r.problem && <div className="calc-why">{r.problem}</div>}
+                    {r.skipped > 0 && (
+                      <div className="calc-why">
+                        {`${r.skipped} rectangle${r.skipped === 1 ? '' : 's'} sit where the curve is undefined, and count for nothing.`}
+                      </div>
+                    )}
+          </CardSection>
+        ),
+      })
+    }
+    const order = calc.order
+    if (order && order.length > 0) {
+      const at = new Map(order.map((id, i) => [id, i]))
+      const fallback = calcTools.map((t) => t.id)
+      calcTools.sort(
+        (p, q) =>
+          (at.get(p.id) ?? order.length + fallback.indexOf(p.id)) -
+          (at.get(q.id) ?? order.length + fallback.indexOf(q.id)),
+      )
+    }
+  }
 
   // ------------------------------------------------------------- read as row
   const quality = useMemo(() => {
@@ -1655,7 +2025,7 @@ export function CurveCard({
         ) : null}
         {!curve.visible && <span className="card-flag">hidden</span>}
 
-        <div className="card-menu-wrap" ref={menuRef}>
+        <div className="card-menu-wrap" ref={menuRef} onKeyDown={onMenuKey}>
           <button
             ref={menuBtnRef}
             type="button"
@@ -1681,85 +2051,82 @@ export function CurveCard({
               {menuItem('Duplicate', onDuplicate)}
               {menuItem(curve.visible ? 'Hide' : 'Show', onToggleVisible)}
               {menuItem(copied ? 'Copied' : 'Copy LaTeX', copyLatex)}
+              {convert && menuItem(convert.label, convert.run)}
               {menuItem('Delete', onDelete, 'card-menu-danger')}
-              {onShowInverseOf && curve.kind === 'explicit' && !broken && (
-                <>
-                  <div className="card-menu-sep" />
-                  {menuItem('Show inverse', onShowInverseOf)}
-                </>
-              )}
-              {fitted && onConvertTyped && (
-                <>
-                  <div className="card-menu-sep" />
-                  {menuItem('Convert to typed exponential', () => {
-                    onConvertTyped(fitted.src, 'convert to typed exponential')
-                  })}
-                </>
-              )}
-              {fittedLn && onConvertTyped && (
-                <>
-                  <div className="card-menu-sep" />
-                  {menuItem('Convert to typed logarithm', () => {
-                    onConvertTyped(fittedLn.src, 'convert to typed logarithm')
-                  })}
-                </>
-              )}
-              {fittedSin && onConvertTyped && (
-                <>
-                  <div className="card-menu-sep" />
-                  {menuItem('Convert to typed sinusoid', () => {
-                    onConvertTyped(fittedSin.src, 'convert to typed sinusoid')
-                  })}
-                </>
-              )}
-              {fittedLg && onConvertTyped && (
-                <>
-                  <div className="card-menu-sep" />
-                  {menuItem('Convert to typed logistic', () => {
-                    onConvertTyped(fittedLg.src, 'convert to typed logistic')
-                  })}
-                </>
-              )}
-              {fittedCon && onConvertTyped && (
-                <>
-                  <div className="card-menu-sep" />
-                  {menuItem('Convert to typed conic', () => {
-                    onConvertTyped(fittedCon.src, 'convert to typed conic')
-                  })}
-                </>
-              )}
               {calc?.canAdd && (
                 <>
-                  <div className="card-menu-sep" />
-                  <div className="card-menu-title">Calculus</div>
-                  {CALC_ITEMS.map((item) =>
-                    item.kind === 'taylor' && calc.taylorBlocked ? (
-                      // Offered, and greyed out with the reason: a teacher who
-                      // typed f(x − 1) is owed WHY, not a menu that forgot.
-                      <button
-                        key={item.kind}
-                        type="button"
-                        role="menuitem"
-                        className="card-menu-item card-menu-item-off"
-                        aria-disabled="true"
-                        title={`${calc.taylorBlocked}.`}
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        {item.label}
-                        <span className="card-menu-why">{calc.taylorBlocked}</span>
-                      </button>
-                    ) : (
-                      <Fragment key={item.kind}>
-                        {menuItem(item.label, () => onAddCalc(item.kind))}
-                      </Fragment>
-                    ),
-                  )}
-                  {between?.canAdd &&
-                    menuItem('Area between curves…', onAddAreaBetween)}
+                  <div className="card-menu-sep" role="separator" />
+                  <div role="group" aria-labelledby={`${menuUid}-calc`}>
+                    <div className="card-menu-title" id={`${menuUid}-calc`}>
+                      Calculus
+                    </div>
+                    {CALC_GROUPS.map((group) => {
+                      const items = group.items.filter((item) => item.kind !== 'between' || between?.canAdd)
+                      if (items.length === 0) return null
+                      return (
+                        <div key={group.title} role="group" aria-label={group.title}>
+                          <div className="card-menu-sub" aria-hidden="true">
+                            {group.title}
+                          </div>
+                          {items.map((item) =>
+                            item.kind === 'between' ? (
+                              <Fragment key={item.kind}>{menuItem(item.label, onAddAreaBetween)}</Fragment>
+                            ) : item.kind === 'taylor' && calc.taylorBlocked ? (
+                              // Offered, and greyed out with the reason: a teacher who
+                              // typed f(x − 1) is owed WHY, not a menu that forgot.
+                              <button
+                                key={item.kind}
+                                type="button"
+                                role="menuitem"
+                                className="card-menu-item card-menu-item-off"
+                                aria-disabled="true"
+                                title={`${calc.taylorBlocked}.`}
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                {item.label}
+                                <span className="card-menu-why">{calc.taylorBlocked}</span>
+                              </button>
+                            ) : (
+                              <Fragment key={item.kind}>
+                                {menuItem(item.label, () => onAddCalc(item.kind as CalcKind))}
+                              </Fragment>
+                            ),
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
                 </>
               )}
-              <div className="card-menu-sep" />
-              <div className="card-menu-title">Line</div>
+              {(showInverseItem || domainFn) && (
+                <>
+                  <div className="card-menu-sep" role="separator" />
+                  <div role="group" aria-labelledby={`${menuUid}-inv`}>
+                    <div className="card-menu-title" id={`${menuUid}-inv`}>
+                      Inverse &amp; domain
+                    </div>
+                    {showInverseItem && onShowInverseOf && menuItem('Show inverse', onShowInverseOf)}
+                    {domainFn &&
+                      domainPanel &&
+                      domainActions &&
+                      menuCheck('Horizontal line test', domainPanel.hlt !== null, () =>
+                        domainActions.onHlt(domainPanel.ownerId, domainPanel.hlt === null),
+                      )}
+                    {domainFn &&
+                      domainPanel &&
+                      domainActions &&
+                      domainPanel.inverse &&
+                      menuCheck('Reflect a point across y = x', domainPanel.reflect, () =>
+                        domainActions.onReflect(domainPanel.ownerId, !domainPanel.reflect),
+                      )}
+                  </div>
+                </>
+              )}
+              <div className="card-menu-sep" role="separator" />
+              <div role="group" aria-labelledby={`${menuUid}-line`}>
+              <div className="card-menu-title" id={`${menuUid}-line`}>
+                Line
+              </div>
               <div className="style-row card-menu-style">
                 <input
                   type="range"
@@ -1802,9 +2169,12 @@ export function CurveCard({
               </div>
               {/* What the two ends of the graph SAY. A circle or an ellipse
                   has no ends, so the row is not there to be answered. */}
+              </div>
               {showsEnds && (
-                <>
-                  <div className="card-menu-title">Ends</div>
+                <div role="group" aria-labelledby={`${menuUid}-ends`}>
+                  <div className="card-menu-title" id={`${menuUid}-ends`}>
+                    Ends
+                  </div>
                   <div className="style-row card-menu-style ends-row">
                     {END_SIDES.map((which) => {
                       const name = endSideName(curve.kind, which)
@@ -1828,7 +2198,7 @@ export function CurveCard({
                       )
                     })}
                   </div>
-                </>
+                </div>
               )}
             </div>
           )}
@@ -1965,7 +2335,7 @@ export function CurveCard({
       )}
 
       {selected && (
-        <div className="card-body" onClick={(e) => e.stopPropagation()}>
+        <div className="card-body card-body-sections" onClick={(e) => e.stopPropagation()}>
           {/* A function built piece by piece is edited BY its pieces. */}
           {piecewise && onPiecewiseRestate && exprSource && (
             <PiecewiseSection
@@ -1987,14 +2357,31 @@ export function CurveCard({
             />
           )}
           {exponential && onExpRestate && (
-            <ExpSection spec={exponential} onRestate={onExpRestate} onShowInverse={onShowInverse} />
+            <ExpSection
+              spec={exponential}
+              onRestate={onExpRestate}
+              onShowInverse={onShowInverse}
+              hideDomainRange={domainRows}
+            />
           )}
           {logarithmic && onLogRestate && (
-            <LogSection spec={logarithmic} onRestate={onLogRestate} onShowInverse={onShowInverse} />
+            <LogSection
+              spec={logarithmic}
+              onRestate={onLogRestate}
+              onShowInverse={onShowInverse}
+              hideDomainRange={domainRows}
+            />
           )}
-          {sinusoidal && onSinRestate && <SinSection spec={sinusoidal} onRestate={onSinRestate} />}
+          {sinusoidal && onSinRestate && (
+            <SinSection spec={sinusoidal} onRestate={onSinRestate} hideDomainRange={domainRows} />
+          )}
           {logistic && onLogisticRestate && (
-            <LogisticSection spec={logistic} onRestate={onLogisticRestate} onShowField={onShowLogisticField} />
+            <LogisticSection
+              spec={logistic}
+              onRestate={onLogisticRestate}
+              onShowField={onShowLogisticField}
+              hideDomainRange={domainRows}
+            />
           )}
           {fittedLg && onConvertTyped && (
             <LogisticSection
@@ -2002,16 +2389,22 @@ export function CurveCard({
               onRestate={onConvertTyped}
               onShowField={onShowLogisticField}
               sketched
+              hideDomainRange={domainRows}
             />
           )}
+          {/* The second reading of a line another family already speaks for
+              (Roots of x², Exponential of 2^(x − 1) + 3) starts folded, and
+              its open/closed choice is remembered apart from the first. */}
           {transform && onTransformRestate && (
             <TransformSection
               spec={transform}
-              defaultOpen={transformOpen}
+              defaultOpen={transformOpen && !transformSecondary}
+              secondary={transformSecondary}
               showParent={transformShowParent ?? transformOpen}
               onShowParent={onTransformShowParent}
               handles={transformOwnsHandles(transformOthers)}
               onRestate={onTransformRestate}
+              hideDomainRange={domainRows}
             />
           )}
           {conic && (
@@ -2071,6 +2464,15 @@ export function CurveCard({
           {/* Teaching order: the numbers you move, then what they do to the
               curve, and only then which curve this is being read as. */}
           {meta.length > 0 && (
+            <CardSection
+              kind="coefficients"
+              title={isExpression ? 'Sliders' : 'Coefficients'}
+              summary={meta
+                .slice(0, 4)
+                .map((m, row) => `${m.name} = ${formatCoord(curve.params[paramIndex[row] ?? row] ?? 0, { scale })}`)
+                .join(', ')}
+              className="param-section"
+            >
             <div className="param-list">
               {(() => {
                 const values = meta.map((m, row) => curve.params[paramIndex[row] ?? row] ?? 0)
@@ -2099,14 +2501,17 @@ export function CurveCard({
                 })
               })()}
             </div>
+            </CardSection>
           )}
 
-          {((domainPanel && domainActions) ||
-            analysisGroups.length > 0 ||
-            asymptotes.length > 0 ||
-            crossings.length > 0) && (
-            <div className="an-section">
-              <div className="an-title">Analysis</div>
+          {(domainRows || analysisGroups.length > 0 || asymptotes.length > 0) && (
+            <CardSection
+              kind="analysis"
+              title="Analysis"
+              summary={analysisSummary}
+              className="an-section"
+              testId="analysis-section"
+            >
               <div className="an-table">
                 {domainPanel && domainActions && (
                   <DomainSection
@@ -2283,68 +2688,12 @@ export function CurveCard({
                     </span>
                   </div>
                 )}
-                {/* And last, the one row that is not about this curve
-                    alone: where it MEETS the others. Stated, never offered —
-                    a crossing is a consequence of two functions, and there is
-                    no single value an editor could move to put it somewhere
-                    else. Each other curve gets its own line, named the way the
-                    figure's caption names it. */}
-                {crossings.length > 0 && (
-                  <div className="an-row" key="intersections">
-                    <span className="an-label">
-                      {crossings.length > 1 || crossings[0].points.length > 1
-                        ? 'Intersections'
-                        : 'Intersection'}
-                    </span>
-                    <span className="an-values">
-                      {crossings.map((g) => (
-                        <span className="an-with" key={g.id}>
-                          <span className="an-with-name">{`with ${g.name}:`}</span>{' '}
-                          {g.points.map((point, n) => {
-                            const parts = pointParts(point, { scale, xScale })
-                            const comma = n === g.points.length - 1 ? '' : ','
-                            return (
-                              <span
-                                className="an-value an-value-static"
-                                key={`${g.id}-${n}`}
-                                data-value={parts.exact === null ? undefined : parts.text}
-                              >
-                                {parts.exact === null ? (
-                                  parts.decimal + comma
-                                ) : (
-                                  <>
-                                    <span
-                                      className="an-exact"
-                                      title={exactTitle(point, parts.exact)}
-                                    >
-                                      {parts.exact}
-                                    </span>
-                                    <span className="an-approx">{` ${APPROX} ${parts.decimal}${comma}`}</span>
-                                  </>
-                                )}
-                              </span>
-                            )
-                          })}
-                        </span>
-                      ))}
-                    </span>
-                  </div>
-                )}
               </div>
-            </div>
+            </CardSection>
           )}
 
-          {calc &&
-            (calc.areas.length > 0 ||
-              calc.riemanns.length > 0 ||
-              calc.accums.length > 0 ||
-              calc.taylors.length > 0 ||
-              calc.secants.length > 0 ||
-              calc.limits.length > 0 ||
-              calc.volumes.length > 0 ||
-              betweenNotes.length > 0) && (
+          {(calcTools.length > 0 || betweenNotes.length > 0) && (
             <div className="calc-section">
-              <div className="calc-title">Calculus</div>
               <div className="calc-list">
                 {/* This curve is somebody else's other half. One line, no
                     controls: the region is ONE object, and two cards offering
@@ -2359,223 +2708,58 @@ export function CurveCard({
                     </div>
                   </div>
                 ))}
-
-                {calc.areas.map((a) => {
-                  const other = a.otherLabel ?? null
-                  return (
-                  <div className="calc-row" key={a.linkId}>
-                    <div className="calc-line">
-                      <span className="calc-tag">{other ? 'Between' : 'Area'}</span>
-                      {other ? (
-                        <span className="calc-read calc-between" title="The region between these two curves">
-                          {`${selfLabel} and ${other}`}
-                        </span>
-                      ) : (
-                        <span className="calc-read">{a.text}</span>
-                      )}
-                      {!other && a.samples !== null && (
-                        <span
-                          className="calc-note"
-                          title="This integral has no closed form, so it was measured — at this many evaluations of the function."
-                        >
-                          {`${a.samples} samples`}
-                        </span>
-                      )}
-                      {dropBtn(a.linkId, 'shaded area')}
-                    </div>
-                    {/* Between curves the first line says WHICH two, so the
-                        number gets a line of its own rather than being
-                        squeezed in beside a pair of equations. */}
-                    {other && (
-                      <div className="calc-line calc-line-read">
-                        <span className="calc-read">{a.text}</span>
-                        {a.samples !== null && (
-                          <span
-                            className="calc-note"
-                            title="This integral has no closed form, so it was measured — at this many evaluations of the function."
-                          >
-                            {`${a.samples} samples`}
-                          </span>
-                        )}
-                      </div>
-                    )}
-                    <div className="calc-controls">
-                      {boundFields(a.linkId, a.from, a.to)}
-                      <button
-                        type="button"
-                        className={`calc-chip${a.abs ? ' calc-chip-on' : ''}`}
-                        aria-pressed={a.abs}
-                        title={
-                          other
-                            ? a.abs
-                              ? 'Showing the area between the curves, ∫|f − g| — top minus bottom wherever they cross. Click for the signed integral ∫(f − g).'
-                              : 'Showing the signed integral ∫(f − g), which cancels where the curves swap over. Click for the area between them.'
-                            : a.abs
-                              ? 'Showing total area. Click for the signed integral (the AP convention).'
-                              : 'Showing the signed integral (the AP convention). Click for total area.'
-                        }
-                        onClick={() =>
-                          onCalcChange({ kind: 'abs', linkId: a.linkId, abs: !a.abs })
-                        }
-                      >
-                        {other ? (a.abs ? '|f − g|' : 'signed') : '|area|'}
-                      </button>
-                    </div>
-                    {a.problem && <div className="calc-why">{a.problem}</div>}
-                  </div>
-                  )
-                })}
-
-                {calc.accums.map((g) => (
-                  <div className="calc-row" key={g.linkId}>
-                    <div className="calc-line">
-                      <span className="calc-tag">Accum</span>
-                      <span className="calc-read">{g.head}</span>
-                      {dropBtn(g.linkId, 'accumulation function')}
-                    </div>
-                    <div className="calc-controls">
-                      {calcNumber(`${g.linkId}:a`, 'a', g.a, (v) =>
-                        onCalcChange({ kind: 'accumA', linkId: g.linkId, a: v }),
-                      )}
-                      {calcNumber(`${g.linkId}:C`, `${g.gName}(a)`, g.C, (v) =>
-                        onCalcChange({ kind: 'accumC', linkId: g.linkId, C: v }),
-                      )}
-                      {g.x !== null ? (
-                        calcNumber(`${g.linkId}:x`, 'x', g.x, (v) =>
-                          onCalcChange({ kind: 'accumX', linkId: g.linkId, x: v }),
-                        )
-                      ) : (
-                        <button
-                          type="button"
-                          className="calc-chip"
-                          title={`Read ${g.gName}(x) at a point, and shade from a to it`}
-                          onClick={() =>
-                            onCalcChange({
-                              kind: 'accumX',
-                              linkId: g.linkId,
-                              x: g.a + 1,
-                            })
-                          }
-                        >
-                          {`${g.gName}(x) at…`}
-                        </button>
-                      )}
-                    </div>
-                    {g.text && (
-                      <div className="calc-line calc-line-read">
-                        <span className="calc-read calc-accum-read">{g.text}</span>
-                      </div>
-                    )}
-                    {g.problem && <div className="calc-why">{g.problem}</div>}
-                  </div>
-                ))}
-
-                {calc.limits.map((lm) => (
-                  <LimitSection
-                    key={lm.linkId}
-                    row={lm}
-                    onCalcChange={onCalcChange}
-                    onRemove={() => onCalcRemove(lm.linkId)}
-                    onEditStart={onParamEditStart}
-                    onEditEnd={onParamEditEnd}
-                  />
-                ))}
-
-                {calc.secants.map((sc) => (
-                  <SecantSection
-                    key={sc.linkId}
-                    row={sc}
-                    onCalcChange={onCalcChange}
-                    onRemove={() => onCalcRemove(sc.linkId)}
-                  />
-                ))}
-
-                {calc.volumes.map((v) => (
-                  <VolumeSection
-                    key={v.linkId}
-                    row={v}
-                    onCalcChange={onCalcChange}
-                    onRemove={() => onCalcRemove(v.linkId)}
-                    onEditStart={onParamEditStart}
-                    onEditEnd={onParamEditEnd}
-                  />
-                ))}
-
-                {calc.taylors.map((t) => (
-                  <TaylorSection
-                    key={t.linkId}
-                    row={t}
-                    onCalcChange={onCalcChange}
-                    onRemove={() => onCalcRemove(t.linkId)}
-                    onEditStart={onParamEditStart}
-                    onEditEnd={onParamEditEnd}
-                  />
-                ))}
-
-                {calc.riemanns.map((r) => (
-                  <div className="calc-row" key={r.linkId}>
-                    <div className="calc-line">
-                      <span className="calc-tag">Riemann</span>
-                      <span className="calc-read">{r.text}</span>
-                      {dropBtn(r.linkId, 'Riemann sum')}
-                    </div>
-                    <div className="calc-controls">
-                      {boundFields(r.linkId, r.from, r.to)}
-                      <select
-                        className="calc-select"
-                        aria-label="Riemann method"
-                        value={r.method}
-                        onChange={(e) =>
-                          onCalcChange({
-                            kind: 'method',
-                            linkId: r.linkId,
-                            method: e.target.value as typeof r.method,
-                          })
-                        }
-                      >
-                        {RIEMANN_METHODS.map((m) => (
-                          <option key={m} value={m}>
-                            {METHOD_LABELS[m] ?? m}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    {/* n is a slider because the lesson is watching it move:
-                        drag it to 200 and the sum walks onto the integral. */}
-                    <div className="calc-n">
-                      <span className="calc-n-label">n</span>
-                      <input
-                        type="range"
-                        min={N_MIN}
-                        max={N_MAX}
-                        step={1}
-                        value={r.n}
-                        aria-label="Number of rectangles"
-                        style={fillStyle(r.n, N_MIN, N_MAX)}
-                        onPointerDown={onParamEditStart}
-                        onPointerUp={onParamEditEnd}
-                        onKeyDown={onParamEditStart}
-                        onKeyUp={onParamEditEnd}
-                        onBlur={onParamEditEnd}
-                        onChange={(e) =>
-                          onCalcChange(
-                            { kind: 'n', linkId: r.linkId, n: Number(e.target.value) },
-                            true,
-                          )
-                        }
-                      />
-                      <span className="calc-n-value">{r.n}</span>
-                    </div>
-                    {r.problem && <div className="calc-why">{r.problem}</div>}
-                    {r.skipped > 0 && (
-                      <div className="calc-why">
-                        {`${r.skipped} rectangle${r.skipped === 1 ? '' : 's'} sit where the curve is undefined, and count for nothing.`}
-                      </div>
-                    )}
-                  </div>
+                {/* Everything attached to this curve, in the order it was
+                    added: the lesson's order, not the menu's. */}
+                {calcTools.map((t) => (
+                  <Fragment key={t.id}>{t.node}</Fragment>
                 ))}
               </div>
             </div>
+          )}
+
+          {/* And last, the one section that is not about this curve alone:
+              where it MEETS the others. Stated, never offered — a crossing is
+              a consequence of two functions, and there is no single value an
+              editor could move to put it somewhere else. Each other curve gets
+              its own line, named the way the figure's caption names it. */}
+          {crossings.length > 0 && (
+            <CardSection
+              kind="intersections"
+              title={crossings.length > 1 || crossings[0].points.length > 1 ? 'Intersections' : 'Intersection'}
+              summary={crossings.map((g) => `with ${g.name} (${g.points.length})`).join(' · ')}
+              className="an-section an-crossings"
+              testId="intersections-section"
+            >
+              <div className="an-with-list">
+                {crossings.map((g) => (
+                  <span className="an-with" key={g.id}>
+                    <span className="an-with-name">{`with ${g.name}:`}</span>{' '}
+                    {g.points.map((point, n) => {
+                      const parts = pointParts(point, { scale, xScale })
+                      const comma = n === g.points.length - 1 ? '' : ','
+                      return (
+                        <span
+                          className="an-value an-value-static"
+                          key={`${g.id}-${n}`}
+                          data-value={parts.exact === null ? undefined : parts.text}
+                        >
+                          {parts.exact === null ? (
+                            parts.decimal + comma
+                          ) : (
+                            <>
+                              <span className="an-exact" title={exactTitle(point, parts.exact)}>
+                                {parts.exact}
+                              </span>
+                              <span className="an-approx">{` ${APPROX} ${parts.decimal}${comma}`}</span>
+                            </>
+                          )}
+                        </span>
+                      )
+                    })}
+                  </span>
+                ))}
+              </div>
+            </CardSection>
           )}
 
           {!isExpression && candidates.length > 1 && (
