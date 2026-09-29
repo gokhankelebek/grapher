@@ -915,6 +915,19 @@ export const INTERSECTION_R = 4
  * are all one black) the axis ink, since there the label colour would be the
  * only grey on an otherwise black-and-white figure.
  */
+/**
+ * The colour a curve's own marks take in this scene — renderBoard's rule,
+ * for anything painted onto the same picture from outside it (the export's
+ * markers of the OTHER curves): the print palette on a light ground, one
+ * black under a mono figure style (SAT, AP).
+ */
+export function sceneInk(scene: BoardScene): (color: string) => string {
+  const fig = figureOf(scene)
+  if (fig?.curveInk === 'mono') return () => scene.theme.axis
+  const print = scene.printColors === true || !isDarkGround(scene.theme)
+  return (c: string): string => (print ? toPrintColor(c) : c)
+}
+
 export function intersectionInk(theme: Theme, mono = false): string {
   return mono ? theme.axis : textColor(theme)
 }

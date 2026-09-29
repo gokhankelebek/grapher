@@ -18,6 +18,8 @@ import { DEFAULT_EXPORT } from './renderBoard'
 import type { FitExportSettings } from './exportFit'
 import { clampFitSettings, defaultFit, isAspect } from './exportFit'
 import type { WheelPref } from './gestures'
+import type { ExportFormat } from './vectorExport'
+import { DEFAULT_LATEX_WIDTH_CM, clampLatexWidth, isExportFormat } from './vectorExport'
 
 const PREFIX = 'grapher.v1'
 const INDEX_KEY = `${PREFIX}.index`
@@ -355,6 +357,14 @@ export interface Prefs {
    * remembered here rather than in the document.
    */
   setNotation: 'interval' | 'builder'
+  /**
+   * What the Download button makes: PNG, SVG, PDF, TikZ or pgfplots. A
+   * teacher who writes in LaTeX writes in LaTeX in every document, so it is a
+   * preference rather than a property of one board.
+   */
+  exportFormat: ExportFormat
+  /** Physical width of a PDF / TikZ / pgfplots figure, in cm. */
+  latexWidthCm: number
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -365,6 +375,8 @@ export const DEFAULT_PREFS: Prefs = {
   presentScale: 2.5,
   wheel: 'auto',
   setNotation: 'interval',
+  exportFormat: 'png',
+  latexWidthCm: DEFAULT_LATEX_WIDTH_CM,
 }
 
 /** Never trust what came back from storage: a bad value falls back silently. */
@@ -406,6 +418,9 @@ export function readPrefs(): Prefs {
       presentScale: clampPresentScale(parsed.presentScale),
       wheel: parsed.wheel === 'zoom' || parsed.wheel === 'pan' ? parsed.wheel : 'auto',
       setNotation: parsed.setNotation === 'builder' ? 'builder' : 'interval',
+      exportFormat: isExportFormat(parsed.exportFormat) ? parsed.exportFormat : DEFAULT_PREFS.exportFormat,
+      latexWidthCm:
+        parsed.latexWidthCm === undefined ? DEFAULT_PREFS.latexWidthCm : clampLatexWidth(parsed.latexWidthCm),
     }
   } catch {
     return { ...DEFAULT_PREFS, exportByDoc: {} }

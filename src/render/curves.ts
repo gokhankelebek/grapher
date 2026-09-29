@@ -13,6 +13,7 @@
 
 import type { Vec2, Viewport, FittedCurve, ModelSpec, PieceInfo, ExactPoint } from '../core/types'
 import { ppuX, ppuY } from '../core/types'
+import { newPath2D } from './vectorCtx'
 
 const TWO_PI = Math.PI * 2
 const DEFAULT_STROKE = 2.5
@@ -1659,7 +1660,9 @@ export function drawCurve(
   if (!model) return
   if (vp.widthPx <= 0 || vp.heightPx <= 0 || !(ppuX(vp) > 0) || !(ppuY(vp) > 0)) return
 
-  const path = new Path2D()
+  // A real canvas gets a native Path2D; the vector recorder (./vectorCtx.ts)
+  // gets one it can read back. See newPath2D.
+  const path = newPath2D(ctx)
   let drawn = false
   switch (curve.kind) {
     case 'explicit':

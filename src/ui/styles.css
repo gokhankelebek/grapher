@@ -6495,3 +6495,26 @@ button.calc-field-btn {
   font-size: var(--fs-xs);
   line-height: 1.4;
 }
+
+/* ------------------------------------------------- export: format row --- */
+
+/* Five formats in a 220px row: tighter than the other segments. */
+.exp-fmt-seg .seg-btn {
+  padding: var(--sp-1) 2px;
+  font-size: var(--fs-sm);
+}
+
+.exp-fmt-seg .seg-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* The format Download will make, when it is not the PNG it always made. */
+.exp-fmt-badge {
+  padding: 0 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.16);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}

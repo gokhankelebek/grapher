@@ -380,12 +380,26 @@ import { DocMenu } from './ui/DocMenu'
 import type { SaveState } from './ui/DocMenu'
 import { ExportMenu } from './ui/ExportMenu'
 import type { CopyState } from './ui/ExportMenu'
+import type { ExportFormat } from './ui/vectorExport'
+import {
+  PX_PER_CM,
+  exportFileName,
+  isLatexFormat,
+  isPhysicalFormat,
+  physicalViewport,
+  recordScene,
+} from './ui/vectorExport'
+import { toPgfplots } from './ui/pgfplotsExport'
+import { toSvg } from './render/vectorSvg'
+import { toPdf } from './render/vectorPdf'
+import { toTikz } from './render/vectorTikz'
 import {
   canvasToPngBlob,
   captionHeight,
   exportGeometry,
   exportTheme,
   renderBoardToCanvas,
+  sceneInk,
   suggestAxisUnits,
 } from './ui/renderBoard'
 import type {
@@ -1101,6 +1115,17 @@ export default function App() {
    * questions ("what do I want to look at" vs "what goes on the paper").
    */
   const [canvasTheme, setCanvasTheme] = useState<'dark' | 'light'>(() => readPrefs().canvasTheme)
+  /** What Download makes, and how wide a LaTeX-bound figure is: a person's habit, like `wheel`. */
+  const [exportFormat, setExportFormatState] = useState<ExportFormat>(() => readPrefs().exportFormat)
+  const changeExportFormat = useCallback((next: ExportFormat): void => {
+    setExportFormatState(next)
+    updatePrefs({ exportFormat: next })
+  }, [])
+  const [latexWidthCm, setLatexWidthState] = useState<number>(() => readPrefs().latexWidthCm)
+  const changeLatexWidth = useCallback((cm: number): void => {
+    setLatexWidthState(cm)
+    updatePrefs({ latexWidthCm: cm })
+  }, [])
   const [wheelPref, setWheelPrefState] = useState<WheelPref>(() => readPrefs().wheel)
   const setWheelPref = useCallback((next: WheelPref): void => {
     setWheelPrefState(next)
@@ -7890,6 +7915,10 @@ export default function App() {
   // cannot silently go missing the way it did when export had its own code.
   const exportSettingsRef = useRef<FitExportSettings>(exportSettings)
   exportSettingsRef.current = exportSettings
+  const exportFormatRef = useRef<ExportFormat>(exportFormat)
+  exportFormatRef.current = exportFormat
+  const latexWidthRef = useRef<number>(latexWidthCm)
+  latexWidthRef.current = latexWidthCm
   const showAnalysisRef = useRef(showAnalysis)
   showAnalysisRef.current = showAnalysis
   const canvasThemeRef = useRef(canvasTheme)
@@ -9416,8 +9445,13 @@ export default function App() {
   }, [])
 
   const buildExportScene = useCallback(
-    (settings: FitExportSettings): BoardScene => {
-    const vp = vpRef.current
+    (settings: FitExportSettings, physicalCm?: number): BoardScene => {
+    // PDF / TikZ / pgfplots: the same window laid out at the paper width (see
+    // src/ui/vectorExport.ts). Everything below frames and draws it as usual.
+    const vp =
+      physicalCm !== undefined
+        ? physicalViewport(vpRef.current, physicalCm, settings.margin)
+        : vpRef.current
     const sel = curvesRef.current.find((c) => c.id === selectedRef.current) ?? null
     // The LOOK the teacher chose, in full — this is the scene it was chosen
     // FOR. The preview switch has no say here: it is a way of looking at this
@@ -9561,14 +9595,30 @@ export default function App() {
     [exportContent],
   )
 
+  /**
+   * The scene's analysis field describes ONE curve, so the other visible
+   * curves' markers are drawn on top of the same picture, in the same
+   * geometry — the export says exactly what the screen says. Shared by the
+   * PNG and the vector formats, drawn in plot coordinates.
+   */
+  const paintExportExtras = useCallback(
+    (ctx: CanvasRenderingContext2D, scene: BoardScene, settings: FitExportSettings): void => {
+      const extra = contextAnalysisRef.current
+      if (extra.length === 0 || kindRef.current !== 'cartesian' || !showAnalysisRef.current) return
+      // The figure's own ink: black under SAT/AP, the print palette on white.
+      const ink = sceneInk(scene)
+      for (const m of extra) {
+        drawContextMarkers(ctx, scene.vp, m.points, ink(m.curve.color), scene.theme.bg)
+      }
+    },
+    [],
+  )
+
   const renderExportCanvas = useCallback((): HTMLCanvasElement | null => {
     const settings = clampFitSettings(exportSettingsRef.current)
     const scene = buildExportScene(settings)
     const out = renderBoardToCanvas(scene, settings)
     if (!out) return null
-    // The scene's analysis field describes ONE curve, so the other visible
-    // curves' markers are drawn on top of the same picture, in the same
-    // geometry — the export says exactly what the screen says.
     const extra = contextAnalysisRef.current
     if (extra.length > 0 && kindRef.current === 'cartesian' && showAnalysisRef.current) {
       const ctx = out.canvas.getContext('2d')
@@ -9579,15 +9629,12 @@ export default function App() {
         ctx.beginPath()
         ctx.rect(0, 0, scene.vp.widthPx, scene.vp.heightPx)
         ctx.clip()
-        for (const m of extra) {
-          const color = settings.theme === 'light' ? toPrintColor(m.curve.color) : m.curve.color
-          drawContextMarkers(ctx, scene.vp, m.points, color, scene.theme.bg)
-        }
+        paintExportExtras(ctx, scene, settings)
         ctx.restore()
       }
     }
     return out.canvas
-  }, [buildExportScene])
+  }, [buildExportScene, paintExportExtras])
 
   const pngFileName = useCallback((): string => {
     const safe = docMetaRef.current.name.replace(/[^\w\d\-. ]+/g, '_').trim()
@@ -9595,11 +9642,11 @@ export default function App() {
   }, [])
 
   const downloadBlob = useCallback(
-    (blob: Blob): void => {
+    (blob: Blob, name?: string): void => {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = pngFileName()
+      a.download = name ?? pngFileName()
       a.click()
       setTimeout(() => URL.revokeObjectURL(url), 1000)
     },
@@ -9729,6 +9776,127 @@ export default function App() {
       fallBack(describeClipboardError(err))
     }
   }, [renderExportCanvas, downloadBlob, flashCopy, showToast])
+
+  // ------------------------------------------------------------ vector export
+  //
+  // SVG, PDF and TikZ are the SAME picture as the PNG: the export scene goes
+  // through renderBoard into a recording context (src/render/vectorCtx.ts) and
+  // the display list is written out. pgfplots is the mathematics instead,
+  // built from the scene and the typed equations (src/ui/pgfplotsExport.ts).
+
+  /** The source text / bytes of a vector format, or null when there is nothing to draw. */
+  const buildVectorExport = useCallback(
+    (format: Exclude<ExportFormat, 'png'>): { data: string | Uint8Array; mime: string } | null => {
+      const settings = clampFitSettings(exportSettingsRef.current)
+      const title = docMetaRef.current.name
+      try {
+        if (format === 'svg') {
+          const scene = buildExportScene(settings)
+          const list = recordScene(scene, settings.margin, (ctx) => paintExportExtras(ctx, scene, settings))
+          const geo = exportGeometry(scene.vp, settings)
+          return {
+            data: toSvg(list, { pixelWidth: geo.w, pixelHeight: geo.h, title }),
+            mime: 'image/svg+xml',
+          }
+        }
+        const scene = buildExportScene(settings, latexWidthRef.current)
+        if (format === 'pgfplots') {
+          const extra =
+            kindRef.current === 'cartesian' && showAnalysisRef.current ? contextAnalysisRef.current : []
+          return {
+            data: toPgfplots(scene, {
+              widthCm: latexWidthRef.current,
+              sources: exprSourcesRef.current,
+              extraMarkers: extra,
+              title,
+            }),
+            mime: 'application/x-tex',
+          }
+        }
+        const list = recordScene(scene, settings.margin, (ctx) => paintExportExtras(ctx, scene, settings))
+        if (format === 'pdf') return { data: toPdf(list, { title }), mime: 'application/pdf' }
+        return { data: toTikz(list, { title }), mime: 'application/x-tex' }
+      } catch {
+        return null
+      }
+    },
+    [buildExportScene, paintExportExtras],
+  )
+
+  const exportVector = useCallback(
+    (format: Exclude<ExportFormat, 'png'>): void => {
+      const out = buildVectorExport(format)
+      if (!out) {
+        showToast('Couldn’t render the figure for export.')
+        return
+      }
+      const part = out.data as BlobPart
+      downloadBlob(new Blob([part], { type: out.mime }), exportFileName(docMetaRef.current.name, format))
+    },
+    [buildVectorExport, downloadBlob, showToast],
+  )
+
+  /** Download in the chosen format — the primary click. */
+  const exportCurrent = useCallback((): void => {
+    const f = exportFormatRef.current
+    if (f === 'png') exportPNG()
+    else if (f === 'pgfplots' && kindRef.current !== 'cartesian') exportVector('tikz')
+    else exportVector(f)
+  }, [exportPNG, exportVector])
+
+  const [latexCopyState, setLatexCopyState] = useState<CopyState>({ kind: 'idle' })
+  const latexCopyTimerRef = useRef(0)
+  useEffect(() => () => window.clearTimeout(latexCopyTimerRef.current), [])
+
+  /** Put the TikZ / pgfplots source on the clipboard; download it if the clipboard refuses. */
+  const copyLatex = useCallback((): void => {
+    const f = exportFormatRef.current
+    const format: 'tikz' | 'pgfplots' = f === 'pgfplots' && kindRef.current === 'cartesian' ? 'pgfplots' : 'tikz'
+    const out = buildVectorExport(format)
+    if (!out || typeof out.data !== 'string') {
+      showToast('Couldn’t produce the LaTeX to copy.')
+      return
+    }
+    const text = out.data
+    const flash = (next: CopyState): void => {
+      setLatexCopyState(next)
+      window.clearTimeout(latexCopyTimerRef.current)
+      latexCopyTimerRef.current = window.setTimeout(() => setLatexCopyState({ kind: 'idle' }), 2200)
+    }
+    const fallBack = (reason: string): void => {
+      downloadBlob(new Blob([text], { type: 'application/x-tex' }), exportFileName(docMetaRef.current.name, format))
+      flash({ kind: 'fell-back', reason })
+      showToast(`Couldn’t copy — ${reason}. Downloaded the .tex file instead.`)
+    }
+    if (typeof navigator === 'undefined' || !navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
+      fallBack('this browser has no clipboard write access')
+      return
+    }
+    setLatexCopyState({ kind: 'working' })
+    navigator.clipboard.writeText(text).then(
+      () => {
+        flash({ kind: 'copied' })
+        showToast(
+          format === 'tikz'
+            ? 'Copied the TikZ picture — paste it into your .tex file.'
+            : 'Copied the pgfplots axis — paste it into your .tex file.',
+          { ms: 2600 },
+        )
+      },
+      (err: unknown) => fallBack(describeClipboardError(err)),
+    )
+  }, [buildVectorExport, downloadBlob, showToast])
+
+  /** The physical size of a PDF / TikZ / pgfplots figure, in cm, margins included. */
+  const physicalSizeOf = useCallback(
+    (s: FitExportSettings, widthCm: number): { w: number; h: number } => {
+      const base = physicalViewport(vpRef.current, widthCm, s.margin)
+      const vp = exportViewport(base, s, s.fit ? exportContent() : null, kindRef.current, itemsRef.current)
+      const m = exportFormatRef.current === 'pgfplots' ? 0 : 2 * s.margin
+      return { w: (vp.widthPx + m) / PX_PER_CM, h: (vp.heightPx + m) / PX_PER_CM }
+    },
+    [exportContent],
+  )
 
   /**
    * Output pixel size for a candidate setting. A function, not a memo: the
@@ -10672,8 +10840,16 @@ export default function App() {
                 sizeOf={exportSizeOf}
                 copyState={copyState}
                 onChange={changeExportSettings}
-                onExport={exportPNG}
+                onExport={exportCurrent}
                 onCopy={copyPNG}
+                format={exportFormat}
+                onFormat={changeExportFormat}
+                formatAvailable={(f) => f !== 'pgfplots' || kind === 'cartesian'}
+                latexWidthCm={latexWidthCm}
+                onLatexWidth={changeLatexWidth}
+                physicalSizeOf={physicalSizeOf}
+                onCopyLatex={copyLatex}
+                latexCopyState={latexCopyState}
                 axisUnits={kind === 'cartesian' ? axisUnitChoice : null}
                 resolvedAxisUnits={axisUnits}
                 onAxisUnit={setAxisUnit}

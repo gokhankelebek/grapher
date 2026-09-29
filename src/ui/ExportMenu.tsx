@@ -33,6 +33,17 @@ import { FigurePicker } from './FigurePicker'
 import { WindowPanel } from './WindowPanel'
 import type { ViewSettings } from './WindowPanel'
 import { backgroundLockedNote, fixesBackground } from './figureStyle'
+import type { ExportFormat } from './vectorExport'
+import {
+  EXPORT_FORMATS,
+  EXPORT_FORMAT_LABELS,
+  EXPORT_FORMAT_TITLES,
+  MAX_LATEX_WIDTH_CM,
+  MIN_LATEX_WIDTH_CM,
+  clampLatexWidth,
+  isLatexFormat,
+  isPhysicalFormat,
+} from './vectorExport'
 
 /** What the Copy button is currently saying. */
 export type CopyState =
@@ -125,6 +136,23 @@ interface Props {
   onChange(next: FitExportSettings): void
   onExport(): void
   onCopy(): void
+  /**
+   * What Download makes. PNG is the default and behaves exactly as it always
+   * has; SVG and PDF download vector files; TikZ and pgfplots download a .tex
+   * file and offer Copy LaTeX. Remembered in preferences.
+   */
+  format?: ExportFormat
+  onFormat?(next: ExportFormat): void
+  /** False where a format has nothing to say (pgfplots on a number line). */
+  formatAvailable?(f: ExportFormat): boolean
+  /** Physical width of a PDF / TikZ / pgfplots figure. */
+  latexWidthCm?: number
+  onLatexWidth?(cm: number): void
+  /** The physical size a width would produce, margins included, in cm. */
+  physicalSizeOf?(settings: FitExportSettings, widthCm: number): { w: number; h: number }
+  /** Put the LaTeX source on the clipboard. */
+  onCopyLatex?(): void
+  latexCopyState?: CopyState
 }
 
 /** The three states, in the order the segment shows them. */
@@ -159,9 +187,45 @@ export function ExportMenu({
   onChange,
   onExport,
   onCopy,
+  format = 'png',
+  onFormat,
+  formatAvailable,
+  latexWidthCm = 8,
+  onLatexWidth,
+  physicalSizeOf,
+  onCopyLatex,
+  latexCopyState = { kind: 'idle' },
 }: Props) {
   const [open, setOpen] = useState(false)
   const size = sizeOf(settings)
+  const physical = isPhysicalFormat(format)
+  const latex = isLatexFormat(format)
+  const cmSize = physical && physicalSizeOf ? physicalSizeOf(settings, latexWidthCm) : null
+  const sizeText = cmSize
+    ? `${cmSize.w.toFixed(1)} × ${cmSize.h.toFixed(1)} cm`
+    : `${size.w}×${size.h} px`
+  const [cmDraft, setCmDraft] = useState<string>(String(latexWidthCm))
+  useEffect(() => {
+    setCmDraft(String(latexWidthCm))
+  }, [latexWidthCm])
+  const commitCm = (raw: string): void => {
+    const n = Number(raw.trim())
+    if (!Number.isFinite(n) || raw.trim() === '') {
+      setCmDraft(String(latexWidthCm))
+      return
+    }
+    const v = clampLatexWidth(n)
+    setCmDraft(String(v))
+    onLatexWidth?.(v)
+  }
+  const latexCopyLabel =
+    latexCopyState.kind === 'copied'
+      ? 'LaTeX copied'
+      : latexCopyState.kind === 'fell-back'
+        ? 'Downloaded instead'
+        : latexCopyState.kind === 'working'
+          ? 'Copying…'
+          : 'Copy LaTeX'
   /**
    * A figure style OWNS the ground of the EXPORT — an SAT figure is on white
    * whatever this says — so the control is disabled rather than hidden, with
@@ -228,7 +292,8 @@ export function ExportMenu({
         className="tb-btn tb-primary exp-main"
         onClick={onExport}
         data-testid="export-png"
-        title={`Download the figure as a PNG (${size.w}×${size.h} px)`}
+        data-format={format}
+        title={`Download the figure as ${format === 'svg' ? 'an SVG' : format === 'pdf' ? 'a PDF' : format === 'png' ? 'a PNG' : `${EXPORT_FORMAT_LABELS[format]} (.tex)`} (${sizeText})`}
       >
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
           <path
@@ -240,6 +305,11 @@ export function ExportMenu({
           />
         </svg>
         Download
+        {format !== 'png' && (
+          <span className="exp-fmt-badge" data-testid="export-format-badge">
+            {EXPORT_FORMAT_LABELS[format]}
+          </span>
+        )}
       </button>
 
       <button
@@ -247,7 +317,7 @@ export function ExportMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label="Board and export settings"
-        title={`Figure style, copy to clipboard, axis units, ruling, axes and window, export settings — ${size.w}×${size.h} px`}
+        title={`Figure style, format, copy to clipboard, axis units, ruling, axes and window, export settings — ${sizeText}`}
         data-testid="export-settings"
         onClick={() => setOpen((o) => !o)}
       >
@@ -275,13 +345,76 @@ export function ExportMenu({
             </>
           )}
 
+          {onFormat && (
+            <>
+              <div className="exp-title">Format</div>
+              <div
+                className="seg exp-seg exp-fmt-seg"
+                role="group"
+                aria-label="Export format"
+                data-testid="export-format"
+                data-format={format}
+              >
+                {EXPORT_FORMATS.map((f) => {
+                  const ok = formatAvailable ? formatAvailable(f) : true
+                  return (
+                    <button
+                      key={f}
+                      className={`seg-btn${format === f ? ' seg-on' : ''}`}
+                      data-testid={`export-format-${f}`}
+                      aria-pressed={format === f}
+                      disabled={!ok}
+                      onClick={() => onFormat(f)}
+                      title={ok ? EXPORT_FORMAT_TITLES[f] : 'A number line has no pgfplots form — use TikZ'}
+                    >
+                      {EXPORT_FORMAT_LABELS[f]}
+                    </button>
+                  )
+                })}
+              </div>
+              {latex && (
+                <div className="exp-note">
+                  {format === 'tikz'
+                    ? 'Needs \\usepackage{tikz}. Download saves a .tex file to \\input; Copy LaTeX puts it on the clipboard.'
+                    : 'Needs \\usepackage{pgfplots} (and the fillbetween library for shading). The file lists its preamble.'}
+                </div>
+              )}
+              {format === 'pdf' && (
+                <div className="exp-note">Vector, sized in cm, for \includegraphics. Labels come out at print size.</div>
+              )}
+              <div className="exp-menu-sep" />
+            </>
+          )}
+
+          {latex && onCopyLatex && (
+            <button
+              className="exp-item"
+              onClick={onCopyLatex}
+              disabled={latexCopyState.kind === 'working'}
+              data-testid="export-copy-latex"
+              data-copy-state={latexCopyState.kind}
+              title="Copy the LaTeX source to the clipboard, ready to paste into a .tex file"
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <rect x="5.2" y="5.2" width="8.3" height="8.3" rx="1.6" stroke="currentColor" strokeWidth="1.4" />
+                <path
+                  d="M10.8 5.2V4a1.6 1.6 0 0 0-1.6-1.6H4A1.6 1.6 0 0 0 2.4 4v5.2A1.6 1.6 0 0 0 4 10.8h1.2"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinecap="round"
+                />
+              </svg>
+              {latexCopyLabel}
+            </button>
+          )}
+
           <button
             className="exp-item"
             onClick={onCopy}
             disabled={copyState.kind === 'working'}
             data-testid="export-copy"
             data-copy-state={copyState.kind}
-            title="Copy the figure to the clipboard, ready to paste into a document"
+            title="Copy the figure to the clipboard as a picture, ready to paste into a document"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
               <rect x="5.2" y="5.2" width="8.3" height="8.3" rx="1.6" stroke="currentColor" strokeWidth="1.4" />
@@ -292,7 +425,7 @@ export function ExportMenu({
                 strokeLinecap="round"
               />
             </svg>
-            {copyLabel}
+            {latex && copyState.kind === 'idle' ? 'Copy as picture' : copyLabel}
           </button>
 
           {axisUnits && (
@@ -410,6 +543,38 @@ export function ExportMenu({
 
           <div className="exp-menu-sep" />
           <div className="exp-title">Output size</div>
+          {physical && (
+            <label className="exp-row" htmlFor={`${uid}-cm`}>
+              <span className="exp-label">Width</span>
+              <input
+                id={`${uid}-cm`}
+                className="exp-num"
+                type="number"
+                inputMode="decimal"
+                min={MIN_LATEX_WIDTH_CM}
+                max={MAX_LATEX_WIDTH_CM}
+                step={0.5}
+                value={cmDraft}
+                data-testid="export-width-cm"
+                onChange={(e) => setCmDraft(e.target.value)}
+                onBlur={(e) => commitCm(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    commitCm((e.target as HTMLInputElement).value)
+                  }
+                }}
+              />
+              <span className="exp-unit">cm</span>
+            </label>
+          )}
+          {physical && (
+            <div className="exp-note">
+              The same window, laid out for paper this wide: labels come out at print size.
+            </div>
+          )}
+          {!physical && (
+          <>
           <div className="seg exp-seg" role="group" aria-label="Export scale">
             {EXPORT_SCALES.map((sc) => (
               <button
@@ -448,6 +613,8 @@ export function ExportMenu({
             />
             <span className="exp-unit">px</span>
           </label>
+          </>
+          )}
 
           <label className="exp-row" htmlFor={`${uid}-m`}>
             <span className="exp-label">Margin</span>
@@ -553,9 +720,22 @@ export function ExportMenu({
             </div>
           )}
 
+          {format === 'pgfplots' && (
+            <div className="exp-note">
+              pgfplots draws its own axes: the margin does not apply, and the colours follow the
+              ground chosen here.
+            </div>
+          )}
+
           <div className="exp-readout" data-testid="export-readout">
-            {size.w} × {size.h} px
-            {settings.width === null ? '' : ' (exact)'}
+            {cmSize ? (
+              sizeText
+            ) : (
+              <>
+                {size.w} × {size.h} px
+                {settings.width === null ? '' : ' (exact)'}
+              </>
+            )}
           </div>
         </div>
       )}
