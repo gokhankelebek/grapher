@@ -140,6 +140,16 @@ export interface ModelSpec {
    * everything else; src/core/taylor.ts is the only caller.
    */
   taylor?(params: number[], a: number, n: number): number[] | null
+  /**
+   * For a typed TWO-VARIABLE INEQUALITY — y < x² − 4, x + 2y ≤ 8, x > 3,
+   * x² + y² < 9, 2 < y < x + 3: the region and its boundaries at these params
+   * (see InequalityInfo below). The curve itself is the BOUNDARY (an explicit
+   * y = f(x) when the inequality solves for y, implicit otherwise), so every
+   * card, slider, name and persistence path treats it as the typed curve it
+   * is; this hook is what makes the renderer shade a side and dash a strict
+   * boundary. Absent for everything that is not an inequality.
+   */
+  inequality?(params: number[]): InequalityInfo | null
   latex(params: number[]): string    // KaTeX-renderable string
   paramMeta(params: number[]): ParamMeta[]  // ranges centered on current values
   /** Optional: return params translated by (dx, dy) in math units (for drag-editing).
@@ -814,3 +824,68 @@ export interface CurveEnds {
 export type Asymptote =
   | { kind: 'vertical'; x: number }
   | { kind: 'line'; a: Vec2; dir: Vec2 }
+
+// ============================================================================
+// Two-variable inequalities — regions of the plane (NC Math 3, Algebra 2,
+// AP Precalculus): y < x² − 4, y ≥ 2x + 1, x > 3, x + 2y ≤ 8, x² + y² < 9,
+// 2 < y < x + 3. Typed on a graph board like any equation.
+//
+//   src/core/parse/index.ts   parseExpression reads a line whose top level
+//                             carries < > ≤ ≥ (<=, >=, =<, =>) as an
+//                             inequality: its ModelSpec draws the boundary and
+//                             answers `inequality(params)`.
+//   src/core/inequality2d.ts  the region as polygons (per-column spans), the
+//                             implicit boundary as chained contours, the
+//                             test-point sentences and the card's words.
+//   src/core/linprog.ts       the feasible polygon of a linear system, its
+//                             vertices (exact where rational) and an objective.
+//   src/render/inequalities.ts  shading (cached per viewport) and boundaries,
+//                             dashed when strict.
+// ============================================================================
+
+export type IneqRel = '<' | '<=' | '>' | '>='
+
+/** One boundary as the renderer draws it. */
+export type IneqBoundary =
+  /** y = f(x): NaN where undefined (the pen lifts, nothing is shaded there). */
+  | { kind: 'y'; f: (x: number) => number }
+  /** x = c: a vertical line. */
+  | { kind: 'x'; c: number }
+  /** F(x, y) = 0, drawn as a contour. */
+  | { kind: 'implicit'; F: (x: number, y: number) => number }
+
+/**
+ * Which side of the boundary is the region. 'inside' / 'outside' are for an
+ * implicit boundary whose region is (or is not) bounded; 'where' is an
+ * implicit boundary that is neither (y² < x): the card then says it in full.
+ */
+export type IneqSide = 'above' | 'below' | 'right' | 'left' | 'inside' | 'outside' | 'where'
+
+/** One inequality of the chain (a compound 2 < y < x + 3 has two). */
+export interface IneqPart {
+  /** The region is s > 0 (strict) or s ≥ 0; NaN is outside it. */
+  s: (x: number, y: number) => number
+  strict: boolean
+  boundary: IneqBoundary
+  side: IneqSide
+  /** s = a·x + b·y + c exactly (constant coefficients at these params). */
+  linear?: { a: number; b: number; c: number }
+  /** KaTeX of the boundary as written: "y = x^{2} - 4", "x + 2y = 8". */
+  boundaryLatex: string
+  /** The same in plain Unicode for sentences: "y = x² − 4". */
+  boundaryText: string
+  /** Index of the two terms of `InequalityInfo.terms` this part compares. */
+  terms: [number, number]
+}
+
+export interface InequalityInfo {
+  parts: readonly IneqPart[]
+  /** The chain as typed: terms ("2", "y", "x + 3") and the signs between them. */
+  terms: readonly string[]
+  rels: readonly IneqRel[]
+  /** Term i's value at (x, y), at these params. */
+  term: (i: number, x: number, y: number) => number
+  /** The free constants and their values, for substituted sentences. */
+  paramNames: readonly string[]
+  params: readonly number[]
+}

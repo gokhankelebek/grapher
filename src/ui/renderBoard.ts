@@ -51,6 +51,12 @@ import { drawPieceDots, pieceMarks } from '../render/pieceDots'
 import { findAsymptotes, findHoles } from '../core/holes'
 import type { Overlay } from '../render/overlays'
 import { drawOverlays, hasOverlayMarks } from '../render/overlays'
+import {
+  drawInequalityBoundaries,
+  drawInequalityShading,
+  inequalityOf,
+  isInequalityCurve,
+} from '../render/inequalities'
 import type { Polyline, SlopeField } from '../render/fields'
 import { drawPolylines, drawSlopeFields } from '../render/fields'
 import type { Shape } from '../render/shapes'
@@ -261,6 +267,14 @@ export interface BoardScene {
    * Cartesian only; a number-line board ignores it.
    */
   overlays?: readonly Overlay[]
+  /**
+   * Two-variable inequalities: shade only the region common to every visible
+   * inequality (stronger, hatched) and dim each one's own wash. The washes
+   * and boundaries themselves need no field — they come from the curves'
+   * models (ModelSpec.inequality). Absent or false: each inequality shades
+   * its own side, and a board without inequalities draws what it always drew.
+   */
+  inequalitySolution?: boolean
   /**
    * Slope fields: dy/dx = f(x, y) as a lattice of short tangent segments,
    * painted under everything the class is meant to look AT.
@@ -1727,6 +1741,21 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
     }
   }
 
+  // Two-variable inequalities: the shaded side of each, and — with the
+  // system's solution region on — the region they share, hatched. FIGURE:
+  // under SAT / AP it is the grey mono wash, and it exports.
+  try {
+    drawInequalityShading(ctx, scene.curves, models, vp, {
+      ink,
+      mono,
+      solution: scene.inequalitySolution === true,
+      solutionColor: mono ? theme.axis : lightGround ? theme.label : DARK_TEXT,
+      stroke: scale.stroke,
+    })
+  } catch {
+    /* shading failed — the figure still stands */
+  }
+
   // Slope fields: under the polylines, under every curve. The lattice is the
   // ground the solution stands on; a curve broken up by it could not be read.
   const fields = scene.fields
@@ -1749,8 +1778,44 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
     }
   }
 
+  // Two-variable inequalities: each one's boundary, solid or dashed by its
+  // own strictness (src/render/inequalities.ts). Their washes went down with
+  // the other fills above; the ordinary curve pass below skips them.
   for (const curve of scene.curves) {
     if (!curve.visible) continue
+    const info = inequalityOf(curve, models)
+    if (!info) continue
+    const style = scene.styles[curve.id]
+    let alpha = 1
+    const fadeIn = chrome?.curveAlpha
+    if (fadeIn && fadeIn.id === curve.id) alpha = Math.max(0, Math.min(1, fadeIn.alpha))
+    if (style?.opacity !== undefined) alpha *= style.opacity
+    ctx.globalAlpha = alpha
+    try {
+      const selected = chrome !== null && curve.id === chrome.selectedId && !(mono && lightGround)
+      const w = style?.width
+      const c =
+        fig !== null
+          ? { ...curve, color: ink(curve.color), strokeWidth: typeof w === 'number' && w > 0 ? w : fig.curveWidth }
+          : print
+            ? { ...curve, color: paint(curve.color) }
+            : curve
+      drawInequalityBoundaries(ctx, c, info, models, vp, {
+        selected,
+        strokeScale: scale.stroke,
+        lightGround,
+        userDash: style?.dash ?? null,
+      })
+    } catch {
+      /* boundary render failed — skip */
+    }
+    ctx.setLineDash([])
+    ctx.globalAlpha = 1
+  }
+
+  for (const curve of scene.curves) {
+    if (!curve.visible) continue
+    if (isInequalityCurve(curve, models)) continue
     const style = scene.styles[curve.id]
     let alpha = 1
     const fadeIn = chrome?.curveAlpha

@@ -171,6 +171,12 @@ interface Props {
    */
   unitCircles?: readonly UnitCircleFigure[] | null
   /**
+   * The inequality system's "solution region": shade only what every visible
+   * inequality shares (BoardScene.inequalitySolution). Threaded like the
+   * unit circles, because the export builds the same scene.
+   */
+  inequalitySolution?: boolean
+  /**
    * The RULING: the square lattice, or the circles and spokes a polar curve is
    * read off. Absent means the square one, so a caller that never mentions it
    * draws exactly what it always drew. Threaded exactly like `axisUnits`,
@@ -522,6 +528,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     shapes,
     scatter,
     unitCircles,
+    inequalitySolution,
     grid,
     figure,
     caption,
@@ -559,6 +566,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   const shapesRef = useRef<readonly Shape[] | null | undefined>(shapes)
   const scatterRef = useRef<readonly ScatterSet[] | null | undefined>(scatter)
   const unitCirclesRef = useRef<readonly UnitCircleFigure[] | null | undefined>(unitCircles)
+  const ineqSolutionRef = useRef<boolean>(inequalitySolution === true)
   const gridRef = useRef<BoardGrid | null | undefined>(grid)
   const figureRef = useRef<FigureStyle | null | undefined>(figure)
   const captionRef = useRef<string | null | undefined>(caption)
@@ -722,6 +730,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       shapes: shapesRef.current ?? undefined,
       ...(scatterRef.current && scatterRef.current.length > 0 ? { scatter: scatterRef.current } : {}),
       ...(unitCirclesRef.current && unitCirclesRef.current.length > 0 ? { unitCircles: unitCirclesRef.current } : {}),
+      ...(ineqSolutionRef.current ? { inequalitySolution: true } : {}),
       grid: gridRef.current ?? undefined,
       figure: figureRef.current ?? undefined,
       caption: captionRef.current ?? undefined,
@@ -808,6 +817,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     shapesRef.current = shapes
     scatterRef.current = scatter
     unitCirclesRef.current = unitCircles
+    ineqSolutionRef.current = inequalitySolution === true
     gridRef.current = grid
     figureRef.current = figure
     captionRef.current = caption
@@ -833,6 +843,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     shapes,
     scatter,
     unitCircles,
+    inequalitySolution,
     grid,
     figure,
     caption,

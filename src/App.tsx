@@ -169,6 +169,9 @@ import {
 import type { BoardUnitCircle, PlaySpeed, UnitCircleShow } from './ui/unitCircleLinks'
 import type { UnitCircleFigure } from './render/unitCircle'
 import { UnitCircleCard } from './ui/UnitCircleCard'
+import { SystemCard } from './ui/SystemCard'
+import { TEST_COLOR, inequalityCount, systemCard, systemOverlays } from './ui/systemLinks'
+import { parseObjective } from './core/linprog'
 import { dragTheta, inverseTrig } from './core/trig'
 import type { InvFn, UnwrapFn } from './core/trig'
 import { fitRegression, regressionSource } from './core/data'
@@ -203,7 +206,7 @@ import {
 } from './ui/nameLinks'
 import type { InverseInfo, NameState } from './ui/nameLinks'
 import type { FunctionEnv } from './core/functionEnv'
-import type { CurveViews } from './core/persist'
+import type { BoardIneqSystem, CurveViews } from './core/persist'
 import type { DomainLens, ViewStates } from './ui/curveViews'
 import {
   collectCurveViews,
@@ -674,6 +677,11 @@ interface Snapshot {
    */
   unitCircles: BoardUnitCircle[]
   /**
+   * The inequality system's settings — solution region, test point, the
+   * objective — in the same history: each switch comes back with one undo.
+   */
+  system: BoardIneqSystem | null
+  /**
    * Curve names (f, g, h …), the letters each typed line calls, and the
    * "Show inverse" links. In the history because they are the document's:
    * a rename rewrites every line that calls the old letter, and one undo has
@@ -742,6 +750,8 @@ interface StatePatch {
   data?: BoardData[]
   sequences?: BoardSequence[]
   unitCircles?: BoardUnitCircle[]
+  /** null clears the system's settings; absent leaves them. */
+  system?: BoardIneqSystem | null
   names?: Record<string, string>
   calls?: Record<string, string[]>
   inverses?: InverseLink[]
@@ -1019,6 +1029,12 @@ export default function App() {
    */
   const [unitCircles, setUnitCircles] = useState<BoardUnitCircle[]>([])
   /**
+   * The inequality system (the visible inequalities, taken together): only
+   * what the teacher set for it — solution region, test point, objective.
+   * Every corner, verdict and table is recomputed from the curves.
+   */
+  const [ineqSystem, setIneqSystem] = useState<BoardIneqSystem | null>(null)
+  /**
    * The animation: θ while playing (the document keeps its own until the
    * animation stops), and the speed. Neither is the document's.
    */
@@ -1247,6 +1263,7 @@ export default function App() {
   const dataRef = useRef<BoardData[]>([])
   const seqRef = useRef<BoardSequence[]>([])
   const ucRef = useRef<BoardUnitCircle[]>([])
+  const sysRef = useRef<BoardIneqSystem | null>(null)
   const namesRef = useRef<Record<string, string>>({})
   const callsRef = useRef<Record<string, string[]>>({})
   const inversesRef = useRef<InverseLink[]>([])
@@ -1612,6 +1629,7 @@ export default function App() {
       data: dataRef.current,
       sequences: seqRef.current,
       unitCircles: ucRef.current,
+      system: sysRef.current,
       names: namesRef.current,
       calls: callsRef.current,
       inverses: inversesRef.current,
@@ -1690,6 +1708,10 @@ export default function App() {
     if (s.unitCircles) {
       ucRef.current = s.unitCircles
       setUnitCircles(s.unitCircles)
+    }
+    if (s.system !== undefined) {
+      sysRef.current = s.system
+      setIneqSystem(s.system)
     }
     if (s.inverses) {
       inversesRef.current = s.inverses
@@ -1846,7 +1868,9 @@ export default function App() {
         // And a sequence's slider: it moves dots, never a curve.
         pre.sequences !== seqRef.current ||
         // And the unit circle's P, dragged round: it moves no curve at all.
-        pre.unitCircles !== ucRef.current)
+        pre.unitCircles !== ucRef.current ||
+        // And the inequality system's test point, dragged: no curve moves.
+        pre.system !== sysRef.current)
     ) {
       undoRef.current = [...undoRef.current.slice(-(HISTORY_LIMIT - 1)), pre]
       redoRef.current = []
@@ -1965,6 +1989,7 @@ export default function App() {
       data: [],
       sequences: [],
       unitCircles: [],
+      system: null,
       grid: 'cartesian',
       figure: 'screen',
       caption: '',
@@ -1999,6 +2024,7 @@ export default function App() {
       data: dataRef.current,
       sequences: seqRef.current,
       unitCircles: ucRef.current,
+      system: sysRef.current,
       grid: boardGridRef.current,
       figure: figureStyleRef.current,
       // The DERIVED caption is not the document's: it is re-derived from the
@@ -2127,6 +2153,8 @@ export default function App() {
     seqRef.current = board.sequences
     // And the unit circle: centre, θ and switches; every label is re-derived.
     ucRef.current = board.unitCircles
+    // And the inequality system's settings; its corners are re-derived.
+    sysRef.current = board.system
     // The inverse links come back; their models are registered below, reading
     // the parent live exactly as they did before the document was closed.
     inversesRef.current = board.inverses
@@ -2193,6 +2221,7 @@ export default function App() {
     setDataSets(board.data)
     setSequences(board.sequences)
     setUnitCircles(board.unitCircles)
+    setIneqSystem(board.system)
     setUcPlay(null)
     setInverses(board.inverses)
     setCalls(callsRef.current)
@@ -2337,6 +2366,8 @@ export default function App() {
     sequences,
     // And the unit circle: θ, its switches, its question.
     unitCircles,
+    // And the inequality system: its switches, test point and objective.
+    ineqSystem,
     // And a rename, which may change nothing but a letter.
     names,
     calls,
@@ -2826,6 +2857,7 @@ export default function App() {
         data: [],
         sequences: [],
         unitCircles: [],
+        system: null,
         styles,
         exprSources: {},
         brokenExpr: {},
@@ -8228,6 +8260,93 @@ export default function App() {
         ))
       : null
 
+  // ================================================= inequality system
+  //
+  // Two-variable inequalities are typed curves; their SYSTEM is every
+  // visible one on the board. The document keeps only what was set for it
+  // (src/core/persist.ts BoardIneqSystem); the common region, the corners,
+  // the objective's table and the test point's verdicts are recomputed from
+  // the curves on every change (src/ui/systemLinks.ts).
+
+  /** One stated change to the system. `live` is a drag in flight (one undo per drag). */
+  const patchSystem = useCallback(
+    (patch: Partial<BoardIneqSystem>, label: string, live = false): void => {
+      const next: BoardIneqSystem = { ...(sysRef.current ?? {}), ...patch }
+      for (const k of ['solution', 'test', 'objective', 'iso'] as const) {
+        if (k in patch && patch[k] === undefined) delete next[k]
+      }
+      const stored = Object.keys(next).length > 0 ? next : null
+      if (live) applyState({ system: stored })
+      else commitState({ system: stored }, label)
+    },
+    [applyState, commitState],
+  )
+
+  const sysCard = useMemo(
+    () => (kind === 'cartesian' ? systemCard(curves, models, ineqSystem) : null),
+    // depKeys: a line that calls f shades anew when f moves.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [kind, curves, models, ineqSystem, depKeys],
+  )
+  const sysOverlays = useMemo<Overlay[]>(() => systemOverlays(sysCard, ineqSystem), [sysCard, ineqSystem])
+  /** The solution region is drawn only while there is a system to intersect. */
+  const ineqSolution = ineqSystem?.solution === true && (sysCard?.members.length ?? 0) >= 2
+  const ineqSolutionRef = useRef(ineqSolution)
+  ineqSolutionRef.current = ineqSolution
+
+  /** The test point: dragged anywhere, snapped to the grid's ladder. */
+  const sysTestHandle = useMemo<ExtraHandle | null>(() => {
+    const t = ineqSystem?.test
+    if (kind !== 'cartesian' || !t || !sysCard) return null
+    return {
+      id: 'ineq:test',
+      pos: t,
+      label: 'test point',
+      color: TEST_COLOR,
+      onDrag: (p: Vec2) => {
+        const q = snapPlaced(p, vpRef.current)
+        const now = sysRef.current?.test
+        const pre = preEditRef.current
+        if (pre && pre.label === 'edit curve') preEditRef.current = { ...pre, label: 'move test point' }
+        if (now && now.x === q.x && now.y === q.y) return
+        patchSystem({ test: q }, 'move test point', true)
+      },
+    }
+  }, [kind, ineqSystem, sysCard, patchSystem])
+
+  const systemCardNode =
+    kind === 'cartesian' && sysCard ? (
+      <SystemCard
+        data={sysCard}
+        system={ineqSystem}
+        hidden={inequalityCount(curves, models) - sysCard.members.length}
+        onSolution={(on) => patchSystem({ solution: on ? true : undefined }, on ? 'show solution region' : 'hide solution region')}
+        onTest={(on) => {
+          if (!on) {
+            patchSystem({ test: undefined }, 'remove test point')
+            return
+          }
+          // The origin when it is on the board, else the middle of the view.
+          const vp = vpRef.current
+          const half = { x: vp.widthPx / 2 / ppuX(vp), y: vp.heightPx / 2 / ppuY(vp) }
+          const originOn = Math.abs(vp.center.x) < half.x * 0.8 && Math.abs(vp.center.y) < half.y * 0.8
+          const at = originOn ? { x: 1, y: 2 } : snapPlaced(vp.center, vp)
+          patchSystem({ test: at }, 'test point')
+        }}
+        onObjective={(src, goal) => {
+          if (src.trim() === '') {
+            patchSystem({ objective: undefined, iso: undefined }, 'remove objective')
+            return null
+          }
+          const o = parseObjective(src)
+          if (!o.ok) return o.error
+          patchSystem({ objective: { src: src.trim(), goal } }, goal === 'max' ? 'maximise' : 'minimise')
+          return null
+        }}
+        onIso={(on) => patchSystem({ iso: on ? true : undefined }, on ? 'iso-profit line' : 'no iso-profit line')}
+      />
+    ) : null
+
 
   // ------------------------------------------------------------------ export
   //
@@ -8356,12 +8475,12 @@ export default function App() {
 
   const overlays = useMemo<Overlay[]>(() => {
     const base = kind === 'cartesian' ? overlaysFor(calcLinks, curves, models, bandSpan) : []
-    const more = motionAreaOverlays.length + domainOverlays.length
+    const more = motionAreaOverlays.length + domainOverlays.length + sysOverlays.length
     if (more === 0) return base
     // The ghost goes first (under everything else); the marks sort themselves
     // onto the curves by kind.
-    return [...domainOverlays, ...base, ...motionAreaOverlays]
-  }, [kind, calcLinks, curves, models, motionAreaOverlays, bandSpan, domainOverlays])
+    return [...domainOverlays, ...base, ...motionAreaOverlays, ...sysOverlays]
+  }, [kind, calcLinks, curves, models, motionAreaOverlays, bandSpan, domainOverlays, sysOverlays])
   const overlaysRef = useRef<Overlay[]>(overlays)
   overlaysRef.current = overlays
 
@@ -9315,8 +9434,9 @@ export default function App() {
     const more = motionHandle ? [motionHandle] : []
     if (domainHandles.length > 0) more.push(...domainHandles)
     if (ucHandle) more.push(ucHandle)
+    if (sysTestHandle) more.push(sysTestHandle)
     return more.length > 0 ? [...extraHandles, ...more] : extraHandles
-  }, [extraHandles, motionHandle, domainHandles, ucHandle])
+  }, [extraHandles, motionHandle, domainHandles, ucHandle, sysTestHandle])
 
   /** What the board marks for the selected curve. */
   const boardAnalysis = useMemo<SpecialPoint[]>(() => {
@@ -9613,8 +9733,15 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind, selectedId, inverses, curves, models, exprSources, depKeys, boardCurveNames, names, lens, crossSpan, domainFactsFor, inverseFormulaFor, restrictModeOf, historyTick])
   const domainPanelFor = useCallback(
-    (id: string): DomainPanel | undefined => (domainPanel && id === selectedId ? domainPanel : undefined),
-    [domainPanel, selectedId],
+    (id: string): DomainPanel | undefined => {
+      if (!domainPanel || id !== selectedId) return undefined
+      // An inequality is a REGION: its boundary's domain, range, one-to-one
+      // and inverse would describe a function the line is not.
+      const c = curves.find((k) => k.id === id)
+      if (c && typeof models[c.modelId]?.inequality === 'function') return undefined
+      return domainPanel
+    },
+    [domainPanel, selectedId, curves, models],
   )
 
   /** The exponentials "Build ▾ → Logarithmic → Inverse of…" can pick, named. */
@@ -9918,6 +10045,8 @@ export default function App() {
       // And the unit circle: the circle, its triangle, its labels and the
       // unwrapped graph are the figure on a trig board.
       ...(ucFiguresRef.current.length > 0 ? { unitCircles: ucFiguresRef.current } : {}),
+      // And the inequality system's solution region, as the screen shows it.
+      ...(ineqSolutionRef.current ? { inequalitySolution: true } : {}),
       // And on the ruling the screen is on: a polar board exported on squares
       // would be a different picture of the same curve.
       grid: boardGridRef.current,
@@ -10868,6 +10997,7 @@ export default function App() {
         onMotionBuild={buildMotion}
         onUnitCircleAdd={addUnitCircle}
         unitCircleCards={unitCircleCardNodes}
+        systemCard={systemCardNode}
         unitCircleCount={kind === 'cartesian' ? unitCircles.length : 0}
         seqOpen={seqOpen}
         onSeqToggle={() => {
@@ -11080,6 +11210,7 @@ export default function App() {
           shapes={screenShapes}
           scatter={scatterScene}
           unitCircles={ucFigures}
+          inequalitySolution={ineqSolution}
           grid={boardGrid}
           figure={boardFigure}
           caption={boardCaption}

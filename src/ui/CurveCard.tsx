@@ -51,6 +51,7 @@ import { VolumeSection } from './VolumeSection'
 import type { CurveIntersections } from './intersections'
 import { DomainSection } from './DomainSection'
 import { CardSection } from './CardSection'
+import { InequalitySection } from './InequalitySection'
 import { setRowText } from './domainLinks'
 import type { DomainActions, DomainPanel, SetNotation } from './domainLinks'
 
@@ -825,7 +826,20 @@ export function CurveCard({
    * transformation of anything this card could edit.
    */
   const broken = Boolean(brokenReason)
-  const readable = !broken && depKey === undefined
+  /**
+   * A typed two-variable inequality (y < x² − 4): its card says which side is
+   * shaded and tests a point; no family section reads its line, because the
+   * line is a region, not the function its boundary happens to be.
+   */
+  const inequality = useMemo(() => {
+    if (!spec || typeof spec.inequality !== 'function') return null
+    try {
+      return spec.inequality(curve.params)
+    } catch {
+      return null
+    }
+  }, [spec, curve.params])
+  const readable = !broken && depKey === undefined && typeof spec?.inequality !== 'function'
 
   /**
    * The curve's line read back as factors — "y = (x + 1)^2(x - 3)" is a
@@ -2336,6 +2350,7 @@ export function CurveCard({
 
       {selected && (
         <div className="card-body card-body-sections" onClick={(e) => e.stopPropagation()}>
+          {inequality && <InequalitySection info={inequality} />}
           {/* A function built piece by piece is edited BY its pieces. */}
           {piecewise && onPiecewiseRestate && exprSource && (
             <PiecewiseSection

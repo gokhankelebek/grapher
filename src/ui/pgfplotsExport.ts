@@ -40,6 +40,17 @@ import { curveEndPoints, resolveEnds } from '../render/endCaps'
 import { holeRange } from '../render/holes'
 import { pieceMarks } from '../render/pieceDots'
 import { OVERLAY_FILL_ALPHA } from '../render/overlays'
+import type { InequalityInfo } from '../core/types'
+import { regionPolygons } from '../core/inequality2d'
+import {
+  INEQ_DIM_ALPHA,
+  INEQ_FILL_ALPHA,
+  INEQ_MONO_ALPHA,
+  INEQ_MONO_DIM_ALPHA,
+  INEQ_MONO_SOLUTION_ALPHA,
+  INEQ_SOLUTION_ALPHA,
+  inequalityOf,
+} from '../render/inequalities'
 import type { GridStep, PiStep } from '../render/grid'
 import {
   PI_LABEL_MIN_PX,
@@ -781,6 +792,42 @@ export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): strin
     add(`\\addplot[${colour(ink(pl.color))}${pl.dash && pl.dash.length > 0 ? ', dashed' : ''}, forget plot] coordinates {${coords(pl.pts)}};`)
   }
 
+  // ---- two-variable inequalities: the shaded regions -----------------------
+  // Each visible inequality's side as filled polygons (the same per-column
+  // region the board fills), under the curves; the system's common region
+  // darker. Hatching has no plain-pgfplots form and is left to TikZ/SVG.
+  {
+    const box = { x0: xmin, x1: xmax, y0: ymin, y1: ymax }
+    const live: { c: FittedCurve; info: InequalityInfo }[] = []
+    for (const c of scene.curves) {
+      if (!c.visible) continue
+      const info = inequalityOf(c, scene.models)
+      if (info && info.parts.length > 0) live.push({ c, info })
+    }
+    const system = scene.inequalitySolution === true && live.length >= 2
+    const own = mono ? (system ? INEQ_MONO_DIM_ALPHA : INEQ_MONO_ALPHA) : system ? INEQ_DIM_ALPHA : INEQ_FILL_ALPHA
+    const fillPolys = (polys: Vec2[][], col: string, alpha: number): void => {
+      for (const poly of polys) {
+        if (poly.length < 3) continue
+        add(`\fill[${col}, fill opacity=${num(alpha, 3)}] ${poly.map((p) => P(p.x, p.y)).join(' -- ')} -- cycle;`)
+      }
+    }
+    const ropts = { cols: 160, rows: 120 }
+    for (const { c, info } of live) {
+      add(`% inequality region: ${(opts.sources?.[c.id] ?? '').replace(/[\r\n]+/g, ' ')}`)
+      fillPolys(regionPolygons(info.parts, box, ropts), colour(ink(c.color)), own)
+    }
+    if (system) {
+      add('% solution region of the system (every inequality holds)')
+      fillPolys(
+        regionPolygons(live.flatMap((l) => l.info.parts), box, ropts),
+        colour(mono ? theme.axis : lightGround ? theme.label : '#e6eaf5'),
+        mono ? INEQ_MONO_SOLUTION_ALPHA : INEQ_SOLUTION_ALPHA,
+      )
+      notExported.push("the solution region's hatching (it is shaded darker instead)")
+    }
+  }
+
   // ---- curves --------------------------------------------------------------
   const holesAll: Array<{ at: Vec2; col: string }> = []
   const dotsAll: Array<{ at: Vec2; col: string; closed: boolean }> = []
@@ -793,7 +840,11 @@ export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): strin
     const o: string[] = [col]
     const w = style?.width ?? (fig ? fig.curveWidth : c.strokeWidth)
     o.push(w > 3.2 ? 'very thick' : 'thick')
-    if (style?.dash && style.dash.length > 0) o.push('dashed')
+    const ineq = inequalityOf(c, scene.models)
+    if ((style?.dash && style.dash.length > 0) || (ineq && ineq.parts.length > 0 && ineq.parts.every((p) => p.strict))) o.push('dashed')
+    if (ineq && ineq.parts.some((p) => p.strict) && ineq.parts.some((p) => !p.strict)) {
+      notExported.push('a compound inequality with one dashed and one solid boundary (both drawn solid)')
+    }
     if (style?.opacity !== undefined && style.opacity < 1) o.push(`opacity=${num(style.opacity, 3)}`)
     const name = fig && fig.curveEnds === 'marked' ? scene.curveNames?.[c.id] : undefined
     const src = opts.sources?.[c.id]
@@ -803,8 +854,12 @@ export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): strin
     let ends: ReturnType<typeof curveEndPoints> | null = null
     let caps: ReturnType<typeof resolveEnds> | null = null
     try {
-      ends = curveEndPoints(c, scene.models, vp)
-      caps = resolveEnds(style, c, fig, ends)
+      // An inequality's boundary runs off the board as part of a REGION:
+      // no arrowheads (the board draws none either).
+      if (!ineq) {
+        ends = curveEndPoints(c, scene.models, vp)
+        caps = resolveEnds(style, c, fig, ends)
+      }
     } catch {
       ends = null
     }

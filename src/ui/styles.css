@@ -6893,3 +6893,168 @@ button.calc-field-btn {
 .canvas-light .uc-v-tan {
   color: #9a6700;
 }
+
+/* ============================================================
+   Two-variable inequalities — the card section and the system card
+   ============================================================ */
+
+.ineq-lines {
+  display: grid;
+  gap: var(--sp-1);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.ineq-boundary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.ineq-latex {
+  font-size: var(--fs-md);
+}
+
+.ineq-dash {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+}
+
+.ineq-dashed {
+  border-style: dashed;
+}
+
+.ineq-shade {
+  color: var(--text);
+}
+
+.ineq-test {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-sm);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: 6px;
+  background: var(--panel-2);
+}
+
+.ineq-ok {
+  color: #38c976;
+}
+
+.ineq-no {
+  color: #f9a8a9;
+}
+
+.ineq-test .field-hint {
+  font-family: var(--font);
+}
+
+.ineq-system-card .card-head {
+  gap: var(--sp-2);
+}
+
+.ineq-sys-glyph {
+  color: var(--muted);
+  font-size: var(--fs-md);
+}
+
+.ineq-sys-count {
+  margin-left: auto;
+}
+
+.ineq-sys-toggles {
+  display: grid;
+  gap: var(--sp-1);
+  margin-bottom: var(--sp-2);
+}
+
+.ineq-test-rows {
+  display: grid;
+  gap: 2px;
+  margin-bottom: var(--sp-2);
+  font-size: var(--fs-sm);
+}
+
+.ineq-test-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.ineq-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.ineq-row-latex {
+  color: var(--text);
+}
+
+.ineq-row-text {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.ineq-test-verdict {
+  font-weight: 600;
+  margin-top: 2px;
+}
+
+.ineq-lp-status,
+.ineq-corners {
+  font-size: var(--fs-sm);
+  color: var(--text);
+  margin-bottom: var(--sp-1);
+}
+
+.ineq-corners {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.ineq-corners .field-hint {
+  font-family: var(--font);
+}
+
+.ineq-obj-row {
+  gap: var(--sp-2);
+  margin: var(--sp-1) 0;
+}
+
+.ineq-obj-input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+}
+
+.ineq-lp-table td {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.ineq-lp-table tr.ineq-best td {
+  color: #f95f62;
+  font-weight: 700;
+}
+
+.ineq-lp-answer {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  margin: var(--sp-1) 0;
+}
+
+.canvas-light .ineq-ok {
+  color: #1a7f37;
+}
+
+.canvas-light .ineq-no {
+  color: #c01c28;
+}

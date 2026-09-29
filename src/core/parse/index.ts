@@ -38,7 +38,19 @@
 //   "Unexpected character" it always was. See Parser.userCall.
 // ============================================================================
 
-import type { CurveKind, ModelSpec, ParamMeta, ParseOutcome, ParsedPlot, PieceInfo } from '../types'
+import type {
+  CurveKind,
+  IneqPart,
+  IneqRel,
+  IneqSide,
+  InequalityInfo,
+  ModelSpec,
+  ParamMeta,
+  ParseOutcome,
+  ParsedPlot,
+  PieceInfo,
+} from '../types'
+import { prettyMath } from '../ineqText'
 import type { FunctionEnv } from '../functionEnv'
 import { evalExactAt } from './exactEval'
 import { jetAt } from './jets'
@@ -3119,6 +3131,484 @@ function tryParametric(src: string, env?: FunctionEnv | null): ParseOutcome | nu
 }
 
 // ----------------------------------------------------------------------------
+// Two-variable inequalities — regions of the plane
+//
+//   y < x^2 - 4      y >= 2x + 1      x > 3      x <= -1
+//   x + 2y <= 8      x^2 + y^2 < 9    2 < y < x + 3      y ≤ a x + b
+//
+// A line is an inequality when its TOP LEVEL (outside every bracket) carries
+// one or two relation signs and no bare '='. That keeps every line that
+// parsed before parsing exactly as it did: `y = x^2 {x < 2}` has its '<'
+// inside braces, and `y = x^2 for x > 0` has an '='.
+//
+// Each side is parsed by the ordinary Pratt parser (the sides share one
+// param table, so `y < a x + b` has sliders a and b in order of appearance)
+// and every inequality of the chain becomes a PART, stated as s(x, y) > 0
+// (strict) or ≥ 0 — s is R − L for < and ≤, L − R for > and ≥. A part is
+// then read structurally, from the AST:
+//
+//   s linear in y with a coefficient B free of x   → y-part: boundary
+//       y = −A(x)/B, shaded above when B > 0 and below when B < 0 (the sign
+//       is read at the CURRENT params, so a slider that flips B flips the side)
+//   s free of y and linear in x                      → x-part: x = c
+//   anything else                                    → implicit: s = 0
+//
+// The curve on the board is the BOUNDARY: explicit y = f(x) for a single
+// y-part (with the full typed-explicit machinery — holes, exact values,
+// Taylor — when the line literally reads y < f(x)), implicit otherwise (the
+// product of the parts' s for a compound, whose zero set is both boundaries).
+// ModelSpec.inequality(params) carries the rest.
+// ----------------------------------------------------------------------------
+
+interface RelCut {
+  at: number
+  len: number
+  rel: IneqRel
+}
+
+const REL_LATEX: Record<IneqRel, string> = { '<': '<', '<=': '\\le', '>': '>', '>=': '\\ge' }
+const REL_TEXT: Record<IneqRel, string> = { '<': '<', '<=': '≤', '>': '>', '>=': '≥' }
+
+/**
+ * The top-level relation signs of a line — `<`, `>`, `≤`, `≥`, `<=`, `>=`,
+ * `=<`, `=>` (and ⩽ ⩾ ≦ ≧) — or null when the line is not an inequality: it
+ * has none, it has a bare '=' (an equation, possibly restricted), or it uses
+ * a condition word (for / if / where / when / and / or).
+ */
+export function inequalityCuts(src: string): RelCut[] | null {
+  let depth = 0
+  const cuts: RelCut[] = []
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i]
+    if (OPENERS.includes(c)) {
+      depth++
+      continue
+    }
+    if (CLOSERS.includes(c)) {
+      depth = Math.max(0, depth - 1)
+      continue
+    }
+    if (depth > 0) continue
+    const two = src.slice(i, i + 2)
+    if (two === '<=' || two === '=<') {
+      cuts.push({ at: i, len: 2, rel: '<=' })
+      i++
+      continue
+    }
+    if (two === '>=' || two === '=>') {
+      cuts.push({ at: i, len: 2, rel: '>=' })
+      i++
+      continue
+    }
+    if (c === '≤' || c === '⩽' || c === '≦') cuts.push({ at: i, len: 1, rel: '<=' })
+    else if (c === '≥' || c === '⩾' || c === '≧') cuts.push({ at: i, len: 1, rel: '>=' })
+    else if (c === '<') cuts.push({ at: i, len: 1, rel: '<' })
+    else if (c === '>') cuts.push({ at: i, len: 1, rel: '>' })
+    else if (c === '=' || c === '≠') return null
+  }
+  if (cuts.length === 0) return null
+  if (/(^|[^A-Za-z])(for|if|where|when|and|or)([^A-Za-z]|$)/i.test(src)) return null
+  return cuts
+}
+
+const ZERO_NODE: Node = { t: 'num', v: 0, raw: '0' }
+const ONE_NODE: Node = { t: 'num', v: 1, raw: '1' }
+
+function usesVar(n: Node, v: VarName): boolean {
+  const s = new Set<VarName>()
+  collectVars(n, s)
+  return s.has(v)
+}
+
+/** n = a + b·v with a and b free of v; null when n is not linear in v. */
+function linIn(n: Node, v: VarName): { a: Node; b: Node } | null {
+  if (!usesVar(n, v)) return { a: n, b: ZERO_NODE }
+  switch (n.t) {
+    case 'var':
+      return { a: ZERO_NODE, b: ONE_NODE }
+    case 'neg': {
+      const r = linIn(n.a, v)
+      return r ? { a: { t: 'neg', a: r.a }, b: { t: 'neg', a: r.b } } : null
+    }
+    case 'bin': {
+      if (n.op === '+' || n.op === '-') {
+        const l = linIn(n.a, v)
+        const r = linIn(n.b, v)
+        if (!l || !r) return null
+        return {
+          a: { t: 'bin', op: n.op, a: l.a, b: r.a },
+          b: { t: 'bin', op: n.op, a: l.b, b: r.b },
+        }
+      }
+      if (n.op === '*') {
+        if (!usesVar(n.a, v)) {
+          const r = linIn(n.b, v)
+          return r ? { a: { t: 'bin', op: '*', a: n.a, b: r.a }, b: { t: 'bin', op: '*', a: n.a, b: r.b } } : null
+        }
+        if (!usesVar(n.b, v)) {
+          const l = linIn(n.a, v)
+          return l ? { a: { t: 'bin', op: '*', a: l.a, b: n.b }, b: { t: 'bin', op: '*', a: l.b, b: n.b } } : null
+        }
+        return null
+      }
+      if (n.op === '/') {
+        if (usesVar(n.b, v)) return null
+        const l = linIn(n.a, v)
+        return l ? { a: { t: 'bin', op: '/', a: l.a, b: n.b }, b: { t: 'bin', op: '/', a: l.b, b: n.b } } : null
+      }
+      if (n.op === '^' && n.b.t === 'num' && n.b.v === 1) return linIn(n.a, v)
+      return null
+    }
+    default:
+      return null
+  }
+}
+
+/** How one part of the chain is read (structure only; numbers come at params). */
+interface PartPlan {
+  kind: 'y' | 'x' | 'implicit'
+  strict: boolean
+  /** s(x, y): the region is s > 0 / s ≥ 0. */
+  s: Evaluator
+  /** y-part: A(x) and B of s = A(x) + B·y. x-part: A and B of s = A + B·x. */
+  A: Evaluator | null
+  B: Evaluator | null
+  /** The explicit body when the line literally reads y < body (or body > y). */
+  literal: Node | null
+  literalEv: Evaluator | null
+  /** s = a·x + b·y + c with a, b, c free of x and y. */
+  lin: { a: Evaluator; b: Evaluator; c: Evaluator } | null
+  boundaryLatex: string
+  boundaryText: string
+  terms: [number, number]
+}
+
+function planPart(
+  L: Node,
+  rel: IneqRel,
+  R: Node,
+  texts: [string, string],
+  terms: [number, number],
+): PartPlan {
+  const less = rel === '<' || rel === '<='
+  const strict = rel === '<' || rel === '>'
+  const sNode: Node = less ? { t: 'bin', op: '-', a: R, b: L } : { t: 'bin', op: '-', a: L, b: R }
+  // A side that is the bare variable goes first: 2 < y has the boundary
+  // y = 2, not 2 = y.
+  const flip =
+    (isVar(R, 'y') && !usesVar(L, 'y')) || (isVar(R, 'x') && !usesVar(L, 'x') && !usesVar(L, 'y'))
+  const [bl, br] = flip ? [R, L] : [L, R]
+  const [tl, tr] = flip ? [texts[1], texts[0]] : texts
+  const boundaryLatex = `${toLatex(bl)} = ${toLatex(br)}`
+  const boundaryText = `${prettyMath(tl)} = ${prettyMath(tr)}`
+  const s = compile(sNode)
+  let lin: PartPlan['lin'] = null
+  const ly = linIn(sNode, 'y')
+  if (ly && !usesVar(ly.b, 'x')) {
+    const lx = linIn(ly.a, 'x')
+    if (lx && !usesVar(lx.b, 'y') && !usesVar(lx.a, 'x')) {
+      lin = { a: compile(lx.b), b: compile(ly.b), c: compile(lx.a) }
+    }
+  }
+  const base = { strict, s, lin, boundaryLatex, boundaryText, terms }
+  if (!usesVar(sNode, 'y')) {
+    const lx = linIn(sNode, 'x')
+    if (lx && !usesVar(lx.b, 'x') && usesVar(sNode, 'x')) {
+      return { ...base, kind: 'x', A: compile(lx.a), B: compile(lx.b), literal: null, literalEv: null }
+    }
+    return { ...base, kind: 'implicit', A: null, B: null, literal: null, literalEv: null }
+  }
+  if (ly && !usesVar(ly.b, 'x')) {
+    let literal: Node | null = null
+    if (isVar(L, 'y') && !usesVar(R, 'y')) literal = R
+    else if (isVar(R, 'y') && !usesVar(L, 'y')) literal = L
+    return {
+      ...base,
+      kind: 'y',
+      A: compile(ly.a),
+      B: compile(ly.b),
+      literal,
+      literalEv: literal ? compile(literal) : null,
+    }
+  }
+  return { ...base, kind: 'implicit', A: null, B: null, literal: null, literalEv: null }
+}
+
+/** Far points: a region that holds at none of them is bounded ("inside"). */
+const FAR_PROBES: readonly Vec2Like[] = (() => {
+  const out: Vec2Like[] = []
+  for (const r of [1e3, 1e5]) {
+    for (let k = 0; k < 16; k++) {
+      const a = (2 * Math.PI * (k + 0.37)) / 16
+      out.push({ x: r * Math.cos(a), y: r * Math.sin(a) })
+    }
+    // Straight up the axes too: x² < 4 is a strip, not the inside of anything.
+    out.push({ x: 0, y: r }, { x: 0, y: -r }, { x: r, y: 0 }, { x: -r, y: 0 })
+  }
+  return out
+})()
+
+interface Vec2Like {
+  x: number
+  y: number
+}
+
+function implicitSide(s: (x: number, y: number) => number): IneqSide {
+  let yes = 0
+  let no = 0
+  for (const p of FAR_PROBES) {
+    const v = s(p.x, p.y)
+    if (v >= 0) yes++
+    else no++
+  }
+  if (yes === 0) return 'inside'
+  if (no === 0) return 'outside'
+  return 'where'
+}
+
+/** A small number for a solved boundary's text and KaTeX: 4, −1/2, 2.35. */
+function niceCoef(v: number): { tex: string; text: string; one: boolean; zero: boolean; neg: boolean } {
+  const neg = v < 0
+  const a = Math.abs(v)
+  const zero = a < 1e-12
+  let tex = ''
+  let text = ''
+  let found = false
+  for (let q = 1; q <= 12 && !found; q++) {
+    const p = Math.round(a * q)
+    if (Math.abs(a * q - p) < 1e-9 * Math.max(1, a * q)) {
+      found = true
+      if (q === 1) {
+        tex = String(p)
+        text = String(p)
+      } else {
+        tex = `\\frac{${p}}{${q}}`
+        text = `${p}/${q}`
+      }
+    }
+  }
+  if (!found) {
+    const t = String(Number(a.toPrecision(4)))
+    tex = t
+    text = t
+  }
+  return { tex, text, one: Math.abs(a - 1) < 1e-12, zero, neg }
+}
+
+/** y = m x + k (or x = c) in KaTeX and in Unicode, from numbers. */
+function solvedLine(kind: 'y' | 'x', m: number, k: number): { tex: string; text: string } {
+  if (kind === 'x') {
+    const c = niceCoef(k)
+    return { tex: `x = ${c.neg && !c.zero ? '-' : ''}${c.tex}`, text: `x = ${c.neg && !c.zero ? '−' : ''}${c.text}` }
+  }
+  const M = niceCoef(m)
+  const K = niceCoef(k)
+  let tex = 'y = '
+  let text = 'y = '
+  if (!M.zero) {
+    const coefTex = M.one ? '' : M.tex
+    const coefText = M.one ? '' : M.text.includes('/') ? `(${M.text})` : M.text
+    tex += `${M.neg ? '-' : ''}${coefTex}x`
+    text += `${M.neg ? '−' : ''}${coefText}x`
+    if (!K.zero) {
+      tex += ` ${K.neg ? '-' : '+'} ${K.tex}`
+      text += ` ${K.neg ? '−' : '+'} ${K.text}`
+    }
+  } else {
+    tex += `${K.neg && !K.zero ? '-' : ''}${K.tex}`
+    text += `${K.neg && !K.zero ? '−' : ''}${K.text}`
+  }
+  return { tex, text }
+}
+
+/** Is this word one of the parser's own names (sin, sqrt, pi, e, x …)? */
+export function isReservedWord(w: string): boolean {
+  return isKnownName(w) || w === 'log_'
+}
+
+function parseRegion(src: string, cuts: RelCut[], env?: FunctionEnv | null): ParsedPlot {
+  if (cuts.length > 2) {
+    throw new ParseError(
+      `At most two inequality signs — a compound inequality reads like 2 < y < x + 3 (unexpected sign at position ${cuts[2].at})`,
+      cuts[2].at,
+    )
+  }
+  // A restriction has no meaning on a region yet; saying so beats the
+  // parser's "Unexpected character '{'".
+  {
+    let depth = 0
+    for (let i = 0; i < src.length; i++) {
+      const c = src[i]
+      if (c === '{' && depth === 0) {
+        throw new ParseError(
+          `A restriction { … } on an inequality is not supported — add the condition as another inequality instead (x > 0) (position ${i})`,
+          i,
+        )
+      }
+      if (OPENERS.includes(c)) depth++
+      else if (CLOSERS.includes(c)) depth = Math.max(0, depth - 1)
+    }
+  }
+  const segs: { text: string; at: number }[] = []
+  let from = 0
+  for (const c of cuts) {
+    segs.push({ text: src.slice(from, c.at), at: from })
+    from = c.at + c.len
+  }
+  segs.push({ text: src.slice(from), at: from })
+  for (let k = 0; k < segs.length; k++) {
+    if (segs[k].text.trim() === '') {
+      const pos = k === 0 ? cuts[0].at : cuts[k - 1].at + cuts[k - 1].len
+      throw new ParseError(
+        k === 0
+          ? `Nothing before '${REL_TEXT[cuts[0].rel]}' — an inequality compares two expressions, like y < x^2 (position ${pos})`
+          : `Nothing after '${REL_TEXT[cuts[k - 1].rel]}' at position ${pos}`,
+        pos,
+      )
+    }
+  }
+  if (cuts.length === 2) {
+    const up = (r: IneqRel): boolean => r === '<' || r === '<='
+    if (up(cuts[0].rel) !== up(cuts[1].rel)) {
+      throw new ParseError(
+        `A compound inequality points one way — 2 < y < x + 3, or 5 > y > x (position ${cuts[1].at})`,
+        cuts[1].at,
+      )
+    }
+  }
+
+  let shared: Parser | null = null
+  const nodes: Node[] = segs.map((seg) =>
+    atOffset(seg.at, () => {
+      const p = new Parser(seg.text, env)
+      if (shared) {
+        p.paramIndex = shared.paramIndex
+        p.paramNames = shared.paramNames
+      } else shared = p
+      const { lhs, rhs } = p.parseInput()
+      if (rhs !== null) throw new ParseError("An inequality has no '=' of its own — write ≤ as <=")
+      return lhs
+    }),
+  )
+  const paramNames = shared ? [...(shared as Parser).paramNames] : []
+  const vars = new Set<VarName>()
+  for (const n of nodes) collectVars(n, vars)
+  if (vars.has('r') || vars.has('theta') || vars.has('t')) {
+    throw new ParseError('An inequality on a graph board is in x and y — r, θ and t are not used here')
+  }
+  if (!vars.has('x') && !vars.has('y')) {
+    throw new ParseError('This inequality has no x or y to shade — try y < 2x + 1')
+  }
+
+  const rels = cuts.map((c) => c.rel)
+  const plans: PartPlan[] = []
+  for (let k = 0; k < rels.length; k++) {
+    plans.push(planPart(nodes[k], rels[k], nodes[k + 1], [segs[k].text, segs[k + 1].text], [k, k + 1]))
+  }
+  const latex = nodes.map((n, k) => (k === 0 ? toLatex(n) : `${REL_LATEX[rels[k - 1]]} ${toLatex(n)}`)).join(' ')
+  const termEvals = nodes.map((n) => compile(n))
+  const termTexts = segs.map((s) => s.text.trim())
+  const logBases = logBaseParams(nodes)
+
+  const single = plans.length === 1 ? plans[0] : null
+  let kind: CurveKind
+  let ev: Evaluator
+  let body: Node | null = null
+  if (single && single.kind === 'y') {
+    kind = 'explicit'
+    if (single.literal) {
+      body = single.literal
+      ev = compile(single.literal)
+    } else {
+      const A = single.A!
+      const B = single.B!
+      ev = (p, x) => -A(p, x, 0) / B(p, x, 0)
+    }
+  } else {
+    kind = 'implicit'
+    ev = plans.length === 1 ? plans[0].s : (p, x, y) => plans[0].s(p, x, y) * plans[1].s(p, x, y)
+  }
+
+  const infoAt = (params: number[]): InequalityInfo => {
+    const P = params.slice()
+    const parts: IneqPart[] = plans.map((pl) => {
+      const s = (x: number, y: number): number => pl.s(P, x, y)
+      let linear: IneqPart['linear']
+      if (pl.lin) {
+        const a = pl.lin.a(P, 0, 0)
+        const b = pl.lin.b(P, 0, 0)
+        const c = pl.lin.c(P, 0, 0)
+        if (Number.isFinite(a) && Number.isFinite(b) && Number.isFinite(c) && (a !== 0 || b !== 0)) {
+          linear = { a, b, c }
+        }
+      }
+      const common = {
+        s,
+        strict: pl.strict,
+        boundaryLatex: pl.boundaryLatex,
+        boundaryText: pl.boundaryText,
+        terms: pl.terms,
+        ...(linear ? { linear } : {}),
+      }
+      if (pl.kind === 'y') {
+        const B = pl.B!(P, 0, 0)
+        if (Number.isFinite(B) && B !== 0) {
+          const A = pl.A!
+          const lit = pl.literalEv
+          const f = lit ? (x: number): number => lit(P, x, 0) : (x: number): number => -A(P, x, 0) / B
+          const part: IneqPart = { ...common, boundary: { kind: 'y', f }, side: B > 0 ? 'above' : 'below' }
+          if (linear && !pl.literal) {
+            const sl = solvedLine('y', -linear.a / linear.b, -linear.c / linear.b)
+            part.boundaryLatex = `${pl.boundaryLatex}\\;\\Leftrightarrow\\; ${sl.tex}`
+          }
+          return part
+        }
+      } else if (pl.kind === 'x') {
+        const B = pl.B!(P, 0, 0)
+        const A = pl.A!(P, 0, 0)
+        if (Number.isFinite(B) && B !== 0 && Number.isFinite(A)) {
+          const c = -A / B
+          const part: IneqPart = { ...common, boundary: { kind: 'x', c }, side: B > 0 ? 'right' : 'left' }
+          const sl = solvedLine('x', 0, c)
+          if (!(pl.boundaryText.replace(/\s/g, '') === sl.text.replace(/\s/g, ''))) {
+            part.boundaryLatex = `${pl.boundaryLatex}\\;\\Leftrightarrow\\; ${sl.tex}`
+          }
+          return part
+        }
+      }
+      return { ...common, boundary: { kind: 'implicit', F: s }, side: implicitSide(s) }
+    })
+    return {
+      parts,
+      terms: termTexts,
+      rels,
+      term: (i, x, y) => termEvals[i](P, x, y),
+      paramNames,
+      params: P,
+    }
+  }
+
+  const plot = makePlot(kind, latex, paramNames, null, ev, body ? singPlanOf(body) : null, logBases, null, body)
+  return {
+    ...plot,
+    makeModel(modelId: string): ModelSpec {
+      const spec = plot.makeModel(modelId)
+      // The renderer asks every frame: the last answer is kept per params.
+      let lastKey = ''
+      let last: InequalityInfo | null = null
+      spec.inequality = (params: number[]) => {
+        const key = params.join(',')
+        if (last && key === lastKey) return last
+        last = infoAt(params)
+        lastKey = key
+        return last
+      }
+      return spec
+    },
+  }
+}
+
+// ----------------------------------------------------------------------------
 // Public API
 // ----------------------------------------------------------------------------
 
@@ -3137,6 +3627,11 @@ export function parseExpression(src: string, env?: FunctionEnv | null): ParseOut
     if (!src || src.trim() === '') {
       return { ok: false, error: 'Empty expression' }
     }
+    // "y < x^2 - 4", "x + 2y <= 8", "2 < y < x + 3": a region, not a curve.
+    // Only a line whose top level carries a relation sign and no '=' comes
+    // here, so every line that parsed before parses exactly as it did.
+    const cuts = inequalityCuts(src)
+    if (cuts) return { ok: true, plot: parseRegion(src, cuts, env) }
     // "y = x^2 {0 <= x < 3}", "y = { x^2 if x < 0 ; 2x if x >= 0 }", ...
     const restricted = parsePieced(src, env)
     if (restricted) return { ok: true, plot: restricted }

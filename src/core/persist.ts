@@ -751,6 +751,56 @@ export function storedToUnitCircle(raw: unknown): { circle: BoardUnitCircle } | 
   return { circle }
 }
 
+// --- inequality system --------------------------------------------------------
+//
+// Two-variable inequalities are typed curves (their line is their source, like
+// every other typed curve). What the BOARD adds is the system they form: the
+// visible inequalities, taken together. The document keeps only what the
+// teacher SET for it — the solution-region switch, the test point, the
+// linear-programming objective and its goal, the iso-profit line — and each
+// key only when set, so a board that never had a system writes nothing and
+// serialises byte-for-byte as it did before this existed. Everything drawn
+// (the common region, the corners, the table) is recomputed from the curves.
+
+export interface BoardIneqSystem {
+  /** Shade only the region common to every visible inequality. */
+  solution?: true
+  /** The draggable test point, while it is on the board. */
+  test?: { x: number; y: number }
+  /** The objective as typed ("P = 3x + 2y") and whether it is maximised or minimised. */
+  objective?: { src: string; goal: 'max' | 'min' }
+  /** The dashed iso-profit line through the optimum. */
+  iso?: true
+}
+
+/** A system with nothing set is no system: null, and nothing is written. */
+export function systemToStored(sys: BoardIneqSystem | null | undefined): BoardIneqSystem | null {
+  if (!sys) return null
+  const out: BoardIneqSystem = {}
+  if (sys.solution) out.solution = true
+  if (sys.test && Number.isFinite(sys.test.x) && Number.isFinite(sys.test.y)) out.test = { x: sys.test.x, y: sys.test.y }
+  if (sys.objective && typeof sys.objective.src === 'string' && sys.objective.src.trim() !== '') {
+    out.objective = { src: sys.objective.src.slice(0, 200), goal: sys.objective.goal === 'min' ? 'min' : 'max' }
+  }
+  if (sys.iso) out.iso = true
+  return Object.keys(out).length > 0 ? out : null
+}
+
+/** The system out of an untrusted blob; unreadable keys are dropped. */
+export function storedToSystem(raw: unknown): BoardIneqSystem | null {
+  if (!isObj(raw)) return null
+  const out: BoardIneqSystem = {}
+  if (raw.solution === true) out.solution = true
+  if (isObj(raw.test) && isNum(raw.test.x) && isNum(raw.test.y) && Math.abs(raw.test.x) < 1e9 && Math.abs(raw.test.y) < 1e9) {
+    out.test = { x: raw.test.x, y: raw.test.y }
+  }
+  if (isObj(raw.objective) && isStr(raw.objective.src) && raw.objective.src.trim() !== '') {
+    out.objective = { src: raw.objective.src.slice(0, 200), goal: raw.objective.goal === 'min' ? 'min' : 'max' }
+  }
+  if (raw.iso === true) out.iso = true
+  return Object.keys(out).length > 0 ? out : null
+}
+
 // --- board ruling -----------------------------------------------------------
 //
 // Which LATTICE a cartesian board is drawn on: the square grid, or the
@@ -1204,6 +1254,11 @@ export interface StoredBoard {
    */
   unitCircles?: StoredUnitCircle[]
   /**
+   * The inequality system's settings (solution region, test point, objective).
+   * Omitted when nothing is set — every document written before it existed.
+   */
+  system?: BoardIneqSystem
+  /**
    * The ruling: 'polar' when the board is drawn on circles and spokes.
    *
    * Written ONLY for a polar board. The square ruling is the default and what
@@ -1470,6 +1525,8 @@ export interface BoardInput {
   sequences?: readonly BoardSequence[]
   /** Unit circles. Absent or empty writes nothing at all, by the same rule. */
   unitCircles?: readonly BoardUnitCircle[]
+  /** The inequality system's settings. Absent or empty writes nothing at all. */
+  system?: BoardIneqSystem | null
   /** The ruling. Absent means 'cartesian', which writes nothing at all. */
   grid?: BoardGrid
   /** The figure style. Absent means 'screen', which writes nothing at all. */
@@ -1562,6 +1619,8 @@ export interface HydratedBoard {
   sequences: BoardSequence[]
   /** The unit circles that could be read; an unreadable one is dropped and REPORTED. */
   unitCircles: BoardUnitCircle[]
+  /** The inequality system's settings; null when the document has none. */
+  system: BoardIneqSystem | null
   /** The ruling this document states. 'cartesian' when it is silent. */
   grid: BoardGrid
   /** The figure style this document states. 'screen' when it is silent. */
@@ -1815,6 +1874,10 @@ export function boardToStored(input: BoardInput): StoredBoard {
   // And for the unit circles.
   const circles = input.unitCircles ?? []
   if (circles.length > 0) board.unitCircles = circles.slice(0, MAX_UNIT_CIRCLES).map(unitCircleToStored)
+
+  // And the inequality system, only when something about it is set.
+  const system = systemToStored(input.system)
+  if (system) board.system = system
 
   // The ruling, only when it is not the square one every document has always
   // been drawn on.
@@ -3352,6 +3415,9 @@ export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResu
     unitCircles.push(built.circle)
   }
 
+  // ---- the inequality system. Absent is the default; unreadable keys drop.
+  const system = storedToSystem(rawBoard.system)
+
   // ---- the ruling. Unreadable or absent is not a repair: it is the default.
   const grid = storedGrid(rawBoard.grid)
 
@@ -3464,6 +3530,7 @@ export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResu
       data,
       sequences,
       unitCircles,
+      system,
       grid,
       figure,
       caption,
@@ -3616,6 +3683,7 @@ function blankHydrated(): HydratedBoard {
     data: [],
     sequences: [],
     unitCircles: [],
+    system: null,
     grid: 'cartesian',
     figure: 'screen',
     caption: '',

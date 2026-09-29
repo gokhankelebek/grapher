@@ -185,6 +185,8 @@ interface Props {
   onUnitCircleAdd?(): void
   /** The unit circle's card, rendered by the App (it owns the play state). */
   unitCircleCards?: ReactNode
+  /** The inequality system's card (solution region, test point, linear programming). */
+  systemCard?: ReactNode
   /** How many unit circles the list holds, for the header count. */
   unitCircleCount?: number
   /** "Build ▾ → Sequence" open at the top of the list. */
@@ -439,6 +441,7 @@ export function Sidebar({
   seqOpen = false,
   onUnitCircleAdd,
   unitCircleCards,
+  systemCard,
   unitCircleCount = 0,
   onSeqToggle,
   onSeqBuild,
@@ -767,6 +770,7 @@ export function Sidebar({
               setNotation={setNotation}
             />
           ))}
+          {!numberLine && systemCard}
           {!numberLine &&
             fields.map((field) => {
               const data = fieldCardFor(field.id)
