@@ -36,6 +36,7 @@ import type {
   Polyline,
   EulerPath,
   ScatterSet,
+  UnitCircleFigure,
   Shape,
   SlopeField,
 } from './renderBoard'
@@ -164,6 +165,11 @@ interface Props {
    * scene like the shapes, so the screen and the PNG draw the same points.
    */
   scatter?: readonly ScatterSet[] | null
+  /**
+   * Unit circles — straight into the scene like the shapes, so the screen and
+   * the exported figure draw the same circle, triangle and unwrapped graph.
+   */
+  unitCircles?: readonly UnitCircleFigure[] | null
   /**
    * The RULING: the square lattice, or the circles and spokes a polar curve is
    * read off. Absent means the square one, so a caller that never mentions it
@@ -515,6 +521,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     eulers,
     shapes,
     scatter,
+    unitCircles,
     grid,
     figure,
     caption,
@@ -551,6 +558,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   const eulersRef = useRef<readonly EulerPath[] | null | undefined>(eulers)
   const shapesRef = useRef<readonly Shape[] | null | undefined>(shapes)
   const scatterRef = useRef<readonly ScatterSet[] | null | undefined>(scatter)
+  const unitCirclesRef = useRef<readonly UnitCircleFigure[] | null | undefined>(unitCircles)
   const gridRef = useRef<BoardGrid | null | undefined>(grid)
   const figureRef = useRef<FigureStyle | null | undefined>(figure)
   const captionRef = useRef<string | null | undefined>(caption)
@@ -713,6 +721,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       ...(eulersRef.current && eulersRef.current.length > 0 ? { eulers: eulersRef.current } : {}),
       shapes: shapesRef.current ?? undefined,
       ...(scatterRef.current && scatterRef.current.length > 0 ? { scatter: scatterRef.current } : {}),
+      ...(unitCirclesRef.current && unitCirclesRef.current.length > 0 ? { unitCircles: unitCirclesRef.current } : {}),
       grid: gridRef.current ?? undefined,
       figure: figureRef.current ?? undefined,
       caption: captionRef.current ?? undefined,
@@ -798,6 +807,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     eulersRef.current = eulers
     shapesRef.current = shapes
     scatterRef.current = scatter
+    unitCirclesRef.current = unitCircles
     gridRef.current = grid
     figureRef.current = figure
     captionRef.current = caption
@@ -822,6 +832,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     eulers,
     shapes,
     scatter,
+    unitCircles,
     grid,
     figure,
     caption,

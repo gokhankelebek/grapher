@@ -6758,3 +6758,138 @@ button.calc-field-btn {
 .euler-run > .calc-line:first-child {
   flex-wrap: nowrap;
 }
+
+/* ==========================================================================
+   Unit circle card (src/ui/UnitCircleCard.tsx)
+   ========================================================================== */
+
+.uc-summary {
+  margin-top: var(--sp-1);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.uc-theta-row,
+.uc-unwrap-row,
+.uc-inv-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.uc-theta-input {
+  width: 9ch;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+}
+
+.uc-theta-input:focus,
+.uc-inv-input:focus {
+  outline: 2px solid var(--curve, var(--accent));
+  outline-offset: 1px;
+}
+
+.uc-inv-input {
+  width: 8ch;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+}
+
+.uc-play-note {
+  margin: 0;
+}
+
+.uc-facts {
+  margin-top: var(--sp-2);
+  display: grid;
+  gap: 2px;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.uc-k {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--curve, var(--accent));
+}
+
+.uc-dim {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.uc-answer {
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.uc-values {
+  display: grid;
+  gap: 2px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+  font-variant-numeric: tabular-nums;
+}
+
+.uc-v-sin {
+  color: #f95f62;
+}
+
+.uc-v-cos {
+  color: #4f9cf9;
+}
+
+.uc-v-tan {
+  color: #f9a825;
+}
+
+.uc-v-recip {
+  color: var(--muted);
+}
+
+.uc-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+  margin-top: var(--sp-2);
+}
+
+.uc-table td,
+.uc-table th {
+  text-align: center;
+}
+
+.uc-row {
+  cursor: pointer;
+}
+
+.uc-row:hover td {
+  background: var(--panel-2);
+}
+
+.uc-row-on td {
+  color: var(--curve, var(--accent));
+  font-weight: 600;
+}
+
+.canvas-light .uc-v-sin {
+  color: #c01c28;
+}
+
+.canvas-light .uc-v-cos {
+  color: #1a5fb4;
+}
+
+.canvas-light .uc-v-tan {
+  color: #9a6700;
+}

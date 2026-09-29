@@ -16,7 +16,9 @@ import { useEffect, useRef, useState } from 'react'
 // its editor at the top of the list; choosing the one already open closes it.
 // "Sequence" builds an arithmetic, geometric, explicit, recursive or listed
 // sequence — dots (n, aₙ), not a curve.
-// "Data table" is the one action: it adds a table to the list and selects it.
+// "Data table" is an action: it adds a table to the list and selects it.
+// "Unit circle" is one too: it puts THE unit circle on the board (one per
+// board — a second press selects the one already there).
 // ============================================================================
 
 interface Props {
@@ -44,6 +46,8 @@ interface Props {
   onSeqToggle?(): void
   /** Add a data table to the list (an action, not an editor that stays open). */
   onDataAdd?(): void
+  /** Put the unit circle on the board, or select the one already there. */
+  onUnitCircleAdd?(): void
 }
 
 export function BuildMenu({
@@ -68,6 +72,7 @@ export function BuildMenu({
   onMotionToggle,
   onSeqToggle,
   onDataAdd,
+  onUnitCircleAdd,
 }: Props) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -146,9 +151,25 @@ export function BuildMenu({
           {item('Conic section', conicOpen, onConicToggle, 'build-conic')}
           {item('Parametric / polar', motionOpen, onMotionToggle, 'build-motion')}
           {item('Sequence', seqOpen, onSeqToggle, 'build-seq')}
+          {(onDataAdd || onUnitCircleAdd) && <div className="card-menu-sep" role="separator" />}
+          {onUnitCircleAdd && (
+            <button
+              type="button"
+              role="menuitem"
+              data-testid="build-unit-circle"
+              className="card-menu-item build-item"
+              title="The unit circle: P(θ) = (cos θ, sin θ), the reference triangle and angle, exact values, the unwrapped sin / cos / tan graph and inverse trig"
+              onClick={(e) => {
+                e.stopPropagation()
+                setOpen(false)
+                onUnitCircleAdd()
+              }}
+            >
+              Unit circle
+            </button>
+          )}
           {onDataAdd && (
             <>
-              <div className="card-menu-sep" role="separator" />
               <button
                 type="button"
                 role="menuitem"

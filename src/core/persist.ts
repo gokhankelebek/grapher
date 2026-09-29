@@ -35,6 +35,7 @@ import type { RiemannMethod } from './calculus'
 import type { SectionShape, VolumeAxis, VolumeMethod } from './volume'
 import { isSectionShape } from './volume'
 import type { RegressionKind } from './data'
+import type { InvFn, UnwrapFn } from './trig'
 
 /**
  * Bump when the on-disk shape changes in a way older readers can't handle.
@@ -618,6 +619,138 @@ export interface BoardSequence {
   name?: string
 }
 
+// --- unit circle --------------------------------------------------------------
+//
+// The unit circle (AP Precalculus Unit 3, NC Math 3): a circle of radius 1
+// about (cx, cy), the terminal point P(θ) = (cos θ, sin θ), and what a lesson
+// switches on around it — the reference triangle, the reference angle, ASTC,
+// the tangent segment, the unwrapped graph of sin, cos or tan, and an inverse
+// question (sin⁻¹(1/2)). Same rule as everything else: what is stored is what
+// the teacher SET — the centre, the angle, the toggles, the question. Every
+// exact value, label and polyline is recomputed from those (src/core/trig.ts,
+// src/ui/unitCircleLinks.ts), so nothing drawn can go stale.
+
+/** Which parts of the picture are on. */
+export interface UnitCircleShow {
+  /** The legs cos θ and sin θ, labelled. */
+  triangle: boolean
+  /** The reference angle θ′'s arc and label. */
+  ref: boolean
+  /** "All Students Take Calculus" in the quadrants. */
+  astc: boolean
+  /** The tangent segment on x = 1. */
+  tan: boolean
+  /** csc, sec and cot on the card too. */
+  recip: boolean
+  /** In inverse mode, the other solution in [0, 2π), greyed. */
+  other: boolean
+}
+
+export const UC_SHOW_DEFAULT: Readonly<UnitCircleShow> = {
+  triangle: true,
+  ref: true,
+  astc: false,
+  tan: false,
+  recip: false,
+  other: true,
+}
+
+export const UC_COLOR_DEFAULT = '#2dd4bf'
+
+/** A unit circle as the board holds it. θ is in radians whatever the mode. */
+export interface BoardUnitCircle {
+  id: string
+  cx: number
+  cy: number
+  theta: number
+  /** Degree mode: the card reads and writes θ in degrees. */
+  deg?: true
+  show: UnitCircleShow
+  /** The graph unwrapped to the right: y = sin x, cos x or tan x. */
+  unwrap?: UnwrapFn
+  /** Inverse mode: which inverse, and the value it is asked about. */
+  inv?: { fn: InvFn; v: number }
+  color: string
+  /** Written only when hidden. */
+  hidden?: true
+}
+
+/**
+ * One unit circle as JSON. Defaults are omitted, the rule every record here
+ * follows: `show` carries only the switches that differ from UC_SHOW_DEFAULT
+ * (and is absent when none do), the colour only when it was changed.
+ */
+export interface StoredUnitCircle {
+  id: string
+  cx: number
+  cy: number
+  theta: number
+  deg?: true
+  show?: Partial<UnitCircleShow>
+  unwrap?: UnwrapFn
+  inv?: { fn: InvFn; v: number }
+  color?: string
+  hidden?: true
+}
+
+const UC_SHOW_KEYS: readonly (keyof UnitCircleShow)[] = ['triangle', 'ref', 'astc', 'tan', 'recip', 'other']
+const UC_FNS: readonly string[] = ['sin', 'cos', 'tan']
+/** A centre further out than this, or an angle past this many turns, is a damaged record. */
+const UC_COORD_LIMIT = 1e6
+const UC_THETA_LIMIT = 2000 * Math.PI
+
+export function unitCircleToStored(u: BoardUnitCircle): StoredUnitCircle {
+  const out: StoredUnitCircle = { id: u.id, cx: u.cx, cy: u.cy, theta: u.theta }
+  if (u.deg) out.deg = true
+  const show: Partial<UnitCircleShow> = {}
+  let any = false
+  for (const k of UC_SHOW_KEYS) {
+    if (u.show[k] !== UC_SHOW_DEFAULT[k]) {
+      show[k] = u.show[k]
+      any = true
+    }
+  }
+  if (any) out.show = show
+  if (u.unwrap) out.unwrap = u.unwrap
+  if (u.inv) out.inv = { fn: u.inv.fn, v: u.inv.v }
+  if (u.color !== UC_COLOR_DEFAULT) out.color = u.color
+  if (u.hidden) out.hidden = true
+  return out
+}
+
+/** One unit circle out of an untrusted blob. */
+export function storedToUnitCircle(raw: unknown): { circle: BoardUnitCircle } | { error: string } {
+  if (!isObj(raw)) return { error: 'it was not readable' }
+  const { id, cx, cy, theta } = raw
+  if (!isStr(id) || !id) return { error: 'it had no id' }
+  if (!isNum(cx) || !isNum(cy) || Math.abs(cx) > UC_COORD_LIMIT || Math.abs(cy) > UC_COORD_LIMIT) {
+    return { error: 'its centre was unreadable' }
+  }
+  if (!isNum(theta) || Math.abs(theta) > UC_THETA_LIMIT) return { error: 'its angle was unreadable' }
+  const show: UnitCircleShow = { ...UC_SHOW_DEFAULT }
+  if (isObj(raw.show)) {
+    for (const k of UC_SHOW_KEYS) {
+      const v = raw.show[k]
+      if (typeof v === 'boolean') show[k] = v
+    }
+  }
+  const circle: BoardUnitCircle = {
+    id,
+    cx,
+    cy,
+    theta,
+    show,
+    color: isStr(raw.color) && raw.color ? raw.color : UC_COLOR_DEFAULT,
+  }
+  if (raw.deg === true) circle.deg = true
+  if (isStr(raw.unwrap) && UC_FNS.includes(raw.unwrap)) circle.unwrap = raw.unwrap as UnwrapFn
+  if (isObj(raw.inv) && isStr(raw.inv.fn) && UC_FNS.includes(raw.inv.fn) && isNum(raw.inv.v)) {
+    circle.inv = { fn: raw.inv.fn as InvFn, v: raw.inv.v }
+  }
+  if (raw.hidden === true) circle.hidden = true
+  return { circle }
+}
+
 // --- board ruling -----------------------------------------------------------
 //
 // Which LATTICE a cartesian board is drawn on: the square grid, or the
@@ -803,6 +936,8 @@ const MAX_CELL_CHARS = 64
 /** And for sequences, and one sequence's typed line. */
 const MAX_SEQUENCES = 100
 const MAX_SEQ_SRC_CHARS = 2000
+/** And for unit circles: a lesson has one; a handful is still a board. */
+const MAX_UNIT_CIRCLES = 8
 /** Stored stroke resolution. Keeps boards small; plenty for refit and hit tests. */
 export const MAX_STORED_STROKE = 120
 const MAX_STROKE_IN = 20000
@@ -1061,6 +1196,13 @@ export interface StoredBoard {
    * then, and an older reader drops a key it does not know.
    */
   sequences?: StoredSequence[]
+  /**
+   * The unit circles on this board — centre, angle, switches, question.
+   * Omitted entirely when there are none, which is every document written
+   * before this field existed: such a board serialises byte-for-byte as it
+   * did then, and an older reader drops a key it does not know.
+   */
+  unitCircles?: StoredUnitCircle[]
   /**
    * The ruling: 'polar' when the board is drawn on circles and spokes.
    *
@@ -1326,6 +1468,8 @@ export interface BoardInput {
   data?: readonly BoardData[]
   /** Sequences. Absent or empty writes nothing at all, by the same rule. */
   sequences?: readonly BoardSequence[]
+  /** Unit circles. Absent or empty writes nothing at all, by the same rule. */
+  unitCircles?: readonly BoardUnitCircle[]
   /** The ruling. Absent means 'cartesian', which writes nothing at all. */
   grid?: BoardGrid
   /** The figure style. Absent means 'screen', which writes nothing at all. */
@@ -1416,6 +1560,8 @@ export interface HydratedBoard {
    * and REPORTED; one whose line no longer parses is kept (its card says so).
    */
   sequences: BoardSequence[]
+  /** The unit circles that could be read; an unreadable one is dropped and REPORTED. */
+  unitCircles: BoardUnitCircle[]
   /** The ruling this document states. 'cartesian' when it is silent. */
   grid: BoardGrid
   /** The figure style this document states. 'screen' when it is silent. */
@@ -1665,6 +1811,10 @@ export function boardToStored(input: BoardInput): StoredBoard {
   // And for the sequences.
   const sequences = input.sequences ?? []
   if (sequences.length > 0) board.sequences = sequences.slice(0, MAX_SEQUENCES).map(sequenceToStored)
+
+  // And for the unit circles.
+  const circles = input.unitCircles ?? []
+  if (circles.length > 0) board.unitCircles = circles.slice(0, MAX_UNIT_CIRCLES).map(unitCircleToStored)
 
   // The ruling, only when it is not the square one every document has always
   // been drawn on.
@@ -3175,6 +3325,33 @@ export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResu
     sequences.push(built.sequence)
   }
 
+  // ---- unit circles
+  const unitCircles: BoardUnitCircle[] = []
+  const rawCircles = Array.isArray(rawBoard.unitCircles) ? rawBoard.unitCircles : []
+  if (rawBoard.unitCircles !== undefined && !Array.isArray(rawBoard.unitCircles)) {
+    problems.push('The unit circle was unreadable.')
+    degraded = true
+  }
+  if (rawCircles.length > MAX_UNIT_CIRCLES) {
+    problems.push(`Only the first ${MAX_UNIT_CIRCLES} unit circles were loaded.`)
+    degraded = true
+  }
+  for (const raw of rawCircles.slice(0, MAX_UNIT_CIRCLES)) {
+    const built = storedToUnitCircle(raw)
+    if ('error' in built) {
+      problems.push(`A unit circle could not be restored: ${built.error}.`)
+      degraded = true
+      continue
+    }
+    if (seen.has(built.circle.id)) {
+      problems.push('A unit circle was dropped: two objects claimed the same id.')
+      degraded = true
+      continue
+    }
+    seen.add(built.circle.id)
+    unitCircles.push(built.circle)
+  }
+
   // ---- the ruling. Unreadable or absent is not a repair: it is the default.
   const grid = storedGrid(rawBoard.grid)
 
@@ -3257,6 +3434,7 @@ export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResu
     ...shapes.map((s) => s.id),
     ...data.map((d) => d.id),
     ...sequences.map((q) => q.id),
+    ...unitCircles.map((u) => u.id),
   ])
   const selectedId =
     isStr(rawBoard.selectedId) && selectable.has(rawBoard.selectedId)
@@ -3285,6 +3463,7 @@ export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResu
       shapes,
       data,
       sequences,
+      unitCircles,
       grid,
       figure,
       caption,
@@ -3436,6 +3615,7 @@ function blankHydrated(): HydratedBoard {
     shapes: [],
     data: [],
     sequences: [],
+    unitCircles: [],
     grid: 'cartesian',
     figure: 'screen',
     caption: '',

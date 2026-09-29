@@ -8,6 +8,7 @@ import type {
   SpecialPoint,
   Vec2,
 } from '../core/types'
+import type { ReactNode } from 'react'
 import type { FactoredSpec } from '../core/factored'
 import type { ExpSpec } from '../core/exponential'
 import type { LogisticSpec } from '../core/logistic'
@@ -180,6 +181,12 @@ interface Props {
   onMotionToggle?(): void
   /** Put a built parametric or polar line on the board. Error, or null. */
   onMotionBuild?(src: string, tab: 'parametric' | 'polar'): string | null
+  /** "Build ▾ → Unit circle": put it on the board (or select the one there). */
+  onUnitCircleAdd?(): void
+  /** The unit circle's card, rendered by the App (it owns the play state). */
+  unitCircleCards?: ReactNode
+  /** How many unit circles the list holds, for the header count. */
+  unitCircleCount?: number
   /** "Build ▾ → Sequence" open at the top of the list. */
   seqOpen?: boolean
   onSeqToggle?(): void
@@ -430,6 +437,9 @@ export function Sidebar({
   onMotionToggle,
   onMotionBuild,
   seqOpen = false,
+  onUnitCircleAdd,
+  unitCircleCards,
+  unitCircleCount = 0,
   onSeqToggle,
   onSeqBuild,
   seqDefaultName,
@@ -535,7 +545,7 @@ export function Sidebar({
             <span className="sidebar-count">
               {numberLine
                 ? items.length
-                : curves.length + fields.length + shapes.length + data.length + sequences.length}
+                : curves.length + fields.length + shapes.length + data.length + sequences.length + unitCircleCount}
             </span>
             <button
               className={`add-btn${exprOpen ? ' add-open' : ''}`}
@@ -551,7 +561,7 @@ export function Sidebar({
             >
               +
             </button>
-            {!numberLine && (onFactorToggle || onExpToggle || onLogisticToggle || onLogToggle || onSinToggle || onTransformToggle || onPiecewiseToggle || onConicToggle || onMotionToggle || onSeqToggle || onDataAdd) && (
+            {!numberLine && (onFactorToggle || onExpToggle || onLogisticToggle || onLogToggle || onSinToggle || onTransformToggle || onPiecewiseToggle || onConicToggle || onMotionToggle || onSeqToggle || onDataAdd || onUnitCircleAdd) && (
               <BuildMenu
                 factorOpen={factorOpen}
                 expOpen={expOpen}
@@ -574,6 +584,7 @@ export function Sidebar({
                 seqOpen={seqOpen}
                 onSeqToggle={onSeqToggle}
                 onDataAdd={onDataAdd}
+                onUnitCircleAdd={onUnitCircleAdd}
               />
             )}
           </div>
@@ -866,6 +877,7 @@ export function Sidebar({
                 />
               )
             })}
+          {!numberLine && unitCircleCards}
         </div>
       </div>
     </aside>

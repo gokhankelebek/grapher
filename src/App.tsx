@@ -157,6 +157,20 @@ import {
   clampSeqN0,
 } from './ui/seqLinks'
 import type { BoardSequence, CompiledSequence, SequenceCardData } from './ui/seqLinks'
+import {
+  newUnitCircle,
+  playStart,
+  playStep,
+  settleTheta,
+  unitCircleBox,
+  unitCircleCard,
+  unitCircleFigure,
+} from './ui/unitCircleLinks'
+import type { BoardUnitCircle, PlaySpeed, UnitCircleShow } from './ui/unitCircleLinks'
+import type { UnitCircleFigure } from './render/unitCircle'
+import { UnitCircleCard } from './ui/UnitCircleCard'
+import { dragTheta, inverseTrig } from './core/trig'
+import type { InvFn, UnwrapFn } from './core/trig'
 import { fitRegression, regressionSource } from './core/data'
 import { POLAR_OFFER, suggestPolarRuling } from './ui/boardGrid'
 import { defaultCaption, exportLook, screenLook } from './ui/figureStyle'
@@ -655,6 +669,11 @@ interface Snapshot {
    */
   sequences: BoardSequence[]
   /**
+   * The unit circle, in the same history: a dragged θ, a switch, an inverse
+   * question — each comes back with one undo.
+   */
+  unitCircles: BoardUnitCircle[]
+  /**
    * Curve names (f, g, h …), the letters each typed line calls, and the
    * "Show inverse" links. In the history because they are the document's:
    * a rename rewrites every line that calls the old letter, and one undo has
@@ -722,6 +741,7 @@ interface StatePatch {
   shapes?: BoardShape[]
   data?: BoardData[]
   sequences?: BoardSequence[]
+  unitCircles?: BoardUnitCircle[]
   names?: Record<string, string>
   calls?: Record<string, string[]>
   inverses?: InverseLink[]
@@ -993,6 +1013,18 @@ export default function App() {
   /** "Build ▾ → Sequence" open at the top of the list. */
   const [seqOpen, setSeqOpen] = useState(false)
   /**
+   * The unit circle (one per board, kept as a list like everything else):
+   * its centre, θ, the switches and the inverse question. Every label and
+   * exact value is recomputed from those (src/ui/unitCircleLinks.ts).
+   */
+  const [unitCircles, setUnitCircles] = useState<BoardUnitCircle[]>([])
+  /**
+   * The animation: θ while playing (the document keeps its own until the
+   * animation stops), and the speed. Neither is the document's.
+   */
+  const [ucPlay, setUcPlay] = useState<{ theta: number } | null>(null)
+  const [ucSpeed, setUcSpeed] = useState<PlaySpeed>(1)
+  /**
    * Which RULING this board is drawn on — the square lattice or the polar one.
    *
    * A property of the DOCUMENT, exactly like the axis units and for the same
@@ -1214,6 +1246,7 @@ export default function App() {
   const shapesRef = useRef<BoardShape[]>([])
   const dataRef = useRef<BoardData[]>([])
   const seqRef = useRef<BoardSequence[]>([])
+  const ucRef = useRef<BoardUnitCircle[]>([])
   const namesRef = useRef<Record<string, string>>({})
   const callsRef = useRef<Record<string, string[]>>({})
   const inversesRef = useRef<InverseLink[]>([])
@@ -1497,8 +1530,15 @@ export default function App() {
   //
   // A number line has no axis units to choose, so it never asks.
   const axisSuggestion = useMemo<AxisUnits>(
-    () => (kind === 'cartesian' ? suggestAxisUnits(curves, exprSources) : {}),
-    [kind, curves, exprSources],
+    () =>
+      kind !== 'cartesian'
+        ? {}
+        : // A unit circle's angle is measured in π, and its unwrapped graph is
+          // read off a π axis: sin x crosses at π, peaks at π/2.
+          unitCircles.some((u) => u.hidden !== true)
+          ? { x: 'pi' as const }
+          : suggestAxisUnits(curves, exprSources),
+    [kind, curves, exprSources, unitCircles],
   )
   const suggestedX: 'decimal' | 'pi' = axisSuggestion.x === 'pi' ? 'pi' : 'decimal'
   const suggestedXRef = useRef(suggestedX)
@@ -1571,6 +1611,7 @@ export default function App() {
       shapes: shapesRef.current,
       data: dataRef.current,
       sequences: seqRef.current,
+      unitCircles: ucRef.current,
       names: namesRef.current,
       calls: callsRef.current,
       inverses: inversesRef.current,
@@ -1645,6 +1686,10 @@ export default function App() {
     if (s.sequences) {
       seqRef.current = s.sequences
       setSequences(s.sequences)
+    }
+    if (s.unitCircles) {
+      ucRef.current = s.unitCircles
+      setUnitCircles(s.unitCircles)
     }
     if (s.inverses) {
       inversesRef.current = s.inverses
@@ -1728,7 +1773,8 @@ export default function App() {
         prev.fields.some((f) => f.id === sel) ||
         prev.shapes.some((sh) => sh.id === sel) ||
         prev.data.some((d) => d.id === sel) ||
-        prev.sequences.some((q) => q.id === sel))
+        prev.sequences.some((q) => q.id === sel) ||
+        prev.unitCircles.some((u) => u.id === sel))
         ? sel
         : null,
     )
@@ -1754,7 +1800,8 @@ export default function App() {
         next.fields.some((f) => f.id === sel) ||
         next.shapes.some((sh) => sh.id === sel) ||
         next.data.some((d) => d.id === sel) ||
-        next.sequences.some((q) => q.id === sel))
+        next.sequences.some((q) => q.id === sel) ||
+        next.unitCircles.some((u) => u.id === sel))
         ? sel
         : null,
     )
@@ -1797,7 +1844,9 @@ export default function App() {
         // And a table: a dragged regression handle can detach its link.
         pre.data !== dataRef.current ||
         // And a sequence's slider: it moves dots, never a curve.
-        pre.sequences !== seqRef.current)
+        pre.sequences !== seqRef.current ||
+        // And the unit circle's P, dragged round: it moves no curve at all.
+        pre.unitCircles !== ucRef.current)
     ) {
       undoRef.current = [...undoRef.current.slice(-(HISTORY_LIMIT - 1)), pre]
       redoRef.current = []
@@ -1915,6 +1964,7 @@ export default function App() {
       shapes: [],
       data: [],
       sequences: [],
+      unitCircles: [],
       grid: 'cartesian',
       figure: 'screen',
       caption: '',
@@ -1948,6 +1998,7 @@ export default function App() {
       shapes: shapesRef.current,
       data: dataRef.current,
       sequences: seqRef.current,
+      unitCircles: ucRef.current,
       grid: boardGridRef.current,
       figure: figureStyleRef.current,
       // The DERIVED caption is not the document's: it is re-derived from the
@@ -2074,6 +2125,8 @@ export default function App() {
     dataRef.current = board.data
     // And the sequences: the lines come back, every term is evaluated again.
     seqRef.current = board.sequences
+    // And the unit circle: centre, θ and switches; every label is re-derived.
+    ucRef.current = board.unitCircles
     // The inverse links come back; their models are registered below, reading
     // the parent live exactly as they did before the document was closed.
     inversesRef.current = board.inverses
@@ -2139,6 +2192,8 @@ export default function App() {
     setShapes(board.shapes)
     setDataSets(board.data)
     setSequences(board.sequences)
+    setUnitCircles(board.unitCircles)
+    setUcPlay(null)
     setInverses(board.inverses)
     setCalls(callsRef.current)
     setNames(namesRef.current)
@@ -2280,6 +2335,8 @@ export default function App() {
     dataSets,
     // And a sequence: its line, window and toggles touch no curve.
     sequences,
+    // And the unit circle: θ, its switches, its question.
+    unitCircles,
     // And a rename, which may change nothing but a letter.
     names,
     calls,
@@ -2750,7 +2807,8 @@ export default function App() {
       fieldsRef.current.length === 0 &&
       shapesRef.current.length === 0 &&
       dataRef.current.length === 0 &&
-      seqRef.current.length === 0
+      seqRef.current.length === 0 &&
+      ucRef.current.length === 0
     ) {
       return
     }
@@ -2767,6 +2825,7 @@ export default function App() {
         shapes: [],
         data: [],
         sequences: [],
+        unitCircles: [],
         styles,
         exprSources: {},
         brokenExpr: {},
@@ -7861,6 +7920,8 @@ export default function App() {
         const b = c ? sequenceBox(q, c) : null
         if (b) boxes.push(b)
       }
+      // And a unit circle, with its unwrapped graph when it has one.
+      for (const u of ucRef.current) if (u.hidden !== true) boxes.push(unitCircleBox(u))
       // And what the lesson is ABOUT, where the curves' extent in this window
       // may not reach: the step points of every Euler path, and the key
       // points of secant, Taylor and limit overlays. None of them: the same
@@ -7915,6 +7976,257 @@ export default function App() {
     },
     [frameData, showToast],
   )
+
+  // ============================================================ unit circle
+  //
+  // One per board. The document holds the centre, θ, the switches and the
+  // inverse question (src/core/persist.ts BoardUnitCircle); every exact value,
+  // label and polyline the board and the card show is re-derived from those
+  // (src/ui/unitCircleLinks.ts), so nothing drawn can go stale.
+
+  /** One circle, replaced in place, with cleared optional keys REMOVED (not undefined). */
+  const mapUC = useCallback(
+    (id: string, patch: Partial<BoardUnitCircle>): BoardUnitCircle[] =>
+      ucRef.current.map((u) => {
+        if (u.id !== id) return u
+        const next: BoardUnitCircle = { ...u, ...patch }
+        for (const k of ['deg', 'unwrap', 'inv', 'hidden'] as const) {
+          if (k in patch && patch[k] === undefined) delete next[k]
+        }
+        return next
+      }),
+    [],
+  )
+
+  /**
+   * One stated change to the unit circle. `live` is a drag in flight: the
+   * state moves without a history entry of its own, inside the bracket the
+   * gesture opened, so a drag of P round the circle is ONE undo.
+   */
+  const patchUnitCircle = useCallback(
+    (id: string, patch: Partial<BoardUnitCircle>, label: string, live = false): void => {
+      if (!ucRef.current.some((u) => u.id === id)) return
+      const next = mapUC(id, patch)
+      if (live) applyState({ unitCircles: next })
+      else commitState({ unitCircles: next }, label)
+    },
+    [applyState, commitState, mapUC],
+  )
+
+  const ucPlayRef = useRef(ucPlay)
+  ucPlayRef.current = ucPlay
+  const ucSpeedRef = useRef(ucSpeed)
+  ucSpeedRef.current = ucSpeed
+
+  /**
+   * Where a pause left θ. Play resumes from there only while θ is still
+   * exactly that; any other θ (dragged, typed, a finished turn) plays the
+   * whole unwrapping again from 0.
+   */
+  const ucPausedRef = useRef<number | null>(null)
+
+  /** Stop the animation, leaving θ where it got to — one undo takes it back. */
+  const stopUnitCirclePlay = useCallback((): void => {
+    const cur = ucPlayRef.current
+    if (!cur) return
+    ucPlayRef.current = null
+    setUcPlay(null)
+    const theta = settleTheta(cur.theta)
+    ucPausedRef.current = theta
+    const u = ucRef.current[0]
+    if (u) patchUnitCircle(u.id, { theta }, 'play θ')
+  }, [patchUnitCircle])
+
+  /** Build ▾ → Unit circle: put it on the board, or select the one already there. */
+  const addUnitCircle = useCallback((): void => {
+    if (kindRef.current !== 'cartesian') return
+    const have = ucRef.current[0]
+    if (have) {
+      setSelectedId(have.id)
+      showToast('This board already has its unit circle — it is selected.', { ms: 2600 })
+      return
+    }
+    const uc = newUnitCircle(nextId())
+    commitState({ unitCircles: [...ucRef.current, uc] }, 'add unit circle')
+    setSelectedId(uc.id)
+    // Frame the circle AND the room to its right where sin x unwraps.
+    frameBox(unitCircleBox(uc, true))
+  }, [commitState, frameBox, showToast])
+
+  const deleteUnitCircle = useCallback(
+    (id: string): void => {
+      if (!ucRef.current.some((u) => u.id === id)) return
+      ucPlayRef.current = null
+      setUcPlay(null)
+      commitState({ unitCircles: ucRef.current.filter((u) => u.id !== id) }, 'delete unit circle')
+      showToast('Deleted the unit circle. Undo brings it back.', {
+        action: { label: 'Undo', run: () => undo() },
+      })
+      setSelectedId((sel) => (sel === id ? null : sel))
+    },
+    [commitState, showToast, undo],
+  )
+
+  const zoomToUnitCircle = useCallback(
+    (id: string): void => {
+      const u = ucRef.current.find((c) => c.id === id)
+      if (u) frameBox(unitCircleBox(u))
+    },
+    [frameBox],
+  )
+
+  const setUnitCircleTheta = useCallback(
+    (id: string, theta: number): void => {
+      if (!Number.isFinite(theta)) return
+      ucPlayRef.current = null
+      setUcPlay(null)
+      patchUnitCircle(id, { theta }, 'set θ')
+    },
+    [patchUnitCircle],
+  )
+
+  const setUnitCircleInverse = useCallback(
+    (id: string, inv: { fn: InvFn; v: number } | null): void => {
+      if (!inv) {
+        patchUnitCircle(id, { inv: undefined }, 'clear inverse')
+        return
+      }
+      const out = inverseTrig(inv.fn, inv.v)
+      ucPlayRef.current = null
+      setUcPlay(null)
+      // θ goes to the principal answer: P and the answer are the same point.
+      patchUnitCircle(id, out.ok ? { inv, theta: out.principal } : { inv }, `${inv.fn}⁻¹`)
+    },
+    [patchUnitCircle],
+  )
+
+  const playUnitCircle = useCallback(
+    (id: string, on: boolean): void => {
+      const u = ucRef.current.find((c) => c.id === id)
+      if (!u) return
+      if (!on) {
+        stopUnitCirclePlay()
+        return
+      }
+      const paused = ucPausedRef.current
+      const start = { theta: paused !== null && paused === u.theta ? playStart(u.theta) : 0 }
+      ucPlayRef.current = start
+      setUcPlay(start)
+    },
+    [stopUnitCirclePlay],
+  )
+
+  // The animation: requestAnimationFrame only while playing; a hidden tab
+  // stops it (and keeps θ where it got to).
+  const ucPlaying = ucPlay !== null
+  useEffect(() => {
+    if (!ucPlaying) return
+    let raf = 0
+    let last = performance.now()
+    const tick = (now: number): void => {
+      const dt = Math.min(0.1, Math.max(0, (now - last) / 1000))
+      last = now
+      const cur = ucPlayRef.current
+      if (!cur) return
+      const step = playStep(cur.theta, dt, ucSpeedRef.current)
+      const next = { theta: step.theta }
+      ucPlayRef.current = next
+      if (step.done) {
+        stopUnitCirclePlay()
+        return
+      }
+      setUcPlay(next)
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    const onVisibility = (): void => {
+      if (document.hidden) stopUnitCirclePlay()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      cancelAnimationFrame(raf)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [ucPlaying, stopUnitCirclePlay])
+
+  /** What the board draws — θ is the animation's while it plays. */
+  const ucFigures = useMemo<UnitCircleFigure[]>(
+    () =>
+      kind === 'cartesian'
+        ? unitCircles.map((u) => unitCircleFigure(u, { playTheta: ucPlay ? ucPlay.theta : null }))
+        : [],
+    [kind, unitCircles, ucPlay],
+  )
+  const ucFiguresRef = useRef<UnitCircleFigure[]>(ucFigures)
+  ucFiguresRef.current = ucFigures
+
+  /** P(θ): the grab point, while the circle is selected or nothing else is. */
+  const ucHandle = useMemo<ExtraHandle | null>(() => {
+    if (kind !== 'cartesian' || ucPlay) return null
+    const u = unitCircles.find((c) => c.hidden !== true && (selectedId === c.id || selectedId === null))
+    if (!u) return null
+    return {
+      id: `uc:${u.id}:P`,
+      pos: { x: u.cx + Math.cos(u.theta), y: u.cy + Math.sin(u.theta) },
+      label: 'θ',
+      color: u.color,
+      onDrag: (p: Vec2) => {
+        const live = ucRef.current.find((c) => c.id === u.id)
+        if (!live) return
+        const vp = vpRef.current
+        const theta = dragTheta(live.theta, Math.atan2(p.y - live.cy, p.x - live.cx), ppuX(vp))
+        const pre = preEditRef.current
+        if (pre && pre.label === 'edit curve') preEditRef.current = { ...pre, label: 'move P' }
+        if (selectedRef.current !== u.id) setSelectedId(u.id)
+        if (theta === live.theta) return
+        patchUnitCircle(u.id, { theta }, 'move P', true)
+      },
+    }
+  }, [kind, ucPlay, unitCircles, selectedId, patchUnitCircle])
+
+  const ucCards = useMemo(
+    () =>
+      unitCircles.map((u) => ({
+        u,
+        card: unitCircleCard(ucPlay ? { ...u, theta: ucPlay.theta } : u),
+      })),
+    [unitCircles, ucPlay],
+  )
+
+  const unitCircleCardNodes =
+    kind === 'cartesian' && ucCards.length > 0
+      ? ucCards.map(({ u, card }) => (
+          <UnitCircleCard
+            key={u.id}
+            uc={u}
+            card={card}
+            selected={selectedId === u.id}
+            playing={ucPlay !== null}
+            speed={ucSpeed}
+            onSelect={() => selectObject(u.id)}
+            onDelete={() => deleteUnitCircle(u.id)}
+            onToggleVisible={() =>
+              patchUnitCircle(u.id, { hidden: u.hidden ? undefined : true }, u.hidden ? 'show unit circle' : 'hide unit circle')
+            }
+            onCycleColor={() => {
+              const i = CURVE_COLORS.indexOf(u.color)
+              patchUnitCircle(u.id, { color: CURVE_COLORS[(i + 1) % CURVE_COLORS.length] }, 'change colour')
+            }}
+            onZoom={() => zoomToUnitCircle(u.id)}
+            onTheta={(t) => setUnitCircleTheta(u.id, t)}
+            onDeg={(d) => patchUnitCircle(u.id, { deg: d ? true : undefined }, d ? 'degrees' : 'radians')}
+            onShow={(patch: Partial<UnitCircleShow>) =>
+              patchUnitCircle(u.id, { show: { ...u.show, ...patch } }, 'show / hide')
+            }
+            onUnwrap={(fn: UnwrapFn | null) =>
+              patchUnitCircle(u.id, { unwrap: fn ?? undefined }, fn ? `unwrap ${fn}` : 'no unwrap')
+            }
+            onInverse={(inv) => setUnitCircleInverse(u.id, inv)}
+            onPlay={(on) => playUnitCircle(u.id, on)}
+            onSpeed={setUcSpeed}
+          />
+        ))
+      : null
 
 
   // ------------------------------------------------------------------ export
@@ -9002,8 +9314,9 @@ export default function App() {
   const boardHandles = useMemo<ExtraHandle[]>(() => {
     const more = motionHandle ? [motionHandle] : []
     if (domainHandles.length > 0) more.push(...domainHandles)
+    if (ucHandle) more.push(ucHandle)
     return more.length > 0 ? [...extraHandles, ...more] : extraHandles
-  }, [extraHandles, motionHandle, domainHandles])
+  }, [extraHandles, motionHandle, domainHandles, ucHandle])
 
   /** What the board marks for the selected curve. */
   const boardAnalysis = useMemo<SpecialPoint[]>(() => {
@@ -9466,7 +9779,8 @@ export default function App() {
         const c = seqCompiledRef.current.get(q.id)
         return c ? sequenceBox(q, c) : null
       })
-    return unionBoxes([box, ...dataRef.current.filter((d) => d.visible).map(dataBox), ...construction, ...seqBoxes])
+    const ucBoxes = ucRef.current.filter((u) => u.hidden !== true).map((u) => unitCircleBox(u))
+    return unionBoxes([box, ...dataRef.current.filter((d) => d.visible).map(dataBox), ...construction, ...seqBoxes, ...ucBoxes])
   }, [])
 
   const buildExportScene = useCallback(
@@ -9601,6 +9915,9 @@ export default function App() {
       // And the data: a scatter plot and its residuals are the lesson on a
       // regression board, so the PNG gets the same sets the screen drew.
       ...(scatterSceneRef.current.length > 0 ? { scatter: scatterSceneRef.current } : {}),
+      // And the unit circle: the circle, its triangle, its labels and the
+      // unwrapped graph are the figure on a trig board.
+      ...(ucFiguresRef.current.length > 0 ? { unitCircles: ucFiguresRef.current } : {}),
       // And on the ruling the screen is on: a polar board exported on squares
       // would be a different picture of the same curve.
       grid: boardGridRef.current,
@@ -10204,6 +10521,8 @@ export default function App() {
           deleteData(selectedRef.current)
         } else if (seqRef.current.some((q) => q.id === selectedRef.current)) {
           deleteSequence(selectedRef.current)
+        } else if (ucRef.current.some((u) => u.id === selectedRef.current)) {
+          deleteUnitCircle(selectedRef.current)
         } else deleteCurve(selectedRef.current)
       } else if (NUDGE[e.key]) {
         const [ux, uy] = NUDGE[e.key]
@@ -10547,6 +10866,9 @@ export default function App() {
           setMotionOpen((o) => !o)
         }}
         onMotionBuild={buildMotion}
+        onUnitCircleAdd={addUnitCircle}
+        unitCircleCards={unitCircleCardNodes}
+        unitCircleCount={kind === 'cartesian' ? unitCircles.length : 0}
         seqOpen={seqOpen}
         onSeqToggle={() => {
           setExprOpen(false)
@@ -10757,6 +11079,7 @@ export default function App() {
           eulers={eulerFigure.paths}
           shapes={screenShapes}
           scatter={scatterScene}
+          unitCircles={ucFigures}
           grid={boardGrid}
           figure={boardFigure}
           caption={boardCaption}
@@ -11090,6 +11413,7 @@ export default function App() {
           shapes.length === 0 &&
           dataSets.length === 0 &&
           sequences.length === 0 &&
+          unitCircles.length === 0 &&
           !drawingActive &&
           !loadNotice?.fatal && (
           <div className="empty-hint" aria-hidden="true">

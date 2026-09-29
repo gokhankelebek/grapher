@@ -58,6 +58,8 @@ import { drawShapes } from '../render/shapes'
 import type { EulerPath } from '../render/euler'
 import { drawEulerPaths } from '../render/euler'
 import type { ScatterSet } from '../render/scatter'
+import type { UnitCircleFigure } from '../render/unitCircle'
+import { drawUnitCircles } from '../render/unitCircle'
 import { drawScatter } from '../render/scatter'
 import { drawNLItem, drawNumberLineAxis, nlLanes } from '../render/numberline'
 import type { NLPart } from '../render/numberline'
@@ -328,6 +330,18 @@ export interface BoardScene {
    */
   scatter?: readonly ScatterSet[]
   /**
+   * Unit circles — the circle, P(θ), the reference triangle and angle, ASTC,
+   * tan θ on x = 1, the unwrapped graph and an inverse question's principal
+   * range (src/render/unitCircle.ts). Painted after the shapes and before the
+   * curve names and the analysis layer.
+   *
+   * FIGURE, not chrome: it exports, and goes mono under SAT / AP. Absent or
+   * empty draws exactly what the board drew before this field existed.
+   *
+   * Cartesian only; a number-line board ignores it.
+   */
+  unitCircles?: readonly UnitCircleFigure[]
+  /**
    * The LOOK of the whole board: the screen, a textbook worksheet, an SAT
    * item, an AP free-response figure. See FigureStyle in core/types.
    *
@@ -388,6 +402,7 @@ export type { Polyline, SlopeField } from '../render/fields'
 export type { Shape } from '../render/shapes'
 export type { EulerPath } from '../render/euler'
 export type { ScatterMarker, ScatterSet } from '../render/scatter'
+export type { UnitCircleFigure } from '../render/unitCircle'
 
 /**
  * Trig by name, at a word boundary, so `sinh`/`cosh`/`tanh` (not periodic) and
@@ -1998,6 +2013,17 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
       })
     } catch {
       /* shape render failed — the figure still stands */
+    }
+  }
+
+  // Unit circles: on top of the shapes, under the names and the analysis
+  // layer. The unwrapped graph rides with its circle.
+  const circles = scene.unitCircles
+  if (circles && circles.length > 0) {
+    try {
+      drawUnitCircles(ctx, circles, { vp, theme, paint: ink, mono, scale, font: fig?.font ?? null })
+    } catch {
+      /* a unit circle that could not be drawn must not take the figure with it */
     }
   }
 
