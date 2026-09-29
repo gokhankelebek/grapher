@@ -18,7 +18,8 @@ import { useEffect, useRef, useState } from 'react'
 // sequence — dots (n, aₙ), not a curve.
 // "Data table" is an action: it adds a table to the list and selects it.
 // "Unit circle" is one too: it puts THE unit circle on the board (one per
-// board — a second press selects the one already there).
+// board — a second press selects the one already there). "Related rates"
+// likewise puts the related-rates problem on the board.
 // ============================================================================
 
 interface Props {
@@ -48,6 +49,8 @@ interface Props {
   onDataAdd?(): void
   /** Put the unit circle on the board, or select the one already there. */
   onUnitCircleAdd?(): void
+  /** Put a related-rates problem on the board, or select the one already there. */
+  onRelatedRatesAdd?(): void
 }
 
 export function BuildMenu({
@@ -73,6 +76,7 @@ export function BuildMenu({
   onSeqToggle,
   onDataAdd,
   onUnitCircleAdd,
+  onRelatedRatesAdd,
 }: Props) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -151,7 +155,7 @@ export function BuildMenu({
           {item('Conic section', conicOpen, onConicToggle, 'build-conic')}
           {item('Parametric / polar', motionOpen, onMotionToggle, 'build-motion')}
           {item('Sequence', seqOpen, onSeqToggle, 'build-seq')}
-          {(onDataAdd || onUnitCircleAdd) && <div className="card-menu-sep" role="separator" />}
+          {(onDataAdd || onUnitCircleAdd || onRelatedRatesAdd) && <div className="card-menu-sep" role="separator" />}
           {onUnitCircleAdd && (
             <button
               type="button"
@@ -166,6 +170,22 @@ export function BuildMenu({
               }}
             >
               Unit circle
+            </button>
+          )}
+          {onRelatedRatesAdd && (
+            <button
+              type="button"
+              role="menuitem"
+              data-testid="build-related-rates"
+              className="card-menu-item build-item"
+              title="Related rates: a sliding ladder, a cone tank, a shadow, a ripple or a balloon — animated in time, with the relation, its derivative and the live rates"
+              onClick={(e) => {
+                e.stopPropagation()
+                setOpen(false)
+                onRelatedRatesAdd()
+              }}
+            >
+              Related rates
             </button>
           )}
           {onDataAdd && (

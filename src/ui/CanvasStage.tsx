@@ -37,6 +37,7 @@ import type {
   EulerPath,
   ScatterSet,
   UnitCircleFigure,
+  RelatedRatesFigure,
   Shape,
   SlopeField,
 } from './renderBoard'
@@ -170,6 +171,8 @@ interface Props {
    * the exported figure draw the same circle, triangle and unwrapped graph.
    */
   unitCircles?: readonly UnitCircleFigure[] | null
+  /** The related-rates scenario — straight into the scene, like the unit circle. */
+  relatedRates?: readonly RelatedRatesFigure[] | null
   /**
    * The inequality system's "solution region": shade only what every visible
    * inequality shares (BoardScene.inequalitySolution). Threaded like the
@@ -528,6 +531,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     shapes,
     scatter,
     unitCircles,
+    relatedRates,
     inequalitySolution,
     grid,
     figure,
@@ -566,6 +570,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   const shapesRef = useRef<readonly Shape[] | null | undefined>(shapes)
   const scatterRef = useRef<readonly ScatterSet[] | null | undefined>(scatter)
   const unitCirclesRef = useRef<readonly UnitCircleFigure[] | null | undefined>(unitCircles)
+  const relatedRatesRef = useRef<readonly RelatedRatesFigure[] | null | undefined>(relatedRates)
   const ineqSolutionRef = useRef<boolean>(inequalitySolution === true)
   const gridRef = useRef<BoardGrid | null | undefined>(grid)
   const figureRef = useRef<FigureStyle | null | undefined>(figure)
@@ -730,6 +735,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       shapes: shapesRef.current ?? undefined,
       ...(scatterRef.current && scatterRef.current.length > 0 ? { scatter: scatterRef.current } : {}),
       ...(unitCirclesRef.current && unitCirclesRef.current.length > 0 ? { unitCircles: unitCirclesRef.current } : {}),
+      ...(relatedRatesRef.current && relatedRatesRef.current.length > 0 ? { relatedRates: relatedRatesRef.current } : {}),
       ...(ineqSolutionRef.current ? { inequalitySolution: true } : {}),
       grid: gridRef.current ?? undefined,
       figure: figureRef.current ?? undefined,
@@ -817,6 +823,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     shapesRef.current = shapes
     scatterRef.current = scatter
     unitCirclesRef.current = unitCircles
+    relatedRatesRef.current = relatedRates
     ineqSolutionRef.current = inequalitySolution === true
     gridRef.current = grid
     figureRef.current = figure
@@ -843,6 +850,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     shapes,
     scatter,
     unitCircles,
+    relatedRates,
     inequalitySolution,
     grid,
     figure,

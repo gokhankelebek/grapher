@@ -66,6 +66,8 @@ import { drawEulerPaths } from '../render/euler'
 import type { ScatterSet } from '../render/scatter'
 import type { UnitCircleFigure } from '../render/unitCircle'
 import { drawUnitCircles } from '../render/unitCircle'
+import type { RelatedRatesFigure } from '../render/relatedRates'
+import { drawRelatedRates } from '../render/relatedRates'
 import { drawScatter } from '../render/scatter'
 import { drawNLItem, drawNumberLineAxis, nlLanes } from '../render/numberline'
 import type { NLPart } from '../render/numberline'
@@ -356,6 +358,14 @@ export interface BoardScene {
    */
   unitCircles?: readonly UnitCircleFigure[]
   /**
+   * The related-rates scenario — its schematic (wall, ladder, cone, lamp,
+   * circles), live values, rate arrows and the mini-graph of the unknown rate
+   * (src/render/relatedRates.ts). Painted with the unit circles. FIGURE: it
+   * exports, and goes mono under SAT / AP. Absent or empty draws exactly what
+   * the board drew before this field existed.
+   */
+  relatedRates?: readonly RelatedRatesFigure[]
+  /**
    * The LOOK of the whole board: the screen, a textbook worksheet, an SAT
    * item, an AP free-response figure. See FigureStyle in core/types.
    *
@@ -417,6 +427,7 @@ export type { Shape } from '../render/shapes'
 export type { EulerPath } from '../render/euler'
 export type { ScatterMarker, ScatterSet } from '../render/scatter'
 export type { UnitCircleFigure } from '../render/unitCircle'
+export type { RelatedRatesFigure } from '../render/relatedRates'
 
 /**
  * Trig by name, at a word boundary, so `sinh`/`cosh`/`tanh` (not periodic) and
@@ -2089,6 +2100,16 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
       drawUnitCircles(ctx, circles, { vp, theme, paint: ink, mono, scale, font: fig?.font ?? null })
     } catch {
       /* a unit circle that could not be drawn must not take the figure with it */
+    }
+  }
+
+  // Related rates: the same layer as the unit circle.
+  const rates = scene.relatedRates
+  if (rates && rates.length > 0) {
+    try {
+      drawRelatedRates(ctx, rates, { vp, theme, paint: ink, mono, scale, font: fig?.font ?? null })
+    } catch {
+      /* a scenario that could not be drawn must not take the figure with it */
     }
   }
 

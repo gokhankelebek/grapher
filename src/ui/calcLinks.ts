@@ -56,6 +56,8 @@ import type { VolumeRow } from './volumeLinks'
 import type { SectionShape, VolumeAxis, VolumeMethod } from '../core/volume'
 import type { SecantRow } from './secantLinks'
 import { limitOverlays, limitRow } from './limitLinks'
+import { implicitOrigin, implicitOverlays, implicitRow, isImplicitCurve } from './implicitLinks'
+import type { Box, ImplicitRow } from './implicitLinks'
 import type { LimitRow } from './limitLinks'
 import {
   pName,
@@ -83,6 +85,7 @@ import {
 export type {
   AccumulationLink,
   AreaLink,
+  ImplicitRow,
   CalcKind,
   CalcLink,
   CurveLink,
@@ -214,8 +217,24 @@ export function overlaysFor(
    * Absent: no band (everything else draws as before).
    */
   span: [number, number] | null = null,
+  /**
+   * Implicit tangents' horizontal / vertical tangent marks: the typed lines
+   * (for the symbolic partials) and the box they are searched in. Absent: no
+   * marks.
+   */
+  implicit: { sources: Readonly<Record<string, string>>; box: Box | null } | null = null,
 ): Overlay[] {
   const out: Overlay[] = []
+  if (implicit) {
+    const marked = links.filter((l): l is TangentLink => l.kind === 'tangent' && l.marks === true)
+    if (marked.length > 0) {
+      try {
+        out.push(...implicitOverlays(marked, curves, models, implicit.sources, implicit.box))
+      } catch {
+        /* the marks are lost this frame; the rest of the figure stands */
+      }
+    }
+  }
   for (const l of links) {
     if (l.kind !== 'area') continue
     const parent = curveById(curves, l.parentId)
@@ -1512,8 +1531,15 @@ export function labelLegend<T extends LegendLike>(
  * both come from this one pass over the links.
  */
 export interface CardCalc {
-  /** True when this curve can carry calculus objects at all (explicit in x). */
+  /** True when this curve can carry calculus objects at all (explicit in x, or an implicit equation). */
   canAdd: boolean
+  /**
+   * An implicit curve (x² + y² = 25): the menu offers the tangent line only,
+   * and the tangents it carries are listed in `implicits`.
+   */
+  implicitOnly?: boolean
+  /** The tangents on this implicit curve: dy/dx, the point, the line, H/V tangents, d²y/dx². */
+  implicits?: ImplicitRow[]
   /** Set when this curve IS a derived object — what it is, and of what. */
   origin: OriginRow | null
   areas: AreaRow[]
@@ -1615,6 +1641,10 @@ export interface RiemannRow {
 /** One edit a card can make to a link. The App applies it; the card states it. */
 export type CalcChange =
   | { kind: 'tangentX'; linkId: string; x: number }
+  /** An implicit tangent's point, already on the curve (a drag, a typed coordinate). */
+  | { kind: 'tangentPoint'; linkId: string; x: number; y: number }
+  /** Mark (or clear) an implicit curve's horizontal and vertical tangents. */
+  | { kind: 'tangentMarks'; linkId: string; on: boolean }
   | { kind: 'bound'; linkId: string; which: 'from' | 'to'; value: number }
   | { kind: 'abs'; linkId: string; abs: boolean }
   | { kind: 'n'; linkId: string; n: number }
@@ -1652,7 +1682,10 @@ export type CalcChange =
 export function changeLabel(change: CalcChange): string {
   switch (change.kind) {
     case 'tangentX':
+    case 'tangentPoint':
       return 'move tangent point'
+    case 'tangentMarks':
+      return 'mark horizontal / vertical tangents'
     case 'bound':
       return 'move area bound'
     case 'abs':
@@ -1740,11 +1773,14 @@ export function cardCalc(
    * integral — R(x) = √x rather than R(x) = f(x). Absent: letters.
    */
   sources: Readonly<Record<string, string>> = {},
+  /** Where an implicit curve's horizontal and vertical tangents are looked for. */
+  implicitBox: Box | null = null,
 ): Record<string, CardCalc> {
   const out: Record<string, CardCalc> = {}
   const callsOthers = (id: string): boolean => (calls[id]?.length ?? 0) > 0
   const blank = (curve: FittedCurve): CardCalc => ({
-    canAdd: models[curve.modelId]?.kind === 'explicit',
+    canAdd: models[curve.modelId]?.kind === 'explicit' || isImplicitCurve(curve, models),
+    ...(isImplicitCurve(curve, models) ? { implicitOnly: true, implicits: [] } : {}),
     origin: null,
     areas: [],
     riemanns: [],
@@ -1768,7 +1804,7 @@ export function cardCalc(
   // the curve (is it a function of x?) rather than about the links.
   for (const curve of curves) {
     const card = blank(curve)
-    if (card.canAdd) {
+    if (card.canAdd && !card.implicitOnly) {
       try {
         card.taylorBlocked = taylorBlocked(curve, models, callsOthers(curve.id))
       } catch {
@@ -1782,6 +1818,35 @@ export function cardCalc(
     const parent = curveById(curves, link.parentId)
     switch (link.kind) {
       case 'tangent': {
+        if (parent && isImplicitCurve(parent, models)) {
+          // An implicit curve's tangent: the whole implicit-differentiation
+          // story goes on the PARENT's card; the line's own card says where.
+          let row: ImplicitRow
+          try {
+            row = implicitRow(link, parent, models, sources[parent.id] ?? null, implicitBox)
+          } catch {
+            row = implicitRow(link, undefined, models, null, null)
+            row.problem = 'this tangent could not be measured'
+          }
+          const own = slot(link.parentId)
+          if (own) {
+            own.order?.push(link.id)
+            ;(own.implicits ??= []).push(row)
+          }
+          const here = slot(link.curveId)
+          if (!here) break
+          const o = implicitOrigin(row)
+          here.origin = {
+            linkId: link.id,
+            kind: 'tangent',
+            text: `tangent to ${nameOf(parent)} at ${row.pointText}`,
+            lead: `tangent to ${nameOf(parent)} at`,
+            tail: o.tail,
+            problem: o.problem,
+            x: null,
+          }
+          break
+        }
         const here = slot(link.curveId)
         if (!here) break
         const r = tangentReadout(link, parent, models, parent ? nameOf(parent) : 'that curve')

@@ -32,6 +32,8 @@ import { MODELS } from './fit/models'
 import { accumulationModel, derivativeModel } from './calculus'
 import { TAYLOR_N_DEFAULT, TAYLOR_N_MAX, TAYLOR_N_MIN } from './taylor'
 import type { RiemannMethod } from './calculus'
+import { RR_DEFS, RR_SCENARIOS, cleanParams } from './relatedRates'
+import type { RRScenario } from './relatedRates'
 import type { SectionShape, VolumeAxis, VolumeMethod } from './volume'
 import { isSectionShape } from './volume'
 import type { RegressionKind } from './data'
@@ -109,9 +111,20 @@ export interface TangentLink {
   kind: 'tangent'
   id: string
   parentId: string
-  /** The `line` curve this link drives; it lives and dies with the link. */
+  /**
+   * The `line` curve this link drives; it lives and dies with the link. On an
+   * implicit parent it is a `line` or, at a vertical tangent, a `vline`.
+   */
   curveId: string
   x: number
+  /**
+   * Implicit parents only (x² + y² = 25): the point's y — which branch x is
+   * on. The point is re-found on the curve from (x, y) on every change.
+   * Written only when present, so every explicit tangent stores what it did.
+   */
+  y?: number
+  /** Implicit parents only: the horizontal and vertical tangents marked on the board. */
+  marks?: true
 }
 
 /** f′ of `parentId`, drawn as the curve `curveId`. */
@@ -832,6 +845,93 @@ export function storedToSystem(raw: unknown): BoardIneqSystem | null {
   return Object.keys(out).length > 0 ? out : null
 }
 
+// --- related rates ------------------------------------------------------------
+//
+// Build ▾ → Related rates (AP Calculus Unit 4): one board object, a scenario
+// (ladder, cone, shadow, ripple, balloon) with its givens, the instant t, the
+// "when x = 6" question and two switches. Same rule as everything else: what
+// is stored is what the teacher SET; every drawing, formula and live value is
+// recomputed from it (src/core/relatedRates.ts, src/ui/relatedRatesLinks.ts).
+// One per board, stored as `board.relatedRates` — a single object, written
+// only when there is one.
+
+export const RR_COLOR_DEFAULT = '#38bdf8'
+
+export interface BoardRelatedRates {
+  id: string
+  scenario: RRScenario
+  /** The givens, by key (L, c, x0 …) — every key the scenario has. */
+  params: Record<string, number>
+  /** The instant, in the scenario's time unit. */
+  t: number
+  /** "When x = 6": the question t was solved from, kept so the card can say it. */
+  when?: { q: string; v: number }
+  /** Play stops at the `when` instant. */
+  pause?: true
+  /** Written only when the mini-graph of the unknown rate is switched off. */
+  graph?: false
+  color: string
+  hidden?: true
+}
+
+export interface StoredRelatedRates {
+  id: string
+  scenario: RRScenario
+  params: Record<string, number>
+  t: number
+  when?: { q: string; v: number }
+  pause?: true
+  graph?: false
+  color?: string
+  hidden?: true
+}
+
+const RR_T_LIMIT = 1e7
+
+export function relatedRatesToStored(r: BoardRelatedRates): StoredRelatedRates {
+  const params: Record<string, number> = {}
+  for (const d of RR_DEFS[r.scenario].params) {
+    const v = r.params[d.key]
+    if (typeof v === 'number' && Number.isFinite(v)) params[d.key] = v
+  }
+  const out: StoredRelatedRates = { id: r.id, scenario: r.scenario, params, t: r.t }
+  if (r.when) out.when = { q: r.when.q, v: r.when.v }
+  if (r.pause) out.pause = true
+  if (r.graph === false) out.graph = false
+  if (r.color !== RR_COLOR_DEFAULT) out.color = r.color
+  if (r.hidden) out.hidden = true
+  return out
+}
+
+export function storedToRelatedRates(raw: unknown): { rr: BoardRelatedRates } | { error: string } {
+  if (!isObj(raw)) return { error: 'it was not readable' }
+  const { id, scenario, t } = raw
+  if (!isStr(id) || !id) return { error: 'it had no id' }
+  if (!isStr(scenario) || !(RR_SCENARIOS as readonly string[]).includes(scenario)) {
+    return { error: 'its scenario was unknown' }
+  }
+  const sc = scenario as RRScenario
+  const rr: BoardRelatedRates = {
+    id,
+    scenario: sc,
+    params: cleanParams(sc, raw.params),
+    t: isNum(t) && Math.abs(t) <= RR_T_LIMIT ? t : 0,
+    color: isStr(raw.color) && raw.color ? raw.color : RR_COLOR_DEFAULT,
+  }
+  if (
+    isObj(raw.when) &&
+    isStr(raw.when.q) &&
+    RR_DEFS[sc].quantities.some((q) => q.key === (raw.when as { q: string }).q) &&
+    isNum(raw.when.v)
+  ) {
+    rr.when = { q: raw.when.q, v: raw.when.v }
+  }
+  if (raw.pause === true) rr.pause = true
+  if (raw.graph === false) rr.graph = false
+  if (raw.hidden === true) rr.hidden = true
+  return { rr }
+}
+
 // --- board ruling -----------------------------------------------------------
 //
 // Which LATTICE a cartesian board is drawn on: the square grid, or the
@@ -1285,6 +1385,13 @@ export interface StoredBoard {
    */
   unitCircles?: StoredUnitCircle[]
   /**
+   * The related-rates object (one per board) — scenario, givens, instant,
+   * question, switches. Omitted when there is none, which is every document
+   * written before this field existed: such a board serialises
+   * byte-for-byte as it did then.
+   */
+  relatedRates?: StoredRelatedRates
+  /**
    * The inequality system's settings (solution region, test point, objective).
    * Omitted when nothing is set — every document written before it existed.
    */
@@ -1476,6 +1583,10 @@ export interface StoredCalcLink {
   ratio?: number
   /** Volume only: 'y' for cross-sections perpendicular to the y-axis. */
   perp?: 'y'
+  /** Tangent on an implicit curve only: the point's y (its branch). */
+  y?: number
+  /** Tangent on an implicit curve only, and only when on: the H/V tangents marked. */
+  marks?: true
 }
 
 export interface StoredDoc {
@@ -1558,6 +1669,8 @@ export interface BoardInput {
   sequences?: readonly BoardSequence[]
   /** Unit circles. Absent or empty writes nothing at all, by the same rule. */
   unitCircles?: readonly BoardUnitCircle[]
+  /** The related-rates object (the first, if several). Absent or empty writes nothing at all. */
+  relatedRates?: readonly BoardRelatedRates[]
   /** The inequality system's settings. Absent or empty writes nothing at all. */
   system?: BoardIneqSystem | null
   /** The ruling. Absent means 'cartesian', which writes nothing at all. */
@@ -1652,6 +1765,8 @@ export interface HydratedBoard {
   sequences: BoardSequence[]
   /** The unit circles that could be read; an unreadable one is dropped and REPORTED. */
   unitCircles: BoardUnitCircle[]
+  /** The related-rates object, as a list of none or one; an unreadable one is dropped and REPORTED. */
+  relatedRates: BoardRelatedRates[]
   /** The inequality system's settings; null when the document has none. */
   system: BoardIneqSystem | null
   /** The ruling this document states. 'cartesian' when it is silent. */
@@ -1907,6 +2022,10 @@ export function boardToStored(input: BoardInput): StoredBoard {
   // And for the unit circles.
   const circles = input.unitCircles ?? []
   if (circles.length > 0) board.unitCircles = circles.slice(0, MAX_UNIT_CIRCLES).map(unitCircleToStored)
+
+  // And the related-rates object: one per board, only when there is one.
+  const rates = input.relatedRates ?? []
+  if (rates.length > 0) board.relatedRates = relatedRatesToStored(rates[0])
 
   // And the inequality system, only when something about it is set.
   const system = systemToStored(input.system)
@@ -2311,14 +2430,19 @@ export function storedToField(
  */
 export function calcLinkToStored(l: CalcLink): StoredCalcLink {
   switch (l.kind) {
-    case 'tangent':
-      return {
+    case 'tangent': {
+      const out: StoredCalcLink = {
         kind: 'tangent',
         id: l.id,
         parentId: l.parentId,
         curveId: l.curveId,
         x: l.x,
       }
+      // An implicit curve's point: its branch, and the marks switch when on.
+      if (l.y !== undefined && Number.isFinite(l.y)) out.y = l.y
+      if (l.marks) out.marks = true
+      return out
+    }
     case 'derivative':
       return { kind: 'derivative', id: l.id, parentId: l.parentId, curveId: l.curveId }
     case 'area':
@@ -2430,9 +2554,13 @@ export function storedToCalcLink(raw: unknown): CalcLink | null {
   const { id, parentId, curveId } = raw
   if (!isStr(id) || !id || !isStr(parentId) || !parentId) return null
   switch (raw.kind) {
-    case 'tangent':
+    case 'tangent': {
       if (!isStr(curveId) || !curveId || !isNum(raw.x)) return null
-      return { kind: 'tangent', id, parentId, curveId, x: raw.x }
+      const t: TangentLink = { kind: 'tangent', id, parentId, curveId, x: raw.x }
+      if (isNum(raw.y)) t.y = raw.y
+      if (raw.marks === true) t.marks = true
+      return t
+    }
     case 'derivative':
       if (!isStr(curveId) || !curveId) return null
       return { kind: 'derivative', id, parentId, curveId }
@@ -3461,6 +3589,22 @@ export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResu
     unitCircles.push(built.circle)
   }
 
+  // ---- related rates
+  const relatedRates: BoardRelatedRates[] = []
+  if (rawBoard.relatedRates !== undefined) {
+    const built = storedToRelatedRates(rawBoard.relatedRates)
+    if ('error' in built) {
+      problems.push(`The related-rates problem could not be restored: ${built.error}.`)
+      degraded = true
+    } else if (seen.has(built.rr.id)) {
+      problems.push('The related-rates problem was dropped: two objects claimed the same id.')
+      degraded = true
+    } else {
+      seen.add(built.rr.id)
+      relatedRates.push(built.rr)
+    }
+  }
+
   // ---- the inequality system. Absent is the default; unreadable keys drop.
   const system = storedToSystem(rawBoard.system)
 
@@ -3547,6 +3691,7 @@ export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResu
     ...data.map((d) => d.id),
     ...sequences.map((q) => q.id),
     ...unitCircles.map((u) => u.id),
+    ...relatedRates.map((r) => r.id),
   ])
   const selectedId =
     isStr(rawBoard.selectedId) && selectable.has(rawBoard.selectedId)
@@ -3576,6 +3721,7 @@ export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResu
       data,
       sequences,
       unitCircles,
+      relatedRates,
       system,
       grid,
       figure,
@@ -3729,6 +3875,7 @@ function blankHydrated(): HydratedBoard {
     data: [],
     sequences: [],
     unitCircles: [],
+    relatedRates: [],
     system: null,
     grid: 'cartesian',
     figure: 'screen',

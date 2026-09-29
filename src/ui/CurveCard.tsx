@@ -50,6 +50,7 @@ import { LimitSection } from './LimitSection'
 import { VolumeSection } from './VolumeSection'
 import type { CurveIntersections } from './intersections'
 import { DomainSection } from './DomainSection'
+import { ImplicitSection } from './ImplicitSection'
 import { CardSection } from './CardSection'
 import { InequalitySection } from './InequalitySection'
 import { setRowText } from './domainLinks'
@@ -1811,6 +1812,12 @@ export function CurveCard({
         ),
       })
     }
+    for (const im of calc.implicits ?? []) {
+      calcTools.push({
+        id: im.linkId,
+        node: <ImplicitSection row={im} onCalcChange={onCalcChange} onRemove={() => onCalcRemove(im.linkId)} />,
+      })
+    }
     for (const sc of calc.secants) {
       calcTools.push({
         id: sc.linkId,
@@ -2075,7 +2082,10 @@ export function CurveCard({
                       Calculus
                     </div>
                     {CALC_GROUPS.map((group) => {
-                      const items = group.items.filter((item) => item.kind !== 'between' || between?.canAdd)
+                      // An implicit curve (x² + y² = 25) offers the tangent line only.
+                      const items = group.items.filter((item) =>
+                        calc.implicitOnly ? item.kind === 'tangent' : item.kind !== 'between' || between?.canAdd,
+                      )
                       if (items.length === 0) return null
                       return (
                         <div key={group.title} role="group" aria-label={group.title}>

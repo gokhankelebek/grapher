@@ -7196,3 +7196,148 @@ button.calc-field-btn {
 .canvas-light .ineq-no {
   color: #c01c28;
 }
+
+/* ==========================================================================
+   Implicit differentiation (src/ui/ImplicitSection.tsx)
+   ========================================================================== */
+
+.impl-partials {
+  max-width: 100%;
+  overflow-x: auto;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.impl-point {
+  margin-top: var(--sp-1);
+}
+
+.impl-label {
+  color: var(--muted);
+}
+
+.impl-none {
+  color: var(--faint);
+}
+
+.impl-h {
+  color: #f9a825;
+}
+
+.impl-v {
+  color: #e879f9;
+}
+
+.canvas-light .impl-h {
+  color: #9a6700;
+}
+
+.canvas-light .impl-v {
+  color: #a21caf;
+}
+
+.impl-note {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.impl-k {
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+
+/* ==========================================================================
+   Related rates card (src/ui/RelatedRatesCard.tsx)
+   ========================================================================== */
+
+.rr-scenarios {
+  flex-wrap: wrap;
+}
+
+.rr-stem {
+  margin-top: var(--sp-1);
+}
+
+.rr-givens {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.rr-given,
+.rr-trow,
+.rr-when {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.rr-input {
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  font-family: var(--font-mono);
+}
+
+.rr-input:focus {
+  outline: 2px solid var(--curve, var(--accent));
+  outline-offset: 1px;
+}
+
+.rr-unit {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.rr-flow {
+  margin-top: var(--sp-2);
+}
+
+.rr-tex {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0;
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+.rr-dim {
+  color: var(--muted);
+}
+
+.rr-step {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  margin-top: var(--sp-1);
+}
+
+.rr-player {
+  margin-bottom: var(--sp-2);
+}
+
+.rr-slider {
+  flex: 1 1 8rem;
+  min-width: 6rem;
+  accent-color: var(--curve, var(--accent));
+}
+
+.rr-when {
+  margin-top: var(--sp-2);
+}
+
+.rr-answer {
+  margin-top: var(--sp-1);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.rr-answer-2 {
+  font-weight: 500;
+}
+
+.rr-sentence {
+  margin-top: var(--sp-1);
+}

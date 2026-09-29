@@ -189,6 +189,12 @@ interface Props {
   systemCard?: ReactNode
   /** How many unit circles the list holds, for the header count. */
   unitCircleCount?: number
+  /** "Build ▾ → Related rates": put it on the board (or select the one there). */
+  onRelatedRatesAdd?(): void
+  /** The related-rates card, rendered by the App (it owns the play state). */
+  relatedRatesCards?: ReactNode
+  /** How many related-rates objects the list holds (0 or 1). */
+  relatedRatesCount?: number
   /** "Build ▾ → Sequence" open at the top of the list. */
   seqOpen?: boolean
   onSeqToggle?(): void
@@ -446,6 +452,9 @@ export function Sidebar({
   unitCircleCards,
   systemCard,
   unitCircleCount = 0,
+  onRelatedRatesAdd,
+  relatedRatesCards,
+  relatedRatesCount = 0,
   onSeqToggle,
   onSeqBuild,
   seqDefaultName,
@@ -553,7 +562,7 @@ export function Sidebar({
             <span className="sidebar-count">
               {numberLine
                 ? items.length
-                : curves.length + fields.length + shapes.length + data.length + sequences.length + unitCircleCount}
+                : curves.length + fields.length + shapes.length + data.length + sequences.length + unitCircleCount + relatedRatesCount}
             </span>
             <button
               className={`add-btn${exprOpen ? ' add-open' : ''}`}
@@ -569,7 +578,7 @@ export function Sidebar({
             >
               +
             </button>
-            {!numberLine && (onFactorToggle || onExpToggle || onLogisticToggle || onLogToggle || onSinToggle || onTransformToggle || onPiecewiseToggle || onConicToggle || onMotionToggle || onSeqToggle || onDataAdd || onUnitCircleAdd) && (
+            {!numberLine && (onFactorToggle || onExpToggle || onLogisticToggle || onLogToggle || onSinToggle || onTransformToggle || onPiecewiseToggle || onConicToggle || onMotionToggle || onSeqToggle || onDataAdd || onUnitCircleAdd || onRelatedRatesAdd) && (
               <BuildMenu
                 factorOpen={factorOpen}
                 expOpen={expOpen}
@@ -593,6 +602,7 @@ export function Sidebar({
                 onSeqToggle={onSeqToggle}
                 onDataAdd={onDataAdd}
                 onUnitCircleAdd={onUnitCircleAdd}
+                onRelatedRatesAdd={onRelatedRatesAdd}
               />
             )}
           </div>
@@ -889,6 +899,7 @@ export function Sidebar({
               )
             })}
           {!numberLine && unitCircleCards}
+          {!numberLine && relatedRatesCards}
         </div>
       </div>
     </aside>

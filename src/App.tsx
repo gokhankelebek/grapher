@@ -169,6 +169,21 @@ import {
   unitCircleFigure,
 } from './ui/unitCircleLinks'
 import type { BoardUnitCircle, PlaySpeed, UnitCircleShow } from './ui/unitCircleLinks'
+import {
+  newRelatedRates,
+  relatedRatesBox,
+  relatedRatesCard,
+  relatedRatesFigure,
+  rrPlayStart,
+  rrPlayStep,
+  switchScenario,
+  tMaxOf,
+} from './ui/relatedRatesLinks'
+import type { BoardRelatedRates, RRSpeed } from './ui/relatedRatesLinks'
+import type { RelatedRatesFigure } from './render/relatedRates'
+import { RelatedRatesCard } from './ui/RelatedRatesCard'
+import { solveWhen } from './core/relatedRates'
+import type { RRScenario } from './core/relatedRates'
 import type { UnitCircleFigure } from './render/unitCircle'
 import { UnitCircleCard } from './ui/UnitCircleCard'
 import { SystemCard } from './ui/SystemCard'
@@ -478,6 +493,16 @@ import {
   writeExportSettings,
 } from './ui/storage'
 import type { SaveOutcome } from './ui/storage'
+import {
+  defaultImplicitPoint,
+  dragImplicitPoint,
+  implicitSearchBox,
+  implicitTangent,
+  isImplicitCurve,
+  settlePoint,
+  tangentCurvePatch,
+} from './ui/implicitLinks'
+import type { Box as ImplicitBox } from './ui/implicitLinks'
 import type { WheelPref } from './ui/gestures'
 
 /**
@@ -678,6 +703,8 @@ interface Snapshot {
    * question — each comes back with one undo.
    */
   unitCircles: BoardUnitCircle[]
+  /** The related-rates problem (none or one): givens, t, the when-question. */
+  relatedRates: BoardRelatedRates[]
   /**
    * The inequality system's settings — solution region, test point, the
    * objective — in the same history: each switch comes back with one undo.
@@ -752,6 +779,7 @@ interface StatePatch {
   data?: BoardData[]
   sequences?: BoardSequence[]
   unitCircles?: BoardUnitCircle[]
+  relatedRates?: BoardRelatedRates[]
   /** null clears the system's settings; absent leaves them. */
   system?: BoardIneqSystem | null
   names?: Record<string, string>
@@ -1031,6 +1059,15 @@ export default function App() {
    */
   const [unitCircles, setUnitCircles] = useState<BoardUnitCircle[]>([])
   /**
+   * The related-rates problem (one per board, kept as a list like the unit
+   * circle): scenario, givens, t, the when-question. Everything drawn and
+   * printed is re-derived from it (src/ui/relatedRatesLinks.ts).
+   */
+  const [relatedRates, setRelatedRates] = useState<BoardRelatedRates[]>([])
+  /** The animation's t while it plays (the document keeps its own), and the speed. */
+  const [rrPlay, setRrPlay] = useState<{ t: number } | null>(null)
+  const [rrSpeed, setRrSpeed] = useState<RRSpeed>(1)
+  /**
    * The inequality system (the visible inequalities, taken together): only
    * what the teacher set for it — solution region, test point, objective.
    * Every corner, verdict and table is recomputed from the curves.
@@ -1265,6 +1302,7 @@ export default function App() {
   const dataRef = useRef<BoardData[]>([])
   const seqRef = useRef<BoardSequence[]>([])
   const ucRef = useRef<BoardUnitCircle[]>([])
+  const rrRef = useRef<BoardRelatedRates[]>([])
   const sysRef = useRef<BoardIneqSystem | null>(null)
   const namesRef = useRef<Record<string, string>>({})
   const callsRef = useRef<Record<string, string[]>>({})
@@ -1631,6 +1669,7 @@ export default function App() {
       data: dataRef.current,
       sequences: seqRef.current,
       unitCircles: ucRef.current,
+      relatedRates: rrRef.current,
       system: sysRef.current,
       names: namesRef.current,
       calls: callsRef.current,
@@ -1710,6 +1749,10 @@ export default function App() {
     if (s.unitCircles) {
       ucRef.current = s.unitCircles
       setUnitCircles(s.unitCircles)
+    }
+    if (s.relatedRates) {
+      rrRef.current = s.relatedRates
+      setRelatedRates(s.relatedRates)
     }
     if (s.system !== undefined) {
       sysRef.current = s.system
@@ -1798,7 +1841,8 @@ export default function App() {
         prev.shapes.some((sh) => sh.id === sel) ||
         prev.data.some((d) => d.id === sel) ||
         prev.sequences.some((q) => q.id === sel) ||
-        prev.unitCircles.some((u) => u.id === sel))
+        prev.unitCircles.some((u) => u.id === sel) ||
+        prev.relatedRates.some((r) => r.id === sel))
         ? sel
         : null,
     )
@@ -1825,7 +1869,8 @@ export default function App() {
         next.shapes.some((sh) => sh.id === sel) ||
         next.data.some((d) => d.id === sel) ||
         next.sequences.some((q) => q.id === sel) ||
-        next.unitCircles.some((u) => u.id === sel))
+        next.unitCircles.some((u) => u.id === sel) ||
+        next.relatedRates.some((r) => r.id === sel))
         ? sel
         : null,
     )
@@ -1871,6 +1916,8 @@ export default function App() {
         pre.sequences !== seqRef.current ||
         // And the unit circle's P, dragged round: it moves no curve at all.
         pre.unitCircles !== ucRef.current ||
+        // And the related-rates t slider: it moves no curve either.
+        pre.relatedRates !== rrRef.current ||
         // And the inequality system's test point, dragged: no curve moves.
         pre.system !== sysRef.current)
     ) {
@@ -1991,6 +2038,7 @@ export default function App() {
       data: [],
       sequences: [],
       unitCircles: [],
+      relatedRates: [],
       system: null,
       grid: 'cartesian',
       figure: 'screen',
@@ -2026,6 +2074,7 @@ export default function App() {
       data: dataRef.current,
       sequences: seqRef.current,
       unitCircles: ucRef.current,
+      relatedRates: rrRef.current,
       system: sysRef.current,
       grid: boardGridRef.current,
       figure: figureStyleRef.current,
@@ -2155,6 +2204,8 @@ export default function App() {
     seqRef.current = board.sequences
     // And the unit circle: centre, θ and switches; every label is re-derived.
     ucRef.current = board.unitCircles
+    // And the related-rates problem: givens and t; every drawing is re-derived.
+    rrRef.current = board.relatedRates
     // And the inequality system's settings; its corners are re-derived.
     sysRef.current = board.system
     // The inverse links come back; their models are registered below, reading
@@ -2223,6 +2274,8 @@ export default function App() {
     setDataSets(board.data)
     setSequences(board.sequences)
     setUnitCircles(board.unitCircles)
+    setRelatedRates(board.relatedRates)
+    setRrPlay(null)
     setIneqSystem(board.system)
     setUcPlay(null)
     setInverses(board.inverses)
@@ -2368,6 +2421,8 @@ export default function App() {
     sequences,
     // And the unit circle: θ, its switches, its question.
     unitCircles,
+    // And the related-rates problem: its givens, t, its question.
+    relatedRates,
     // And the inequality system: its switches, test point and objective.
     ineqSystem,
     // And a rename, which may change nothing but a letter.
@@ -2841,7 +2896,8 @@ export default function App() {
       shapesRef.current.length === 0 &&
       dataRef.current.length === 0 &&
       seqRef.current.length === 0 &&
-      ucRef.current.length === 0
+      ucRef.current.length === 0 &&
+      rrRef.current.length === 0
     ) {
       return
     }
@@ -2859,6 +2915,7 @@ export default function App() {
         data: [],
         sequences: [],
         unitCircles: [],
+        relatedRates: [],
         system: null,
         styles,
         exprSources: {},
@@ -3457,6 +3514,26 @@ export default function App() {
     setCrossSpan(next)
   }, [viewWindow])
 
+  /**
+   * The box an implicit curve's horizontal and vertical tangents are looked
+   * for in: the view padded by half, snapped coarse — state for the same
+   * reason crossSpan is, so a pan only re-solves once the board has moved on.
+   */
+  const viewSearchBox = useCallback((): ImplicitBox => {
+    const vp = vpRef.current
+    return implicitSearchBox(vp.center, vp.widthPx / 2 / ppuX(vp), vp.heightPx / 2 / ppuY(vp))
+  }, [])
+  const [implicitBox, setImplicitBox] = useState<ImplicitBox>(() => viewSearchBox())
+  const implicitBoxRef = useRef(implicitBox)
+  implicitBoxRef.current = implicitBox
+  const refreshImplicitBox = useCallback((): void => {
+    const next = viewSearchBox()
+    const now = implicitBoxRef.current
+    if (next.x0 === now.x0 && next.x1 === now.x1 && next.y0 === now.y0 && next.y1 === now.y1) return
+    implicitBoxRef.current = next
+    setImplicitBox(next)
+  }, [viewSearchBox])
+
   /** Rename the edit bracket a gesture already opened, so undo says the truth. */
   const relabelEdit = useCallback((label: string): void => {
     const pre = preEditRef.current
@@ -3469,6 +3546,53 @@ export default function App() {
       if (!parent) return
       const models = modelsRef.current
       const spec = models[parent.modelId]
+      if (kind === 'tangent' && isImplicitCurve(parent, models)) {
+        // A tangent to an implicit curve: a point ON the curve (a lattice point
+        // such as (3, 4) when there is one in view), its tangent a `line` — or
+        // a `vline` where the tangent is vertical.
+        const vp = vpRef.current
+        const hw = vp.widthPx / 2 / ppuX(vp)
+        const hh = vp.heightPx / 2 / ppuY(vp)
+        const p = defaultImplicitPoint(parent, models, {
+          x0: vp.center.x - hw,
+          x1: vp.center.x + hw,
+          y0: vp.center.y - hh,
+          y1: vp.center.y + hh,
+        })
+        const linkId = nextId()
+        const probe = p ? { kind: 'tangent' as const, id: linkId, parentId, curveId: '', x: p.x, y: p.y } : null
+        const st = probe ? implicitTangent(probe, parent, models) : null
+        const patch = st ? tangentCurvePatch(st.tangent) : null
+        if (!p || !st || !patch) {
+          showToast('This curve has no point in view to put a tangent line on.')
+          return
+        }
+        const curve: FittedCurve = {
+          id: nextId(),
+          modelId: patch.modelId,
+          params: patch.params.slice(),
+          kind: patch.kind,
+          domain: null,
+          color: parent.color,
+          strokeWidth: 2,
+          visible: true,
+          error: 0,
+        }
+        commitState(
+          {
+            curves: [...curvesRef.current, curve],
+            calc: [
+              ...calcRef.current,
+              { kind: 'tangent', id: linkId, parentId, curveId: curve.id, x: st.point.x, y: st.point.y },
+            ],
+          },
+          'add tangent',
+        )
+        // The implicit curve stays selected: dy/dx, the point and the
+        // horizontal / vertical tangents are on ITS card.
+        setSelectedId(parentId)
+        return
+      }
       if (!spec || spec.kind !== 'explicit') {
         showToast('Only a curve that is a function of x can carry calculus objects.')
         return
@@ -3925,7 +4049,28 @@ export default function App() {
         })
       } else if (change.kind === 'tangentX' && l.kind === 'tangent') {
         if (!Number.isFinite(change.x) || change.x === l.x) return
-        next = { ...l, x: change.x }
+        const parent = curvesRef.current.find((c) => c.id === l.parentId)
+        if (parent && isImplicitCurve(parent, modelsRef.current)) {
+          // A typed x on an implicit curve: the point on the branch it was on.
+          const p = settlePoint(parent, modelsRef.current, change.x, l.y ?? 0)
+          if (!p) {
+            showToast(`The curve has no point at x = ${fixedNum(change.x, 2)} on this branch.`)
+            return
+          }
+          next = { ...l, x: p.x, y: p.y }
+        } else next = { ...l, x: change.x }
+      } else if (change.kind === 'tangentPoint' && l.kind === 'tangent') {
+        if (!Number.isFinite(change.x) || !Number.isFinite(change.y)) return
+        if (change.x === l.x && change.y === l.y) return
+        next = { ...l, x: change.x, y: change.y }
+      } else if (change.kind === 'tangentMarks' && l.kind === 'tangent') {
+        if ((l.marks === true) === change.on) return
+        if (change.on) next = { ...l, marks: true }
+        else {
+          const { marks: _gone, ...rest } = l
+          void _gone
+          next = rest
+        }
       } else if (change.kind === 'bound' && (l.kind === 'area' || l.kind === 'riemann')) {
         if (!Number.isFinite(change.value) || l[change.which] === change.value) return
         next = { ...l, [change.which]: change.value } as CalcLink
@@ -4093,7 +4238,7 @@ export default function App() {
       // parent that has no derivative — it is one to come back to.
       const sig = `${parent.modelId}#${specSerial(parentSpec)}|${parent.params.join(',')}|${
         parent.domain ? parent.domain.join(',') : ''
-      }|${depKeysRef.current[parent.id] ?? ''}|${parent.color}|${link.kind === 'tangent' ? link.x : ''}|${
+      }|${depKeysRef.current[parent.id] ?? ''}|${parent.color}|${link.kind === 'tangent' ? `${link.x},${link.y ?? ''}` : ''}|${
         link.kind === 'accumulation' ? `${link.a}|${link.C}` : ''
       }|${link.kind === 'taylor' ? `${link.a}|${link.n}|${(callsRef.current[parent.id]?.length ?? 0) > 0}` : ''}`
       if (!parentSpec) continue
@@ -4154,6 +4299,17 @@ export default function App() {
             color: accumColor(parent.color),
           }
         }
+      } else if (link.kind === 'tangent' && isImplicitCurve(parent, models)) {
+        // An implicit curve: the point re-found on the curve, its tangent a
+        // line or — where it is vertical — a vline. None at a singular point.
+        let st: ReturnType<typeof implicitTangent> = null
+        try {
+          st = implicitTangent(link, parent, models)
+        } catch {
+          st = null
+        }
+        const tp = st ? tangentCurvePatch(st.tangent) : null
+        if (tp) patch = { modelId: tp.modelId, params: tp.params.slice(), kind: tp.kind, domain: null, color: parent.color }
       } else if (link.kind === 'tangent') {
         let t: ReturnType<typeof tangentAt> = null
         try {
@@ -4164,7 +4320,7 @@ export default function App() {
         // No tangent at a corner, a pole or outside the domain: the line HIDES
         // rather than keeping the last one it had. A stale tangent on a
         // projector is a wrong answer that looks like a right one.
-        if (t) patch = { params: [t.b, t.m], color: parent.color }
+        if (t) patch = { modelId: 'line', params: [t.b, t.m], kind: 'explicit', color: parent.color }
       } else {
         // A library derivative registers nothing; only a closure needs an id,
         // and asking for one under the child's CURRENT id would overwrite a
@@ -7758,6 +7914,8 @@ export default function App() {
     // crossing into view that was never solved for. Hot path: this is a pair
     // of comparisons unless the board has left the coarse span entirely.
     refreshCrossSpan()
+    // And where an implicit curve's horizontal / vertical tangents are sought.
+    refreshImplicitBox()
     // A solution curve is integrated across a fixed x-range, so a board panned
     // or zoomed past that range would show it stopping in mid-air. This is the
     // hot path — it fires on every frame of a pan — and refreshSolveSpan does
@@ -7774,7 +7932,7 @@ export default function App() {
     setAxesMode(axesModeOf(vpRef.current))
     viewSubsRef.current.forEach((fn) => fn())
     scheduleSave()
-  }, [refreshCrossSpan, refreshSolveSpan, refreshPartnerSpan, refreshGhostFrame, refreshMotionFrame, refreshHltEdge, scheduleSave])
+  }, [refreshCrossSpan, refreshImplicitBox, refreshSolveSpan, refreshPartnerSpan, refreshGhostFrame, refreshMotionFrame, refreshHltEdge, scheduleSave])
 
   /** The view was changed from outside the stage: redraw everything that rides it. */
   const viewMoved = useCallback((): void => {
@@ -8004,6 +8162,8 @@ export default function App() {
       }
       // And a unit circle, with its unwrapped graph when it has one.
       for (const u of ucRef.current) if (u.hidden !== true) boxes.push(unitCircleBox(u))
+      // And the related-rates picture, with its graph.
+      for (const r of rrRef.current) if (r.hidden !== true) boxes.push(relatedRatesBox(r))
       // And what the lesson is ABOUT, where the curves' extent in this window
       // may not reach: the step points of every Euler path, and the key
       // points of secant, Taylor and limit overlays. None of them: the same
@@ -8310,6 +8470,227 @@ export default function App() {
         ))
       : null
 
+  // ========================================================== related rates
+  //
+  // One per board. The document holds the scenario, its givens, t, the
+  // when-question and two switches (src/core/persist.ts BoardRelatedRates);
+  // the picture, the formulas and every live value are re-derived from those
+  // (src/ui/relatedRatesLinks.ts), so nothing drawn can go stale.
+
+  /** One problem, replaced in place, with cleared optional keys REMOVED (not undefined). */
+  const mapRR = useCallback(
+    (id: string, patch: Partial<BoardRelatedRates>): BoardRelatedRates[] =>
+      rrRef.current.map((r) => {
+        if (r.id !== id) return r
+        const next: BoardRelatedRates = { ...r, ...patch }
+        for (const k of ['when', 'pause', 'graph', 'hidden'] as const) {
+          if (k in patch && patch[k] === undefined) delete next[k]
+        }
+        return next
+      }),
+    [],
+  )
+
+  const patchRelatedRates = useCallback(
+    (id: string, patch: Partial<BoardRelatedRates>, label: string, live = false): void => {
+      if (!rrRef.current.some((r) => r.id === id)) return
+      const next = mapRR(id, patch)
+      if (live) applyState({ relatedRates: next })
+      else commitState({ relatedRates: next }, label)
+    },
+    [applyState, commitState, mapRR],
+  )
+
+  const rrPlayRef = useRef(rrPlay)
+  rrPlayRef.current = rrPlay
+  const rrSpeedRef = useRef(rrSpeed)
+  rrSpeedRef.current = rrSpeed
+
+  /** Stop the animation, leaving t where it got to — one undo takes it back. */
+  const stopRelatedRatesPlay = useCallback((): void => {
+    const cur = rrPlayRef.current
+    if (!cur) return
+    rrPlayRef.current = null
+    setRrPlay(null)
+    const r = rrRef.current[0]
+    if (r) patchRelatedRates(r.id, { t: cur.t }, 'play t')
+  }, [patchRelatedRates])
+
+  /** Build ▾ → Related rates: put it on the board, or select the one already there. */
+  const addRelatedRates = useCallback((): void => {
+    if (kindRef.current !== 'cartesian') return
+    const have = rrRef.current[0]
+    if (have) {
+      setSelectedId(have.id)
+      showToast('This board already has its related-rates problem — it is selected.', { ms: 2600 })
+      return
+    }
+    const rr = newRelatedRates(nextId())
+    commitState({ relatedRates: [...rrRef.current, rr] }, 'add related rates')
+    setSelectedId(rr.id)
+    frameBox(relatedRatesBox(rr))
+  }, [commitState, frameBox, showToast])
+
+  const deleteRelatedRates = useCallback(
+    (id: string): void => {
+      if (!rrRef.current.some((r) => r.id === id)) return
+      rrPlayRef.current = null
+      setRrPlay(null)
+      commitState({ relatedRates: rrRef.current.filter((r) => r.id !== id) }, 'delete related rates')
+      showToast('Deleted the related-rates problem. Undo brings it back.', {
+        action: { label: 'Undo', run: () => undo() },
+      })
+      setSelectedId((sel) => (sel === id ? null : sel))
+    },
+    [commitState, showToast, undo],
+  )
+
+  /** A change of givens: t stays where it was when that is still in range, else the question is re-asked. */
+  const setRelatedRatesParams = useCallback(
+    (id: string, patch: Record<string, number>): void => {
+      const r = rrRef.current.find((c) => c.id === id)
+      if (!r) return
+      rrPlayRef.current = null
+      setRrPlay(null)
+      const params = { ...r.params, ...patch }
+      const probe: BoardRelatedRates = { ...r, params }
+      let t = Math.min(r.t, tMaxOf(probe))
+      if (r.when) {
+        const w = solveWhen(r.scenario, params, r.when.q, r.when.v)
+        if (w.ok) t = w.t
+      }
+      patchRelatedRates(id, { params, t }, 'change givens')
+    },
+    [patchRelatedRates],
+  )
+
+  const setRelatedRatesWhen = useCallback(
+    (id: string, when: { q: string; v: number } | null): void => {
+      const r = rrRef.current.find((c) => c.id === id)
+      if (!r) return
+      rrPlayRef.current = null
+      setRrPlay(null)
+      if (!when) {
+        patchRelatedRates(id, { when: undefined, pause: undefined }, 'clear question')
+        return
+      }
+      const w = solveWhen(r.scenario, r.params, when.q, when.v)
+      patchRelatedRates(id, w.ok ? { when, t: w.t } : { when }, `when ${when.q} = ${when.v}`)
+    },
+    [patchRelatedRates],
+  )
+
+  const playRelatedRates = useCallback(
+    (id: string, on: boolean): void => {
+      const r = rrRef.current.find((c) => c.id === id)
+      if (!r) return
+      if (!on) {
+        stopRelatedRatesPlay()
+        return
+      }
+      const T = tMaxOf(r)
+      const w = r.when ? solveWhen(r.scenario, r.params, r.when.q, r.when.v) : null
+      const stopAt = r.pause && w && w.ok ? w.t : null
+      // "Pause at that instant": Play runs up to it — from 0 when t is already there or past it.
+      const start = stopAt !== null && r.t >= stopAt - 1e-9 ? 0 : rrPlayStart(r.t, T)
+      const next = { t: start }
+      rrPlayRef.current = next
+      setRrPlay(next)
+    },
+    [stopRelatedRatesPlay],
+  )
+
+  const rrPlaying = rrPlay !== null
+  useEffect(() => {
+    if (!rrPlaying) return
+    let raf = 0
+    let last = performance.now()
+    const tick = (now: number): void => {
+      const dt = Math.min(0.1, Math.max(0, (now - last) / 1000))
+      last = now
+      const cur = rrPlayRef.current
+      const r = rrRef.current[0]
+      if (!cur || !r) return
+      const w = r.pause && r.when ? solveWhen(r.scenario, r.params, r.when.q, r.when.v) : null
+      const step = rrPlayStep(cur.t, dt, rrSpeedRef.current, tMaxOf(r), w && w.ok ? w.t : null)
+      const next = { t: step.t }
+      rrPlayRef.current = next
+      if (step.done) {
+        stopRelatedRatesPlay()
+        return
+      }
+      setRrPlay(next)
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    const onVisibility = (): void => {
+      if (document.hidden) stopRelatedRatesPlay()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      cancelAnimationFrame(raf)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [rrPlaying, stopRelatedRatesPlay])
+
+  /** What the board draws — t is the animation's while it plays. */
+  const rrFigures = useMemo<RelatedRatesFigure[]>(
+    () =>
+      kind === 'cartesian'
+        ? relatedRates.map((r) => relatedRatesFigure(r, { playT: rrPlay ? rrPlay.t : null }))
+        : [],
+    [kind, relatedRates, rrPlay],
+  )
+  const rrFiguresRef = useRef<RelatedRatesFigure[]>(rrFigures)
+  rrFiguresRef.current = rrFigures
+
+  const relatedRatesCardNodes =
+    kind === 'cartesian' && relatedRates.length > 0
+      ? relatedRates.map((r) => (
+          <RelatedRatesCard
+            key={r.id}
+            rr={r}
+            card={relatedRatesCard(r, rrPlay ? rrPlay.t : null)}
+            selected={selectedId === r.id}
+            playing={rrPlay !== null}
+            speed={rrSpeed}
+            onSelect={() => selectObject(r.id)}
+            onDelete={() => deleteRelatedRates(r.id)}
+            onToggleVisible={() =>
+              patchRelatedRates(r.id, { hidden: r.hidden ? undefined : true }, r.hidden ? 'show related rates' : 'hide related rates')
+            }
+            onCycleColor={() => {
+              const i = CURVE_COLORS.indexOf(r.color)
+              patchRelatedRates(r.id, { color: CURVE_COLORS[(i + 1) % CURVE_COLORS.length] }, 'change colour')
+            }}
+            onZoom={() => frameBox(relatedRatesBox(r))}
+            onScenario={(sc: RRScenario) => {
+              rrPlayRef.current = null
+              setRrPlay(null)
+              const next = switchScenario(r, sc)
+              commitState({ relatedRates: rrRef.current.map((c) => (c.id === r.id ? next : c)) }, `related rates: ${sc}`)
+              frameBox(relatedRatesBox(next))
+            }}
+            onParams={(patch) => setRelatedRatesParams(r.id, patch)}
+            onT={(t, live) => {
+              rrPlayRef.current = null
+              setRrPlay(null)
+              if (live) {
+                // One undo for the whole slider drag: the bracket opens once.
+                editStart('move t')
+                patchRelatedRates(r.id, { t }, 'move t', true)
+              } else patchRelatedRates(r.id, { t }, 'set t')
+            }}
+            onTEnd={editEnd}
+            onWhen={(w) => setRelatedRatesWhen(r.id, w)}
+            onPause={(on) => patchRelatedRates(r.id, { pause: on ? true : undefined }, on ? 'pause at instant' : 'no pause')}
+            onGraph={(on) => patchRelatedRates(r.id, { graph: on ? undefined : false }, on ? 'show rate graph' : 'hide rate graph')}
+            onPlay={(on) => playRelatedRates(r.id, on)}
+            onSpeed={setRrSpeed}
+          />
+        ))
+      : null
+
   // ================================================= inequality system
   //
   // Two-variable inequalities are typed curves; their SYSTEM is every
@@ -8529,14 +8910,35 @@ export default function App() {
     [kind, sequences, seqCompiled],
   )
 
+  /**
+   * The equations of the implicit curves that carry a tangent, as typed (or
+   * as their family prints them): what dy/dx is differentiated from.
+   */
+  const implicitSources = useMemo<Record<string, string>>(() => {
+    const out: Record<string, string> = {}
+    if (kind !== 'cartesian') return out
+    for (const l of calcLinks) {
+      if (l.kind !== 'tangent' || out[l.parentId] !== undefined) continue
+      const c = curves.find((cc) => cc.id === l.parentId)
+      if (!c || !isImplicitCurve(c, models) || (calls[c.id]?.length ?? 0) > 0) continue
+      const src = inverseSourceOf(c)
+      if (src) out[c.id] = src
+    }
+    return out
+    // exprSources: a retyped equation keeps its curve id.
+  }, [kind, calcLinks, curves, models, calls, inverseSourceOf, exprSources])
+
   const overlays = useMemo<Overlay[]>(() => {
-    const base = kind === 'cartesian' ? overlaysFor(calcLinks, curves, models, bandSpan) : []
+    const base =
+      kind === 'cartesian'
+        ? overlaysFor(calcLinks, curves, models, bandSpan, { sources: implicitSources, box: implicitBox })
+        : []
     const more = motionAreaOverlays.length + domainOverlays.length + sysOverlays.length + seriesMarks.length
     if (more === 0) return base
     // The ghost goes first (under everything else); the marks sort themselves
     // onto the curves by kind.
     return [...domainOverlays, ...base, ...motionAreaOverlays, ...sysOverlays, ...seriesMarks]
-  }, [kind, calcLinks, curves, models, motionAreaOverlays, bandSpan, domainOverlays, sysOverlays, seriesMarks])
+  }, [kind, calcLinks, curves, models, motionAreaOverlays, bandSpan, domainOverlays, sysOverlays, seriesMarks, implicitSources, implicitBox])
   const overlaysRef = useRef<Overlay[]>(overlays)
   overlaysRef.current = overlays
 
@@ -8570,7 +8972,8 @@ export default function App() {
         if (src) sources[id] = src
       }
     }
-    return cardCalc(calcLinks, curves, models, curveLabel, letters, calls, sources)
+    for (const [id, src] of Object.entries(implicitSources)) if (sources[id] === undefined) sources[id] = src
+    return cardCalc(calcLinks, curves, models, curveLabel, letters, calls, sources, implicitBox)
   }, [
     kind,
     calcLinks,
@@ -8583,6 +8986,8 @@ export default function App() {
     names,
     inverses,
     inverseSourceOf,
+    implicitSources,
+    implicitBox,
   ])
   const calcFor = useCallback(
     (id: string): CardCalc | undefined => calcCards[id],
@@ -8635,6 +9040,39 @@ export default function App() {
     for (const link of calcLinks) {
       const parent = byId.get(link.parentId)
       if (!parent) continue
+      if (link.kind === 'tangent' && isImplicitCurve(parent, models)) {
+        // The point slides along the implicit curve — round a circle, through
+        // its vertical tangents — snapping to round coordinates on the way.
+        if (link.curveId !== selectedId && link.parentId !== selectedId) continue
+        let st: ReturnType<typeof implicitTangent> = null
+        try {
+          st = implicitTangent(link, parent, models)
+        } catch {
+          st = null
+        }
+        if (!st) continue
+        out.push({
+          id: `calc:${link.id}:point`,
+          pos: st.point,
+          label: 'tangent point',
+          onDrag: (pos) => {
+            const live = calcRef.current.find((l) => l.id === link.id)
+            const par = curvesRef.current.find((c) => c.id === link.parentId)
+            if (!live || live.kind !== 'tangent' || !par) return
+            const vp = vpRef.current
+            const q = dragImplicitPoint(
+              par,
+              modelsRef.current,
+              { x: live.x, y: live.y ?? 0 },
+              pos,
+              (v, axis) => snapCoord(v, vp, axis),
+              { x: ppuX(vp), y: ppuY(vp) },
+            )
+            changeCalc({ kind: 'tangentPoint', linkId: link.id, x: q.x, y: q.y }, true)
+          },
+        })
+        continue
+      }
       if (link.kind === 'tangent') {
         // Reachable from either card: the line's own, and the curve it is on.
         if (link.curveId !== selectedId && link.parentId !== selectedId) continue
@@ -9099,7 +9537,13 @@ export default function App() {
         }
       }
     }
-    return out
+    // A tangent's point on an implicit curve goes LAST: on a tie with a family
+    // handle at the same spot — (5, 0) is the circle's r handle and a vertical
+    // tangent's point — the later handle wins, and the point is what the
+    // teacher is moving.
+    const pts = out.filter((h) => h.id.startsWith('calc:') && h.label === 'tangent point')
+    if (pts.length === 0) return out
+    return [...out.filter((h) => !pts.includes(h)), ...pts]
   }, [
     kind,
     selectedId,
@@ -9963,7 +10407,8 @@ export default function App() {
         return c ? sequenceBox(q, c) : null
       })
     const ucBoxes = ucRef.current.filter((u) => u.hidden !== true).map((u) => unitCircleBox(u))
-    return unionBoxes([box, ...dataRef.current.filter((d) => d.visible).map(dataBox), ...construction, ...seqBoxes, ...ucBoxes])
+    const rrBoxes = rrRef.current.filter((r) => r.hidden !== true).map((r) => relatedRatesBox(r))
+    return unionBoxes([box, ...dataRef.current.filter((d) => d.visible).map(dataBox), ...construction, ...seqBoxes, ...ucBoxes, ...rrBoxes])
   }, [])
 
   const buildExportScene = useCallback(
@@ -10101,6 +10546,8 @@ export default function App() {
       // And the unit circle: the circle, its triangle, its labels and the
       // unwrapped graph are the figure on a trig board.
       ...(ucFiguresRef.current.length > 0 ? { unitCircles: ucFiguresRef.current } : {}),
+      // And the related-rates picture and its mini-graph.
+      ...(rrFiguresRef.current.length > 0 ? { relatedRates: rrFiguresRef.current } : {}),
       // And the inequality system's solution region, as the screen shows it.
       ...(ineqSolutionRef.current ? { inequalitySolution: true } : {}),
       // And on the ruling the screen is on: a polar board exported on squares
@@ -10708,6 +11155,8 @@ export default function App() {
           deleteSequence(selectedRef.current)
         } else if (ucRef.current.some((u) => u.id === selectedRef.current)) {
           deleteUnitCircle(selectedRef.current)
+        } else if (rrRef.current.some((r) => r.id === selectedRef.current)) {
+          deleteRelatedRates(selectedRef.current)
         } else deleteCurve(selectedRef.current)
       } else if (NUDGE[e.key]) {
         const [ux, uy] = NUDGE[e.key]
@@ -11055,6 +11504,9 @@ export default function App() {
         unitCircleCards={unitCircleCardNodes}
         systemCard={systemCardNode}
         unitCircleCount={kind === 'cartesian' ? unitCircles.length : 0}
+        onRelatedRatesAdd={addRelatedRates}
+        relatedRatesCards={relatedRatesCardNodes}
+        relatedRatesCount={kind === 'cartesian' ? relatedRates.length : 0}
         seqOpen={seqOpen}
         onSeqToggle={() => {
           setExprOpen(false)
@@ -11268,6 +11720,7 @@ export default function App() {
           shapes={screenShapes}
           scatter={scatterScene}
           unitCircles={ucFigures}
+          relatedRates={rrFigures}
           inequalitySolution={ineqSolution}
           grid={boardGrid}
           figure={boardFigure}
@@ -11603,6 +12056,7 @@ export default function App() {
           dataSets.length === 0 &&
           sequences.length === 0 &&
           unitCircles.length === 0 &&
+          relatedRates.length === 0 &&
           !drawingActive &&
           !loadNotice?.fatal && (
           <div className="empty-hint" aria-hidden="true">
