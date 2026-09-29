@@ -6046,6 +6046,144 @@ button.calc-field-btn {
   font-size: var(--fs-sm);
 }
 
+/* ------------------------------------------------------------ Series Σ aₙ */
+/*
+ * The Series section of a sequence's card borrows the Taylor row (the KaTeX
+ * line, the N stepper-slider) and the calc facts. What it adds: the verdict
+ * as a word the back row can read, the AP-style argument under it, and the
+ * "Show all tests" list with each test's outcome as a small tag.
+ */
+.series-tex {
+  font-size: var(--fs-md);
+}
+
+.series-facts .calc-fact-lead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.series-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  flex: none;
+}
+
+.series-verdict {
+  margin-top: var(--sp-2);
+  font-size: var(--fs-md);
+  line-height: 1.3;
+}
+
+.series-verdict-word {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.series-verdict-converges .series-verdict-word,
+.series-verdict-converges-absolutely .series-verdict-word,
+.series-verdict-converges-conditionally .series-verdict-word,
+.series-verdict-finite .series-verdict-word {
+  color: #38c976;
+}
+
+.series-verdict-diverges .series-verdict-word {
+  color: var(--danger);
+}
+
+.series-verdict-unknown .series-verdict-word {
+  color: var(--muted);
+}
+
+.series-verdict-test {
+  color: var(--muted);
+}
+
+.series-why {
+  margin-top: 2px;
+  color: var(--text);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.series-note {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.series-tests {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: var(--sp-1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.series-test {
+  padding: var(--sp-1) var(--sp-2);
+  border-left: 2px solid var(--border-strong);
+}
+
+.series-test-converges {
+  border-left-color: #38c976;
+}
+
+.series-test-diverges {
+  border-left-color: var(--danger);
+}
+
+.series-test-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.series-test-name {
+  color: var(--text);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.series-outcome {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--panel-3);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.series-outcome-converges {
+  background: color-mix(in srgb, #38c976 22%, transparent);
+  color: #7ee2a8;
+}
+
+.series-outcome-diverges {
+  background: color-mix(in srgb, var(--danger) 22%, transparent);
+  color: #ff9a9c;
+}
+
+.series-test-why {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.seq-series-verdict {
+  color: var(--muted);
+}
+
 /* ------------------------------------------------------ Taylor polynomials */
 /*
  * The Taylor row on the parent's card borrows the calc-* vocabulary (tag,

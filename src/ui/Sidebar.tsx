@@ -27,7 +27,7 @@ import { ShapeCard } from './ShapeCard'
 import { DataCard } from './DataCard'
 import { SequenceCard } from './SequenceCard'
 import { SequenceEditor } from './SequenceEditor'
-import type { BoardSequence, SequenceCardData } from './seqLinks'
+import type { BoardSequence, SeqSeriesView, SequenceCardData } from './seqLinks'
 import type { DataParse } from '../core/data'
 import type { BoardData, DataCardData, DataMarker, PasteMode, RegressionKind } from './dataLinks'
 import type { BoardShape, ShapeCardData } from './shapeLinks'
@@ -214,6 +214,9 @@ interface Props {
   onSeqWindow?(id: string, n0: number, count: number): string | null
   onSeqTogglePartner?(id: string): void
   onSeqToggleSums?(id: string): void
+  /** "Σ Show series" on a sequence's card. */
+  onSeqToggleSeries?(id: string): void
+  onSeqSeriesChange?(id: string, patch: Partial<SeqSeriesView>, live?: boolean): void
   /** The player's state for a parametric / polar curve (the selected one plays). */
   motionFor?(id: string): MotionPlayState | undefined
   /** The vectors' scales on this board for a curve. */
@@ -459,6 +462,8 @@ export function Sidebar({
   onSeqWindow = () => null,
   onSeqTogglePartner = noop,
   onSeqToggleSums = noop,
+  onSeqToggleSeries = noop,
+  onSeqSeriesChange = noop,
   motionFor,
   motionScalesFor,
   onMotionPlay,
@@ -878,6 +883,8 @@ export function Sidebar({
                   onWindow={(n0, count) => onSeqWindow(q.id, n0, count)}
                   onTogglePartner={() => onSeqTogglePartner(q.id)}
                   onToggleSums={() => onSeqToggleSums(q.id)}
+                  onToggleSeries={() => onSeqToggleSeries(q.id)}
+                  onSeriesChange={(patch, live) => onSeqSeriesChange(q.id, patch, live)}
                 />
               )
             })}

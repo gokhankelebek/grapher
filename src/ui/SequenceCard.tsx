@@ -3,8 +3,9 @@ import type { CSSProperties } from 'react'
 import { Latex } from './Latex'
 import { ParamRow } from './CurveCard'
 import { coord } from './fieldLinks'
-import { subscript } from './seqLinks'
-import type { BoardSequence, SequenceCardData } from './seqLinks'
+import { SeriesSection } from './SeriesSection'
+import { seriesColor, subscript } from './seqLinks'
+import type { BoardSequence, SeqSeriesView, SequenceCardData } from './seqLinks'
 
 // ============================================================================
 // src/ui/SequenceCard.tsx — a sequence in the sidebar list.
@@ -48,6 +49,10 @@ interface Props {
   onWindow(n0: number, count: number): string | null
   onTogglePartner(): void
   onToggleSums(): void
+  /** "Σ Show series": on with the default view, or off. */
+  onToggleSeries?(): void
+  /** A change to the series view; `live` inside a slider drag. */
+  onSeriesChange?(patch: Partial<SeqSeriesView>, live?: boolean): void
 }
 
 export function SequenceCard({
@@ -68,6 +73,8 @@ export function SequenceCard({
   onWindow,
   onTogglePartner,
   onToggleSums,
+  onToggleSeries = () => {},
+  onSeriesChange = () => {},
 }: Props) {
   // ---- the ⋯ menu (identical behaviour to a curve's, deliberately)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -354,6 +361,13 @@ export function SequenceCard({
           {card.seriesLine}
         </div>
       )}
+      {!card.error && !selected && card.sigma && (
+        <div className="seq-series seq-series-verdict" data-testid="seq-series-verdict">
+          Σ: {card.sigma.verdictText}
+          {card.sigma.testName ? ` (${card.sigma.testName})` : ''}
+          {card.sigma.sumText ? ` · ${card.sigma.sumText}` : ''}
+        </div>
+      )}
 
       {selected && !card.error && (
         <div className="card-body" onClick={(e) => e.stopPropagation()}>
@@ -414,10 +428,11 @@ export function SequenceCard({
             )}
           </div>
 
-          {(card.closedForm || card.seriesNote) && (
+          {(card.closedForm || (card.seriesNote && !card.sigma)) && (
             <div className="field-hint seq-note" data-testid="seq-note">
               {card.closedForm && <div>{card.closedForm}</div>}
-              {card.seriesNote && <div>{card.seriesNote}</div>}
+              {/* the Series section below says it properly, test by test */}
+              {card.seriesNote && !card.sigma && <div>{card.seriesNote}</div>}
             </div>
           )}
 
@@ -445,6 +460,14 @@ export function SequenceCard({
               <input type="checkbox" checked={seq.showSums} data-testid="seq-sums" onChange={onToggleSums} />
               <span>show partial sums</span>
             </label>
+            <label
+              className="te-check"
+              title="The infinite series Σ aₙ: partial sums on the board, its sum, and the convergence tests"
+              onClick={(ev) => ev.stopPropagation()}
+            >
+              <input type="checkbox" checked={!!seq.series} data-testid="seq-series-toggle" onChange={onToggleSeries} />
+              <span>Σ show series</span>
+            </label>
           </div>
           {card.partnerNote && (
             <div className="field-hint seq-partner-src" data-testid="seq-partner-note">
@@ -455,6 +478,16 @@ export function SequenceCard({
             <div className="field-hint seq-partner-src" data-testid="seq-partner-src">
               Dashed: {card.partner.replace(/-/g, '−')}
             </div>
+          )}
+          {card.sigma && (
+            <SeriesSection
+              data={card.sigma}
+              color={seriesColor(seq.color)}
+              onChange={onSeriesChange}
+              onRemove={onToggleSeries}
+              onEditStart={onParamEditStart}
+              onEditEnd={onParamEditEnd}
+            />
           )}
         </div>
       )}

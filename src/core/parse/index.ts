@@ -12,7 +12,7 @@
 //   expr       := term ( ('+'|'-') term )*
 //   term       := factor ( ('*'|'/') factor | juxtaposed-factor )*      // implicit mult
 //   factor     := ('-'|'+') factor | power
-//   power      := atom ( '^' factor )?                                   // right-assoc
+//   power      := atom '!'* ( '^' factor )?                              // right-assoc; n! postfix
 //   atom       := number | ident | '(' expr ')' | '|' expr '|'
 //                | func '(' expr (',' expr)? ')' | func tight-product
 //   (implemented as a Pratt parser with binding powers:
@@ -122,6 +122,10 @@ const FUNCS: Record<string, FuncDef> = {
   floor: { arity: 1, fn: (a) => Math.floor(a), latex: (x) => `\\left\\lfloor ${x[0]}\\right\\rfloor` },
   ceil:  { arity: 1, fn: (a) => Math.ceil(a),  latex: (x) => `\\left\\lceil ${x[0]}\\right\\rceil` },
   sign:  { arity: 1, fn: (a) => Math.sign(a),  latex: (x) => `\\operatorname{sign}${wrap(x[0])}` },
+  // n! — typed as a postfix (n!, (2n)!, (n+1)!) or as fact(n); the AST is
+  // one call either way, and prints back as fact(…) where source is needed.
+  // The LaTeX is set in toLatex (a bare atom takes no parentheses: n!).
+  fact:  { arity: 1, fn: (a) => factorial(a),  latex: (x) => `\\left(${x[0]}\\right)!` },
   min:   { arity: 2, fn: (a, b) => Math.min(a, b), latex: (x) => `\\min${wrap(`${x[0]},\\,${x[1]}`)}` },
   max:   { arity: 2, fn: (a, b) => Math.max(a, b), latex: (x) => `\\max${wrap(`${x[0]},\\,${x[1]}`)}` },
   // log_B(u): args are [B, u] (source order, so free constants keep their
@@ -191,6 +195,47 @@ function logBase(b: number, u: number): number {
   if (b === 10) return Math.log10(u)
   if (b === 2) return Math.log2(u)
   return Math.log(u) / Math.log(b)
+}
+
+/** 0! … 170!, exact in double precision (170! is the largest finite one). */
+const FACTORIALS: readonly number[] = (() => {
+  const out = [1]
+  for (let i = 1; i <= 170; i++) out.push(out[i - 1] * i)
+  return out
+})()
+
+/** Lanczos coefficients (g = 7, n = 9): Γ to ~15 significant digits. */
+const LANCZOS = [
+  0.99999999999980993, 676.5203681218851, -1259.1392167224028, 771.32342877765313,
+  -176.61502916214059, 12.507343278686905, -0.13857109526572012, 9.9843695780195716e-6,
+  1.5056327351493116e-7,
+]
+
+/** Γ(z) for z > 0 (the only side factorial needs). */
+function gammaPos(z: number): number {
+  if (z < 0.5) return Math.PI / (Math.sin(Math.PI * z) * gammaPos(1 - z))
+  z -= 1
+  let x = LANCZOS[0]
+  for (let i = 1; i < 9; i++) x += LANCZOS[i] / (z + i)
+  const t = z + 7.5
+  return Math.sqrt(2 * Math.PI) * Math.pow(t, z + 0.5) * Math.exp(-t) * x
+}
+
+/**
+ * u! — exact for the whole numbers (a table: 0! = 1 … 170!, ∞ past it), and
+ * Γ(u + 1) between them for u > −1, so y = x! is the smooth curve through the
+ * factorials. Undefined at and below −1: Γ's poles and sign flips there are
+ * nothing a lesson on n! asks for.
+ */
+function factorial(u: number): number {
+  if (u !== u) return Number.NaN
+  if (u === Infinity) return Infinity
+  if (Number.isInteger(u)) {
+    if (u < 0) return Number.NaN
+    return u > 170 ? Infinity : FACTORIALS[u]
+  }
+  if (u <= -1) return Number.NaN
+  return u > 171 ? Infinity : gammaPos(u + 1)
 }
 
 const CONSTS: Record<string, { v: number; latex: string }> = {
@@ -437,6 +482,9 @@ function tokenize(src: string, callable?: (w: string) => boolean, lenient = fals
     if (c === ',') { toks.push({ type: 'comma', text: c, pos: i, value: 0 }); i++; continue }
     if (c === '=') { toks.push({ type: 'eq', text: c, pos: i, value: 0 }); i++; continue }
     if (c === '|') { toks.push({ type: 'bar', text: c, pos: i, value: 0 }); i++; continue }
+    // n! — a postfix factorial. `!=` stays the error it always was here (a
+    // condition reads its own ≠ / != before any expression gets it).
+    if (c === '!' && src[i + 1] !== '=') { toks.push({ type: 'op', text: '!', pos: i, value: 0 }); i++; continue }
     if (lenient) { i++; continue }
     throw new ParseError(`Unexpected character '${c}' at position ${i}`, i)
   }
@@ -525,7 +573,22 @@ class Parser {
   }
 
   // ---- nud: parse a prefix/atomic expression ------------------------------
+  /**
+   * An atom, then any postfix factorials: n!, (2n)!, (n + 1)!. The factorial
+   * binds tighter than everything — 2n! is 2·(n!), n!^2 is (n!)², −n! is
+   * −(n!) — which is how every textbook reads it.
+   */
   private nud(): Node {
+    let node = this.nudAtom()
+    for (;;) {
+      const t = this.peek()
+      if (t.type !== 'op' || t.text !== '!') return node
+      this.next()
+      node = { t: 'call', fn: 'fact', args: [node] }
+    }
+  }
+
+  private nudAtom(): Node {
     const tok = this.next()
     switch (tok.type) {
       case 'num':
@@ -1618,6 +1681,11 @@ function toLatex(n: Node): string {
     case 'call':
       // log_B: a simple fraction base is typeset as one, \log_{\frac{1}{2}}
       if (n.fn === 'log_') return FUNCS.log_.latex([baseLatex(n.args[0]), toLatex(n.args[1])])
+      if (n.fn === 'fact') {
+        const a = n.args[0]
+        const bare = a.t === 'var' || a.t === 'param' || a.t === 'const' || (a.t === 'num' && /^\d+$/.test(a.raw))
+        return bare ? `${toLatex(a)}!` : FUNCS.fact.latex([toLatex(a)])
+      }
       return FUNCS[n.fn].latex(n.args.map(toLatex))
     case 'ucall':
       // f\left(x-1\right), f'\left(x\right), f''\left(x\right)
@@ -1650,7 +1718,10 @@ function toLatex(n: Node): string {
           // A decimal base is written in parentheses, (1.05)^{x}: bare, the
           // coefficient in front of it runs into it ("3 · 1.05^x").
           const decimalBase = n.a.t === 'num' && n.a.raw.includes('.')
-          const base = precOf(n.a) < 4 || decimalBase ? wrap(toLatex(n.a)) : toLatex(n.a)
+          // A fraction base is wrapped too: \frac{-2}{3}^{n} reads as if only
+          // the denominator were raised; (−2/3)ⁿ is what was typed.
+          const fracBase = n.a.t === 'bin' && n.a.op === '/'
+          const base = precOf(n.a) < 4 || decimalBase || fracBase ? wrap(toLatex(n.a)) : toLatex(n.a)
           return `${base}^{${toLatex(n.b)}}`
         }
       }

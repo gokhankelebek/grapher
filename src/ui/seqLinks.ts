@@ -38,21 +38,34 @@ import {
   terms,
 } from '../core/sequences'
 import type { SeqClass, SequenceDef, SequenceParse, SeriesInfo } from '../core/sequences'
-import type { BoardSequence } from '../core/persist'
+import type { BoardSequence, SeqSeriesView } from '../core/persist'
 import {
   SEQ_COUNT_DEFAULT,
   SEQ_COUNT_MAX,
   SEQ_COUNT_MIN,
+  SERIES_N_SPAN,
   clampSeqCount,
   clampSeqN0,
 } from '../core/persist'
+import { CURVE_COLORS } from '../core/types'
+import {
+  OUTCOME_TEXT,
+  SERIES_TEST_NAMES,
+  analyzeSeries,
+  approxText,
+  exactPartialSum,
+  partialSumsTo,
+  seriesSource,
+} from '../core/series'
+import type { SeriesAnalysis, SeriesOutcome, SeriesSource, SeriesTestId, SeriesVerdict } from '../core/series'
+import type { Overlay } from '../render/overlays'
 import { parseExpression } from '../core/parse'
 import { exactForm } from '../core/exact'
 import type { ScatterSet } from '../render/scatter'
 import { carryParams, fieldParamMeta } from './fieldLinks'
 import type { LegendEntry } from './present'
 
-export type { BoardSequence, SeqClass, SequenceDef, SeriesInfo }
+export type { BoardSequence, SeqClass, SeqSeriesView, SequenceDef, SeriesInfo }
 export { SEQ_COUNT_DEFAULT, SEQ_COUNT_MAX, SEQ_COUNT_MIN, clampSeqCount, clampSeqN0, carryParams }
 
 const MINUS = '−'
@@ -277,6 +290,8 @@ export interface CompiledSequence {
   series: SeriesInfo | null
   /** The continuous partner as a typed line ("y = 4x - 1"), when there is one. */
   partner: string | null
+  /** The infinite series Σ aₙ, worked out only while its section is shown. */
+  sigma: CompiledSeries | null
 }
 
 const NONE: SeqClass = { kind: 'none' }
@@ -285,7 +300,11 @@ const NONE: SeqClass = { kind: 'none' }
 export function compileSequence(q: BoardSequence): CompiledSequence {
   const parse = readSequence(q.src)
   const n0 = clampSeqN0(q.n0)
-  const count = clampSeqCount(q.count)
+  // With the series shown, every partial sum S_N on the board has its terms
+  // beside it: the window of terms reaches at least to N (S₁₂ with a₁₁, a₁₂
+  // missing read as if the sum had outrun the sequence).
+  const seriesN = q.series && Number.isFinite(q.series.N) ? Math.floor(q.series.N) : 0
+  const count = clampSeqCount(Math.max(q.count, seriesN - n0 + 1))
   const ns = Array.from({ length: count }, (_, i) => n0 + i)
   const name = seqName(q)
   if (!parse.ok) {
@@ -301,6 +320,7 @@ export function compileSequence(q: BoardSequence): CompiledSequence {
       cls: NONE,
       series: null,
       partner: null,
+      sigma: null,
     }
   }
   const seq = parse.seq
@@ -360,6 +380,7 @@ export function compileSequence(q: BoardSequence): CompiledSequence {
     cls,
     series,
     partner: partner && partner.trim() !== '' ? partner : null,
+    sigma: q.series ? compileSeries(q, seq, params, name) : null,
   }
 }
 
@@ -463,6 +484,8 @@ export interface SequenceCardData {
   partnerNote: string | null
   /** "S₁₀" or "a₀ + … + a₉" — what the last partial sum is called. */
   sumLabel: string
+  /** The Series section, while "Σ Show series" is on; else null. */
+  sigma: SeriesCardData | null
 }
 
 /** "arithmetic, d = 4" — the headline of a classification. */
@@ -552,6 +575,7 @@ export function sequenceCard(q: BoardSequence, c: CompiledSequence): SequenceCar
     partnerNote:
       c.partner === null && c.cls.kind === 'geometric' && c.cls.r < 0 ? 'no continuous partner: r < 0' : null,
     sumLabel: label,
+    sigma: seriesCard(q, c),
   }
 }
 
@@ -585,7 +609,9 @@ export function sequenceScatter(
       visible: q.visible,
       label: `${c.name}${subscript('n')}`,
     })
-    if (q.showSums) {
+    // The series section draws its own partial sums (squares, companion
+    // colour); the rings would sit on the same points.
+    if (q.showSums && !(q.series && c.sigma)) {
       out.push({
         id: sumsSetId(q.id),
         xs: c.ns,
@@ -597,7 +623,7 @@ export function sequenceScatter(
       })
     }
   }
-  return out
+  return [...out, ...seriesScatter(qs, compiled)]
 }
 
 /** The partner's dash: long enough to read as "the function behind the dots". */
@@ -695,6 +721,14 @@ export function sequenceBox(q: BoardSequence, c: CompiledSequence): Box | null {
   }
   take(c.ns, c.values)
   if (q.showSums) take(c.ns, c.sums)
+  if (q.series && c.sigma) {
+    take(c.sigma.ns, c.sigma.sums)
+    if (c.sigma.bound !== null) take([c.sigma.N + 3], [c.sigma.sums[c.sigma.sums.length - 1]])
+    const S = c.sigma.analysis.sum?.value
+    if (typeof S === 'number' && Number.isFinite(S) && seriesConverges(c.sigma.analysis.verdict)) {
+      take([c.sigma.ns[0] ?? c.ns[0]], [S])
+    }
+  }
   if (!(minX <= maxX)) return null
   // The axis is part of the picture of a sequence: include y = 0 when the
   // terms sit near it, so 20, 10, 5, 2.5 … is seen approaching the axis.
@@ -848,4 +882,336 @@ export function seqPreview(
     params: p.seq.defaultParams.slice(),
   }
   return { src: made.src, error: null, card: sequenceCard(q, compileSequence(q)), window: w }
+}
+
+// ---------------------------------------------------------------------------
+// The series Σ aₙ ("Σ Show series" on the card)
+//
+// The analysis itself is src/core/series.ts. What lives here is the board's
+// half: where the series starts (the window's first index — so typing
+// "n from 2" on the card starts Σ 1/(n ln n) at 2), how far the partial sums
+// reach (the N slider), what the card prints, and what the board draws: the
+// partial sums (n, Sₙ) as squares in a companion colour, optionally joined,
+// the dashed line y = S when the series converges, the band S ± |a_(N+1)| of
+// an alternating series, and the staircase of stacked bars.
+// ---------------------------------------------------------------------------
+
+export interface CompiledSeries {
+  analysis: SeriesAnalysis
+  src: SeriesSource
+  k0: number
+  /** The partial sums run to S_N, N clamped to [Nmin, Nmax]. */
+  N: number
+  Nmin: number
+  Nmax: number
+  /** k₀ … N and S_k₀ … S_N. */
+  ns: number[]
+  sums: number[]
+  /** |a_(N+1)| when the alternating series error bound applies at this N; else null. */
+  bound: number | null
+}
+
+/** The slider's range for a series from k₀: 1 … 200 from n = 1. */
+export function seriesRange(k0: number): { min: number; max: number } {
+  return { min: k0, max: k0 + SERIES_N_SPAN - 1 }
+}
+
+/** What "Σ Show series" switches on: S_N at the last term the window shows. */
+export function defaultSeriesView(q: Pick<BoardSequence, 'n0' | 'count'>): SeqSeriesView {
+  const k0 = clampSeqN0(q.n0)
+  const r = seriesRange(k0)
+  const N = Math.min(r.max, Math.max(r.min, k0 + clampSeqCount(q.count) - 1))
+  return { N, connect: false, bars: false }
+}
+
+/**
+ * The partial sums' colour: a different palette colour from the terms, far
+ * from it in hue (blue terms → amber sums), so the two sets read apart on the
+ * projector — and, because it is a palette colour, it maps to its print
+ * counterpart on paper. Under SAT / AP (mono) the marker shape tells them apart.
+ */
+export function seriesColor(color: string): string {
+  const i = CURVE_COLORS.indexOf(color)
+  if (i >= 0) return CURVE_COLORS[SERIES_PARTNER[i]]
+  return color.toLowerCase() === '#f9a825' ? '#4f9cf9' : '#f9a825'
+}
+
+/**
+ * Palette index → its partner's index, chosen by hue so the two never sit
+ * next to each other on the wheel: blue↔amber, red→teal, green→purple,
+ * purple→lime, teal→pink, pink→teal, lime→purple.
+ */
+const SERIES_PARTNER: readonly number[] = [3, 5, 4, 0, 7, 6, 5, 4]
+
+/**
+ * The explicit formula as typed — "1/(n ln n)" out of "a_n = 1/(n ln n), n >= 2" —
+ * for the integral test's "f(x) = 1/(x ln x)". Null for anything else.
+ */
+export function plainFormula(src: string): string | null {
+  const m = /^\s*[A-Za-z]\s*(?:_\s*\{?\s*\(?\s*[nkijm]\s*\)?\s*\}?|\(\s*[nkijm]\s*\)|[ₙₖ])\s*=\s*(.+)$/.exec(src)
+  if (!m) return null
+  let rhs = m[1]
+  if (/[,;]|\bfor\b|\{/.test(rhs)) {
+    rhs = rhs
+      .replace(/\{[^}]*\}\s*$/, '')
+      .replace(/\s+for\s+.*$/, '')
+      .replace(/[,;]\s*[^,;]*[<>≤≥][^,;]*$/, '')
+  }
+  rhs = rhs.trim()
+  if (rhs === '' || /[,;{}]/.test(rhs) || /_/.test(rhs)) return null
+  return rhs
+}
+
+const ANALYSIS_CACHE = new Map<string, SeriesAnalysis>()
+const ANALYSIS_CACHE_MAX = 64
+
+function compileSeries(q: BoardSequence, seq: SequenceDef, params: number[], name: string): CompiledSeries | null {
+  const view = q.series
+  if (!view) return null
+  const k0 = clampSeqN0(q.n0)
+  const r = seriesRange(k0)
+  const N = Math.min(r.max, Math.max(r.min, Number.isFinite(view.N) ? Math.round(view.N) : r.min))
+  let src: SeriesSource
+  try {
+    const plain = seq.kind === 'explicit' ? plainFormula(q.src) : null
+    src = seriesSource(seq, params, k0, plain)
+    if (name !== src.name) src = { ...src, name }
+  } catch {
+    return null
+  }
+  const key = `${q.src}\u0000${params.join(',')}\u0000${k0}\u0000${name}`
+  let analysis = ANALYSIS_CACHE.get(key)
+  if (!analysis) {
+    analysis = analyzeSeries(src)
+    if (ANALYSIS_CACHE.size >= ANALYSIS_CACHE_MAX) ANALYSIS_CACHE.clear()
+    ANALYSIS_CACHE.set(key, analysis)
+  }
+  const sums = partialSumsTo(src, N)
+  const ns = sums.map((_, i) => k0 + i)
+  let bound: number | null = null
+  if (analysis.boundFrom !== null && N >= analysis.boundFrom) {
+    const b = Math.abs(src.term(N + 1))
+    bound = Number.isFinite(b) ? b : null
+  }
+  return { analysis, src, k0, N, Nmin: r.min, Nmax: r.max, ns, sums, bound }
+}
+
+/** Is the verdict one of the three "converges"? */
+export function seriesConverges(v: SeriesVerdict): boolean {
+  return v === 'converges' || v === 'converges-absolutely' || v === 'converges-conditionally' || v === 'finite'
+}
+
+export interface SeriesTestRow {
+  id: SeriesTestId
+  name: string
+  outcome: SeriesOutcome
+  outcomeText: string
+  reason: string
+}
+
+export interface SeriesCardData {
+  /** KaTeX: \sum_{n=1}^{\infty} \frac{1}{n^{2}} */
+  tex: string
+  N: number
+  Nmin: number
+  Nmax: number
+  /** "S₂₀" */
+  sNLabel: string
+  /** "1627/2520 ≈ 0.645635", "≈ 1.596163" */
+  sNText: string
+  /** "S = π²/6 ≈ 1.644934", or null when no sum is given. */
+  sumText: string | null
+  sumHow: string | null
+  /** Why a convergent series has no sum shown. */
+  sumNote: string | null
+  verdict: SeriesVerdict
+  verdictText: string
+  /** The test the verdict rests on ("p-series"), or null. */
+  testName: string | null
+  justification: string
+  tests: SeriesTestRow[]
+  /** "|S − S₂₀| ≤ |a₂₁| = 1/21 ≈ 0.047619" for an alternating series. */
+  bound: string | null
+  /** "S − S₂₀ ≈ 0.0234 (actual)" beside the bound, when S is known. */
+  actual: string | null
+  problem: string | null
+  connect: boolean
+  bars: boolean
+}
+
+function withApprox(text: string, v: number): string {
+  if (text.startsWith('≈')) return text
+  const a = approxText(v, 7)
+  return a === text ? text : `${text} ≈ ${a}`
+}
+
+/** What the Series section prints, already worked out. */
+export function seriesCard(q: BoardSequence, c: CompiledSequence): SeriesCardData | null {
+  const s = c.sigma
+  if (!s || !q.series) return null
+  const A = s.analysis
+  const sN = s.sums[s.sums.length - 1]
+  const sNLabel = `S${subscript(s.N)}`
+  let sNText = Number.isFinite(sN) ? `≈ ${approxText(sN, 7)}` : 'undefined'
+  if (Number.isFinite(sN)) {
+    const ex = exactPartialSum(s.src, s.N)
+    if (ex && ex.exact) sNText = withApprox(ex.text, sN)
+  }
+  const sum = A.sum
+  const sumText = sum && Number.isFinite(sum.value) ? `S = ${sum.exact ? withApprox(sum.text, sum.value) : sum.text}` : null
+  let bound: string | null = null
+  let actual: string | null = null
+  if (s.bound !== null) {
+    const nxt = `${c.name}${subscript(s.N + 1)}`
+    const bt = termText(s.bound)
+    bound = `|S ${MINUS} ${sNLabel}| ≤ |${nxt}| = ${withApprox(bt, s.bound)}`
+    if (sum && Number.isFinite(sum.value) && Number.isFinite(sN)) {
+      actual = `actual |S ${MINUS} ${sNLabel}| ≈ ${approxText(Math.abs(sum.value - sN), 4)}`
+    }
+  }
+  return {
+    tex: A.tex,
+    N: s.N,
+    Nmin: s.Nmin,
+    Nmax: s.Nmax,
+    sNLabel,
+    sNText,
+    sumText,
+    sumHow: sum ? sum.how : null,
+    sumNote: A.sumNote,
+    verdict: A.verdict,
+    verdictText: A.verdictText,
+    testName: A.decidedBy ? SERIES_TEST_NAMES[A.decidedBy] : null,
+    justification: A.justification,
+    tests: A.tests.map((t) => ({
+      id: t.id,
+      name: t.name,
+      outcome: t.outcome,
+      outcomeText: OUTCOME_TEXT[t.outcome],
+      reason: t.reason,
+    })),
+    bound,
+    actual,
+    problem: A.problem,
+    connect: q.series.connect,
+    bars: q.series.bars,
+  }
+}
+
+/** The id of a sequence's series set on the board: never an object. */
+export function seriesSetId(id: string): string {
+  return `${id}:series`
+}
+
+/** The partial sums (n, Sₙ) of every visible sequence whose series is shown: squares. */
+export function seriesScatter(
+  qs: readonly BoardSequence[],
+  compiled: ReadonlyMap<string, CompiledSequence>,
+): ScatterSet[] {
+  const out: ScatterSet[] = []
+  for (const q of qs) {
+    const c = compiled.get(q.id)
+    const s = c?.sigma
+    if (!c || !s || !q.series) continue
+    out.push({
+      id: seriesSetId(q.id),
+      xs: s.ns,
+      ys: s.sums,
+      color: seriesColor(q.color),
+      visible: q.visible,
+      marker: 'square',
+      label: `S${subscript('n')} = Σ ${c.name}${subscript('k')}`,
+    })
+  }
+  return out
+}
+
+/** Half the width of one staircase bar, in index units. */
+export const SERIES_BAR_HALF = 0.34
+/** The band and the bars' fill alpha. */
+export const SERIES_BAND_FILL = 0.2
+export const SERIES_BAR_FILL = 0.3
+
+/**
+ * The series' figure content, as overlays (so the export draws it by the same
+ * field the screen does): the staircase bars, the line joining the partial
+ * sums, the band S ± |a_(N+1)|, the dashed y = S and its chip.
+ */
+export function seriesOverlays(
+  qs: readonly BoardSequence[],
+  compiled: ReadonlyMap<string, CompiledSequence>,
+): Overlay[] {
+  const under: Overlay[] = []
+  const marks: Overlay[] = []
+  for (const q of qs) {
+    if (!q.visible || !q.series) continue
+    const c = compiled.get(q.id)
+    const s = c?.sigma
+    if (!c || !s) continue
+    const color = seriesColor(q.color)
+    const A = s.analysis
+    const S = A.sum && seriesConverges(A.verdict) && Number.isFinite(A.sum.value) ? A.sum.value : null
+    if (q.series.bars) {
+      let prev = 0
+      for (let i = 0; i < s.ns.length; i++) {
+        const n = s.ns[i]
+        const top = s.sums[i]
+        if (!Number.isFinite(top)) break
+        under.push({
+          kind: 'path',
+          points: [
+            { x: n - SERIES_BAR_HALF, y: prev },
+            { x: n + SERIES_BAR_HALF, y: prev },
+            { x: n + SERIES_BAR_HALF, y: top },
+            { x: n - SERIES_BAR_HALF, y: top },
+          ],
+          closed: true,
+          fill: SERIES_BAR_FILL,
+          alpha: 0.85,
+          width: 1,
+          color,
+          under: true,
+        })
+        prev = top
+      }
+    }
+    if (s.bound !== null) {
+      const centre = S ?? s.sums[s.sums.length - 1]
+      if (Number.isFinite(centre)) {
+        const x0 = s.N - 0.5
+        const x1 = Math.max(s.N + 3, c.ns.length ? c.ns[c.ns.length - 1] + 0.5 : s.N + 3)
+        under.push({
+          kind: 'path',
+          points: [
+            { x: x0, y: centre - s.bound },
+            { x: x1, y: centre - s.bound },
+            { x: x1, y: centre + s.bound },
+            { x: x0, y: centre + s.bound },
+          ],
+          closed: true,
+          fill: SERIES_BAND_FILL,
+          alpha: 0,
+          color,
+          under: true,
+        })
+        marks.push({ kind: 'segment', from: { x: s.N, y: centre - s.bound }, to: { x: s.N, y: centre + s.bound }, color, width: 2 })
+      }
+    }
+    if (q.series.connect && s.ns.length > 1) {
+      const pts = s.ns.map((n, i) => ({ x: n, y: s.sums[i] })).filter((p) => Number.isFinite(p.y))
+      marks.push({ kind: 'path', points: pts, color, width: 1.5, alpha: 0.9 })
+    }
+    if (S !== null) {
+      marks.push({ kind: 'hline', y: S, color, dashed: true })
+      const lastN = Math.max(s.N, c.ns.length ? c.ns[c.ns.length - 1] : s.N)
+      marks.push({
+        kind: 'label',
+        at: { x: lastN + 1, y: S },
+        text: `S = ${A.sum && A.sum.exact ? A.sum.text : approxText(S, 5)}`,
+        dir: { x: 0.4, y: -1 },
+        color,
+      })
+    }
+  }
+  return [...under, ...marks]
 }

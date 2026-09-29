@@ -594,6 +594,35 @@ export function clampSeqN0(v: unknown): number {
   return Math.min(SEQ_N0_LIMIT, Math.max(-SEQ_N0_LIMIT, Math.round(v)))
 }
 
+/**
+ * How far the partial sums of a series reach: S_N for N = k₀ … k₀ + 199
+ * (1 … 200 for a series from n = 1). The stored N is only kept inside the
+ * widest window any start could give it; the card clamps it to its own.
+ */
+export const SERIES_N_SPAN = 200
+
+/** A partial-sum index as the store accepts it (a whole number, or null). */
+export function clampSeriesN(v: unknown): number | null {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return null
+  const lim = SEQ_N0_LIMIT + SERIES_N_SPAN
+  return Math.min(lim, Math.max(-lim, Math.round(v)))
+}
+
+/**
+ * A sequence's series, as its card shows it ("Σ Show series"): present only
+ * while it is shown. Everything the section prints — the verdict, the tests,
+ * the sum, S_N — is recomputed from the line, so only the teacher's choices
+ * live here.
+ */
+export interface SeqSeriesView {
+  /** The partial sums run to S_N. */
+  N: number
+  /** Join the partial-sum dots (n, Sₙ) with a line. */
+  connect: boolean
+  /** Draw each term as a bar stacked on the partial sum before it (the staircase). */
+  bars: boolean
+}
+
 /** A sequence as the board holds it. `src` is the only source of truth. */
 export interface BoardSequence {
   id: string
@@ -617,6 +646,8 @@ export interface BoardSequence {
    * Absent for every other sequence: its letter is the one its line names.
    */
   name?: string
+  /** The series section, while "Σ Show series" is on. Absent otherwise. */
+  series?: SeqSeriesView
 }
 
 // --- unit circle --------------------------------------------------------------
@@ -1333,6 +1364,8 @@ export interface StoredSequence {
   hidden?: true
   /** A listed sequence's letter (see BoardSequence.name). */
   name?: string
+  /** Written only while the series is shown; its switches only when on. */
+  series?: { N: number; connect?: true; bars?: true }
 }
 
 export interface StoredData {
@@ -2094,6 +2127,14 @@ export function sequenceToStored(q: BoardSequence): StoredSequence {
   if (q.showSums) out.sums = true
   if (q.visible === false) out.hidden = true
   if (typeof q.name === 'string' && /^[A-Za-z]$/.test(q.name)) out.name = q.name
+  if (q.series) {
+    const N = clampSeriesN(q.series.N)
+    if (N !== null) {
+      out.series = { N }
+      if (q.series.connect) out.series.connect = true
+      if (q.series.bars) out.series.bars = true
+    }
+  }
   return out
 }
 
@@ -2111,6 +2152,10 @@ export function storedToSequence(raw: unknown): { sequence: BoardSequence } | { 
     ? raw.params.slice(0, MAX_PARAMS).map((v) => (isNum(v) ? v : 1))
     : []
   const name = isStr(raw.name) && /^[A-Za-z]$/.test(raw.name) ? raw.name : undefined
+  const sr = isObj(raw.series) ? raw.series : null
+  const sN = sr ? clampSeriesN(sr.N) : null
+  const series: SeqSeriesView | undefined =
+    sr && sN !== null ? { N: sN, connect: sr.connect === true, bars: sr.bars === true } : undefined
   return {
     sequence: {
       id,
@@ -2123,6 +2168,7 @@ export function storedToSequence(raw: unknown): { sequence: BoardSequence } | { 
       showSums: raw.sums === true,
       params,
       ...(name !== undefined ? { name } : {}),
+      ...(series !== undefined ? { series } : {}),
     },
   }
 }

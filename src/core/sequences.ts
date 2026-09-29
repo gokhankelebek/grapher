@@ -158,6 +158,16 @@ class SeqError extends Error {
 interface Internal {
   listValues?: number[]
   ellipsis?: boolean
+  /** The index letter the rule uses (n, k, …). */
+  letter?: string
+  /**
+   * An explicit formula as a function of a REAL index — f(x) with aₙ = f(n) —
+   * for the integral test. Only when nothing but the formula defines the
+   * terms (no given terms standing in for it).
+   */
+  fx?: (params: readonly number[], x: number) => number
+  /** KaTeX of the explicit formula's right-hand side (aₙ = …), for Σ. */
+  rhsTex?: string
 }
 const INTERNAL = new WeakMap<SequenceDef, Internal>()
 
@@ -918,7 +928,8 @@ function parseDefinition(text: string, parts: Span[], eqSpans: Span[], others: S
   if (order === 0) {
     // explicit (given terms, if any, stand as typed)
     const start = range ? range.lo : givenIdx.length ? Math.min(givenIdx[0], 1) : 1
-    return {
+    const nan = (): number => Number.NaN
+    const def: SequenceDef = {
       name,
       kind: 'explicit',
       term: (p, m) => {
@@ -932,6 +943,12 @@ function parseDefinition(text: string, parts: Span[], eqSpans: Span[], others: S
       defaultParams,
       latex,
     }
+    INTERNAL.set(def, {
+      letter,
+      ...(givens.length === 0 ? { fx: (p: readonly number[], x: number) => run(p, x - h, nan, nan) } : {}),
+      ...(givens.length === 0 && h === 0 ? { rhsTex: r.latex } : {}),
+    })
+    return def
   }
 
   // recursive
@@ -1000,7 +1017,7 @@ function parseDefinition(text: string, parts: Span[], eqSpans: Span[], others: S
     }
     return memo[q]
   }
-  return {
+  const def: SequenceDef = {
     name,
     kind: 'recursive',
     term,
@@ -1010,6 +1027,39 @@ function parseDefinition(text: string, parts: Span[], eqSpans: Span[], others: S
     defaultParams,
     latex,
   }
+  INTERNAL.set(def, { letter })
+  return def
+}
+
+// ============================================================================
+// What the series module (src/core/series.ts) reads off a parsed sequence
+// ============================================================================
+
+/** The letter the rule indexes by: n, or k, i, j, m when the line says so. */
+export function indexLetter(seq: SequenceDef): string {
+  return INTERNAL.get(seq)?.letter ?? 'n'
+}
+
+/** An explicit formula at a REAL index (the integral test's f(x)), or null. */
+export function continuousTerm(seq: SequenceDef): ((params: readonly number[], x: number) => number) | null {
+  return INTERNAL.get(seq)?.fx ?? null
+}
+
+/** KaTeX of aₙ's formula (the part after "aₙ ="), or null for a rule or a list. */
+export function termFormulaTex(seq: SequenceDef): string | null {
+  return INTERNAL.get(seq)?.rhsTex ?? null
+}
+
+/** A typed list's terms and whether it ends in "…", or null. */
+export function listTerms(seq: SequenceDef): { values: readonly number[]; ellipsis: boolean } | null {
+  const i = INTERNAL.get(seq)
+  return i?.listValues ? { values: i.listValues, ellipsis: i.ellipsis === true } : null
+}
+
+/** A number as the sequence texts write it: 1/2, 0.8, √2, −3. */
+export function niceNumber(v: number): { value: number; text: string; src: string; isFrac: boolean } {
+  const n = nice(v)
+  return { value: n.v, text: n.text, src: n.src, isFrac: n.isFrac }
 }
 
 // ============================================================================

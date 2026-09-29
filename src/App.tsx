@@ -152,11 +152,13 @@ import {
   sequenceNameClash,
   sequenceScatter,
   seqName,
+  seriesOverlays,
+  defaultSeriesView,
   carryParams as carrySeqParams,
   clampSeqCount,
   clampSeqN0,
 } from './ui/seqLinks'
-import type { BoardSequence, CompiledSequence, SequenceCardData } from './ui/seqLinks'
+import type { BoardSequence, CompiledSequence, SeqSeriesView, SequenceCardData } from './ui/seqLinks'
 import {
   newUnitCircle,
   playStart,
@@ -5236,6 +5238,54 @@ export default function App() {
     [commitState, mapSeq],
   )
 
+  /** "Σ Show series": on at the default view, off (and forgotten). One undo entry. */
+  const toggleSeqSeries = useCallback(
+    (id: string): void => {
+      const now = seqRef.current.find((q) => q.id === id)
+      if (!now) return
+      commitState(
+        {
+          sequences: mapSeq(id, (q) => {
+            if (q.series) {
+              const { series: _drop, ...rest } = q
+              void _drop
+              return rest
+            }
+            return { ...q, series: defaultSeriesView(q) }
+          }),
+        },
+        now.series ? 'hide series' : 'show series',
+      )
+      setSelectedId(id)
+    },
+    [commitState, mapSeq],
+  )
+
+  /**
+   * The series view: N, "join the sums", "staircase bars". A slider drag is
+   * live (inside the bracket its press opened); a click is one commit.
+   */
+  const setSeqSeries = useCallback(
+    (id: string, patch: Partial<SeqSeriesView>, live?: boolean): void => {
+      const now = seqRef.current.find((q) => q.id === id)
+      if (!now || !now.series) return
+      const next = mapSeq(id, (q) => (q.series ? { ...q, series: { ...q.series, ...patch } } : q))
+      if (live) {
+        relabelEdit('move N')
+        applyState({ sequences: next })
+        return
+      }
+      const what =
+        patch.connect !== undefined
+          ? patch.connect ? 'join the partial sums' : 'unjoin the partial sums'
+          : patch.bars !== undefined
+            ? patch.bars ? 'show staircase bars' : 'hide staircase bars'
+            : 'change N'
+      commitState({ sequences: next }, what)
+    },
+    [applyState, commitState, mapSeq, relabelEdit],
+  )
+
   const cycleSeqColor = useCallback(
     (id: string): void => {
       const now = seqRef.current.find((q) => q.id === id)
@@ -8473,14 +8523,20 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind, lens, curves, models, crossSpan, ghostFunctionOf, depKeys])
 
+  /** Σ aₙ on the board: staircase bars, the joined sums, the band, y = S. */
+  const seriesMarks = useMemo<Overlay[]>(
+    () => (kind === 'cartesian' && sequences.some((q) => q.series) ? seriesOverlays(sequences, seqCompiled) : []),
+    [kind, sequences, seqCompiled],
+  )
+
   const overlays = useMemo<Overlay[]>(() => {
     const base = kind === 'cartesian' ? overlaysFor(calcLinks, curves, models, bandSpan) : []
-    const more = motionAreaOverlays.length + domainOverlays.length + sysOverlays.length
+    const more = motionAreaOverlays.length + domainOverlays.length + sysOverlays.length + seriesMarks.length
     if (more === 0) return base
     // The ghost goes first (under everything else); the marks sort themselves
     // onto the curves by kind.
-    return [...domainOverlays, ...base, ...motionAreaOverlays, ...sysOverlays]
-  }, [kind, calcLinks, curves, models, motionAreaOverlays, bandSpan, domainOverlays, sysOverlays])
+    return [...domainOverlays, ...base, ...motionAreaOverlays, ...sysOverlays, ...seriesMarks]
+  }, [kind, calcLinks, curves, models, motionAreaOverlays, bandSpan, domainOverlays, sysOverlays, seriesMarks])
   const overlaysRef = useRef<Overlay[]>(overlays)
   overlaysRef.current = overlays
 
@@ -11028,6 +11084,8 @@ export default function App() {
         onSeqWindow={setSeqWindow}
         onSeqTogglePartner={toggleSeqPartner}
         onSeqToggleSums={toggleSeqSums}
+        onSeqToggleSeries={toggleSeqSeries}
+        onSeqSeriesChange={setSeqSeries}
         motionFor={motionFor}
         motionScalesFor={motionScalesFor}
         onMotionPlay={patchMotion}
