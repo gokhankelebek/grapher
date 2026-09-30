@@ -7341,3 +7341,90 @@ button.calc-field-btn {
 .rr-sentence {
   margin-top: var(--sp-1);
 }
+
+/* ------------------------------------------------ sign chart (card section)
+   The small chart: one line per strip, the label, then signs and critical x's
+   in reading order. It wraps rather than widening the card; the conclusions
+   are sentences in the card's fact list. */
+.signchart-mini {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+.signchart-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+
+.signchart-label {
+  flex: none;
+  min-width: 1.8em;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.signchart-cells {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 6px;
+}
+
+.signchart-sign {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.signchart-sign.is-pos {
+  color: #3ecf8e;
+}
+
+.signchart-sign.is-neg {
+  color: var(--danger);
+}
+
+.signchart-mark {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+  padding: 0 2px;
+  border-left: 1px solid var(--border-strong);
+  border-right: 1px solid var(--border-strong);
+  color: var(--muted);
+}
+
+.signchart-at {
+  color: var(--faint);
+  font-size: var(--fs-xs);
+}
+
+.signchart-more {
+  color: var(--faint);
+}
+
+.signchart-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-1);
+}
+
+.signchart-facts .calc-fact {
+  color: var(--text);
+}
+
+.signchart-relmax,
+.signchart-relmin,
+.signchart-inflection,
+.signchart-absmax,
+.signchart-absmin {
+  font-weight: 600;
+}

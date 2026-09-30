@@ -47,11 +47,15 @@ import type {
   LimitLink,
   RiemannLink,
   SecantLink,
+  SignChartLink,
+  SignLevel,
   TangentLink,
   TaylorLink,
   VolumeLink,
 } from '../core/persist'
 import { secantOverlays, secantRow } from './secantLinks'
+import { signChartRow } from './signChartLinks'
+import type { SignChartRow } from './signChartLinks'
 import { regionChoices, volumeOverlays, volumeRow } from './volumeLinks'
 import type { VolumeRow } from './volumeLinks'
 import type { SectionShape, VolumeAxis, VolumeMethod } from '../core/volume'
@@ -97,6 +101,9 @@ export type {
   RiemannMethod,
   SecantLink,
   SecantRow,
+  SignChartLink,
+  SignChartRow,
+  SignLevel,
   TangentLink,
   TaylorLink,
   TaylorRow,
@@ -187,6 +194,8 @@ export function linkNoun(kind: CalcKind): string {
       return 'limit'
     case 'volume':
       return 'volume'
+    case 'signchart':
+      return 'sign chart'
   }
 }
 
@@ -1582,6 +1591,8 @@ export interface CardCalc {
   limits: LimitRow[]
   /** The solids built on regions this curve bounds (it is the parent). */
   volumes: VolumeRow[]
+  /** The sign charts drawn for this curve: rows, "treat as f′", the AP statements. */
+  signs: SignChartRow[]
   /**
    * The link ids of everything above that is ATTACHED to this curve (areas,
    * sums, accumulations, Taylor, secants, limits, volumes), in the order they
@@ -1699,6 +1710,13 @@ export type CalcChange =
   | { kind: 'volumeSlice'; linkId: string; x: number | null }
   /** null: the x-axis. The App re-chooses a and b for the new region. */
   | { kind: 'volumeOther'; linkId: string; otherId: string | null }
+  /** Treat the graph as f, f′ or f″. */
+  | { kind: 'signAs'; linkId: string; as: SignLevel }
+  /** Which strips the chart shows. */
+  | { kind: 'signRows'; linkId: string; rows: SignLevel[] }
+  | { kind: 'signFlag'; linkId: string; flag: 'arrows' | 'cup' | 'guides'; on: boolean }
+  /** The Candidates Test interval; null clears it. */
+  | { kind: 'signInterval'; linkId: string; a: number | null; b: number | null }
 
 /** The undo entry each change deserves, in a teacher's words. */
 export function changeLabel(change: CalcChange): string {
@@ -1764,6 +1782,14 @@ export function changeLabel(change: CalcChange): string {
       return 'move slice'
     case 'volumeOther':
       return 'change region'
+    case 'signAs':
+      return 'change what the graph is'
+    case 'signRows':
+      return 'change sign chart rows'
+    case 'signFlag':
+      return change.flag === 'guides' ? 'switch guides' : change.flag === 'arrows' ? 'switch arrow row' : 'switch concavity row'
+    case 'signInterval':
+      return 'set Candidates Test interval'
   }
 }
 
@@ -1807,6 +1833,8 @@ export function cardCalc(
    * leave a hidden curve out). A hidden parent is then still "h", never "f".
    */
   cardLetters: Readonly<Record<string, string>> = {},
+  /** The x-range sign charts are analysed over (signRange of the view). */
+  signSpan: readonly [number, number] = [-10, 10],
 ): Record<string, CardCalc> {
   const out: Record<string, CardCalc> = {}
   // The board's letters first; a hidden curve falls back to its card's name.
@@ -1824,6 +1852,7 @@ export function cardCalc(
     secants: [],
     limits: [],
     volumes: [],
+    signs: [],
     order: [],
   })
   const slot = (id: string): CardCalc | null => {
@@ -2067,6 +2096,19 @@ export function cardCalc(
         }
         own.order?.push(link.id)
         own.volumes.push(row)
+        break
+      }
+      case 'signchart': {
+        const own = slot(link.parentId)
+        if (!own) break
+        let row: SignChartRow
+        try {
+          row = signChartRow(link, parent, models, letters[link.parentId] ?? 'f', deps[link.parentId] ?? '', signSpan)
+        } catch {
+          row = { ...signChartRow(link, undefined, models), problem: 'this sign chart could not be read' }
+        }
+        own.order?.push(link.id)
+        own.signs.push(row)
         break
       }
     }

@@ -70,6 +70,8 @@ import { drawUnitCircles } from '../render/unitCircle'
 import type { RelatedRatesFigure } from '../render/relatedRates'
 import { drawRelatedRates } from '../render/relatedRates'
 import { drawScatter } from '../render/scatter'
+import type { SignChartFigure } from '../render/signChart'
+import { drawSignGuides, drawSignStrips, signBandHeight } from '../render/signChart'
 import { drawNLItem, drawNumberLineAxis, nlLanes } from '../render/numberline'
 import type { NLPart } from '../render/numberline'
 import { pointText } from './numeric'
@@ -367,6 +369,20 @@ export interface BoardScene {
    */
   relatedRates?: readonly RelatedRatesFigure[]
   /**
+   * Sign charts — strips of f, f′, f″ along the bottom of the board, each
+   * critical x under the board x it is, with optional dashed guides up
+   * through the graph (src/render/signChart.ts). The strips sit on an opaque
+   * backing above the caption band, painted after every other figure layer;
+   * the guides go down under the curves. The grid's numbers keep out of the
+   * band as they keep out of the caption's.
+   *
+   * FIGURE, not chrome: it exports, and goes mono under SAT / AP. Absent or
+   * empty draws exactly what the board drew before this field existed.
+   *
+   * Cartesian only; a number-line board ignores it.
+   */
+  signCharts?: readonly SignChartFigure[]
+  /**
    * The LOOK of the whole board: the screen, a textbook worksheet, an SAT
    * item, an AP free-response figure. See FigureStyle in core/types.
    *
@@ -429,6 +445,7 @@ export type { EulerPath } from '../render/euler'
 export type { ScatterMarker, ScatterSet } from '../render/scatter'
 export type { UnitCircleFigure } from '../render/unitCircle'
 export type { RelatedRatesFigure } from '../render/relatedRates'
+export type { SignChartFigure } from '../render/signChart'
 
 /**
  * Trig by name, at a word boundary, so `sinh`/`cosh`/`tanh` (not periodic) and
@@ -1788,11 +1805,28 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
   // numbers live. Without a caption there is no band and no style object, so
   // the grid call is the one it has always been.
   const captioned = typeof scene.caption === 'string' && scene.caption.trim() !== ''
-  const gridStyle: GridStyle | null = captioned
-    ? { ...(fig ?? SCREEN_GRID), bottomInset: captionHeight(scene.present, scene.caption, vp.widthPx) }
-    : fig
+  const capInset = captioned ? captionHeight(scene.present, scene.caption, vp.widthPx) : 0
+  // Sign-chart strips take a band just above the caption's, and the grid's
+  // numbers keep out of it the same way. No strips: no band, the same call.
+  const signs = scene.kind !== 'number-line' && scene.signCharts && scene.signCharts.length > 0 ? scene.signCharts : null
+  const signBand = signs ? signBandHeight(signs, scene.present) : 0
+  const gridStyle: GridStyle | null =
+    captioned || signBand > 0 ? { ...(fig ?? SCREEN_GRID), bottomInset: capInset + signBand } : fig
   const mono = fig?.curveInk === 'mono'
   const ink = mono ? (): string => theme.axis : paint
+  const signOpts =
+    signs && signBand > 0
+      ? {
+          vp,
+          theme,
+          paint: ink,
+          mono,
+          text: textColor(theme),
+          scale,
+          font: fig?.font ?? null,
+          bottomInset: capInset,
+        }
+      : null
   /** Shaded fills under mono ink: a grey wash light enough to copy. */
   const washAlpha = mono ? MONO_FILL_ALPHA : null
 
@@ -1816,6 +1850,16 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
     else drawGrid(ctx, vp, theme, scale, scene.axisUnits ?? null, gridStyle)
   } catch {
     /* grid module absent or failed — keep going */
+  }
+
+  // A sign chart's guides: dashed lines from each critical x up to the strips,
+  // under every curve so the graph reads on top of them.
+  if (signs && signOpts) {
+    try {
+      drawSignGuides(ctx, signs, signOpts)
+    } catch {
+      /* the guides are lost; the figure still stands */
+    }
   }
 
   // Overlays: after the grid, before every curve — so a curve's own stroke
@@ -2268,6 +2312,16 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
       }
     } catch {
       /* a crossing that could not be drawn must not take the board with it */
+    }
+  }
+
+  // The sign-chart strips: on their own backing along the bottom, above the
+  // caption band, after every other figure layer.
+  if (signs && signOpts) {
+    try {
+      drawSignStrips(ctx, signs, signOpts)
+    } catch {
+      /* a strip that could not be drawn must not take the figure with it */
     }
   }
 

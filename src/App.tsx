@@ -65,6 +65,11 @@ import {
 import { defaultSecant } from './ui/secantLinks'
 import { applyVolumeChange, defaultVolume, isVolumeChange, snapSlice, volumeSliceHandle } from './ui/volumeLinks'
 import { defaultLimitA, limitSnapPoints, snapLimitA } from './ui/limitLinks'
+import { defaultSignRows, signChartFigures, signRange } from './ui/signChartLinks'
+import type { SignChartLink } from './ui/signChartLinks'
+import { signBandHeight } from './render/signChart'
+import type { SignChartFigure } from './render/signChart'
+import { signRowsFor } from './core/persist'
 import {
   carryParams,
   compileFields,
@@ -4012,6 +4017,28 @@ export default function App() {
         return
       }
 
+      if (kind === 'signchart') {
+        // One chart per curve: its card already holds every row and switch.
+        // f′'s row to start, with its guides — the picture a class is asked
+        // to read — and f stays selected so the card shows the statements.
+        if (calcRef.current.some((l) => l.kind === 'signchart' && l.parentId === parentId)) {
+          showToast('This curve already has a sign chart — its rows are on its card.')
+          setSelectedId(parentId)
+          return
+        }
+        commitState(
+          {
+            calc: [
+              ...calcRef.current,
+              { kind: 'signchart', id: linkId, parentId, rows: defaultSignRows('f'), guides: true },
+            ],
+          },
+          'add sign chart',
+        )
+        setSelectedId(parentId)
+        return
+      }
+
       if (kind === 'secant') {
         // Two nice numbers in view where f is defined (continuous between
         // them when the view allows it). The secant is an overlay on f — no
@@ -4357,6 +4384,47 @@ export default function App() {
       } else if (change.kind === 'limitEps' && l.kind === 'limit') {
         if (!Number.isFinite(change.eps) || !(change.eps > 0) || change.eps === l.eps) return
         next = { ...l, eps: change.eps }
+      } else if (change.kind === 'signAs' && l.kind === 'signchart') {
+        const was = l.as ?? 'f'
+        if (was === change.as) return
+        const { as: _was, arrows: _arrows, ...rest } = l
+        void _was
+        void _arrows
+        // The rows that still exist for what the graph now is; none left means
+        // the new graph's own row (f′ shown → the f′ row).
+        const ok = signRowsFor(change.as)
+        const kept = l.rows.filter((r) => ok.includes(r))
+        const rows = kept.length > 0 ? kept : defaultSignRows(change.as)
+        next = {
+          ...rest,
+          ...(change.as === 'f' ? {} : { as: change.as }),
+          rows,
+          ...(l.arrows === true && change.as !== 'f2' ? { arrows: true as const } : {}),
+        }
+      } else if (change.kind === 'signRows' && l.kind === 'signchart') {
+        const ok = signRowsFor(l.as ?? 'f')
+        const rows = ok.filter((r) => change.rows.includes(r))
+        if (rows.length === l.rows.length && rows.every((r, j) => l.rows[j] === r)) return
+        next = { ...l, rows }
+      } else if (change.kind === 'signFlag' && l.kind === 'signchart') {
+        if ((l[change.flag] === true) === change.on) return
+        const rest: SignChartLink = { ...l }
+        delete rest[change.flag]
+        next = change.on ? { ...rest, [change.flag]: true } : rest
+      } else if (change.kind === 'signInterval' && l.kind === 'signchart') {
+        const { a: _a, b: _b, ...rest } = l
+        void _a
+        void _b
+        if (change.a === null || change.b === null) {
+          if (l.a === undefined) return
+          next = rest
+        } else {
+          if (!Number.isFinite(change.a) || !Number.isFinite(change.b) || change.a === change.b) return
+          const a = Math.min(change.a, change.b)
+          const b = Math.max(change.a, change.b)
+          if (l.a === a && l.b === b) return
+          next = { ...rest, a, b }
+        }
       } else if (change.kind === 'accumX' && l.kind === 'accumulation') {
         if (change.x === null) {
           if (l.x === undefined) return
@@ -9157,6 +9225,16 @@ export default function App() {
   const overlaysRef = useRef<Overlay[]>(overlays)
   overlaysRef.current = overlays
 
+  /**
+   * The x-range sign charts are analysed over: the view joined with
+   * [−10, 10] (signRange). Only its two numbers are state, so a pan inside
+   * [−10, 10] — or any pan on a board with no sign chart — changes nothing.
+   */
+  const hasSignCharts = calcLinks.some((l) => l.kind === 'signchart')
+  const signLo = hasSignCharts ? signRange(crossSpan)[0] : -10
+  const signHi = hasSignCharts ? signRange(crossSpan)[1] : 10
+  const signSpan = useMemo<[number, number]>(() => [signLo, signHi], [signLo, signHi])
+
   /** Everything the cards say about calculus, computed once for all of them. */
   const calcCards = useMemo<Record<string, CardCalc>>(() => {
     if (kind !== 'cartesian') return {}
@@ -9170,7 +9248,8 @@ export default function App() {
         l.kind === 'taylor' ||
         l.kind === 'secant' ||
         l.kind === 'limit' ||
-        l.kind === 'volume',
+        l.kind === 'volume' ||
+        l.kind === 'signchart',
     )
       ? curveNames(curves, { ...displaySources, ...exprSources }, calcLinks, names, inverses)
       : {}
@@ -9204,7 +9283,19 @@ export default function App() {
           inverses,
         )
       : {}
-    const out = cardCalc(calcLinks, curves, models, curveLabel, letters, calls, sources, implicitBox, depKeys, cardLetters)
+    const out = cardCalc(
+      calcLinks,
+      curves,
+      models,
+      curveLabel,
+      letters,
+      calls,
+      sources,
+      implicitBox,
+      depKeys,
+      cardLetters,
+      signSpan,
+    )
     // Undo/redo's epoch: the Taylor ▶ demo is keyed on it (see playEpoch).
     if (playEpoch !== 0) for (const card of Object.values(out)) card.epoch = playEpoch
     return out
@@ -9224,6 +9315,7 @@ export default function App() {
     inverseSourceOf,
     implicitSources,
     implicitBox,
+    signSpan,
   ])
   const calcFor = useCallback(
     (id: string): CardCalc | undefined => calcCards[id],
@@ -10379,6 +10471,23 @@ export default function App() {
   const boardCurveNamesRef = useRef(boardCurveNames)
   boardCurveNamesRef.current = boardCurveNames
 
+  /**
+   * The sign charts' strips along the bottom of the board — figure content:
+   * the screen and every export draw the same list (BoardScene.signCharts).
+   * Keyed on depKeys, so a chart on a line that calls f follows f.
+   */
+  const signFigures = useMemo<SignChartFigure[]>(() => {
+    if (kind !== 'cartesian' || !hasSignCharts) return []
+    const links = calcLinks.filter((l): l is SignChartLink => l.kind === 'signchart')
+    try {
+      return signChartFigures(links, curves, models, { ...cardNames, ...boardCurveNames }, depKeys, signSpan)
+    } catch {
+      return []
+    }
+  }, [kind, hasSignCharts, calcLinks, curves, models, cardNames, boardCurveNames, depKeys, signSpan])
+  const signFiguresRef = useRef<SignChartFigure[]>(signFigures)
+  signFiguresRef.current = signFigures
+
   // ------------------------------------------------ the selected card's Domain rows
   //
   // Only the selected card is asked (the rows live in its open body), and
@@ -10678,6 +10787,11 @@ export default function App() {
       const plain = exportViewport(vp, settings, content, kindRef.current, itemsRef.current, 0)
       capPx = captionHeight(null, caption, plain.widthPx)
     }
+    // Sign-chart strips take a band above the caption's; a frame fitted to the
+    // curves leaves room for it the same way.
+    if (kindRef.current === 'cartesian' && signFiguresRef.current.length > 0) {
+      capPx += signBandHeight(signFiguresRef.current, null)
+    }
     const evp = exportViewport(vp, settings, content, kindRef.current, itemsRef.current, capPx)
     // A sequence's dashed partner is part of the figure: sampled across THIS
     // frame, which is not the screen's window when the export is fitted.
@@ -10786,6 +10900,10 @@ export default function App() {
       ...(ucFiguresRef.current.length > 0 ? { unitCircles: ucFiguresRef.current } : {}),
       // And the related-rates picture and its mini-graph.
       ...(rrFiguresRef.current.length > 0 ? { relatedRates: rrFiguresRef.current } : {}),
+      // And the sign charts' strips, along the bottom of the figure.
+      ...(kindRef.current === 'cartesian' && signFiguresRef.current.length > 0
+        ? { signCharts: signFiguresRef.current }
+        : {}),
       // And the inequality system's solution region, as the screen shows it.
       ...(ineqSolutionRef.current ? { inequalitySolution: true } : {}),
       // And on the ruling the screen is on: a polar board exported on squares
@@ -11959,6 +12077,7 @@ export default function App() {
           scatter={scatterScene}
           unitCircles={ucFigures}
           relatedRates={rrFigures}
+          signCharts={signFigures}
           inequalitySolution={ineqSolution}
           grid={boardGrid}
           figure={boardFigure}

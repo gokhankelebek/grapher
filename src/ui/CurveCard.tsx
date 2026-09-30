@@ -47,6 +47,7 @@ import type { CalcChange, CalcKind, CardCalc } from './calcLinks'
 import { TaylorSection } from './TaylorSection'
 import { SecantSection } from './SecantSection'
 import { LimitSection } from './LimitSection'
+import { SignChartSection } from './SignChartSection'
 import { VolumeSection } from './VolumeSection'
 import type { CurveIntersections } from './intersections'
 import { DomainSection } from './DomainSection'
@@ -301,6 +302,7 @@ export const CALC_GROUPS: { title: string; items: { kind: CalcKind | 'between'; 
       { kind: 'secant', label: 'Average rate of change (secant)' },
       { kind: 'tangent', label: 'Tangent line' },
       { kind: 'derivative', label: 'Derivative f\u2032' },
+      { kind: 'signchart', label: 'Sign chart (f\u2032, f\u2033)' },
     ],
   },
   {
@@ -1856,6 +1858,12 @@ export function CurveCard({
       calcTools.push({
         id: sc.linkId,
         node: <SecantSection row={sc} onCalcChange={onCalcChange} onRemove={() => onCalcRemove(sc.linkId)} />,
+      })
+    }
+    for (const sg of calc.signs ?? []) {
+      calcTools.push({
+        id: sg.linkId,
+        node: <SignChartSection row={sg} onCalcChange={onCalcChange} onRemove={() => onCalcRemove(sg.linkId)} />,
       })
     }
     for (const v of calc.volumes) {

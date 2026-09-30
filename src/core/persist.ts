@@ -105,6 +105,7 @@ export type CalcKind =
   | 'secant'
   | 'limit'
   | 'volume'
+  | 'signchart'
 
 /** A tangent line at one point of `parentId`, drawn as the curve `curveId`. */
 export interface TangentLink {
@@ -324,6 +325,55 @@ export interface VolumeLink {
   x?: number
 }
 
+/** f, f′, f″ — a sign chart's rows, and what its curve is taken to be. */
+export type SignLevel = 'f' | 'f1' | 'f2'
+export const SIGN_LEVELS: readonly SignLevel[] = ['f', 'f1', 'f2']
+
+/**
+ * The sign chart of `parentId` (AP Calculus Unit 5): strips along the bottom
+ * of the board for f, f′ and f″ (`rows`, top to bottom in that order), each
+ * with its critical x's, "0" / "und" at them and + / − between; the AP
+ * statements they justify on the card; and — `as` — "treat this graph as f′"
+ * (or f″), the AP classic, where the same machinery reasons about the unseen
+ * f: f increases where the shown graph is positive, and so on.
+ *
+ * `arrows` adds a row of ↗ ↘ for f, `cup` a row of ∪ ∩, `guides` dashed lines
+ * from each critical x up through the graph; `a`/`b` is the closed interval
+ * for the Candidates Test. Nothing computed is stored. `rows` is always
+ * written (it is the chart); `as` only when it is not 'f', the switches only
+ * when on, a and b only as a pair.
+ *   src/core/signChart.ts     signChart / conclusions / chartSourceOf
+ *   src/ui/signChartLinks.ts  signChartRow / signChartFigures
+ */
+export interface SignChartLink {
+  kind: 'signchart'
+  id: string
+  parentId: string
+  /** What the curve IS: absent means f. */
+  as?: 'f1' | 'f2'
+  /** Which strips, a subset of SIGN_LEVELS at or after `as`, in that order. */
+  rows: SignLevel[]
+  arrows?: true
+  cup?: true
+  guides?: true
+  /** The Candidates Test interval [a, b], when one is set. */
+  a?: number
+  b?: number
+}
+
+/** The rows a chart may show when its curve is `as`: f′ has no f row. */
+export function signRowsFor(as: SignLevel | undefined): SignLevel[] {
+  const from = SIGN_LEVELS.indexOf(as ?? 'f')
+  return SIGN_LEVELS.slice(Math.max(0, from))
+}
+
+/** Rows as a file may hold them: known, allowed for `as`, once each, in order. */
+export function cleanSignRows(rows: unknown, as: SignLevel | undefined): SignLevel[] {
+  const ok = signRowsFor(as)
+  const want = Array.isArray(rows) ? rows : []
+  return ok.filter((r) => want.includes(r))
+}
+
 export type CalcLink =
   | TangentLink
   | DerivativeLink
@@ -334,6 +384,7 @@ export type CalcLink =
   | SecantLink
   | LimitLink
   | VolumeLink
+  | SignChartLink
 
 /** The links that own a curve of their own. */
 export type CurveLink = TangentLink | DerivativeLink | AccumulationLink | TaylorLink
@@ -1655,6 +1706,12 @@ export interface StoredCalcLink {
   y?: number
   /** Tangent on an implicit curve only, and only when on: the H/V tangents marked. */
   marks?: true
+  /** Sign chart only: what the curve is (absent: f), its rows, and the switches when on. */
+  as?: 'f1' | 'f2'
+  rows?: SignLevel[]
+  arrows?: true
+  cup?: true
+  guides?: true
 }
 
 export interface StoredDoc {
@@ -2609,6 +2666,23 @@ export function calcLinkToStored(l: CalcLink): StoredCalcLink {
         ...(l.x !== undefined && isNum(l.x) ? { x: l.x } : {}),
       }
     }
+    case 'signchart': {
+      const as = l.as === 'f1' || l.as === 'f2' ? l.as : undefined
+      const pair = isNum(l.a) && isNum(l.b) && l.a !== l.b
+      return {
+        kind: 'signchart',
+        id: l.id,
+        parentId: l.parentId,
+        // 'f' is the default: a chart of the graph itself writes no `as`.
+        ...(as ? { as } : {}),
+        rows: cleanSignRows(l.rows, as),
+        ...(l.arrows === true && as !== 'f2' ? { arrows: true as const } : {}),
+        ...(l.cup === true ? { cup: true as const } : {}),
+        ...(l.guides === true ? { guides: true as const } : {}),
+        // The Candidates Test interval travels as a pair, or not at all.
+        ...(pair ? { a: Math.min(l.a as number, l.b as number), b: Math.max(l.a as number, l.b as number) } : {}),
+      }
+    }
   }
 }
 
@@ -2776,6 +2850,26 @@ export function storedToCalcLink(raw: unknown): CalcLink | null {
         ...(isNum(raw.x) ? { x: sliceX(raw.x) } : {}),
       }
     }
+    case 'signchart': {
+      // Everything about a sign chart defaults: rows that are not rows are
+      // dropped, a switch that is not true is off, an interval that is not a
+      // pair of distinct numbers is no interval. `as` that is not f′ or f″ is f.
+      const as = raw.as === 'f1' || raw.as === 'f2' ? raw.as : undefined
+      const pair = isNum(raw.a) && isNum(raw.b) && raw.a !== raw.b
+      return {
+        kind: 'signchart',
+        id,
+        parentId,
+        ...(as ? { as } : {}),
+        rows: cleanSignRows(raw.rows, as),
+        ...(raw.arrows === true && as !== 'f2' ? { arrows: true as const } : {}),
+        ...(raw.cup === true ? { cup: true as const } : {}),
+        ...(raw.guides === true ? { guides: true as const } : {}),
+        ...(pair
+          ? { a: Math.min(raw.a as number, raw.b as number), b: Math.max(raw.a as number, raw.b as number) }
+          : {}),
+      }
+    }
     default:
       return null
   }
@@ -2802,6 +2896,8 @@ export function calcNoun(kind: CalcKind): string {
       return 'limit'
     case 'volume':
       return 'volume'
+    case 'signchart':
+      return 'sign chart'
   }
 }
 
