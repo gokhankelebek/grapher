@@ -13,8 +13,15 @@
 //     runs that carry mathematics go into $…$.
 //   * NOTHING BREAKS THE FILE. Every TeX special (\ { } $ & # % _ ^ ~) is
 //     escaped, every non-ASCII character this knows is mapped to a command,
-//     and anything it does not know becomes "?" — never a raw byte that
-//     pdflatex's default setup cannot typeset.
+//     an accented letter outside Latin-1 (ğ ş İ ı …) becomes its TeX accent
+//     (\u{g}, \c{s}, \.{I}, \i), prose punctuation inside mathematics (‘ ’ “ ”
+//     — …) is set in \mbox{…} in text mode, and anything still unknown
+//     becomes a visible [U+XXXX] — never a raw byte that pdflatex's default
+//     setup cannot typeset, and never a silent "?".
+//   * ONLY THE KERNEL + TikZ. Nothing here needs amsmath or amssymb: text in
+//     math is \mbox (not \text), ✓ is \surd and ✗ is \times (not
+//     \checkmark, which is amssymb), so the TikZ export compiles with just
+//     \usepackage{tikz} and the pgfplots export with just pgfplots.
 // ============================================================================
 
 /** Unicode → math-mode LaTeX. */
@@ -28,6 +35,21 @@ const MATH_SYMBOLS: Readonly<Record<string, string>> = {
   '→': '\\to', '∈': '\\in', '∪': '\\cup', '∩': '\\cap', '∂': '\\partial', '∑': '\\sum',
   '≡': '\\equiv', '∅': '\\emptyset', '⇒': '\\Rightarrow', '…': '\\ldots', 'ℝ': '\\mathbf{R}',
   '∠': '\\angle', '∘': '\\circ', '|': '|',
+  // Verdict marks (a test point's "(1, 2) ✓"): kernel-only symbols, so no
+  // amssymb is needed — \surd for a tick, \times for a cross.
+  '✓': '\\surd', '✔': '\\surd', '✗': '\\times', '✘': '\\times', '✕': '\\times',
+  '∓': '\\mp', '∝': '\\propto', '⊂': '\\subset', '⊆': '\\subseteq', '⊃': '\\supset',
+  '⊇': '\\supseteq', '∉': '\\notin', '∀': '\\forall', '∃': '\\exists', '¬': '\\neg',
+  '∧': '\\wedge', '∨': '\\vee', '≅': '\\cong', '≃': '\\simeq', '∼': '\\sim', '⊥': '\\perp',
+  '∥': '\\parallel', '∇': '\\nabla', '∮': '\\oint', '←': '\\leftarrow', '↔': '\\leftrightarrow',
+  '⇔': '\\Leftrightarrow', '⟹': '\\Longrightarrow', '↦': '\\mapsto', '↑': '\\uparrow', '↓': '\\downarrow',
+  '⌊': '\\lfloor', '⌋': '\\rfloor', '⌈': '\\lceil', '⌉': '\\rceil', '⟨': '\\langle', '⟩': '\\rangle',
+  '‖': '\\|', '∖': '\\setminus', '∗': '*', '∙': '\\cdot', '≪': '\\ll', '≫': '\\gg',
+  'ℕ': '\\mathbf{N}', 'ℤ': '\\mathbf{Z}', 'ℚ': '\\mathbf{Q}', 'ℂ': '\\mathbf{C}',
+  'ζ': '\\zeta', 'η': '\\eta', 'ι': '\\iota', 'κ': '\\kappa', 'ν': '\\nu', 'ξ': '\\xi',
+  'ο': 'o', 'υ': '\\upsilon', 'χ': '\\chi', 'ψ': '\\psi', 'ϕ': '\\phi', 'ϑ': '\\vartheta',
+  'Γ': '\\Gamma', 'Θ': '\\Theta', 'Λ': '\\Lambda', 'Ξ': '\\Xi', 'Π': '\\Pi', 'Φ': '\\Phi',
+  'Ψ': '\\Psi', 'Υ': '\\Upsilon',
 }
 
 const SUPERS: Readonly<Record<string, string>> = {
@@ -47,6 +69,55 @@ const TEXT_SYMBOLS: Readonly<Record<string, string>> = {
 
 /** Latin-1 letters pdflatex's default UTF-8 input handles. */
 const LATIN1_LETTER = /[À-ÖØ-öø-ÿ]/
+
+/** Combining accents → the kernel's text accent commands (\u{g}, \c{s}, …). */
+const ACCENTS: Readonly<Record<string, string>> = {
+  '\u0300': '\\`', '\u0301': "\\'", '\u0302': '\\^', '\u0303': '\\~', '\u0304': '\\=',
+  '\u0306': '\\u', '\u0307': '\\.', '\u0308': '\\"', '\u030A': '\\r', '\u030B': '\\H',
+  '\u030C': '\\v', '\u0323': '\\d', '\u0327': '\\c', '\u0328': '\\k', '\u0331': '\\b',
+}
+
+/** Letters with no decomposition that the kernel still has a command for. */
+const TEXT_LETTERS: Readonly<Record<string, string>> = {
+  'ı': '{\\i}', 'ȷ': '{\\j}', 'ł': '{\\l}', 'Ł': '{\\L}', 'đ': '{\\dj}', 'Đ': '{\\DJ}',
+  'œ': '{\\oe}', 'Œ': '{\\OE}', 'ŋ': '{\\ng}', 'Ŋ': '{\\NG}',
+}
+
+/** Is this a combining mark (it decorates the character before it)? */
+const COMBINING = /[\u0300-\u036f\u1ab0-\u1aff\u20d0-\u20ff\ufe20-\ufe2f]/
+
+/**
+ * Text-mode LaTeX for a character none of the tables knows — never "?", never
+ * a raw byte: an accented letter as its accent command, a compatibility form
+ * (ﬁ, full-width digits) as its plain letters, and anything else as a visible
+ * [U+XXXX] so the author can see what to fix. Empty for a lone combining mark.
+ */
+function textFallback(ch: string): string {
+  if (TEXT_LETTERS[ch] !== undefined) return TEXT_LETTERS[ch]
+  if (COMBINING.test(ch)) return ''
+  const code = ch.codePointAt(0) ?? 63
+  if (code < 32 || code === 127 || (code >= 0x80 && code < 0xa0)) return ' '
+  const nfd = ch.normalize('NFD')
+  const base = [...nfd]
+  if (base.length >= 2 && base.slice(1).every((c) => ACCENTS[c] !== undefined)) {
+    const first = base[0]
+    const cp = first.codePointAt(0) ?? 0
+    if ((cp >= 65 && cp <= 90) || (cp >= 97 && cp <= 122)) {
+      // i and j lose their dot under an accent above: \u{\i}.
+      let out = first === 'i' ? '\\i' : first === 'j' ? '\\j' : first
+      for (const acc of base.slice(1)) out = `${ACCENTS[acc]}{${out}}`
+      return out
+    }
+  }
+  const compat = ch.normalize('NFKD').replace(COMBINING, '')
+  if (compat !== ch && compat.length > 0 && [...compat].every((c) => {
+    const k = c.codePointAt(0) ?? 0
+    return k >= 32 && k <= 126
+  })) {
+    return texEscapeText(compat)
+  }
+  return `[U+${code.toString(16).toUpperCase().padStart(4, '0')}]`
+}
 
 const FUNCTION_NAMES = [
   'arcsin', 'arccos', 'arctan', 'sinh', 'cosh', 'tanh', 'sin', 'cos', 'tan', 'sec', 'csc',
@@ -78,7 +149,7 @@ export function texEscapeText(s: string): string {
         else if (SUPERS[ch] !== undefined) out += `\\textsuperscript{${SUPERS[ch]}}`
         else if (SUBS[ch] !== undefined) out += `$_{${SUBS[ch]}}$`
         else if (ch === '\t' || ch === '\n') out += ' '
-        else out += '?'
+        else out += textFallback(ch)
       }
     }
   }
@@ -184,8 +255,15 @@ export function texMath(src: string): string {
     const code = ch.codePointAt(0) ?? 63
     if (code >= 32 && code <= 126) out += ch
     else if (MATH_SYMBOLS[ch] !== undefined) out += MATH_SYMBOLS[ch] + '\u0006'
-    else if (LATIN1_LETTER.test(ch)) out += `\\text{${ch}}`
-    else out += '?'
+    // Text inside mathematics goes in \mbox (kernel LaTeX; \text is amsmath):
+    // a Latin-1 letter, prose punctuation (‘ ’ “ ” —), anything else known.
+    else if (LATIN1_LETTER.test(ch)) out += `\\mbox{${ch}}`
+    else if (TEXT_SYMBOLS[ch] !== undefined) out += `\\mbox{${TEXT_SYMBOLS[ch]}}`
+    else if (code < 32 || code === 127) out += ' '
+    else {
+      const t = textFallback(ch)
+      if (t !== '') out += `\\mbox{${t}}`
+    }
   }
   // A command written just before a letter needs a space (\pi x, not \pix);
   // \u0006 marks where a command name ended.
@@ -195,7 +273,8 @@ export function texMath(src: string): string {
 /** A whitespace-delimited token that reads as prose: a word of 2+ letters that is not a function call. */
 function isProse(token: string): boolean {
   const stripped = token.replace(FN_RE, ' ')
-  return /[A-Za-zÀ-ÿ]{2,}/.test(stripped)
+  // Latin-1 and Latin Extended-A letters: "ılık", "Gökhan’s", "İzmir" are words.
+  return /[A-Za-zÀ-ÖØ-öø-ÿĀ-ſ]{2,}/.test(stripped)
 }
 
 /** Does a run of non-prose tokens carry any mathematics worth $…$? */

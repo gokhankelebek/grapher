@@ -56,6 +56,8 @@
 import type { SeqKind, SequenceDef } from './sequences'
 import { classify, continuousTerm, indexLetter, listTerms, niceNumber, termFormulaTex } from './sequences'
 import { exactForm } from './exact'
+import { parseAst } from './parse'
+import type { ExprNode } from './parse'
 
 const MINUS = '−'
 /** A recursion is iterated this far (src/core/sequences.ts TERM_CAP). */
@@ -209,6 +211,21 @@ export interface SeriesSource {
   termTex: string
   /** The formula as typed, plain ("1/(n ln n)"), for "f(x) = 1/(x ln x)"; else null. */
   plain: string | null
+  /**
+   * The term in log space — sign and ln|aₙ| — read off the typed formula
+   * (factorials by log-gamma, bⁿ as n·ln b), so 2ⁿ/3ⁿ at n = 1024 is (2/3)¹⁰²⁴
+   * and not ∞/∞. Null when there is no formula to read or it could not be
+   * read faithfully; the term itself (term) already falls back to it.
+   */
+  logTerm?: ((n: number) => LogValue | null) | null
+}
+
+/** A number as sign and ln|v|: s ∈ {−1, 0, 1} (NaN: undefined), l = ln|v| (−∞ for 0). */
+export interface LogValue {
+  s: number
+  l: number
+  /** The plain value, when it is an ordinary finite double (kept exact: n = 1023, not e^(ln 1023)). */
+  v?: number
 }
 
 // ============================================================================
@@ -233,6 +250,237 @@ function needsParens(tex: string): boolean {
   return false
 }
 
+// ============================================================================
+// Terms in log space: a term whose pieces overflow (100ⁿ, n!, 3ⁿ⁺¹) while the
+// term itself is an ordinary number
+// ============================================================================
+
+const LN_2PI_HALF = 0.5 * Math.log(2 * Math.PI)
+
+/** ln Γ(z) for z > 0: shifted up to z ≥ 15, then Stirling's series. */
+export function lnGamma(z: number): number {
+  if (!(z > 0)) return Number.NaN
+  if (!Number.isFinite(z)) return Infinity
+  let shift = 0
+  while (z < 15) {
+    shift += Math.log(z)
+    z += 1
+  }
+  const z2 = z * z
+  const series = 1 / (12 * z) - 1 / (360 * z * z2) + 1 / (1260 * z * z2 * z2) - 1 / (1680 * z * z2 * z2 * z2)
+  return (z - 0.5) * Math.log(z) - z + LN_2PI_HALF + series - shift
+}
+
+/** ln(n!) — exact products while they are small, log-gamma beyond. */
+export function lnFactorial(n: number): number {
+  if (!(n >= 0)) return Number.NaN
+  if (Number.isInteger(n) && n <= 20) {
+    let f = 1
+    for (let i = 2; i <= n; i++) f *= i
+    return Math.log(f)
+  }
+  return lnGamma(n + 1)
+}
+
+const LV_NAN: LogValue = { s: Number.NaN, l: Number.NaN }
+const LV_ZERO: LogValue = { s: 0, l: -Infinity }
+
+function lvOf(v: number): LogValue {
+  if (Number.isNaN(v)) return LV_NAN
+  if (v === 0) return LV_ZERO
+  const out: LogValue = { s: Math.sign(v), l: Math.log(Math.abs(v)) }
+  if (Number.isFinite(v)) out.v = v
+  return out
+}
+
+function lvNum(a: LogValue): number {
+  if (Number.isNaN(a.s)) return Number.NaN
+  if (a.v !== undefined) return a.v
+  return a.s === 0 ? 0 : a.s * Math.exp(a.l)
+}
+
+/** A plain result of two plain values, when it is an ordinary nonzero double. */
+function plainPair(a: LogValue, b: LogValue, op: (x: number, y: number) => number): LogValue | null {
+  if (a.v === undefined || b.v === undefined) return null
+  const r = op(a.v, b.v)
+  return Number.isFinite(r) && r !== 0 ? lvOf(r) : null
+}
+
+function lvAdd(a: LogValue, b: LogValue): LogValue {
+  if (Number.isNaN(a.s) || Number.isNaN(b.s)) return LV_NAN
+  if (a.s === 0) return b
+  if (b.s === 0) return a
+  const [hi, lo] = a.l >= b.l ? [a, b] : [b, a]
+  if (hi.l === Infinity) return lo.l === Infinity && lo.s !== hi.s ? LV_NAN : hi
+  const d = lo.l - hi.l
+  if (hi.s === lo.s) return { s: hi.s, l: hi.l + Math.log1p(Math.exp(d)) }
+  if (d === 0) return LV_ZERO
+  return { s: hi.s, l: hi.l + Math.log1p(-Math.exp(d)) }
+}
+
+/** Functions read on a plain (finite) argument. */
+const LV_PLAIN: Record<string, (a: number) => number> = {
+  sin: Math.sin,
+  cos: Math.cos,
+  tan: Math.tan,
+  sec: (a) => 1 / Math.cos(a),
+  csc: (a) => 1 / Math.sin(a),
+  cot: (a) => Math.cos(a) / Math.sin(a),
+  asin: Math.asin,
+  acos: Math.acos,
+  atan: Math.atan,
+  sinh: Math.sinh,
+  cosh: Math.cosh,
+  tanh: Math.tanh,
+  floor: Math.floor,
+  ceil: Math.ceil,
+  sign: Math.sign,
+}
+
+class LvFail extends Error {}
+
+/**
+ * The typed formula as a log-space evaluator, or null when it cannot be read:
+ * the index letter and the sliders bound, everything else refused.
+ */
+function logEvaluator(
+  plain: string | null,
+  letter: string,
+  names: readonly string[],
+  params: readonly number[],
+): ((n: number) => LogValue | null) | null {
+  if (!plain) return null
+  const ast = parseAst(plain)
+  if (!ast.ok || ast.rhs !== null) return null
+  const slider = (name: string): number => {
+    const i = names.indexOf(name)
+    if (i < 0 || i >= params.length) throw new LvFail()
+    return params[i]
+  }
+  const plainOf = (a: LogValue): number => {
+    const v = lvNum(a)
+    if (!Number.isFinite(v) && !Number.isNaN(v)) throw new LvFail()
+    return v
+  }
+  const ev = (node: ExprNode, n: number): LogValue => {
+    switch (node.t) {
+      case 'num':
+        return lvOf(node.v)
+      case 'const':
+        return lvOf(node.name === 'pi' ? Math.PI : node.name === 'tau' ? 2 * Math.PI : Math.E)
+      case 'param':
+        return lvOf(node.name === letter ? n : slider(node.name))
+      case 'var':
+        return lvOf(slider(node.name))
+      case 'neg': {
+        const a = ev(node.a, n)
+        return a.v !== undefined ? lvOf(-a.v) : { s: -a.s, l: a.l }
+      }
+      case 'bin': {
+        const a = ev(node.a, n)
+        const b = ev(node.b, n)
+        if (Number.isNaN(a.s) || Number.isNaN(b.s)) return LV_NAN
+        switch (node.op) {
+          case '+':
+            return plainPair(a, b, (x, y) => x + y) ?? lvAdd(a, b)
+          case '-':
+            return plainPair(a, b, (x, y) => x - y) ?? lvAdd(a, { s: -b.s, l: b.l })
+          case '*':
+            if (a.s === 0 || b.s === 0) return LV_ZERO
+            return plainPair(a, b, (x, y) => x * y) ?? { s: a.s * b.s, l: a.l + b.l }
+          case '/':
+            if (b.s === 0) return a.s === 0 ? LV_NAN : { s: a.s, l: Infinity }
+            if (a.s === 0) return LV_ZERO
+            return plainPair(a, b, (x, y) => x / y) ?? { s: a.s * b.s, l: a.l - b.l }
+          case '^': {
+            const pp = plainPair(a, b, Math.pow)
+            if (pp) return pp
+            const e = plainOf(b)
+            if (Number.isNaN(e)) return LV_NAN
+            if (a.s === 0) return e > 0 ? LV_ZERO : e === 0 ? lvOf(1) : { s: 1, l: Infinity }
+            if (e === 0) return lvOf(1)
+            if (a.s > 0) return { s: 1, l: e * a.l }
+            if (!Number.isInteger(e)) throw new LvFail()
+            return { s: e % 2 === 0 ? 1 : -1, l: e * a.l }
+          }
+        }
+        throw new LvFail()
+      }
+      case 'call': {
+        const args = node.args.map((x) => ev(x, n))
+        const a = args[0]
+        if (!a || args.some((x) => Number.isNaN(x.s))) return LV_NAN
+        switch (node.fn) {
+          case 'fact': {
+            const x = plainOf(a)
+            if (!(x >= 0)) throw new LvFail()
+            if (Number.isInteger(x) && x <= 170) {
+              let f = 1
+              for (let i = 2; i <= x; i++) f *= i
+              return lvOf(f)
+            }
+            return { s: 1, l: lnFactorial(x) }
+          }
+          case 'ln':
+          case 'log':
+          case 'log2':
+          case 'log10': {
+            if (a.s < 0) return LV_NAN
+            if (a.s === 0) return { s: -1, l: Infinity }
+            const div = node.fn === 'ln' ? 1 : node.fn === 'log2' ? Math.LN2 : Math.LN10
+            return lvOf(a.l / div)
+          }
+          case 'log_': {
+            const base = plainOf(a)
+            const u = args[1]
+            if (!u || !(base > 0) || base === 1) throw new LvFail()
+            if (u.s < 0) return LV_NAN
+            if (u.s === 0) return { s: base > 1 ? -1 : 1, l: Infinity }
+            return lvOf(u.l / Math.log(base))
+          }
+          case 'sqrt':
+            if (a.s < 0) return LV_NAN
+            if (a.v !== undefined) return lvOf(Math.sqrt(a.v))
+            return a.s === 0 ? LV_ZERO : { s: 1, l: a.l / 2 }
+          case 'cbrt':
+            if (a.v !== undefined) return lvOf(Math.cbrt(a.v))
+            return a.s === 0 ? LV_ZERO : { s: a.s, l: a.l / 3 }
+          case 'abs':
+            return a.v !== undefined ? lvOf(Math.abs(a.v)) : { s: Math.abs(a.s), l: a.l }
+          case 'exp': {
+            const x = lvNum(a)
+            if (Number.isNaN(x)) return LV_NAN
+            if (x === -Infinity) return LV_ZERO
+            if (x === Infinity) throw new LvFail()
+            return { s: 1, l: x }
+          }
+          case 'min':
+          case 'max': {
+            const x = plainOf(a)
+            const y = plainOf(args[1] ?? LV_NAN)
+            return lvOf(node.fn === 'min' ? Math.min(x, y) : Math.max(x, y))
+          }
+          default: {
+            const f = LV_PLAIN[node.fn]
+            if (!f || node.args.length !== 1) throw new LvFail()
+            return lvOf(f(plainOf(a)))
+          }
+        }
+      }
+      default:
+        throw new LvFail()
+    }
+  }
+  const root = ast.lhs
+  return (n: number): LogValue | null => {
+    try {
+      return ev(root, n)
+    } catch {
+      return null
+    }
+  }
+}
+
 /**
  * The series of `seq` at these slider values, summed from index `k0`.
  * `plain` is the formula as typed (the part after "aₙ ="), when there is one.
@@ -254,18 +502,49 @@ export function seriesSource(
   const rhs = termFormulaTex(seq)
   const name = seq.name || 'a'
   const termTex = rhs ? (needsParens(rhs) ? `\\left(${rhs}\\right)` : rhs) : `${name}_{${letter}}`
+  const plainTrim = plain && plain.trim() !== '' ? plain.trim() : null
+  const raw = (n: number): number => {
+    try {
+      const v = seq.term(p, n)
+      return typeof v === 'number' ? v : Number.NaN
+    } catch {
+      return Number.NaN
+    }
+  }
+  // The log-space reading of the formula, trusted only where it agrees with
+  // the terms themselves at the first few indexes.
+  let logTerm: ((n: number) => LogValue | null) | null = null
+  if (seq.kind === 'explicit' && plainTrim) {
+    const cand = logEvaluator(plainTrim, letter, seq.paramNames, p)
+    if (cand) {
+      let agree = 0
+      let bad = false
+      for (let n = k0; n < k0 + 12 && !bad; n++) {
+        const v = raw(n)
+        if (!Number.isFinite(v) || v === 0 || Math.abs(v) > 1e300 || Math.abs(v) < 1e-300) continue
+        const lv = cand(n)
+        if (!lv) continue
+        const w = lvNum(lv)
+        if (Math.abs(w - v) <= 1e-8 * Math.abs(v)) agree++
+        else bad = true
+      }
+      if (!bad && agree >= 2) logTerm = cand
+    }
+  }
   return {
     name,
     letter,
     k0,
     term: (n: number) => {
-      try {
-        const v = seq.term(p, n)
-        return typeof v === 'number' ? v : Number.NaN
-      } catch {
-        return Number.NaN
-      }
+      const v = raw(n)
+      if (!logTerm || (Number.isFinite(v) && v !== 0)) return v
+      // ∞/∞, ∞·0 or a finite/∞ = 0 in the pieces: read the term in log space
+      const lv = logTerm(n)
+      if (!lv) return v
+      if (Number.isNaN(lv.s)) return Number.isFinite(v) ? v : Number.NaN
+      return lvNum(lv)
     },
+    logTerm,
     fx: fx0
       ? (x: number) => {
           try {
@@ -280,7 +559,7 @@ export function seriesSource(
     maxIndex,
     finite: seq.kind === 'list' && !!list && !list.ellipsis,
     termTex,
-    plain: plain && plain.trim() !== '' ? plain.trim() : null,
+    plain: plainTrim,
   }
 }
 
@@ -471,7 +750,13 @@ function linear(coef: Frac, base: Base, offset: Frac): { text: string; tex: stri
 function recognize(v: number, tol = 1e-11): { text: string; tex: string } | null {
   if (!Number.isFinite(v)) return null
   const ef = exactForm(v, { tol })
-  if (ef) return { text: ef.text, tex: ef.tex }
+  if (ef) {
+    // "−1+√5" reads as a sum written backwards: say √5 − 1
+    const t = /^−(\d+)\+([^+−-]+)$/.exec(ef.text)
+    const x = /^-(\d+)\+([^+-]+)$/.exec(ef.tex)
+    if (t && x) return { text: `${t[2]} − ${t[1]}`, tex: `${x[2]} - ${x[1]}` }
+    return { text: ef.text, tex: ef.tex }
+  }
   const eps = tol * Math.max(1, Math.abs(v))
   for (const K of NAMED) {
     for (let s = 0; s <= 3; s = s <= 0 ? -s + 1 : -s) {
@@ -549,7 +834,45 @@ const relDiff = (a: number, b: number): number => Math.abs(a - b) / Math.max(Mat
 // Reading the terms
 // ============================================================================
 
-type Cut = 'none' | 'overflow' | 'underflow' | 'undefined'
+/**
+ * Why the terms stop being read: they outgrew a double ('overflow'), shrank
+ * below one ('underflow'), a term is truly undefined ('undefined'), or — with
+ * no formula to read in log space — a shrinking run met ∞/∞ in the pieces of
+ * its formula ('lost': a precision limit, never evidence about the series).
+ */
+type Cut = 'none' | 'overflow' | 'underflow' | 'undefined' | 'lost'
+
+/**
+ * Why aₙ is not a finite number. With the formula in log space the answer is
+ * exact: a finite ln|aₙ| too large for a double is an overflow, anything else
+ * (a pole, ln 0, √ of a negative) is undefined. Without it: next to the
+ * largest double it is an overflow; after a shrinking run, or a term still far
+ * from that limit (1000ⁿ/n! at n = 103 is 10¹⁴⁵ while 1000ⁿ is already ∞), the
+ * formula's pieces overflowed and not the term ('lost'); else undefined.
+ */
+function badCut(src: SeriesSource, n: number, v: number, shrinking: boolean, prev: number): Cut {
+  const lv = src.logTerm ? src.logTerm(n) : null
+  if (lv) {
+    if (!Number.isNaN(lv.s) && lv.s !== 0 && Number.isFinite(lv.l)) return lv.l > 0 ? 'overflow' : 'underflow'
+    return 'undefined'
+  }
+  void v
+  if (prev > 1e250) return 'overflow'
+  if (shrinking || prev > 1e100) return 'lost'
+  return 'undefined'
+}
+
+/**
+ * The last `k` values strictly shrink in size — read before any trailing
+ * zeros, which a finite/∞ in the formula's pieces also produces.
+ */
+function shrinks(xs: readonly number[], k: number): boolean {
+  let end = xs.length
+  while (end > 0 && xs[end - 1] === 0) end--
+  if (end < k) return false
+  for (let i = end - k + 1; i < end; i++) if (!(Math.abs(xs[i]) < Math.abs(xs[i - 1]))) return false
+  return true
+}
 
 interface Level {
   n: number
@@ -591,7 +914,7 @@ function makeCtx(src: SeriesSource): Ctx {
     const v = a(n)
     if (!Number.isFinite(v)) {
       const prev = vals.length ? Math.abs(vals[vals.length - 1]) : 0
-      cut = (v === Infinity || v === -Infinity || (Number.isNaN(v) && prev > 1e250)) && vals.length > 0 ? 'overflow' : 'undefined'
+      cut = vals.length > 0 ? badCut(src, n, v, shrinks(vals, 6), prev) : 'undefined'
       break
     }
     if (v === 0 && vals.length > 0 && Math.abs(vals[vals.length - 1]) < 1e-250 && vals[vals.length - 1] !== 0) {
@@ -600,6 +923,8 @@ function makeCtx(src: SeriesSource): Ctx {
     }
     vals.push(v)
   }
+  // A lost run's trailing zeros are finite/∞ in the formula's pieces, not terms.
+  if (cut === 'lost') while (vals.length > 1 && vals[vals.length - 1] === 0) vals.pop()
   const levels: Level[] = []
   let levelCut: Cut = 'none'
   if (src.kind !== 'list') {
@@ -612,7 +937,9 @@ function makeCtx(src: SeriesSource): Ctx {
       for (let i = 0; i < WINDOW; i++) {
         const v = a(n + i)
         if (!Number.isFinite(v)) {
-          bad = v === Infinity || v === -Infinity || (levels.length > 0 && levels[levels.length - 1].M > 1e250) ? 'overflow' : 'undefined'
+          const Ms = levels.map((l) => l.M)
+          const shrinking = Ms.length >= 2 ? shrinks(Ms, Math.min(3, Ms.length)) : shrinks(vals, 6)
+          bad = badCut(src, n + i, v, shrinking, levels.length > 0 ? levels[levels.length - 1].M : 0)
           break
         }
         M = Math.max(M, Math.abs(v))
@@ -693,9 +1020,34 @@ interface NthFacts {
   size?: number
 }
 
+/** ln|aₙ| at n = k₀ + 2ʲ (j = 4 … 16), read in log space; null without a formula. */
+function logLadder(ctx: Ctx): number[] | null {
+  const lt = ctx.src.logTerm
+  if (!lt) return null
+  const out: number[] = []
+  for (let j = 4; j <= 16; j++) {
+    const n = ctx.src.k0 + 2 ** j
+    if (n > ctx.src.maxIndex) break
+    const v = lt(n)
+    if (!v || Number.isNaN(v.s) || Number.isNaN(v.l)) return null
+    out.push(v.s === 0 ? -Infinity : v.l)
+  }
+  return out
+}
+
 function nthFacts(ctx: Ctx): NthFacts {
   const lv = ctx.levels
-  if (ctx.cut === 'overflow' || ctx.levelCut === 'overflow') return { state: 'unbounded' }
+  if (ctx.cut === 'overflow' || ctx.levelCut === 'overflow') {
+    // Too big for a double somewhere is not "grows without bound": 1000ⁿ/n!
+    // passes 10³⁰⁸ on its way to 0. The log-space terms say which it is.
+    const lg = logLadder(ctx)
+    if (!lg) return { state: 'unbounded' }
+    if (lg.length < 4) return { state: 'unknown' }
+    const t = lg.slice(-4)
+    if (t.every((x, i) => i === 0 || x > t[i - 1])) return { state: 'unbounded' }
+    if (t.every((x, i) => i === 0 || x < t[i - 1]) && t[3] < -40) return { state: 'zero' }
+    return { state: 'unknown' }
+  }
   if (ctx.levelCut === 'underflow' || (ctx.cut === 'underflow' && lv.length < 3)) return { state: 'zero' }
   if (lv.length < 4) return { state: ctx.src.kind === 'list' ? 'short' : 'unknown' }
   const last = lv.slice(-4).map((l) => l.M)
@@ -742,14 +1094,36 @@ interface RatioFacts {
 
 function ratioFacts(ctx: Ctx): RatioFacts {
   const rows: { n: number; r: number; spread: number }[] = []
-  const starts = ctx.levels.map((l) => l.n)
+  let starts = ctx.levels.map((l) => l.n)
+  const lt = ctx.src.logTerm
+  // Terms that under- or overflow a double still have ratios: read them in
+  // log space, out to n = k₀ + 2¹⁶ (where ln|aₙ| is still good to ~1e-10).
+  const extend = !!lt && (ctx.levelCut === 'underflow' || ctx.levelCut === 'overflow')
+  if (extend) {
+    starts = []
+    for (let j = 4; j <= 16; j++) {
+      const n = ctx.src.k0 + 2 ** j
+      if (n + 5 > ctx.src.maxIndex) break
+      starts.push(n)
+    }
+  }
+  const ratioAt = (n: number): number => {
+    const x = ctx.a(n)
+    const y = ctx.a(n + 1)
+    if (Number.isFinite(x) && Number.isFinite(y) && x !== 0 && y !== 0) return Math.abs(y / x)
+    if (!extend || !lt) return Number.isFinite(x) && Number.isFinite(y) && x !== 0 ? Math.abs(y / x) : Number.NaN
+    const lx = lt(n)
+    const ly = lt(n + 1)
+    if (!lx || !ly || !(lx.s !== 0 && Math.abs(lx.s) === 1) || !(Math.abs(ly.s) === 1)) return Number.NaN
+    if (!Number.isFinite(lx.l) || !Number.isFinite(ly.l)) return Number.NaN
+    return Math.exp(ly.l - lx.l)
+  }
   for (const n of starts) {
     const rs: number[] = []
     for (let j = 0; j < 4; j++) {
-      const x = ctx.a(n + j)
-      const y = ctx.a(n + j + 1)
-      if (!Number.isFinite(x) || !Number.isFinite(y) || x === 0) break
-      rs.push(Math.abs(y / x))
+      const r = ratioAt(n + j)
+      if (!Number.isFinite(r)) break
+      rs.push(r)
     }
     if (rs.length < 4) break
     const mx = Math.max(...rs)
@@ -1533,6 +1907,24 @@ interface AbsResult {
   reason: string
 }
 
+/**
+ * The index from which |aₙ| ≥ 1/n at every term read (the dense run and every
+ * far-out window), or null: it must start inside the dense run and hold out to
+ * the last window.
+ */
+function harmonicFrom(ctx: Ctx): number | null {
+  if (ctx.levels.length < 6 || ctx.levelCut !== 'none') return null
+  let lastBelow = -Infinity
+  for (const n of checkPoints(ctx)) {
+    if (n < 1) continue
+    const g = Math.abs(ctx.a(n))
+    if (!Number.isFinite(g)) return null
+    if (g < (1 / n) * (1 - 1e-12)) lastBelow = Math.max(lastBelow, n)
+  }
+  const from = lastBelow === -Infinity ? Math.max(ctx.src.k0, 1) : lastBelow + 1
+  return from < ctx.src.k0 + ctx.vals.length ? from : null
+}
+
 function absTest(ctx: Ctx, F: Facts): AbsResult {
   const { an } = ctx
   if (F.signs.kind === 'positive' || F.signs.kind === 'negative' || F.signs.kind === 'zero') {
@@ -1562,6 +1954,16 @@ function absTest(ctx: Ctx, F: Facts): AbsResult {
   if (d.outcome === 'converges') tries.push({ id: 'direct-comparison', outcome: d.outcome, reason: d.reason.replace(/\.$/, '') })
   const l = limitCompTest(ctx, F, true)
   if (l.outcome === 'converges' || l.outcome === 'diverges') tries.push({ id: 'limit-comparison', outcome: l.outcome, reason: l.reason.replace(/\.$/, '') })
+  // |aₙ| ≥ 1/n from some n on: Σ|aₙ| diverges by direct comparison with the
+  // harmonic series — 1/ln n and ln(n)/n, which the tests above leave open.
+  const h = harmonicFrom(ctx)
+  if (h !== null) {
+    tries.push({
+      id: 'direct-comparison',
+      outcome: 'diverges',
+      reason: `by direct comparison with the harmonic series, |${an}| ≥ 1/${ctx.L} > 0 for ${ctx.L} ≥ ${h} and Σ 1/${ctx.L} diverges (p = 1)`,
+    })
+  }
   const hit = tries.find((t) => t.outcome === 'converges' || t.outcome === 'diverges')
   if (!hit) {
     return {
@@ -1578,7 +1980,7 @@ function absTest(ctx: Ctx, F: Facts): AbsResult {
     }
   }
   return {
-    test: test('absolute', 'diverges', `${hit.reason}, so Σ|${an}| diverges: the series does not converge absolutely.`),
+    test: test('absolute', 'diverges', `${hit.reason[0].toUpperCase()}${hit.reason.slice(1)}, so Σ|${an}| diverges: the series does not converge absolutely.`),
     by: hit.id,
     reason: hit.reason,
   }
@@ -1963,6 +2365,13 @@ function analyzeInner(src: SeriesSource, termName: string): SeriesAnalysis {
       const r = numericSum(ctx, F, decidedBy)
       sum = r.sum
       sumNote = r.note
+    }
+    if (sum && !Number.isFinite(sum.value)) {
+      // Σ 1000ⁿ/n! = e¹⁰⁰⁰ − 1: exact, but past the largest double
+      sumNote = sum.exact
+        ? `The series converges to ${sum.text}, a number too large to write out as a decimal.`
+        : 'The series converges, but its sum is too large to write out as a decimal.'
+      sum = null
     }
   }
 

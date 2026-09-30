@@ -841,9 +841,9 @@ export function logisticFeatures(spec: LogisticSpec): LogisticFeatures | null {
       } else if (br[1] === 1 && br[0] >= 2 && br[0] <= 10) {
         // x0 = h + log_b(A): "log₂ 3", the AP Precalc way of saying it
         const a = Ar[1] === 1 ? String(Ar[0]) : `(${Ar[0]}/${Ar[1]})`
-        const aX = Ar[1] === 1 ? String(Ar[0]) : `\frac{${Ar[0]}}{${Ar[1]}}`
+        const aX = Ar[1] === 1 ? String(Ar[0]) : `\\frac{${Ar[0]}}{${Ar[1]}}`
         const lg = `log${String(br[0]).replace(/\d/g, (c) => '₀₁₂₃₄₅₆₇₈₉'[Number(c)])} ${a}`
-        const lgX = `\log_{${br[0]}} ${aX}`
+        const lgX = `\\log_{${br[0]}} ${aX}`
         xForm = hr[0] === 0 ? { text: lg, tex: lgX } : { text: `${ratU(hr)} + ${lg}`, tex: `${ratTex(hr)} + ${lgX}` }
         xCheck = ratVal(hr) + Math.log(ratVal(Ar)) / Math.log(br[0])
       }

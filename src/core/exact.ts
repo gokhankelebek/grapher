@@ -82,6 +82,12 @@
 // constants, and any surd of a non-square-free radicand. ln 2 = 0.693147…
 // must come back null, and does: no fraction with q ≤ 64, no a√n/b, no
 // rational multiple of π and no quadratic surd sits within 1e-11 of it.
+//
+// Nor are LARGE values: at |v| ≥ 1e6 a relative tolerance is units wide, so
+// every family would "fit" (e²⁰ as 8247808322/17). There only an integer is
+// offered, when the double is exactly that integer and |v| ≤ 1e15 (past
+// that its last digits are rounding: 10¹⁵ computed is 1000000000000003.1).
+// A p/q with |p| > 100000 is never offered either.
 // ============================================================================
 
 export interface ExactForm {
@@ -125,6 +131,22 @@ const TRUST = 8
 const QS_MAX_A = 60
 const QS_MAX_B = 60
 const QS_MAX_C = 12
+
+/**
+ * LARGE NUMBERS. A value this big or bigger is no fraction, π-multiple or
+ * surd anybody means: at |v| ≈ 5e8 the relative tolerance is several units
+ * wide, and e²⁰ = 485165195.41 "matches" 8247808322/17. Past it only an
+ * integer is offered, and only when the double IS that integer.
+ */
+const BIG_V = 1e6
+/**
+ * Integers past this have more digits than a computed double can vouch
+ * for: 10¹⁵ worked out as e^(15·ln 10) is 1000000000000003.1, and its last
+ * digits are rounding, not an answer.
+ */
+const MAX_EXACT_INT = 1e15
+/** A p/q whose numerator is this large is a coincidence, not a fraction. */
+const MAX_P = 100000
 
 /** True minus, U+2212 — not the hyphen, which reads as a dash next to a digit. */
 const MINUS = '−'
@@ -252,6 +274,11 @@ function candidates(v: number, eps: number, visit: Visit): void {
 
   // ---- 1. integer -------------------------------------------------------
   const k = Math.round(v)
+  if (av >= BIG_V) {
+    // large: an integer only when the double is one, and short enough to trust
+    if (v === k && Math.abs(k) <= MAX_EXACT_INT) visit(makeInt(k))
+    return
+  }
   if (Number.isSafeInteger(k) && Math.abs(v - k) <= eps) {
     if (visit(makeInt(k))) return
   }
@@ -261,7 +288,7 @@ function candidates(v: number, eps: number, visit: Visit): void {
     const p = Math.round(v * q)
     if (p === 0) continue
     if (gcd(p, q) !== 1) continue // already offered at a smaller denominator
-    if (!Number.isSafeInteger(p)) continue
+    if (!Number.isSafeInteger(p) || Math.abs(p) > MAX_P) continue
     if (Math.abs(v - p / q) <= epsFor(eps, q)) {
       if (visit(makeRat(p, q))) return
     }

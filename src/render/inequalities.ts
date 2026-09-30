@@ -16,9 +16,12 @@
 //                implicit F = 0 is a chained contour so the dash runs round
 //                the whole circle instead of restarting every 10 px.
 //
-// Regions and contours are CACHED per (model, params, viewport): a slider
-// drag or a pan recomputes once per new view, a redraw with nothing changed
-// (hover, selection, a playing animation elsewhere) costs a map lookup.
+// Regions and contours are CACHED per (model, params, zoom), computed on a
+// PADDED box 1.5× the view (snapped to the sampling grid, so where the
+// samples fall never depends on the pan history). A pan that stays inside
+// the pad reuses them — sin(x² + y²) > 0 costs ~60 ms to shade, which is not
+// a per-frame budget — and only leaving the pad, a zoom, a resize or new
+// params recomputes. A redraw with nothing changed costs a map lookup.
 // Everything goes through ctx path calls, so the vector exporters (which
 // replay this very renderer through src/render/vectorCtx.ts) get the same
 // polygons.
@@ -66,22 +69,34 @@ export function isInequalityCurve(curve: FittedCurve, models: Record<string, Mod
 // ---------------------------------------------------------------------------
 
 const CACHE_MAX = 64
-const cache = new Map<string, Vec2[][]>()
 
-function remember(key: string, make: () => Vec2[][]): Vec2[][] {
+/** What is kept per (parts, zoom): the padded box it was computed on, and the result. */
+interface Cached {
+  box: Box
+  value: Vec2[][]
+}
+
+const cache = new Map<string, Cached>()
+
+/**
+ * The cached value when its box still covers `need`, else a fresh one from
+ * `make()` on `pad` (stored in its place). Most recently used last.
+ */
+function remember(key: string, need: Box, pad: Box, make: (box: Box) => Vec2[][]): Vec2[][] {
   const got = cache.get(key)
-  if (got) {
+  if (got && got.box.x0 <= need.x0 && got.box.x1 >= need.x1 && got.box.y0 <= need.y0 && got.box.y1 >= need.y1) {
     cache.delete(key)
     cache.set(key, got)
-    return got
+    return got.value
   }
-  const v = make()
-  cache.set(key, v)
+  const value = make(pad)
+  cache.delete(key)
+  cache.set(key, { box: pad, value })
   if (cache.size > CACHE_MAX) {
     const first = cache.keys().next().value
     if (first !== undefined) cache.delete(first)
   }
-  return v
+  return value
 }
 
 /** Tests only. */
@@ -89,8 +104,9 @@ export function clearInequalityCache(): void {
   cache.clear()
 }
 
-function vpKey(vp: Viewport): string {
-  return `${vp.center.x},${vp.center.y},${ppuX(vp)},${ppuY(vp)},${vp.widthPx},${vp.heightPx}`
+/** The zoom and size — NOT the centre: a pan alone never invalidates. */
+function scaleKey(vp: Viewport): string {
+  return `${ppuX(vp)},${ppuY(vp)},${vp.widthPx},${vp.heightPx}`
 }
 
 /**
@@ -123,26 +139,51 @@ function boxOf(vp: Viewport, padPx = 6): Box {
   }
 }
 
-/** The region of these parts on this view, as math-coord polygons (cached). */
-export function regionOnView(parts: readonly IneqPart[], vp: Viewport): Vec2[][] {
-  if (parts.length === 0 || !(vp.widthPx > 0) || !(vp.heightPx > 0)) return []
-  const key = `r|${fingerprint(parts)}|${vpKey(vp)}`
-  return remember(key, () =>
-    regionPolygons(parts, boxOf(vp), {
-      cols: Math.ceil(vp.widthPx / 2) + 2,
-      rows: Math.ceil(vp.heightPx / 4) + 2,
-    }),
-  )
+/** How much bigger than the view the cached box is (each way). */
+export const INEQ_CACHE_PAD = 1.5
+
+/**
+ * The padded box to compute on: INEQ_CACHE_PAD × the view about its centre,
+ * its edges on multiples of the sampling cell (cellX, cellY px), with
+ * whole cell counts — so the grid is the same absolute lattice after any pan.
+ */
+function paddedGrid(vp: Viewport, cellXPx: number, cellYPx: number): { box: Box; cols: number; rows: number } {
+  const px = ppuX(vp)
+  const py = ppuY(vp)
+  const cw = cellXPx / px
+  const ch = cellYPx / py
+  const halfW = (vp.widthPx * INEQ_CACHE_PAD) / 2 / px
+  const halfH = (vp.heightPx * INEQ_CACHE_PAD) / 2 / py
+  const x0 = Math.floor((vp.center.x - halfW) / cw) * cw
+  const x1 = Math.ceil((vp.center.x + halfW) / cw) * cw
+  const y0 = Math.floor((vp.center.y - halfH) / ch) * ch
+  const y1 = Math.ceil((vp.center.y + halfH) / ch) * ch
+  return {
+    box: { x0, x1, y0, y1 },
+    cols: Math.max(2, Math.round((x1 - x0) / cw)),
+    rows: Math.max(2, Math.round((y1 - y0) / ch)),
+  }
 }
 
-/** F = 0 on this view as math-coord polylines (cached). */
+/**
+ * The region of these parts around this view, as math-coord polygons
+ * (cached; the polygons cover at least the view, usually the padded box).
+ */
+export function regionOnView(parts: readonly IneqPart[], vp: Viewport): Vec2[][] {
+  if (parts.length === 0 || !(vp.widthPx > 0) || !(vp.heightPx > 0)) return []
+  const key = `r|${fingerprint(parts)}|${scaleKey(vp)}`
+  // Same density as before: a column every 2 px, a row every 4 px.
+  const g = paddedGrid(vp, 2, 4)
+  return remember(key, boxOf(vp), g.box, (box) => regionPolygons(parts, box, { cols: g.cols, rows: g.rows }))
+}
+
+/** F = 0 around this view as math-coord polylines (cached, like regionOnView). */
 function contourOnView(part: IneqPart, vp: Viewport): Vec2[][] {
   const b = part.boundary
   if (b.kind !== 'implicit') return []
-  const key = `c|${fingerprint([part])}|${vpKey(vp)}`
-  return remember(key, () =>
-    contourPolylines(b.F, boxOf(vp, 12), Math.ceil(vp.widthPx / 5) + 2, Math.ceil(vp.heightPx / 5) + 2),
-  )
+  const key = `c|${fingerprint([part])}|${scaleKey(vp)}`
+  const g = paddedGrid(vp, 5, 5)
+  return remember(key, boxOf(vp, 12), g.box, (box) => contourPolylines(b.F, box, g.cols, g.rows))
 }
 
 // ---------------------------------------------------------------------------

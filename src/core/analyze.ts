@@ -650,6 +650,16 @@ function analyzeExplicitNumeric(
   const g = scanGrid(f, lo, hi, pieces)
   const { xs, ys, step, scale, zeroTol, breaks, runs, flats, ends } = g
   const n = xs.length - 1
+  // A run end INSIDE the scan (not its own edge, not a stated piece end) sits
+  // beside a gap — a pole, a jump, an undefined sample. There a value merely
+  // below tolerance is a curve heading to 0, not reaching it: e^(1/x) at
+  // x = −1/60 is 8.7e−27 as x → 0⁻, and 0 is not in its domain. Only an
+  // exact 0 there is a zero; a true zero at the edge of an undefined stretch
+  // (√(4 − x²) at ±2) is still found by its own sample or by the edge
+  // refinement below.
+  const atPieceEnd = (x: number): boolean =>
+    ends.some((e) => Math.abs(e - x) <= 1e-12 * Math.max(1, Math.abs(e)))
+  const interiorEnd = (i: number): boolean => i !== 0 && i !== n && !atPieceEnd(xs[i])
 
   for (const run of runs) {
     const { i0, i1 } = run
@@ -666,6 +676,7 @@ function analyzeExplicitNumeric(
       // be mistaken for one of these.
       for (const i of i0 === i1 ? [i0] : [i0, i1]) {
         const y = ys[i]
+        if (interiorEnd(i) && y !== 0) continue
         if (Number.isFinite(y) && Math.abs(y) <= zeroTol) {
           const p = pt('zero', xs[i], 0, 'zero', false)
           if (p) out.push(p)

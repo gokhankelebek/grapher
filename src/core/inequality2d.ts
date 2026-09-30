@@ -202,7 +202,9 @@ export function describeInequality(info: InequalityInfo): InequalityCardText {
   const boundaries = parts.map((p) => ({ latex: p.boundaryLatex, text: p.boundaryText, dashed: p.strict }))
 
   let test: InequalityCardText['test'] = null
-  const pt = TEST_POINTS.find((q) => !onBoundary(parts, q.x, q.y) && pointVerdict(info, q).evaluated.indexOf('undefined') < 0)
+  // A test point needs every term of the chain to be a number there: 0 > ln 0
+  // (→ 0 > −∞) or 0 > 1/0 says nothing about either side.
+  const pt = TEST_POINTS.find((q) => !onBoundary(parts, q.x, q.y) && badTerm(info, q) < 0)
   if (pt) {
     const t = testSentence(info, pt)
     const isOrigin = pt.x === 0 && pt.y === 0
@@ -214,10 +216,33 @@ export function describeInequality(info: InequalityInfo): InequalityCardText {
       point: pt,
       ok: t.ok,
       text: `Test ${t.text} → ${note}`,
-      note: isOrigin ? null : '(0, 0) is on the boundary, so another point is tested.',
+      note: isOrigin ? null : originNote(info, pt),
     }
   }
   return { shade, boundaries, test }
+}
+
+/** The first term of the chain that is not a finite number at p, or −1. */
+function badTerm(info: InequalityInfo, p: Vec2): number {
+  for (let i = 0; i < info.terms.length; i++) {
+    let v: number
+    try {
+      v = info.term(i, p.x, p.y)
+    } catch {
+      v = Number.NaN
+    }
+    if (!Number.isFinite(v)) return i
+  }
+  return -1
+}
+
+/** Why the origin was passed over for `pt`, in the card's words. */
+function originNote(info: InequalityInfo, pt: Vec2): string {
+  const O: Vec2 = { x: 0, y: 0 }
+  const instead = `so ${pointLabel(pt)} is tested instead.`
+  const bad = badTerm(info, O)
+  if (bad >= 0) return `(0, 0) isn’t in the domain of ${prettyMath(info.terms[bad])}, ${instead}`
+  return `(0, 0) is on the boundary, ${instead}`
 }
 
 // ---------------------------------------------------------------------------

@@ -106,19 +106,33 @@ export function isExactText(v: number): boolean {
 const paren = (t: string): string => (t.startsWith(MINUS) ? `(${t})` : t)
 const parenTex = (t: string): string => (t.startsWith('-') ? `\\left(${t}\\right)` : t)
 
-/** "c = √3", "c ≈ 0.541". */
+/**
+ * "c = √3", "c ≈ 0.541" — and a whole stretch as the open interval it is,
+ * "every c in (1, 2)": c is strictly between a and b in the theorem, and a
+ * stretch's ends are where a piece starts or stops (the core makes them exact).
+ */
 export function solutionText(s: Solution, name = 'c'): string {
   if (s.to !== undefined) {
-    return `${name} from ${s.exact ? s.exact.text : decimal(s.x)} to ${
-      s.toExact ? s.toExact.text : decimal(s.to)
-    }`
+    return `${name} in (${s.exact ? s.exact.text : decimal(s.x)}, ${s.toExact ? s.toExact.text : decimal(s.to)})`
   }
   return s.exact ? `${name} = ${s.exact.text}` : `${name} ≈ ${decimal(s.x)}`
 }
 
+/** The same in LaTeX: "c = \\sqrt{3}", "c \\approx 0.541", "\\text{every } c \\in (1, 2)". */
+export function solutionTex(s: Solution, name = 'c'): string {
+  const dec = (v: number): string => decimal(v).replace(MINUS, '-')
+  if (s.to !== undefined) {
+    const lo = s.exact ? s.exact.tex : dec(s.x)
+    const hi = s.toExact ? s.toExact.tex : dec(s.to)
+    const who = name.startsWith('every ') ? `\\text{every } ${name.slice(6)}` : name
+    return `${who} \\in \\left(${lo}, ${hi}\\right)`
+  }
+  return s.exact ? `${name} = ${s.exact.tex}` : `${name} \\approx ${dec(s.x)}`
+}
+
 /**
  * Every c, as the card says them: "c = ±2√3/3 ≈ ±1.155", "c = π/2 ≈ 1.571",
- * "c ≈ 0.541", "every c from 1 to 2". A symmetric pair is written once with ±.
+ * "c ≈ 0.541", "every c in (1, 2)". A symmetric pair is written once with ±.
  */
 export function solutionsText(points: readonly Solution[]): string {
   if (points.length === 0) return ''
@@ -188,6 +202,26 @@ const serialOf = (o: object | undefined): number => {
   return n
 }
 
+/**
+ * f(x) the way secantOf reads it: the exact value when the source has one
+ * (NaN at the hole of (x² − 1)/(x − 1)), else f as drawn.
+ */
+function valueAt(src: MvtSource, x: number): number {
+  if (src.exactAt) {
+    try {
+      const e = src.exactAt(x)
+      if (typeof e === 'number') return e
+    } catch {
+      /* fall through */
+    }
+  }
+  try {
+    return src.f(x)
+  } catch {
+    return NaN
+  }
+}
+
 const CACHE = new Map<string, SecantAnalysis>()
 const CACHE_MAX = 64
 
@@ -201,6 +235,12 @@ export function analyzeSecant(
   link: Pick<SecantLink, 'a' | 'b' | 'mvt' | 'avg'>,
   parent: FittedCurve,
   models: Record<string, ModelSpec>,
+  /**
+   * The state of every curve this one calls (App's depKeys[parent.id]): p(x)
+   * = h(x) + 1 changes when h is retyped although p's own model, params and
+   * domain do not.
+   */
+  dep = '',
 ): SecantAnalysis {
   const spec = models[parent.modelId]
   const wantMvt = link.mvt === true
@@ -210,6 +250,7 @@ export function analyzeSecant(
     serialOf(spec),
     parent.params.join(','),
     parent.domain ? parent.domain.join(',') : '',
+    dep,
     link.a,
     link.b,
     wantMvt ? 1 : 0,
@@ -412,6 +453,8 @@ export function secantRow(
   parent: FittedCurve | undefined,
   models: Record<string, ModelSpec>,
   fName = 'f',
+  /** depKeys[parent.id]: the curves this one calls, as they are now. */
+  dep = '',
 ): SecantRow {
   const lo = Math.min(link.a, link.b)
   const hi = Math.max(link.a, link.b)
@@ -444,7 +487,7 @@ export function secantRow(
     row.problem = 'a and b are the same point, so there is no secant line'
     return row
   }
-  const an = analyzeSecant(link, parent, models)
+  const an = analyzeSecant(link, parent, models, dep)
   if (!an.src) {
     row.problem = `${fName} is not a function of x`
     return row
@@ -459,7 +502,9 @@ export function secantRow(
     if (bad !== null && d) {
       row.problem = `x = ${numText(bad)} is outside the domain of ${fName} [${numText(d[0])}, ${numText(d[1])}]`
     } else {
-      const fa = src.f(link.a)
+      // The same evaluator secantOf used: src.f may be a polynomial fill-in
+      // that is finite at a hole, where the exact value is not.
+      const fa = valueAt(src, link.a)
       const at = Number.isFinite(fa) ? link.b : link.a
       row.problem = `${fName} is undefined at x = ${numText(at)}, so there is no secant line there`
     }
@@ -627,6 +672,8 @@ export function secantOverlays(
   links: readonly SecantLink[],
   curves: readonly FittedCurve[],
   models: Record<string, ModelSpec>,
+  /** App's depKeys: curve id → the state of the curves it calls. */
+  deps: Readonly<Record<string, string>> = {},
 ): Overlay[] {
   const fills: Overlay[] = []
   const lines: Overlay[] = []
@@ -637,7 +684,7 @@ export function secantOverlays(
     if (!parent || !parent.visible) continue
     let an: SecantAnalysis
     try {
-      an = analyzeSecant(link, parent, models)
+      an = analyzeSecant(link, parent, models, deps[parent.id] ?? '')
     } catch {
       continue
     }

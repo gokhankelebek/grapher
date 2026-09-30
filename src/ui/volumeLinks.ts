@@ -314,6 +314,17 @@ const serialOf = (o: object | undefined): number => {
   return n
 }
 
+/** The dependency part of a volume's cache key: both curves' depKeys. */
+export function volumeDep(
+  link: Pick<VolumeLink, 'parentId' | 'otherId'>,
+  deps: Readonly<Record<string, string>> | undefined,
+): string {
+  if (!deps) return ''
+  const f = deps[link.parentId] ?? ''
+  const g = link.otherId === undefined ? '' : (deps[link.otherId] ?? '')
+  return f || g ? `${f}#${g}` : ''
+}
+
 const CACHE = new Map<string, VolumeAnalysis>()
 const CACHE_MAX = 48
 
@@ -375,6 +386,12 @@ export function analyzeVolume(
   parent: FittedCurve | undefined,
   other: FittedCurve | undefined,
   models: Record<string, ModelSpec>,
+  /**
+   * The state of the curves these two call (volumeDep: App's depKeys for the
+   * parent and the other curve). p(x) = h(x) + 1 changes when h is retyped
+   * although p's own model, params and domain do not.
+   */
+  dep = '',
 ): VolumeAnalysis {
   // The curves' letters are written into a problem as {f} and {g} and filled
   // in by the card, so a renamed curve does not cost a re-integration.
@@ -391,6 +408,7 @@ export function analyzeVolume(
     axis.at,
     link.section ?? 'square',
     link.ratio ?? 1,
+    dep,
   ].join('|')
   const hit = CACHE.get(key)
   if (hit) {
@@ -677,6 +695,8 @@ export function volumeRow(
     gName?: string
     sources?: Readonly<Record<string, string>>
     others?: RegionChoice[]
+    /** App's depKeys: curve id → the state of the curves it calls. */
+    deps?: Readonly<Record<string, string>>
   } = {},
 ): VolumeRow {
   const fName = opts.fName ?? 'f'
@@ -720,7 +740,7 @@ export function volumeRow(
     sliceLo: lo,
     sliceHi: hi,
   }
-  const an = analyzeVolume(link, parent, other, models)
+  const an = analyzeVolume(link, parent, other, models, volumeDep(link, opts.deps))
   row.head = headOf(mode, section, axis, an)
   if (mode === 'section-y' && !an.problem && an.region && !an.bands) {
     row.need = {
@@ -1118,8 +1138,9 @@ export function volumeSliceHandle(
   parent: FittedCurve | undefined,
   other: FittedCurve | undefined,
   models: Record<string, ModelSpec>,
+  deps?: Readonly<Record<string, string>>,
 ): SliceHandle | null {
-  const an = analyzeVolume(link, parent, other, models)
+  const an = analyzeVolume(link, parent, other, models, volumeDep(link, deps))
   const r = an.region
   if (!r || !an.result) return null
   const mode = modeOf(link)
@@ -1176,6 +1197,8 @@ export function volumeOverlays(
   links: readonly VolumeLink[],
   curves: readonly FittedCurve[],
   models: Record<string, ModelSpec>,
+  /** App's depKeys: curve id → the state of the curves it calls. */
+  deps: Readonly<Record<string, string>> = {},
 ): Overlay[] {
   const fills: Overlay[] = []
   const marks: Overlay[] = []
@@ -1187,7 +1210,7 @@ export function volumeOverlays(
     if (link.otherId !== undefined && (!other || !other.visible)) continue
     let an: VolumeAnalysis
     try {
-      an = analyzeVolume(link, parent, other, models)
+      an = analyzeVolume(link, parent, other, models, volumeDep(link, deps))
     } catch {
       continue
     }

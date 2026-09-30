@@ -15,6 +15,15 @@
 //   labels                     \node[anchor=base west|base|base east] at (x,y)
 //                              {…}; at the renderer's own size and face, with
 //                              mathematics in $…$ (see ./texText.ts)
+//
+// NO DIMENSION TOO LARGE. TeX cannot hold a length past 16383.99998pt, and a
+// single far-off coordinate (a guide line to tan⁻¹(1000), a near-vertical
+// branch) stops pdflatex with "Dimension too large". So the picture's bounding
+// box is pinned to the figure, and every path is first cut to a padded box
+// around it (lines and polygons exactly — Liang–Barsky for strokes,
+// Sutherland–Hodgman for fills; curves and arcs, which the renderer only
+// draws near the view, are clamped as a last resort), and a label placed far
+// outside it is dropped. What is visible is unchanged.
 // ============================================================================
 
 import type { DisplayList, PathItem, Rgba, Seg, TextItem } from './vectorCtx'
@@ -32,6 +41,163 @@ export interface TikzOptions {
 
 const CAP = { butt: 'butt', round: 'round', square: 'rect' } as const
 
+/** The largest |coordinate| written, in pt — safely inside TeX's 16383.99998pt. */
+export const TIKZ_MAX_PT = 16000
+
+/** A box in device units. */
+export interface Box {
+  x0: number
+  y0: number
+  x1: number
+  y1: number
+}
+
+const inBox = (b: Box, x: number, y: number): boolean => x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1
+
+/** The part of segment a→b inside the box (Liang–Barsky), or null. */
+export function clipSegment(
+  b: Box,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): [number, number, number, number] | null {
+  if (![ax, ay, bx, by].every(Number.isFinite)) return null
+  const dx = bx - ax
+  const dy = by - ay
+  let t0 = 0
+  let t1 = 1
+  const edges: [number, number][] = [
+    [-dx, ax - b.x0],
+    [dx, b.x1 - ax],
+    [-dy, ay - b.y0],
+    [dy, b.y1 - ay],
+  ]
+  for (const [p, q] of edges) {
+    if (p === 0) {
+      if (q < 0) return null
+      continue
+    }
+    const r = q / p
+    if (p < 0) {
+      if (r > t1) return null
+      if (r > t0) t0 = r
+    } else {
+      if (r < t0) return null
+      if (r < t1) t1 = r
+    }
+  }
+  return [ax + t0 * dx, ay + t0 * dy, ax + t1 * dx, ay + t1 * dy]
+}
+
+/** A closed polygon cut to the box (Sutherland–Hodgman). */
+function clipPolygon(b: Box, pts: readonly [number, number][]): [number, number][] {
+  let out = pts.filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y))
+  const sides: Array<[(p: [number, number]) => boolean, (p: [number, number], q: [number, number]) => [number, number]]> = [
+    [(p) => p[0] >= b.x0, (p, q) => [b.x0, p[1] + ((q[1] - p[1]) * (b.x0 - p[0])) / (q[0] - p[0])]],
+    [(p) => p[0] <= b.x1, (p, q) => [b.x1, p[1] + ((q[1] - p[1]) * (b.x1 - p[0])) / (q[0] - p[0])]],
+    [(p) => p[1] >= b.y0, (p, q) => [p[0] + ((q[0] - p[0]) * (b.y0 - p[1])) / (q[1] - p[1]), b.y0]],
+    [(p) => p[1] <= b.y1, (p, q) => [p[0] + ((q[0] - p[0]) * (b.y1 - p[1])) / (q[1] - p[1]), b.y1]],
+  ]
+  for (const [inside, cross] of sides) {
+    if (out.length === 0) break
+    const next: [number, number][] = []
+    for (let i = 0; i < out.length; i++) {
+      const cur = out[i]
+      const prev = out[(i + out.length - 1) % out.length]
+      if (inside(cur)) {
+        if (!inside(prev)) next.push(cross(prev, cur))
+        next.push(cur)
+      } else if (inside(prev)) {
+        next.push(cross(prev, cur))
+      }
+    }
+    out = next
+  }
+  return out
+}
+
+/**
+ * Segments that stay inside the box, drawing the same thing inside it. A path
+ * already inside comes back as it was (the same array).
+ */
+export function fitSegs(segs: readonly Seg[], box: Box, filled: boolean): readonly Seg[] {
+  let inside = true
+  let curvy = false
+  for (const s of segs) {
+    if (s.k === 'Z') continue
+    if (s.k === 'C') {
+      curvy = true
+      if (!inBox(box, s.x1, s.y1) || !inBox(box, s.x2, s.y2)) inside = false
+    }
+    if (s.k === 'A') {
+      curvy = true
+      if (!inBox(box, s.cx - s.r, s.cy - s.r) || !inBox(box, s.cx + s.r, s.cy + s.r)) inside = false
+    }
+    if (!inBox(box, s.x, s.y)) inside = false
+  }
+  if (inside) return segs
+  const cx = (v: number): number => (Number.isFinite(v) ? Math.max(box.x0, Math.min(box.x1, v)) : box.x0)
+  const cy = (v: number): number => (Number.isFinite(v) ? Math.max(box.y0, Math.min(box.y1, v)) : box.y0)
+  if (curvy) {
+    // Last resort: pin every point to the box (the renderer only draws
+    // curves and arcs near the view, so this changes nothing visible).
+    const rMax = Math.max(box.x1 - box.x0, box.y1 - box.y0)
+    return segs.map((s): Seg => {
+      switch (s.k) {
+        case 'M': case 'L': return { k: s.k, x: cx(s.x), y: cy(s.y) }
+        case 'C': return { k: 'C', x1: cx(s.x1), y1: cy(s.y1), x2: cx(s.x2), y2: cy(s.y2), x: cx(s.x), y: cy(s.y) }
+        case 'A': return { ...s, cx: cx(s.cx), cy: cy(s.cy), r: Math.min(s.r, rMax), x: cx(s.x), y: cy(s.y) }
+        default: return s
+      }
+    })
+  }
+  // Lines only: split into subpaths.
+  const subs: { pts: [number, number][]; closed: boolean }[] = []
+  for (const s of segs) {
+    if (s.k === 'M') subs.push({ pts: [[s.x, s.y]], closed: false })
+    else if (s.k === 'L') {
+      if (subs.length === 0) subs.push({ pts: [], closed: false })
+      subs[subs.length - 1].pts.push([s.x, s.y])
+    } else if (s.k === 'Z' && subs.length > 0) {
+      const last = subs[subs.length - 1]
+      last.closed = true
+      // A path may carry on from the closed subpath's start.
+      subs.push({ pts: [last.pts[0]], closed: false })
+    }
+  }
+  const out: Seg[] = []
+  for (const sub of subs) {
+    if (sub.pts.length === 0) continue
+    if (sub.pts.every(([x, y]) => inBox(box, x, y))) {
+      if (sub.pts.length < 2 && !sub.closed) continue
+      sub.pts.forEach(([x, y], i) => out.push({ k: i === 0 ? 'M' : 'L', x, y }))
+      if (sub.closed) out.push({ k: 'Z' })
+      continue
+    }
+    if (filled) {
+      const poly = clipPolygon(box, sub.pts)
+      if (poly.length < 3) continue
+      poly.forEach(([x, y], i) => out.push({ k: i === 0 ? 'M' : 'L', x, y }))
+      out.push({ k: 'Z' })
+      continue
+    }
+    const pts = sub.closed ? [...sub.pts, sub.pts[0]] : sub.pts
+    let pen: [number, number] | null = null
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const c = clipSegment(box, pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1])
+      if (!c) {
+        pen = null
+        continue
+      }
+      if (!pen || pen[0] !== c[0] || pen[1] !== c[1]) out.push({ k: 'M', x: c[0], y: c[1] })
+      out.push({ k: 'L', x: c[2], y: c[3] })
+      pen = [c[2], c[3]]
+    }
+  }
+  return out
+}
+
 /** Coordinates per output line: keeps every TeX input line short. */
 const COORDS_PER_LINE = 6
 
@@ -39,6 +205,16 @@ export function toTikz(list: DisplayList, opts: TikzOptions = {}): string {
   const k = opts.ptPerPx ?? PT_PER_PX
   const Hpt = list.height * k
   const P = (x: number, y: number): string => `(${num(x * k)},${num(Hpt - y * k)})`
+  // The padded box every path is cut to, in device units — never past
+  // TIKZ_MAX_PT once converted to pt.
+  const pad = Math.max(list.width, list.height) / 2 + 50
+  const lim = TIKZ_MAX_PT / k
+  const box: Box = {
+    x0: Math.max(-pad, -lim),
+    x1: Math.min(list.width + pad, lim),
+    y0: Math.max(-pad, (Hpt - TIKZ_MAX_PT) / k),
+    y1: Math.min(list.height + pad, (Hpt + TIKZ_MAX_PT) / k),
+  }
 
   // Colours, named in order of first use.
   const colours = new Map<string, string>()
@@ -114,12 +290,14 @@ export function toTikz(list: DisplayList, opts: TikzOptions = {}): string {
       }
     }
     const cmd = it.fill && s ? '\\filldraw' : it.fill ? '\\fill' : '\\draw'
-    return `${cmd}[${o.join(', ')}] ${pathText(it.segs)};`
+    const segs = fitSegs(it.segs, box, it.fill !== null)
+    if (!segs.some((g) => g.k !== 'M' && g.k !== 'Z')) return ''
+    return `${cmd}[${o.join(', ')}] ${pathText(segs)};`
   }
 
   const nodeCmd = (it: TextItem): string => {
     const body = texLabel(it.text)
-    if (body === '') return ''
+    if (body === '' || !inBox(box, it.x, it.y)) return ''
     const f = it.font
     const size = f.size * k
     const face = f.generic === 'serif' ? '\\rmfamily' : f.generic === 'monospace' ? '\\ttfamily' : '\\sffamily'
@@ -148,7 +326,7 @@ export function toTikz(list: DisplayList, opts: TikzOptions = {}): string {
     for (let i = keep; i < chain.length; i++) {
       body.push(`${indent()}\\begin{scope}`)
       open.push(chain[i])
-      body.push(`${indent()}\\clip ${pathText(list.clips[chain[i] - 1].segs)};`)
+      body.push(`${indent()}\\clip ${pathText(fitSegs(list.clips[chain[i] - 1].segs, box, true))};`)
     }
     const line = it.t === 'path' ? pathCmd(it) : nodeCmd(it)
     if (line) body.push(indent() + line)
@@ -160,11 +338,14 @@ export function toTikz(list: DisplayList, opts: TikzOptions = {}): string {
 
   const cm = (pt: number): string => num((pt / 72.27) * 2.54, 2)
   const head: string[] = [
-    `% Grapher figure${opts.title ? ` "${opts.title.replace(/[\r\n]+/g, ' ')}"` : ''} as TikZ, ` +
+    // eslint-disable-next-line no-control-regex
+    `% Grapher figure${opts.title ? ` "${opts.title.replace(/[\u0000-\u001f\u007f]+/g, ' ')}"` : ''} as TikZ, ` +
       `${cm(list.width * k)} cm x ${cm(Hpt)} cm.`,
     '% Needs only \\usepackage{tikz} (it loads xcolor). Compiles with plain pdflatex.',
     '% Use it with \\input{<this file>}, or paste it inside a figure environment.',
     '\\begin{tikzpicture}[x=1pt, y=1pt, inner sep=0pt, outer sep=0pt]',
+    // The figure is the page: nothing drawn past its edge grows the picture.
+    `  \\useasboundingbox (0,0) rectangle (${num(list.width * k)},${num(Hpt)});`,
   ]
   for (const [hex, name] of colours) head.push(`  \\definecolor{${name}}{HTML}{${hex}}`)
   return [...head, ...body, '\\end{tikzpicture}', ''].join('\n')

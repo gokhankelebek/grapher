@@ -587,7 +587,7 @@ export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): strin
   const xmin = vp.center.x - vp.widthPx / 2 / ppx
   const xmax = vp.center.x + vp.widthPx / 2 / ppx
   const captioned = typeof scene.caption === 'string' && scene.caption.trim() !== ''
-  const band = captioned ? captionHeight(scene.present) : 0
+  const band = captioned ? captionHeight(scene.present, scene.caption, vp.widthPx) : 0
   const ymin = vp.center.y - (vp.heightPx / 2 - band) / ppy
   const ymax = vp.center.y + vp.heightPx / 2 / ppy
   const spanY = ymax - ymin
@@ -809,12 +809,12 @@ export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): strin
     const fillPolys = (polys: Vec2[][], col: string, alpha: number): void => {
       for (const poly of polys) {
         if (poly.length < 3) continue
-        add(`\fill[${col}, fill opacity=${num(alpha, 3)}] ${poly.map((p) => P(p.x, p.y)).join(' -- ')} -- cycle;`)
+        add(`\\fill[${col}, fill opacity=${num(alpha, 3)}] ${poly.map((p) => P(p.x, p.y)).join(' -- ')} -- cycle;`)
       }
     }
     const ropts = { cols: 160, rows: 120 }
     for (const { c, info } of live) {
-      add(`% inequality region: ${(opts.sources?.[c.id] ?? '').replace(/[\r\n]+/g, ' ')}`)
+      add(`% inequality region: ${texCommentSafe(opts.sources?.[c.id] ?? '')}`)
       fillPolys(regionPolygons(info.parts, box, ropts), colour(ink(c.color)), own)
     }
     if (system) {
@@ -1015,6 +1015,38 @@ export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): strin
     }
   }
 
+  // ---- unit circles and related rates ------------------------------------------
+  // The unit circle's core is plain geometry in axis coordinates: the circle
+  // (sampled, so a stretched board shows the ellipse it really is), the
+  // initial side and the terminal radius, and P(θ) with its chip. The rest of
+  // the lesson (angle arc, reference triangle, ASTC, tan, unwrap, inverse) is
+  // the TikZ export's, and the header says so.
+  for (const f of scene.unitCircles ?? []) {
+    if (!f?.visible || ![f.center.x, f.center.y, f.theta].every(Number.isFinite)) continue
+    const col = colour(ink(f.color))
+    const { x: cx, y: cy } = f.center
+    const ring: Vec2[] = []
+    for (let i = 0; i < 96; i++) {
+      const t = (i / 96) * 2 * Math.PI
+      ring.push({ x: cx + Math.cos(t), y: cy + Math.sin(t) })
+    }
+    const p = { x: cx + Math.cos(f.theta), y: cy + Math.sin(f.theta) }
+    add(`% unit circle ${texCommentSafe(f.id)}`)
+    const around: string[] = []
+    for (let i = 0; i < ring.length; i += PER_LINE) around.push(ring.slice(i, i + PER_LINE).map((q) => P(q.x, q.y)).join(' -- '))
+    add(`\\draw[${col}, thick] ${around.join(' --\n    ')} -- cycle;`)
+    add(`\\draw[${col}, thick] ${P(cx, cy)} -- ${P(cx + 1, cy)};`)
+    add(`\\draw[${col}, thick] ${P(cx, cy)} -- ${P(p.x, p.y)};`)
+    marks([p], ink(f.color), false, 2.2)
+    label(p, f.pointText, ink(f.color), Math.cos(f.theta) >= 0 ? 'south west' : 'south east')
+    const extras =
+      f.show.triangle || f.show.ref || f.show.astc || f.show.tan || f.unwrap !== null || f.inv !== null || Math.abs(f.theta) > 1e-9
+    if (extras) notExported.push("the unit circle's angle arc, triangle and guides (use TikZ for this figure)")
+  }
+  if ((scene.relatedRates ?? []).some((r) => r?.visible)) {
+    notExported.push('the related-rates scenario (use TikZ for this figure)')
+  }
+
   // ---- marks and labels on top ------------------------------------------------
   for (const h of holesAll) marks([h.at], h.col, true)
   for (const d of dotsAll) marks([d.at], d.col, !d.closed)
@@ -1140,7 +1172,7 @@ export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): strin
   // ---- file ----------------------------------------------------------------------
   const widthCm = opts.widthCm ?? vp.widthPx / PX_PER_CM
   const head: string[] = [
-    `% Grapher figure${opts.title ? ` "${opts.title.replace(/[\r\n]+/g, ' ')}"` : ''} as pgfplots, ${num(widthCm, 1)} cm wide.`,
+    `% Grapher figure${opts.title ? ` "${texCommentSafe(opts.title)}"` : ''} as pgfplots, ${num(widthCm, 1)} cm wide.`,
     '% Preamble:',
     '%   \\usepackage{pgfplots}',
     '%   \\pgfplotsset{compat=1.18}',
@@ -1156,9 +1188,10 @@ export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): strin
   return [...head, ...lines, '\\end{axis}', '\\end{tikzpicture}', ''].join('\n')
 }
 
-/** A comment line cannot end early; strip line breaks. */
+/** A comment line cannot end early; strip line breaks (and every other control character). */
 function texCommentSafe(s: string): string {
-  return s.replace(/[\r\n]+/g, ' ')
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/[\u0000-\u001f\u007f]+/g, ' ')
 }
 
 /** Re-exported for tests: the prose escaper the labels use. */

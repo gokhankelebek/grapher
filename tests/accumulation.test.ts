@@ -358,7 +358,13 @@ describe('the accumulation link in a file', () => {
       createdAt: 1,
       modifiedAt: 1,
       board: {
-        curves: [curve('poly2', [-1, 0, 1]), curve('poly3', [0, -1, 0, 1 / 3], { id: 'g' })],
+        // Each link draws its own curve: two links on one curve are refused
+        // on load (tests/hardening-app.test.ts).
+        curves: [
+          curve('poly2', [-1, 0, 1]),
+          curve('poly3', [0, -1, 0, 1 / 3], { id: 'g' }),
+          curve('poly3', [0, -1, 0, 1 / 3], { id: 'h' }),
+        ],
         viewport: { cx: 0, cy: 0, ppu: 60 },
         selectedId: null,
         mode: 'draw',
@@ -366,14 +372,14 @@ describe('the accumulation link in a file', () => {
           { kind: 'accumulation', id: 'ok', parentId: 'f', curveId: 'g', a: 0 },
           { kind: 'accumulation', id: 'noA', parentId: 'f', curveId: 'g' },
           { kind: 'accumulation', id: 'badC', parentId: 'f', curveId: 'g', a: 0, C: 'x' },
-          { kind: 'accumulation', id: 'badX', parentId: 'f', curveId: 'g', a: 0, x: 'nope' },
+          { kind: 'accumulation', id: 'badX', parentId: 'f', curveId: 'h', a: 0, x: 'nope' },
         ],
       },
     }
     const res = deserializeDoc(JSON.stringify(raw))
     expect(res.board!.calc).toEqual([
       { kind: 'accumulation', id: 'ok', parentId: 'f', curveId: 'g', a: 0, C: 0 },
-      { kind: 'accumulation', id: 'badX', parentId: 'f', curveId: 'g', a: 0, C: 0 },
+      { kind: 'accumulation', id: 'badX', parentId: 'f', curveId: 'h', a: 0, C: 0 },
     ])
     expect(res.problems.join(' ')).toContain('2 damaged calculus objects')
   })

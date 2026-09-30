@@ -283,6 +283,9 @@ export const LIMIT_INF = 'inf'
 export const LIMIT_NEG_INF = '-inf'
 /** ε when the link does not say. */
 export const LIMIT_EPS_DEFAULT = 0.5
+/** ε's range on the card's slider; a file cannot carry an ε outside it. */
+export const LIMIT_EPS_MIN = 0.01
+export const LIMIT_EPS_MAX = 2
 
 /**
  * The volume of a solid built on the region between `parentId` and `otherId`
@@ -830,18 +833,37 @@ export function systemToStored(sys: BoardIneqSystem | null | undefined): BoardIn
   return Object.keys(out).length > 0 ? out : null
 }
 
-/** The system out of an untrusted blob; unreadable keys are dropped. */
-export function storedToSystem(raw: unknown): BoardIneqSystem | null {
-  if (!isObj(raw)) return null
+/**
+ * The system out of an untrusted blob; unreadable keys are dropped — and,
+ * when `problems` is given, each one is reported there (a lost test point or
+ * objective is a lost instruction, not a default).
+ */
+export function storedToSystem(raw: unknown, problems?: string[]): BoardIneqSystem | null {
+  if (raw === undefined || raw === null) return null
+  const say = (what: string): void => {
+    problems?.push(`The inequality system’s ${what}.`)
+  }
+  if (!isObj(raw)) {
+    problems?.push('The inequality system was unreadable, so its settings were reset.')
+    return null
+  }
   const out: BoardIneqSystem = {}
   if (raw.solution === true) out.solution = true
+  else if (raw.solution !== undefined) say('solution-region switch was unreadable; it was turned off')
   if (isObj(raw.test) && isNum(raw.test.x) && isNum(raw.test.y) && Math.abs(raw.test.x) < 1e9 && Math.abs(raw.test.y) < 1e9) {
     out.test = { x: raw.test.x, y: raw.test.y }
+  } else if (raw.test !== undefined) {
+    say('test point was unreadable, so it was removed')
   }
   if (isObj(raw.objective) && isStr(raw.objective.src) && raw.objective.src.trim() !== '') {
-    out.objective = { src: raw.objective.src.slice(0, 200), goal: raw.objective.goal === 'min' ? 'min' : 'max' }
+    const g = raw.objective.goal
+    if (g !== undefined && g !== 'min' && g !== 'max') say('objective goal was unreadable; it maximises')
+    out.objective = { src: raw.objective.src.slice(0, 200), goal: g === 'min' ? 'min' : 'max' }
+  } else if (raw.objective !== undefined) {
+    say('objective was unreadable, so it was removed')
   }
   if (raw.iso === true) out.iso = true
+  else if (raw.iso !== undefined) say('iso-profit line switch was unreadable; it was turned off')
   return Object.keys(out).length > 0 ? out : null
 }
 
@@ -903,7 +925,28 @@ export function relatedRatesToStored(r: BoardRelatedRates): StoredRelatedRates {
   return out
 }
 
-export function storedToRelatedRates(raw: unknown): { rr: BoardRelatedRates } | { error: string } {
+/**
+ * A CSS colour as this app writes one: #rgb, #rgba, #rrggbb, #rrggbbaa, or
+ * rgb()/rgba()/hsl()/hsla(). Anything else ("banana", "url(…)", "") is not
+ * a colour and falls back to the object's default — reported by the loader.
+ */
+export function isColorString(v: unknown): v is string {
+  if (typeof v !== 'string') return false
+  const t = v.trim()
+  if (/^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(t)) return true
+  return /^(?:rgba?|hsla?)\(\s*[-+0-9.%\s,/deg]+\)$/i.test(t)
+}
+
+/**
+ * The related-rates problem out of an untrusted blob. A value that is there
+ * but damaged (a given that is not a number or out of range, an unreadable
+ * t, "when", pause, graph or colour) is replaced by its default — and, when
+ * `problems` is given, reported there like every other object's damage.
+ */
+export function storedToRelatedRates(
+  raw: unknown,
+  problems?: string[],
+): { rr: BoardRelatedRates } | { error: string } {
   if (!isObj(raw)) return { error: 'it was not readable' }
   const { id, scenario, t } = raw
   if (!isStr(id) || !id) return { error: 'it had no id' }
@@ -911,12 +954,32 @@ export function storedToRelatedRates(raw: unknown): { rr: BoardRelatedRates } | 
     return { error: 'its scenario was unknown' }
   }
   const sc = scenario as RRScenario
+  const say = (what: string): void => {
+    problems?.push(`The related-rates problem’s ${what}.`)
+  }
+  const params = cleanParams(sc, raw.params)
+  if (raw.params !== undefined && !isObj(raw.params)) {
+    say('givens were unreadable; the defaults were used')
+  } else {
+    const rec = isObj(raw.params) ? raw.params : {}
+    for (const d of RR_DEFS[sc].params) {
+      const v = rec[d.key]
+      // Absent is the default (a given added after the file was written).
+      if (v === undefined) continue
+      if (!isNum(v)) say(`given ${d.key} was unreadable; the default was used`)
+      else if (v !== params[d.key]) say(`given ${d.key} was out of range; it was moved to ${params[d.key]}`)
+    }
+  }
+  const tOk = isNum(t) && Math.abs(t) <= RR_T_LIMIT
+  if (!tOk) say('instant t was unreadable; it starts at 0')
+  const colorOk = raw.color === undefined || isColorString(raw.color)
+  if (!colorOk) say('colour was not a colour; the default was used')
   const rr: BoardRelatedRates = {
     id,
     scenario: sc,
-    params: cleanParams(sc, raw.params),
-    t: isNum(t) && Math.abs(t) <= RR_T_LIMIT ? t : 0,
-    color: isStr(raw.color) && raw.color ? raw.color : RR_COLOR_DEFAULT,
+    params,
+    t: tOk ? t : 0,
+    color: colorOk && isStr(raw.color) ? raw.color.trim() : RR_COLOR_DEFAULT,
   }
   if (
     isObj(raw.when) &&
@@ -925,10 +988,15 @@ export function storedToRelatedRates(raw: unknown): { rr: BoardRelatedRates } | 
     isNum(raw.when.v)
   ) {
     rr.when = { q: raw.when.q, v: raw.when.v }
+  } else if (raw.when !== undefined) {
+    say('“when” question was unreadable, so it was removed')
   }
   if (raw.pause === true) rr.pause = true
+  else if (raw.pause !== undefined) say('pause switch was unreadable; it was turned off')
   if (raw.graph === false) rr.graph = false
+  else if (raw.graph !== undefined) say('graph switch was unreadable; the graph is shown')
   if (raw.hidden === true) rr.hidden = true
+  else if (raw.hidden !== undefined) say('hidden switch was unreadable; it is shown')
   return { rr }
 }
 
@@ -2650,7 +2718,12 @@ export function storedToCalcLink(raw: unknown): CalcLink | null {
       const a = isNum(raw.a) ? raw.a : raw.a === LIMIT_INF ? Infinity : raw.a === LIMIT_NEG_INF ? -Infinity : null
       if (a === null) return null
       const side = Number.isFinite(a) && (raw.side === 'left' || raw.side === 'right') ? raw.side : undefined
-      const eps = raw.epsilon === true && isNum(raw.eps) && raw.eps > 0 ? raw.eps : undefined
+      // Held to the card's slider (0.01–2): a hand-written 1e300 is not an ε
+      // the picture, the δ search or the slider can do anything with.
+      const eps =
+        raw.epsilon === true && isNum(raw.eps) && raw.eps > 0
+          ? Math.min(LIMIT_EPS_MAX, Math.max(LIMIT_EPS_MIN, raw.eps))
+          : undefined
       return {
         kind: 'limit',
         id,
@@ -2678,6 +2751,16 @@ export function storedToCalcLink(raw: unknown): CalcLink | null {
       const section = method === 'section' && isSectionShape(raw.section) && raw.section !== 'square' ? raw.section : undefined
       const ratio =
         section === 'rectangle' && isNum(raw.ratio) && raw.ratio > 0 && raw.ratio !== 1 ? raw.ratio : undefined
+      // A slice in dx sits inside [a, b]. One in dy (washers about a vertical
+      // axis, shells about a horizontal one, sections ⟂ y) holds a HEIGHT,
+      // whose range only the curves know — the board clamps that one.
+      const dir = axis ? axis.dir : 'h'
+      const inY =
+        (method === 'washer' && dir === 'v') ||
+        (method === 'shell' && dir === 'h') ||
+        (method === 'section' && raw.perp === 'y')
+      const sliceX = (x: number): number =>
+        inY ? x : Math.min(Math.max(raw.a as number, raw.b as number), Math.max(Math.min(raw.a as number, raw.b as number), x))
       return {
         kind: 'volume',
         id,
@@ -2690,7 +2773,7 @@ export function storedToCalcLink(raw: unknown): CalcLink | null {
         ...(section ? { section } : {}),
         ...(ratio !== undefined ? { ratio } : {}),
         ...(method === 'section' && raw.perp === 'y' ? { perp: 'y' as const } : {}),
-        ...(isNum(raw.x) ? { x: raw.x } : {}),
+        ...(isNum(raw.x) ? { x: sliceX(raw.x) } : {}),
       }
     }
     default:
@@ -3183,6 +3266,8 @@ export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResu
   {
     const curveIds = new Set(curves.map((c) => c.id))
     const seenLinks = new Set<string>()
+    /** curve id → already drawn by a link (a derived curve has one driver). */
+    const drawn = new Set<string>()
     let damaged = 0
     for (const raw of rawCalc.slice(0, MAX_CALC)) {
       const link = storedToCalcLink(raw)
@@ -3217,6 +3302,22 @@ export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResu
         degraded = true
         continue
       }
+      if (isCurveLink(link) && link.curveId === link.parentId) {
+        // A link that draws its own parent would overwrite the parent with
+        // the thing derived from it (a Taylor polynomial of f replacing f).
+        problems.push(`A ${calcNoun(link.kind)} was dropped: it claimed to draw the curve it came from.`)
+        degraded = true
+        continue
+      }
+      if (isCurveLink(link) && drawn.has(link.curveId)) {
+        // Two links driving one curve would fight over it on every change.
+        problems.push(
+          `A ${calcNoun(link.kind)} was dropped: its curve is already drawn by another calculus object.`,
+        )
+        degraded = true
+        continue
+      }
+      if (isCurveLink(link)) drawn.add(link.curveId)
       seenLinks.add(link.id)
       calc.push(link)
     }
@@ -3592,7 +3693,12 @@ export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResu
   // ---- related rates
   const relatedRates: BoardRelatedRates[] = []
   if (rawBoard.relatedRates !== undefined) {
-    const built = storedToRelatedRates(rawBoard.relatedRates)
+    const rrProblems: string[] = []
+    const built = storedToRelatedRates(rawBoard.relatedRates, rrProblems)
+    if (!('error' in built) && rrProblems.length > 0) {
+      problems.push(...rrProblems)
+      degraded = true
+    }
     if ('error' in built) {
       problems.push(`The related-rates problem could not be restored: ${built.error}.`)
       degraded = true
@@ -3606,7 +3712,12 @@ export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResu
   }
 
   // ---- the inequality system. Absent is the default; unreadable keys drop.
-  const system = storedToSystem(rawBoard.system)
+  const sysProblems: string[] = []
+  const system = storedToSystem(rawBoard.system, sysProblems)
+  if (sysProblems.length > 0) {
+    problems.push(...sysProblems)
+    degraded = true
+  }
 
   // ---- the ruling. Unreadable or absent is not a repair: it is the default.
   const grid = storedGrid(rawBoard.grid)

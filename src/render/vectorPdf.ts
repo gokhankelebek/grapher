@@ -20,6 +20,10 @@
 //   π θ √ ∞ ≈ ≤ ≥ ≠ ′ Δ … → the standard Symbol font, glyph by glyph, in the
 //                  same BT block (a Tf switch between runs);
 //   ₀–₉ ⁰–⁹ ⁻ ⁺  → the digit itself at 70 % size, lowered or raised with Ts;
+//   ✓ ✔ ✗ ✘      → the standard ZapfDingbats font (built-in encoding, never
+//                  embedded): a19 (code 51), a20 (52), a23 (55), a24 (56) —
+//                  the Unicode Dingbats block is ZapfDingbats in order,
+//                  U+2713 ✓ = 0x33, U+2717 ✗ = 0x37;
 //   ‘ ’ “ ” – — … • and Latin-1 → their WinAnsi codes;
 //   anything else → "?". Nothing outside ASCII ever reaches the file raw:
 //                  every byte above 126 in a string is written as \ddd.
@@ -47,6 +51,17 @@ const SUB: Readonly<Record<string, string>> = {
   '₀': '0', '₁': '1', '₂': '2', '₃': '3', '₄': '4', '₅': '5', '₆': '6', '₇': '7', '₈': '8',
   '₉': '9', '₋': '-', '₊': '+', 'ₙ': 'n', 'ₓ': 'x', 'ᵢ': 'i', 'ₖ': 'k', 'ₐ': 'a',
 }
+
+/** ZapfDingbats glyphs: [code in its built-in encoding, advance in 1/1000 em] (AFM). */
+const DINGBATS: Readonly<Record<string, readonly [number, number]>> = {
+  '✓': [0x33, 755], // a19
+  '✔': [0x34, 846], // a20
+  '✗': [0x37, 571], // a23
+  '✘': [0x38, 677], // a24
+}
+
+/** Fonts with their own built-in encoding (no /Encoding /WinAnsiEncoding). */
+const SYMBOLIC_FONTS = new Set(['Symbol', 'ZapfDingbats'])
 
 /** Size and shift of a sub/superscript, as fractions of the font size. */
 const SCRIPT_SIZE = 0.7
@@ -120,6 +135,11 @@ export function pdfTextRuns(text: string, f: FontSpec): TextRun[] {
     const sym = SYMBOL_GLYPHS[ch]
     if (sym) {
       add('Symbol', sym[0], 1, 0, sym[1])
+      continue
+    }
+    const ding = DINGBATS[ch]
+    if (ding) {
+      add('ZapfDingbats', ding[0], 1, 0, ding[1])
       continue
     }
     add(base.name, 63, 1, 0, glyphWidth(63, base.face)) // '?'
@@ -299,8 +319,8 @@ export function toPdfString(list: DisplayList, opts: PdfOptions = {}): string {
   )
   for (const [name] of fontList) {
     objects.push(
-      name === 'Symbol'
-        ? '<< /Type /Font /Subtype /Type1 /BaseFont /Symbol >>'
+      SYMBOLIC_FONTS.has(name)
+        ? `<< /Type /Font /Subtype /Type1 /BaseFont /${name} >>`
         : `<< /Type /Font /Subtype /Type1 /BaseFont /${name} /Encoding /WinAnsiEncoding >>`,
     )
   }

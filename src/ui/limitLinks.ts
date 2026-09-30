@@ -30,7 +30,7 @@ import type { FittedCurve, ModelSpec } from '../core/types'
 import { CURVE_COLORS } from '../core/types'
 import type { Overlay } from '../render/overlays'
 import type { LimitLink } from '../core/persist'
-import { LIMIT_EPS_DEFAULT } from '../core/persist'
+import { LIMIT_EPS_DEFAULT, LIMIT_EPS_MAX, LIMIT_EPS_MIN } from '../core/persist'
 import { exactForm } from '../core/exact'
 import { chosenLimit, deltaFor, limitAt, limitPoints, limitSourceOf, limitTable, reachFrom } from '../core/limits'
 import type {
@@ -42,13 +42,13 @@ import type {
   LimitSource,
   LimitTable,
 } from '../core/limits'
-import { decimal, numText } from './secantLinks'
+import { decimal, isExactText, numText } from './secantLinks'
 
 export type { LimitLink }
 
 /** ε's slider: its range and step. */
-export const EPS_MIN = 0.01
-export const EPS_MAX = 2
+export const EPS_MIN = LIMIT_EPS_MIN
+export const EPS_MAX = LIMIT_EPS_MAX
 export const EPS_STEP = 0.01
 /** The two ε–δ bands' wash, and the box's outline weight. */
 export const EPS_BAND_ALPHA = 0.14
@@ -104,7 +104,22 @@ export function outcomeText(o: LimitOutcome): string {
   if (o.value === Infinity) return '∞'
   if (o.value === -Infinity) return `${MINUS}∞`
   if (o.exact) return o.exact.text
-  return o.approx ? `≈ ${fourSig(o.value)}` : numText(o.value)
+  return o.approx ? `≈ ${fourSig(o.value)}` : valueText(o.value)
+}
+
+/**
+ * A value measured in double precision: "6", "π/2", "2.5" when those digits
+ * ARE the value, "≈ 22026.466" when they are rounded — never "= 22030" for
+ * e¹⁰ (numText's three places, so the text and the LaTeX agree).
+ */
+function valueText(v: number): string {
+  return isExactText(v) ? numText(v) : `≈ ${decimal(v)}`
+}
+
+/** " = 6", " ≈ 22026.466" — "f(a)" or "lim f(x)" followed by its value. */
+function eqText(v: number): string {
+  const t = valueText(v)
+  return t.startsWith('≈') ? ` ${t}` : ` = ${t}`
 }
 
 /** " = 6", " ≈ 0.693", " does not exist" — what follows "lim f(x)". */
@@ -120,8 +135,12 @@ function tailTex(o: LimitOutcome): string {
   if (o.value === Infinity) return ' = \\infty'
   if (o.value === -Infinity) return ' = -\\infty'
   if (o.exact) return ` = ${o.exact.tex}`
-  const d = fourSig(o.value).replace(MINUS, '-')
-  return o.approx ? ` \\approx ${d}` : ` = ${d}`
+  if (o.approx) return ` \\approx ${fourSig(o.value).replace(MINUS, '-')}`
+  // The same digits as the text (numText), and = only when they are exact.
+  const v = o.value
+  if (!isExactText(v)) return ` \\approx ${decimal(v).replace(MINUS, '-')}`
+  const ex = v === 0 ? null : exactForm(v)
+  return ` = ${ex ? ex.tex : decimal(v).replace(MINUS, '-')}`
 }
 
 /** Four significant figures, a real minus sign. */
@@ -165,8 +184,19 @@ const serialOf = (o: object | undefined): number => {
 const CACHE = new Map<string, LimitAnalysis>()
 const CACHE_MAX = 64
 
-const curveKey = (parent: FittedCurve, models: Record<string, ModelSpec>): string =>
-  [parent.modelId, serialOf(models[parent.modelId]), parent.params.join(','), parent.domain ? parent.domain.join(',') : ''].join('|')
+/**
+ * One curve as it is now. `dep` is App's depKeys[curve.id] — the state of the
+ * curves this one calls: p(x) = h(x) + 1 moves when h is retyped although p's
+ * own model, params and domain stand still.
+ */
+const curveKey = (parent: FittedCurve, models: Record<string, ModelSpec>, dep = ''): string =>
+  [
+    parent.modelId,
+    serialOf(models[parent.modelId]),
+    parent.params.join(','),
+    parent.domain ? parent.domain.join(',') : '',
+    dep,
+  ].join('|')
 
 function remember<T>(map: Map<string, T>, key: string, value: T, max: number): T {
   map.set(key, value)
@@ -183,8 +213,10 @@ export function analyzeLimit(
   a: number,
   parent: FittedCurve,
   models: Record<string, ModelSpec>,
+  /** depKeys[parent.id]: the curves this one calls, as they are now. */
+  dep = '',
 ): LimitAnalysis {
-  const key = `${curveKey(parent, models)}|${a}`
+  const key = `${curveKey(parent, models, dep)}|${a}`
   const hit = CACHE.get(key)
   if (hit) {
     CACHE.delete(key)
@@ -218,7 +250,9 @@ const sideOf = (link: Pick<LimitLink, 'a' | 'side'>): LimitSide =>
   Number.isFinite(link.a) && (link.side === 'left' || link.side === 'right') ? link.side : 'both'
 
 const epsOf = (link: Pick<LimitLink, 'eps'>): number =>
-  typeof link.eps === 'number' && Number.isFinite(link.eps) && link.eps > 0 ? link.eps : LIMIT_EPS_DEFAULT
+  typeof link.eps === 'number' && Number.isFinite(link.eps) && link.eps > 0
+    ? Math.min(EPS_MAX, Math.max(EPS_MIN, link.eps))
+    : LIMIT_EPS_DEFAULT
 
 /** The finite L the ε–δ picture is about, or null. */
 function finiteL(o: LimitOutcome): number | null {
@@ -234,10 +268,11 @@ function deltaOf(
   models: Record<string, ModelSpec>,
   src: LimitSource,
   L: number,
+  dep = '',
 ): DeltaResult | null {
   const side = sideOf(link)
   const eps = epsOf(link)
-  const key = `${curveKey(parent, models)}|${link.a}|${L}|${eps}|${side}`
+  const key = `${curveKey(parent, models, dep)}|${link.a}|${L}|${eps}|${side}`
   if (DELTA_CACHE.has(key)) return DELTA_CACHE.get(key) ?? null
   let d: DeltaResult | null = null
   try {
@@ -318,7 +353,7 @@ function whyText(res: LimitResult, chosen: LimitOutcome, side: LimitSide, fName:
     if (chosen.value === Infinity || chosen.value === -Infinity) {
       return `${fName} ${chosen.value > 0 ? 'grows' : 'decreases'} without bound: there is no horizontal asymptote on this side.`
     }
-    return `y = ${outcomeText(chosen)} is a horizontal asymptote as x → ${at}.`
+    return `y${tail(chosen)} is a horizontal asymptote as x → ${at}.`
   }
   const L = res.left as LimitOutcome
   const R = res.right as LimitOutcome
@@ -464,6 +499,8 @@ export function limitRow(
   parent: FittedCurve | undefined,
   models: Record<string, ModelSpec>,
   fName = 'f',
+  /** depKeys[parent.id]: the curves this one calls, as they are now. */
+  dep = '',
 ): LimitRow {
   const side = sideOf(link)
   const a = link.a
@@ -507,7 +544,7 @@ export function limitRow(
     row.problem = 'a is not a number'
     return row
   }
-  const an = analyzeLimit(a, parent, models)
+  const an = analyzeLimit(a, parent, models, dep)
   if (!an.src) {
     row.problem = `${fName} is not a function of x`
     return row
@@ -527,7 +564,7 @@ export function limitRow(
       tex: `${headTex(res.left, 'left')}, \\qquad ${headTex(res.right, 'right')}`,
     }
     row.fa = res.fa
-      ? `${fName}(${row.aText}) = ${res.fa.exact ? res.fa.exact.text : fourSig(res.fa.value)}`
+      ? `${fName}(${row.aText})${res.fa.exact ? ` = ${res.fa.exact.text}` : eqText(res.fa.value)}`
       : `${fName}(${row.aText}) is undefined`
     row.klass = klassText(res, fName)
     const ck = checklistOf(res, fName)
@@ -554,7 +591,7 @@ export function limitRow(
     } else if (L === null) {
       row.delta = { text: 'The ε–δ picture needs a finite limit L.', value: null }
     } else {
-      const d = deltaOf(link, parent, models, an.src, L)
+      const d = deltaOf(link, parent, models, an.src, L, dep)
       const eT = fourSig(row.eps)
       const at = row.aText
       // |x − 2|, |x + 1|, |x|; |f(x) − 4|, |f(x) + 2|, |f(x)|
@@ -611,6 +648,8 @@ export function limitOverlays(
   links: readonly LimitLink[],
   curves: readonly FittedCurve[],
   models: Record<string, ModelSpec>,
+  /** App's depKeys: curve id → the state of the curves it calls. */
+  deps: Readonly<Record<string, string>> = {},
 ): Overlay[] {
   const fills: Overlay[] = []
   const lines: Overlay[] = []
@@ -624,7 +663,7 @@ export function limitOverlays(
     if (Number.isNaN(a)) continue
     let an: LimitAnalysis
     try {
-      an = analyzeLimit(a, parent, models)
+      an = analyzeLimit(a, parent, models, deps[parent.id] ?? '')
     } catch {
       continue
     }
@@ -696,7 +735,7 @@ export function limitOverlays(
     const L = finiteL(chosen)
     if (link.epsilon === true && L !== null) {
       const eps = epsOf(link)
-      const d = deltaOf(link, parent, models, src, L)
+      const d = deltaOf(link, parent, models, src, L, deps[parent.id] ?? '')
       const tint = deltaTint(parent.color)
       fills.push({
         kind: 'region',
@@ -770,6 +809,8 @@ export function limitSnapPoints(
   curve: FittedCurve,
   models: Record<string, ModelSpec>,
   window: [number, number],
+  /** depKeys[curve.id]: the curves this one calls, as they are now. */
+  dep = '',
 ): LimitPoint[] {
   const lo = Math.min(window[0], window[1])
   const hi = Math.max(window[0], window[1])
@@ -778,7 +819,7 @@ export function limitSnapPoints(
   const g = Math.pow(10, Math.floor(Math.log10(hi - lo)) - 1)
   const wlo = Math.floor(lo / g) * g
   const whi = Math.ceil(hi / g) * g
-  const key = `${curveKey(curve, models)}|${wlo}|${whi}`
+  const key = `${curveKey(curve, models, dep)}|${wlo}|${whi}`
   const hit = POINT_CACHE.get(key)
   if (hit) return hit
   let pts: LimitPoint[] = []
@@ -823,13 +864,14 @@ export function defaultLimitA(
   curve: FittedCurve,
   models: Record<string, ModelSpec>,
   window: [number, number],
+  dep = '',
 ): number | null {
   const src = limitSourceOf(curve, models)
   if (!src) return null
   const lo = Math.min(window[0], window[1])
   const hi = Math.max(window[0], window[1])
   const mid = Number.isFinite(lo) && Number.isFinite(hi) ? (lo + hi) / 2 : 0
-  const pts = limitSnapPoints(curve, models, [lo, hi]).filter((p) => p.x >= lo && p.x <= hi)
+  const pts = limitSnapPoints(curve, models, [lo, hi], dep).filter((p) => p.x >= lo && p.x <= hi)
   if (pts.length > 0) {
     let best = pts[0]
     for (const p of pts) if (Math.abs(p.x - mid) < Math.abs(best.x - mid)) best = p

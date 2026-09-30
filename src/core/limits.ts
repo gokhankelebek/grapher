@@ -9,7 +9,9 @@
 //                                  a may be ±Infinity: a limit at infinity.
 //   limitTable(src, a, side)       the table of values a class fills in:
 //                                  a ± 0.1, 0.01, 0.001, 0.0001 (or x = 10,
-//                                  100, … 10⁵ toward ∞), f(x) to sensible digits
+//                                  100, … 10⁵ toward ∞), f(x) to sensible digits;
+//                                  toward ∞ the column stops before a row
+//                                  the doubles overflow on (eˣ at 1000)
 //   deltaFor(src, a, L, ε, side)   the largest δ found on a sampled scan with
 //                                  0 < |x − a| < δ ⇒ |f(x) − L| < ε
 //   limitPoints(src, range)        where the interesting limits are: holes,
@@ -42,7 +44,10 @@
 //
 // AT ±∞ the same three instruments run on x = ±10ᵏ (k = 1 … 8) and on the
 // windows [X, 3X]: (2x² + 1)/(x² − 3) → 2, e^(−x) → 0, ln x → ∞, sin x
-// oscillates, x·sin x oscillates without bound.
+// oscillates, x·sin x oscillates without bound. Where the doubles overflow
+// into NaN first (e^x/(e^x + 1) is ∞/∞ past x ≈ 709.78) that NaN is no
+// sample, not "undefined": the ladder is laid geometrically from 10 up to
+// the last x that evaluates, and e^x/(e^x + 1) → 1 is read from there.
 //
 // Pure: no DOM, no React, no render imports — the renderer's oneSidedLimit
 // idea is mirrored here, not imported.
@@ -54,6 +59,7 @@ import { exactForm } from './exact'
 import { continuityOn, mvtSourceOf } from './mvt'
 import type { MvtSource } from './mvt'
 import { findHoles, findPoles } from './holes'
+import { overflowEdge } from './domainRange'
 
 // ---------------------------------------------------------------------------
 // The source
@@ -468,11 +474,49 @@ function sideAt(src: LimitSource, a: number, dir: -1 | 1, hint: number | null): 
   return readSide(f, xs, wins, hint)
 }
 
+/**
+ * How far out toward ±∞ (dir) f can be READ: +∞, or the last |x| before the
+ * doubles overflow into NaN. e^x/(e^x + 1) is ∞/∞ = NaN from x ≈ 709.78 on,
+ * though it is defined (and ≈ 1) everywhere; a NaN that begins where f was
+ * arriving smoothly, far out, is that (see overflowEdge in ./domainRange).
+ * A formula that really stops (√(1000 − x), ln(1000 − x)) is read as it is.
+ */
+function readableReach(f: (x: number) => number, dir: -1 | 1): number {
+  let lastFinite: number | null = null
+  for (const k of [1, ...FAR_K.map((q) => q + 0.5), 9]) {
+    const x = dir * Math.pow(10, k)
+    const v = f(x)
+    if (Number.isFinite(v)) { lastFinite = x; continue }
+    if (!Number.isNaN(v) || lastFinite === null) return Infinity
+    // NaN from here out?
+    const beyond = [2, 10, 100].map((m) => f(x * m))
+    if (!beyond.every(Number.isNaN)) return Infinity
+    const X = overflowEdge(f, lastFinite, x)
+    return X === null ? Infinity : Math.abs(X)
+  }
+  return Infinity
+}
+
 /** The one way in to ±∞. */
 function sideAtInfinity(src: LimitSource, dir: -1 | 1): LimitOutcome {
   const d = src.domain
   if (d && (dir > 0 ? Number.isFinite(d[1]) : Number.isFinite(d[0]))) return dne('undefined')
   const f = (x: number): number => safe(src.f, x)
+  const reach = readableReach(f, dir)
+  if (reach < Infinity) {
+    // Overflow NaN is no sample: the ladder runs from 10 to the last x that
+    // evaluates, geometrically (its windows [X, 3X] inside the reach), and
+    // the limit is read from there — e^x/(e^x + 1) → 1.
+    const top = (0.9 * reach) / 3
+    if (top > 20) {
+      const n = FAR_K.length
+      const r = Math.pow(top / 10, 1 / (n - 1))
+      const Xs = FAR_K.map((_, i) => 10 * Math.pow(r, i))
+      const xs = Xs.map((X) => dir * X)
+      const wins = Xs.slice(0, -1).map((X) => (dir > 0 ? windowOf(f, X, 3 * X) : windowOf(f, -3 * X, -X)))
+      return readSide(f, xs, wins)
+    }
+  }
   const xs = FAR_K.map((k) => dir * Math.pow(10, k))
   const wins = FAR_K.slice(0, -1).map((k) => {
     const X = Math.pow(10, k)
@@ -530,12 +574,25 @@ function valueWithForm(src: LimitSource, a: number): { value: number; exact: Exa
   if (!inDomain(src, a)) return null
   const plain = safe(src.f, a)
   if (!Number.isFinite(plain)) return null
+  let named = false
   try {
     const tol = 1e-12 * scaleOf(a)
     const sing = src.singularities?.([a - 1e-9 * scaleOf(a), a + 1e-9 * scaleOf(a)]) ?? []
-    if (sing.some((x) => Math.abs(x - a) <= tol)) return null
+    named = sing.some((x) => Math.abs(x - a) <= tol)
   } catch {
     /* no singularities to ask */
+  }
+  if (named) {
+    // A one-formula line's `{x != 2}` is not in its evaluator (x² {x != 2}
+    // still says 4 at 2): the singularity decides. A PIECEWISE evaluator
+    // gates every condition, so a finite value there is some piece's own:
+    // {x² if x ≠ 2; 5 if x = 2} names 2 (the first piece's exclusion) and
+    // its second piece says f(2) = 5. Only a pole the doubles missed —
+    // tan(π/2) is 1.6e16, not ∞ — is still undefined.
+    if (!src.pieceEnds) return null
+    const h = 1e-6 * scaleOf(a)
+    const around = Math.abs(safe(src.f, a - h)) + Math.abs(safe(src.f, a + h))
+    if (!(Math.abs(plain) <= 1e8 * (1 + (Number.isFinite(around) ? around : 0)))) return null
   }
   let v = plain
   const e = valueAt(src, a)
@@ -747,11 +804,26 @@ export function limitTable(src: LimitSource, a: number, side: LimitSide = 'both'
   }
   if (a === Infinity || a === -Infinity) {
     const dir = a > 0 ? 1 : -1
-    const rows: TableRow[] = [1, 2, 3, 4, 5].map((k) => {
+    // The column STOPS at the last x whose value the doubles can hold. eˣ at
+    // 1000 is not ∞ (it is about 2·10⁴³⁴), and e^x/(e^x + 1) there is not
+    // undefined (it is 1 to 400 places): a row that overflowed would print
+    // a false answer, so it is left out rather than marked. A value that
+    // really is ±∞ or undefined at that x (ln(1000 − x) at 1000) stays.
+    const plain = (x: number): number => safe(src.f, x)
+    const reach = readableReach(plain, dir)
+    const overflowed = (x: number, y: number): boolean => {
+      if (Number.isFinite(y)) return false
+      if (Number.isNaN(y)) return Math.abs(x) > reach
+      const h = 1e-6 * Math.abs(x)
+      return !Number.isFinite(plain(x - h)) && !Number.isFinite(plain(x + h))
+    }
+    const rows: TableRow[] = []
+    for (const k of [1, 2, 3, 4, 5]) {
       const x = dir * Math.pow(10, k)
       const y = f(x)
-      return { x, xText: tableNumber(x), y, yText: tableNumber(y) }
-    })
+      if (rows.length > 0 && overflowed(x, y)) break
+      rows.push({ x, xText: tableNumber(x), y, yText: tableNumber(y) })
+    }
     return dir > 0 ? { left: null, right: rows } : { left: rows, right: null }
   }
   const ks = [1, 2, 3, 4]

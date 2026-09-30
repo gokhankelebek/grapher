@@ -1930,3 +1930,24 @@ describe('analyzeCurve — steps, jumps and flat stretches', () => {
     }
   })
 })
+
+describe('analyzeCurve — no zero where a curve only approaches 0 at a pole', () => {
+  it('e^(1/x): no zeros (its left branch tends to 0 as x → 0⁻, never reaching it)', () => {
+    const r = parseExpression('y = e^(1/x)')
+    if (!r.ok) throw new Error(r.error)
+    const models = { m: r.plot.makeModel('m') }
+    const c: FittedCurve = { ...curve('m', [], null), kind: 'explicit' }
+    const zs = analyzeCurve(c, models).filter((p) => p.kind === 'zero')
+    expect(zs).toEqual([])
+  })
+  it('√(4 − x²) still has its zeros at ±2, where its domain stops', () => {
+    const r = parseExpression('y = sqrt(4 - x^2)')
+    if (!r.ok) throw new Error(r.error)
+    const models = { m: r.plot.makeModel('m') }
+    const c: FittedCurve = { ...curve('m', [], null), kind: 'explicit' }
+    const xs = analyzeCurve(c, models).filter((p) => p.kind === 'zero').map((p) => p.pos.x)
+    expect(xs.length).toBe(2)
+    expect(xs[0]).toBeCloseTo(-2, 9)
+    expect(xs[1]).toBeCloseTo(2, 9)
+  })
+})

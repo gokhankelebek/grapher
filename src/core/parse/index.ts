@@ -1174,11 +1174,57 @@ interface SingPlan {
 
 const emptySingPlan = (): SingPlan => ({ sources: [], exclusions: [] })
 
-/** True for a literal negative exponent, written `-2` or `(-2)`. */
+/**
+ * The value of a sub-expression that holds no variable, slider or named
+ * call — `-2`, `(-2/3)`, `-1/3`, `-(1+1)/3`, `-π` — or null when it depends
+ * on something that moves.
+ */
+function constantValue(n: Node): number | null {
+  switch (n.t) {
+    case 'num':
+    case 'const':
+      return compile(n)([], 0, 0)
+    case 'neg': {
+      const a = constantValue(n.a)
+      return a === null ? null : -a
+    }
+    case 'bin': {
+      if (constantValue(n.a) === null || constantValue(n.b) === null) return null
+      const v = compile(n)([], 0, 0)
+      return Number.isNaN(v) ? null : v
+    }
+    case 'call': {
+      if (!n.args.every((m) => constantValue(m) !== null)) return null
+      const v = compile(n)([], 0, 0)
+      return Number.isNaN(v) ? null : v
+    }
+    default:
+      return null
+  }
+}
+
+/**
+ * True for a constant negative exponent, however it is written: `-2`,
+ * `(-2)`, `(-2/3)`, `-1/3`. u^(−r) is 1/u^r for every r > 0, so the base is
+ * a denominator: x^(−2/3) has a pole at 0 just as x^(−2) does.
+ */
 function negativeExponent(n: Node): boolean {
-  if (n.t === 'num') return n.v < 0
-  if (n.t === 'neg') return n.a.t === 'num' && n.a.v > 0
-  return false
+  const v = constantValue(n)
+  return v !== null && v < 0
+}
+
+/**
+ * u^w with an exponent that moves (x^x, x^(x − 1)): where the base is 0 the
+ * power is undefined if the exponent is ≤ 0 there (0⁰ and 0^(−1) have no
+ * value). The source is the base where the exponent is ≤ 0, and 1 (never
+ * zero) elsewhere — so 0^(positive) = 0 is left alone.
+ */
+function zeroBaseSource(base: Node, exp: Node): Evaluator | null {
+  if (constantValue(exp) !== null || affineShape(exp) === 'const') return null
+  if (constantValue(base) !== null) return null // e^(1/x): a constant base is never 0
+  const f = compile(base)
+  const g = compile(exp)
+  return (p, a, b) => (g(p, a, b) <= 0 ? f(p, a, b) : 1)
 }
 
 /**
@@ -1222,8 +1268,13 @@ function collectSingSources(n: Node, within: Piece[] | null, out: SingSource[]):
       if (n.op === '/') {
         push(n.b, compile(n.b))
       } else if (n.op === '^' && negativeExponent(n.b)) {
-        // x^-2 is 1/x²: the base is a denominator wearing a different hat
+        // x^-2 is 1/x², x^(−2/3) is 1/∛x²: the base is a denominator
+        // wearing a different hat
         push(n.a, compile(n.a))
+      } else if (n.op === '^') {
+        // x^x: 0⁰ is undefined, so the base's zeros where the exponent is ≤ 0
+        const q = zeroBaseSource(n.a, n.b)
+        if (q) push(n.a, q)
       }
       collectSingSources(n.a, within, out)
       collectSingSources(n.b, within, out)

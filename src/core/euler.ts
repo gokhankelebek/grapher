@@ -84,12 +84,34 @@ export const EULER_DECIMALS = 4
 const MINUS = '−'
 const withMinus = (s: string): string => (s.startsWith('-') ? MINUS + s.slice(1) : s)
 
-function decimalText(v: number): string {
-  if (!Number.isFinite(v)) return '—'
-  if (Math.abs(v) < 1e-12) return '0'
+const SUPERSCRIPT: Record<string, string> = {
+  '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
+  '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹', '-': '⁻',
+}
+
+/**
+ * A decimal as the table prints it, text and KaTeX. Very large and very
+ * small values use the app's scientific notation — "1.235×10⁷", "10⁻⁵" —
+ * the way src/render/grid.ts draws a tick (core cannot import it), never
+ * JavaScript's "1.235e+7".
+ */
+function decimalParts(v: number): { text: string; tex: string; shown: number } {
+  if (!Number.isFinite(v)) return { text: '—', tex: '\\text{—}', shown: Number.NaN }
+  if (Math.abs(v) < 1e-12) return { text: '0', tex: '0', shown: 0 }
   const a = Math.abs(v)
-  if (a >= 1e7 || a < 1e-4) return withMinus(v.toExponential(3))
-  return withMinus(String(Number(v.toFixed(EULER_DECIMALS))))
+  if (a >= 1e7 || a < 1e-4) {
+    const [m0, e0] = v.toExponential(3).split('e')
+    const m = m0.replace(/\.?0+$/, '')
+    const neg = m.startsWith('-')
+    const mant = neg ? m.slice(1) : m
+    const exp = String(parseInt(e0, 10))
+    const sup = exp.replace(/[-0-9]/g, (c) => SUPERSCRIPT[c])
+    const text = (neg ? MINUS : '') + (mant === '1' ? '' : `${mant}×`) + `10${sup}`
+    const tex = (neg ? '-' : '') + (mant === '1' ? '' : `${mant}\\times `) + `10^{${exp}}`
+    return { text, tex, shown: Number(v.toExponential(3)) }
+  }
+  const t = String(Number(v.toFixed(EULER_DECIMALS)))
+  return { text: withMinus(t), tex: t, shown: Number(t) }
 }
 
 /** A fraction whose decimal stops within two places (5/2, 15/4, 6/5) reads as that decimal. */
@@ -106,16 +128,20 @@ function shortDecimal(q: number): boolean {
  * at EULER_EXACT_TOL. Anything else is a decimal to four places.
  */
 export function eulerNumber(v: number): EulerNumber {
-  const decimal = decimalText(v)
+  const dp = decimalParts(v)
+  const decimal = dp.text
   if (!Number.isFinite(v)) return { text: '—', tex: '\\text{—}', exact: false, decimal }
-  if (Math.abs(v) < 1e-12) return { text: '0', tex: '0', exact: true, decimal: '0' }
+  // 0 is exact only when it IS 0; 1e-14 printed as "0" is a rounding
+  if (Math.abs(v) < 1e-12) return { text: '0', tex: '0', exact: v === 0, decimal: '0' }
   const e = exactForm(v, { tol: EULER_EXACT_TOL })
-  if (!e) return { text: decimal, tex: decimal.replace(MINUS, '-'), exact: false, decimal }
+  if (!e) return { text: decimal, tex: dp.tex, exact: false, decimal }
   const frac = /^[-−]?(\d+)\/(\d+)$/.exec(e.text)
   const whole = /^[-−]?\d+$/.test(e.text)
   if (whole || (frac && shortDecimal(Number(frac[2])))) {
-    const t = decimalText(e.value)
-    return { text: t, tex: t.replace(MINUS, '-'), exact: true, decimal }
+    // printed as a decimal: exact only when the decimal says all of it
+    // (12345678 prints "1.235×10⁷", a rounding)
+    const p = decimalParts(e.value)
+    return { text: p.text, tex: p.tex, exact: p.shown === e.value, decimal }
   }
   return { text: withMinus(e.text), tex: e.tex, exact: true, decimal }
 }

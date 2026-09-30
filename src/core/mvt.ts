@@ -29,6 +29,19 @@
 // stretch is never reported as a corner: a corner is a place where the two
 // one-sided derivatives converge to DIFFERENT numbers.
 //
+// HOLES. A c where f itself is undefined is no c: a curve with singularities
+// is never read through its polynomial (Horner would fill (x² − 1)/(x − 1)'s
+// hole at 1), a point solution on a singularity or hole is dropped, and
+// "every c" splits there into stretches.
+//
+// FAST TURNS. A candidate where the typed line's jet has a slope is smooth
+// there, whatever difference quotients say (x·sin(1/x) near 0.018 is no
+// corner). The root scans refine their grid wherever g bends between two
+// samples (x·sin(1/x) on [0.01, 1] has 32 values of c, 0.0006 apart near
+// 0.01). A stretch's ends are moved onto the piece end, a or b they fall
+// within two grid steps of: {x², x < 1; 2x, x ≥ 1} on [0, 2] is every c
+// from 1 to 2.
+//
 // EXACT FORMS. A c found by bisection is only good to a few ulps of f′, so it
 // is snapped with verifiedExact and the curve itself is the judge: the form is
 // kept only when f′(form) = m to 1e-9. x³ on [−2, 2] gives c = ±2√3/3; x² on
@@ -53,6 +66,12 @@ export interface MvtSource {
   f(x: number): number
   /** f′(x); NaN where f is not differentiable or the slope is unknown. */
   d(x: number): number
+  /**
+   * f′(x) from the Taylor jet ONLY — a number where f is analytic at x (so
+   * certainly differentiable there), null where the jet has nothing to say
+   * (|x| at 0, a piecewise, a named call). Never a difference quotient.
+   */
+  jetSlope?(x: number): number | null
   /** The drawn domain, or null for all of ℝ. */
   domain: [number, number] | null
   /** Ascending coefficients, when f is a polynomial (then everything is exact). */
@@ -142,8 +161,10 @@ export interface AverageValue {
 
 /** Samples across [a, b] for the hypothesis scans. */
 const SCAN_N = 1200
-/** Samples across (a, b) for the root scans. */
+/** Samples across (a, b) for the root scans (before adaptive refinement). */
 const ROOT_N = 800
+/** At most this many samples once the root scan has refined where g turns fast. */
+const ROOT_BUDGET = 24000
 /** A chord-slope turn this many times its neighbours' is probed as a corner. */
 const CORNER_GATE = 8
 /** A chord slope peaking this many times the chords two away is probed as a cusp. */
@@ -657,6 +678,13 @@ export function differentiabilityOn(src: MvtSource, a: number, b: number): Smoot
     if (!Number.isFinite(fx)) continue // not continuous: continuityOn's business
     // A jump or a pole is continuityOn's to report, not a corner.
     if (!approaches(f, x, -1, fx) || !approaches(f, x, 1, fx)) continue
+    // f analytic at x (its jet has a slope there) is differentiable there,
+    // however fast it turns: x·sin(1/x) at 0.018 swings so hard that fixed
+    // difference steps read a "corner" the formula does not have.
+    if (src.jetSlope && !(src.pieceEnds ?? []).some((e) => Math.abs(e - x) <= 1e-9 * scaleOf(x))) {
+      const j = safe((u) => src.jetSlope!(u) ?? Number.NaN, x)
+      if (Number.isFinite(j)) continue
+    }
     const { left, right } = sideSlopes(f, x)
     if (Number.isNaN(left) || Number.isNaN(right)) continue
     const infL = !Number.isFinite(left)
@@ -693,13 +721,16 @@ function rootsOf(
   const span = hi - lo
   const xs: number[] = []
   const gs: number[] = []
-  const i0 = open ? 1 : 0
-  const i1 = open ? N - 1 : N
-  for (let i = i0; i <= i1; i++) {
-    const x = i === N ? hi : lo + (span * i) / N
+  // An open interval is scanned from just inside its ends — not from one
+  // grid step in, which left x·sin(1/x)'s first roots on [0.01, 1] (all in
+  // the first step) unseen.
+  const inset = open ? 1e-9 * span : 0
+  for (let i = 0; i <= N; i++) {
+    const x = i === 0 ? lo + inset : i === N ? hi - inset : lo + (span * i) / N
     xs.push(x)
     gs.push(safe(g, x))
   }
+  refineSamples(g, xs, gs, accept)
   const finite = gs.filter(Number.isFinite)
   if (finite.length > 0.9 * gs.length && finite.every((v) => Math.abs(v) <= accept)) {
     return { all: true, xs: [], stretches: [] }
@@ -801,6 +832,57 @@ function rootsOf(
   return { all: false, xs: out, stretches }
 }
 
+/**
+ * Where g changes faster than the grid can follow, add samples: a step whose
+ * midpoint is off the chord by more than 10% of the values around it is
+ * halved, again and again (to 1/4096 of a step, ROOT_BUDGET samples in all).
+ * f′ of x·sin(1/x) near 0.01 turns every 0.0006 — twice per step of an
+ * 800-sample grid on [0.01, 1] — and a root it crosses twice between two
+ * samples would never show as a sign change. A smooth g needs nothing.
+ */
+function refineSamples(g: (x: number) => number, xs: number[], gs: number[], accept: number): void {
+  const n0 = xs.length
+  if (n0 < 2) return
+  const minW = (xs[n0 - 1] - xs[0]) / (ROOT_N * 4096)
+  let budget = ROOT_BUDGET - n0
+  const outX: number[] = [xs[0]]
+  const outG: number[] = [gs[0]]
+  const split = (l: number, gl: number, r: number, gr: number, depth: number): void => {
+    if (budget > 0 && depth < 12 && r - l > minW && Number.isFinite(gl) && Number.isFinite(gr)) {
+      const m = 0.5 * (l + r)
+      const gm = safe(g, m)
+      budget--
+      const off = Math.abs(gm - 0.5 * (gl + gr))
+      const size = (Math.abs(gl) + Math.abs(gr) + Math.abs(gm)) / 3
+      // on the first pass a third-point too: a g that turns an exact number
+      // of times per step looks straight at its midpoint alone
+      let offT = 0
+      if (depth === 0) {
+        const gt = safe(g, l + (r - l) / 3)
+        budget--
+        offT = Number.isFinite(gt) ? Math.abs(gt - (gl + (gr - gl) / 3)) : 0
+      }
+      if (Number.isFinite(gm) && Math.max(off, offT) > 0.1 * size + accept) {
+        split(l, gl, m, gm, depth + 1)
+        split(m, gm, r, gr, depth + 1)
+        return
+      }
+      if (Number.isFinite(gm) && Math.sign(gm) !== Math.sign(gl) && Math.sign(gm) !== Math.sign(gr)) {
+        // two sign changes inside one step: keep the midpoint that shows them
+        outX.push(m)
+        outG.push(gm)
+      }
+    }
+    outX.push(r)
+    outG.push(gr)
+  }
+  for (let k = 0; k + 1 < n0; k++) split(xs[k], gs[k], xs[k + 1], gs[k + 1], 0)
+  xs.length = 0
+  gs.length = 0
+  xs.push(...outX)
+  gs.push(...outG)
+}
+
 /** Snap each root with verifiedExact, the curve itself the judge. */
 function exactRoots(xs: number[], check: (x: number) => boolean): Solution[] {
   return xs.map((x) => {
@@ -848,10 +930,97 @@ export function mvtPoints(src: MvtSource, a: number, b: number, m: number): MvtP
   const g = (x: number): number => safe(src.d, x) - m
   const accept = ROOT_ACCEPT * Math.max(1, Math.abs(m))
   const r = rootsOf(g, lo, hi, true, accept)
-  if (r.all) return { all: true, points: [] }
+  // Points where f itself is undefined (a hole, an excluded x) are no c,
+  // whatever f′ does around them: "every c" splits there.
+  const bad = excludedIn(src, lo, hi)
+  if (r.all) {
+    if (bad.length === 0) return { all: true, points: [] }
+    r.stretches = [[lo, hi]]
+  }
   const tight = EXACT_CHECK * Math.max(1, Math.abs(m))
   const points = exactRoots(r.xs, (c) => Math.abs(safe(src.d, c) - m) <= tight)
-  return { all: false, points: withStretches(points, r.stretches) }
+  const stretches = clipStretches(r.stretches, lo, hi, src.pieceEnds ?? [], bad)
+  return { all: false, points: withStretches(dropExcluded(src, points, bad), stretches) }
+}
+
+/**
+ * The x in [lo, hi] where f is undefined although its neighbours are not:
+ * the formula's own singularities and holes where f(x) is not finite, and
+ * a one-formula line's written exclusion ({x != 2}), which its evaluator
+ * does not gate.
+ */
+function excludedIn(src: MvtSource, lo: number, hi: number): number[] {
+  const out: number[] = []
+  const add = (x: number): void => {
+    if (!Number.isFinite(x) || x < lo || x > hi) return
+    if (out.some((o) => Math.abs(o - x) <= 1e-9 * scaleOf(x))) return
+    out.push(x)
+  }
+  try {
+    for (const x of src.singularities?.([lo, hi]) ?? []) add(x)
+  } catch {
+    /* none */
+  }
+  try {
+    for (const x of src.holes?.([lo, hi]) ?? []) add(x)
+  } catch {
+    /* none */
+  }
+  // a piecewise gates its own conditions: a singularity where it still has a
+  // value ({x², x ≠ 2; 5, x = 2} at 2) is defined there
+  const kept = src.pieceEnds ? out.filter((x) => !Number.isFinite(safe(src.f, x))) : out
+  return kept.sort((p, q) => p - q)
+}
+
+/** Point solutions that land on an excluded x (or where f is undefined) are no solutions. */
+function dropExcluded(src: MvtSource, points: Solution[], bad: number[]): Solution[] {
+  return points.filter((p) => {
+    if (p.to !== undefined) return true
+    if (bad.some((x) => Math.abs(x - p.x) <= 1e-9 * scaleOf(x))) return false
+    return !src.poly || bad.length === 0 || Number.isFinite(safe(src.f, p.x))
+  })
+}
+
+/**
+ * A stretch's ends as the pieces and the interval make them. The scan pins
+ * an end only to within its samples — and a difference quotient near a
+ * piece's end is spoiled by the other piece — so {x², x < 1; 2x, x ≥ 1} on
+ * [0, 2] reads "from 1.0007 to 1.9975". An end within two grid steps of a
+ * piece end, a or b is moved onto it; then the stretch is split at every
+ * excluded x inside it.
+ */
+function clipStretches(
+  stretches: [number, number][],
+  lo: number,
+  hi: number,
+  pieceEnds: readonly number[],
+  bad: number[],
+): [number, number][] {
+  const step = (hi - lo) / ROOT_N
+  const marks = [lo, hi, ...pieceEnds.filter((e) => e >= lo && e <= hi)]
+  const onto = (x: number): number => {
+    let best = x
+    let dist = 2 * step
+    for (const e of marks) {
+      const d = Math.abs(e - x)
+      if (d <= dist) { best = e; dist = d }
+    }
+    return best
+  }
+  const out: [number, number][] = []
+  for (const [p0, q0] of stretches) {
+    const p = Math.max(lo, onto(p0))
+    const q = Math.min(hi, onto(q0))
+    if (!(q > p)) continue
+    let from = p
+    for (const x of bad) {
+      if (x <= p || x >= q) continue
+      if (x > from) out.push([from, x])
+      from = x
+    }
+    if (q > from) out.push([from, q])
+  }
+  return out
 }
 
 // ---------------------------------------------------------------------------
@@ -911,12 +1080,15 @@ export function averageValue(src: MvtSource, a: number, b: number): AverageValue
   const accept = ROOT_ACCEPT * Math.max(1, Math.abs(target))
   const r = rootsOf(g, lo, hi, false, accept)
   const tight = EXACT_CHECK * Math.max(1, Math.abs(target))
-  const points = r.all
-    ? []
-    : withStretches(
-        exactRoots(r.xs, (c) => Math.abs(valueAt(src, c) - target) <= tight),
-        r.stretches,
-      )
+  const bad = excludedIn(src, lo, hi)
+  if (r.all && bad.length > 0) r.stretches = [[lo, hi]]
+  const points =
+    r.all && bad.length === 0
+      ? []
+      : withStretches(
+          dropExcluded(src, exactRoots(r.xs, (c) => Math.abs(valueAt(src, c) - target) <= tight), bad),
+          clipStretches(r.stretches, lo, hi, src.pieceEnds ?? [], bad),
+        )
   return { value, exact: I.exact, form, integral: I.value, points }
 }
 
@@ -973,8 +1145,20 @@ export function mvtSourceOf(curve: FittedCurve, models: Record<string, ModelSpec
   // and polynomialOf, fitting samples, believes it; Horner would then carry
   // the formula past the restriction and through the separate point. Only
   // a curve with no pieces is read as its polynomial.
+  //
+  // Nor is one with singularities: (x³ − x)/x and (x² − 1)/(x − 1) ARE
+  // polynomials except at their holes, and Horner would fill the hole —
+  // putting an MVT c or an average-value c exactly where f is undefined.
   let poly: number[] | null = null
-  if (!spec.pieces) {
+  let singular = false
+  if (spec.singularities) {
+    try {
+      singular = spec.singularities(params, [-1e6, 1e6]).length > 0
+    } catch {
+      singular = false
+    }
+  }
+  if (!spec.pieces && !singular) {
     try {
       poly = polynomialOf(curve, models)
     } catch {
@@ -1009,6 +1193,17 @@ export function mvtSourceOf(curve: FittedCurve, models: Record<string, ModelSpec
     d,
     domain,
     poly,
+  }
+  if (jets) {
+    src.jetSlope = (x: number): number | null => {
+      if (!inside(x) || !Number.isFinite(f(x))) return null
+      try {
+        const c = jets(params, x, 1)
+        return c && Number.isFinite(c[0]) && Number.isFinite(c[1]) ? c[1] : null
+      } catch {
+        return null
+      }
+    }
   }
   if (spec.evalExact) {
     const exactEval = spec.evalExact.bind(spec)

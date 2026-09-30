@@ -299,14 +299,14 @@ describe('PDF', () => {
 
   it('never lets an unknown glyph into a string; sub/superscripts are scaled digits', () => {
     const f = { family: 'x', generic: 'sans-serif' as const, size: 10, italic: false, bold: false }
-    const runs = pdfTextRuns('P₀ x² ∞ √2 ✓', f)
+    const runs = pdfTextRuns('P₀ x² ∞ √2 ☃', f)
     const all = runs.flatMap((r) => r.codes)
     expect(all.every((c) => c >= 32 && c <= 255)).toBe(true)
     expect(runs.some((r) => r.scale < 1 && r.rise < 0 && r.codes.includes(48))).toBe(true) // ₀
     expect(runs.some((r) => r.scale < 1 && r.rise > 0 && r.codes.includes(50))).toBe(true) // ²
     expect(runs.some((r) => r.font === 'Symbol' && r.codes.includes(0xa5))).toBe(true) // ∞
     expect(runs.some((r) => r.font === 'Symbol' && r.codes.includes(0xd6))).toBe(true) // √
-    expect(runs[runs.length - 1].codes).toContain(63) // ✓ → ?
+    expect(runs[runs.length - 1].codes).toContain(63) // ☃ → ? (✓ is ZapfDingbats now: hardening-export)
   })
 })
 

@@ -134,6 +134,18 @@ export interface FeasibleRegion {
   rays: Vec2[]
   /** True when every boundary is parallel: a strip or a half-plane, no corners. */
   parallel: boolean
+  /**
+   * A strip or half-plane (parallel only): lo ≤ n·(x, y) ≤ hi for the unit
+   * normal n, with the constraint that sets each finite bound.
+   */
+  strip?: {
+    nx: number
+    ny: number
+    lo: number
+    hi: number
+    loLine: LinConstraint | null
+    hiLine: LinConstraint | null
+  }
 }
 
 const TOL = 1e-9
@@ -156,7 +168,11 @@ export function feasibleRegion(cons: readonly LinConstraint[]): FeasibleRegion {
     }
   }
   const lines = cs.filter((k) => k.a !== 0 || k.b !== 0)
-  if (lines.length === 0) return { status: 'unbounded', vertices: [], rays: [], parallel: true }
+  if (lines.length === 0) {
+    // the whole plane: it runs off in every direction
+    const all = [{ x: 1, y: 0 }, { x: 0, y: 1 }, { x: -1, y: 0 }, { x: 0, y: -1 }]
+    return { status: 'unbounded', vertices: [], rays: all, parallel: true }
+  }
   const ex = lines.map((k) => {
     const a = toFrac(k.a)
     const b = toFrac(k.b)
@@ -223,6 +239,21 @@ export function feasibleRegion(cons: readonly LinConstraint[]): FeasibleRegion {
     }
   }
 
+  // Strict boundaries: the closed region's corners and rays exist, but the
+  // region itself may not (x > 0, y > 0, x + y < 0 closes up to the single
+  // point (0, 0)). The closed region is convex, so the strict region is
+  // non-empty exactly when EACH strict constraint is positive somewhere in it —
+  // the average of those points is then positive for all of them at once. A
+  // linear slack is positive somewhere in hull(corners) + cone(rays) iff it is
+  // at a corner or grows along a ray.
+  for (const k of cs) {
+    if (!k.strict || (k.a === 0 && k.b === 0)) continue
+    const sk = scaleOf(k)
+    const atCorner = raw.some((v) => slack(k, v.x, v.y) / sk > TOL * (1 + Math.abs(v.x) + Math.abs(v.y)))
+    const alongRay = rays.some((d) => (k.a * d.x + k.b * d.y) / sk > TOL)
+    if (!atCorner && !alongRay) return { status: 'empty', vertices: [], rays: [], parallel: false }
+  }
+
   // Order the corners around a point inside the region.
   let cx = 0
   let cy = 0
@@ -252,6 +283,8 @@ function parallelRegion(lines: readonly LinConstraint[]): FeasibleRegion {
   let hi = Infinity
   let loStrict = false
   let hiStrict = false
+  let loK: LinConstraint | null = null
+  let hiK: LinConstraint | null = null
   for (const k of lines) {
     const lam = k.a * nx + k.b * ny
     const t = -k.c / lam
@@ -259,15 +292,28 @@ function parallelRegion(lines: readonly LinConstraint[]): FeasibleRegion {
       if (t > lo || (t === lo && k.strict)) {
         lo = t
         loStrict = k.strict
+        loK = k
       }
     } else if (t < hi || (t === hi && k.strict)) {
       hi = t
       hiStrict = k.strict
+      hiK = k
     }
   }
   const empty = lo > hi + TOL || (Math.abs(lo - hi) <= TOL && (loStrict || hiStrict))
-  const rays = empty ? [] : [{ x: -ny, y: nx }, { x: ny, y: -nx }]
-  return { status: empty ? 'empty' : 'unbounded', vertices: [], rays, parallel: true }
+  if (empty) return { status: 'empty', vertices: [], rays: [], parallel: true }
+  // Along the lines both ways; across them wherever a side is open: a
+  // half-plane y ≥ 0 runs off upward too, so max y has no maximum.
+  const rays: Vec2[] = [{ x: -ny, y: nx }, { x: ny, y: -nx }]
+  if (hi === Infinity) rays.push({ x: nx, y: ny })
+  if (lo === -Infinity) rays.push({ x: -nx, y: -ny })
+  return {
+    status: 'unbounded',
+    vertices: [],
+    rays,
+    parallel: true,
+    strip: { nx, ny, lo, hi, loLine: loK, hiLine: hiK },
+  }
 }
 
 export function vertexLabel(x: number, y: number, exact: LpVertex['exact']): string {
@@ -392,6 +438,24 @@ function workText(obj: Objective, v: LpVertex, value: number, exact: Frac | null
   return `${out} = ${valueText(value, exact)}`
 }
 
+/** a·x + b·y + c = 0 solved the way a student writes it: "y = 2", "x = −3", "y = 2x + 1". */
+export function lineText(k: LinConstraint): string {
+  const num = (v: number): string => valueText(v, toFrac(v))
+  if (Math.abs(k.b) < 1e-15) return `x = ${num(-k.c / k.a)}`
+  const m = -k.a / k.b
+  const c = -k.c / k.b
+  let rhs = ''
+  if (Math.abs(m) > 1e-15) {
+    const mag = num(Math.abs(m))
+    rhs = `${m < 0 ? '−' : ''}${mag === '1' ? '' : mag.includes('/') ? `(${mag})` : mag}x`
+  }
+  if (Math.abs(c) > 1e-15 || rhs === '') {
+    if (rhs === '') rhs = num(c)
+    else rhs += c < 0 ? ` − ${num(-c)}` : ` + ${num(c)}`
+  }
+  return `y = ${rhs}`
+}
+
 /** Evaluate P at every corner and say where (whether) it is optimal. */
 export function optimize(region: FeasibleRegion, obj: Objective, goal: Goal): LpResult {
   const word = goal === 'max' ? 'maximum' : 'minimum'
@@ -421,6 +485,24 @@ export function optimize(region: FeasibleRegion, obj: Objective, goal: Goal): Lp
   const grows = region.rays.some((d) => (sgn * (obj.p * d.x + obj.q * d.y)) / pn > 1e-9)
   if (grows || region.vertices.length === 0) {
     if (!grows && region.parallel) {
+      // P is constant along the lines: its best is on the bounding line on
+      // the side P improves toward — the value there, along that whole line.
+      const st = region.strip
+      const lam = st ? obj.p * st.nx + obj.q * st.ny : 0
+      const line = st ? (sgn * lam > 0 ? st.hiLine : st.loLine) : null
+      const t = st ? (sgn * lam > 0 ? st.hi : st.lo) : Number.NaN
+      if (st && line && Number.isFinite(t)) {
+        const value = lam * t + obj.k
+        const exact = toFrac(value)
+        const vText = valueText(value, exact)
+        const lText = lineText(line)
+        const attained = !line.strict
+        let sentence = `${word[0].toUpperCase()}${word.slice(1)} ${obj.name} = ${vText}, at every point of the line ${lText} (multiple optimal solutions).`
+        if (!attained) {
+          sentence += ` That line is a dashed (strict) boundary, so ${obj.name} gets as close to ${vText} as you like but never reaches it.`
+        }
+        return { status: 'optimal', rows, value, valueText: vText, at: [], along: 'edge', attained, sentence }
+      }
       return {
         status: 'optimal',
         rows,

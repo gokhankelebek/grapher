@@ -25,6 +25,10 @@ export const cssHex = (c: Rgba): string => `#${hex2(c.r)}${hex2(c.g)}${hex2(c.b)
 
 export function escapeXml(s: string): string {
   return s
+    // XML 1.0 forbids most C0 controls outright (a form feed makes the file
+    // unparseable); tab / CR / LF in a label would only collapse to a space.
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')

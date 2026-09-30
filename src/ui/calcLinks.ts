@@ -36,6 +36,7 @@ import {
 } from '../core/calculus'
 import { analyzeCurve } from '../core/analyze'
 import { exactForm } from '../core/exact'
+import { pointText as implicitPointText } from '../core/implicitDiff'
 import type {
   AccumulationLink,
   AreaLink,
@@ -223,6 +224,12 @@ export function overlaysFor(
    * marks.
    */
   implicit: { sources: Readonly<Record<string, string>>; box: Box | null } | null = null,
+  /**
+   * App's depKeys: curve id → the state of every curve it calls. A secant,
+   * limit or volume on p(x) = h(x) + 1 is cached on p's model, params and
+   * domain — which do not move when h is retyped — so this goes in the key.
+   */
+  deps: Readonly<Record<string, string>> = {},
 ): Overlay[] {
   const out: Overlay[] = []
   if (implicit) {
@@ -306,7 +313,7 @@ export function overlaysFor(
   const secants = links.filter((l): l is SecantLink => l.kind === 'secant')
   if (secants.length > 0) {
     try {
-      out.push(...secantOverlays(secants, curves, models))
+      out.push(...secantOverlays(secants, curves, models, deps))
     } catch {
       /* the secant marks are lost this frame; the rest of the figure stands */
     }
@@ -317,7 +324,7 @@ export function overlaysFor(
   const volumes = links.filter((l): l is VolumeLink => l.kind === 'volume')
   if (volumes.length > 0) {
     try {
-      out.push(...volumeOverlays(volumes, curves, models))
+      out.push(...volumeOverlays(volumes, curves, models, deps))
     } catch {
       /* the volume figure is lost this frame; the rest of the figure stands */
     }
@@ -327,7 +334,7 @@ export function overlaysFor(
   const limits = links.filter((l): l is LimitLink => l.kind === 'limit')
   if (limits.length > 0) {
     try {
-      out.push(...limitOverlays(limits, curves, models))
+      out.push(...limitOverlays(limits, curves, models, deps))
     } catch {
       /* the limit marks are lost this frame; the rest of the figure stands */
     }
@@ -1510,6 +1517,16 @@ export function labelLegend<T extends LegendLike>(
         text: taylorLegend(link),
       }
     }
+    if (link.y !== undefined && Number.isFinite(link.y)) {
+      // An implicit tangent: x alone does not say which branch — x = 3 is two
+      // points of x² + y² = 25 — so the legend names the point.
+      const pt = implicitPointText({ x: link.x, y: link.y })
+      return {
+        ...e,
+        tex: `\\text{tangent at }${pt.tex}\\colon\\;${e.tex}`,
+        text: `tangent at ${pt.text}`,
+      }
+    }
     const x = fixed(link.x, 2).replace(MINUS, '-')
     return {
       ...e,
@@ -1533,6 +1550,11 @@ export function labelLegend<T extends LegendLike>(
 export interface CardCalc {
   /** True when this curve can carry calculus objects at all (explicit in x, or an implicit equation). */
   canAdd: boolean
+  /**
+   * The board's undo/redo epoch (App). The Taylor ▶ demo is keyed on it, so
+   * an undo remounts it and its timer stops. Absent: 0.
+   */
+  epoch?: number
   /**
    * An implicit curve (x² + y² = 25): the menu offers the tangent line only,
    * and the tangents it carries are listed in `implicits`.
@@ -1762,7 +1784,7 @@ export function cardCalc(
    * The board's letters (f, g, h …) by curve id, so an accumulation reads
    * "g(x) = ∫₀ˣ f(t) dt" with the names on the figure. Absent: f and g.
    */
-  letters: Readonly<Record<string, string>> = {},
+  boardLetters: Readonly<Record<string, string>> = {},
   /**
    * The letters each typed line calls (curve id → letters). A line that calls
    * another curve by name has no Taylor polynomial, and its menu says so.
@@ -1775,8 +1797,20 @@ export function cardCalc(
   sources: Readonly<Record<string, string>> = {},
   /** Where an implicit curve's horizontal and vertical tangents are looked for. */
   implicitBox: Box | null = null,
+  /**
+   * App's depKeys: curve id → the state of every curve it calls, so a secant,
+   * limit or volume on p(x) = h(x) + 1 is measured anew when h is retyped.
+   */
+  deps: Readonly<Record<string, string>> = {},
+  /**
+   * What each CARD is called, hidden curves included (the board's letters
+   * leave a hidden curve out). A hidden parent is then still "h", never "f".
+   */
+  cardLetters: Readonly<Record<string, string>> = {},
 ): Record<string, CardCalc> {
   const out: Record<string, CardCalc> = {}
+  // The board's letters first; a hidden curve falls back to its card's name.
+  const letters: Readonly<Record<string, string>> = { ...cardLetters, ...boardLetters }
   const callsOthers = (id: string): boolean => (calls[id]?.length ?? 0) > 0
   const blank = (curve: FittedCurve): CardCalc => ({
     canAdd: models[curve.modelId]?.kind === 'explicit' || isImplicitCurve(curve, models),
@@ -1987,7 +2021,7 @@ export function cardCalc(
         if (!own) break
         let row: SecantRow
         try {
-          row = secantRow(link, parent, models, letters[link.parentId] ?? 'f')
+          row = secantRow(link, parent, models, letters[link.parentId] ?? 'f', deps[link.parentId] ?? '')
         } catch {
           row = {
             ...secantRow({ ...link, mvt: undefined, avg: undefined }, undefined, models),
@@ -2003,7 +2037,7 @@ export function cardCalc(
         if (!own) break
         let row: LimitRow
         try {
-          row = limitRow(link, parent, models, letters[link.parentId] ?? 'f')
+          row = limitRow(link, parent, models, letters[link.parentId] ?? 'f', deps[link.parentId] ?? '')
         } catch {
           row = { ...limitRow(link, undefined, models), problem: 'this limit could not be measured' }
         }
@@ -2024,7 +2058,7 @@ export function cardCalc(
         }))
         let row: VolumeRow
         try {
-          row = volumeRow(link, parent, other, models, { fName, gName, sources, others })
+          row = volumeRow(link, parent, other, models, { fName, gName, sources, others, deps })
         } catch {
           row = {
             ...volumeRow({ ...link, otherId: undefined }, undefined, undefined, models, { fName, others }),
@@ -2049,4 +2083,108 @@ function accumNames(
   let g = letters[link.curveId] ?? (f === 'g' ? 'G' : 'g')
   if (g === f) g = 'G'
   return [f, g]
+}
+
+// ---------------------------------------------------------------------------
+// Frozen copies: a duplicate of a derived curve is a snapshot
+// ---------------------------------------------------------------------------
+//
+// A Taylor polynomial or an inverse relation draws with a closure the board
+// rebuilds from its LINK (tay_<link>, inv_<link>). A duplicate has no link: it
+// would share the original's model, follow it, and be dropped on reload. So
+// the copy is frozen as the typed line it IS at that moment — a polynomial, a
+// parametric (f(t), t) — which the loader rebuilds from its text like any
+// other typed curve.
+
+/**
+ * A number the parser reads back to the same double: "3", "-0.1666666666666667",
+ * never "1e-7" (the parser's e is Euler's number).
+ */
+export function plainNumber(v: number): string {
+  if (!Number.isFinite(v)) return 'NaN'
+  if (v === 0) return '0'
+  const s = String(v)
+  if (!/e/i.test(s)) return s
+  const mag = Math.abs(v)
+  if (mag < 1) {
+    const places = Math.min(100, 17 - Math.floor(Math.log10(mag)))
+    return v.toFixed(places).replace(/0+$/, '').replace(/\.$/, '')
+  }
+  return BigInt(Math.round(v)).toString()
+}
+
+/** p/q for a v that IS a small fraction (denominator ≤ 10⁴), else null. */
+function smallFraction(v: number): { p: number; q: number } | null {
+  if (!Number.isFinite(v) || Number.isInteger(v)) return null
+  for (let q = 2; q <= 10000; q++) {
+    const p = Math.round(v * q)
+    if (p !== 0 && Math.abs(p / q - v) <= 1e-13 * Math.max(1, Math.abs(v))) return { p, q }
+  }
+  return null
+}
+
+/** a as the parser should read it inside (x − a): 2, 1/2, pi/6, 0.3. */
+function centreText(a: number): string {
+  if (Number.isInteger(a)) return String(Math.abs(a))
+  const m = Math.abs(a)
+  const r = smallFraction(m / Math.PI)
+  if (r && r.q <= 24) return `${r.p === 1 ? '' : r.p}pi/${r.q}`
+  if (Math.abs(m / Math.PI - Math.round(m / Math.PI)) <= 1e-13 && Math.round(m / Math.PI) !== 0) {
+    const k = Math.round(m / Math.PI)
+    return k === 1 ? 'pi' : `${k}pi`
+  }
+  const f = smallFraction(m)
+  if (f) return `(${f.p}/${f.q})`
+  return plainNumber(m)
+}
+
+/**
+ * Pₙ as a line the parser reads: "y = x - x^3/6 + x^5/120",
+ * "y = 1 + (x - 1) - (x - 1)^2/2". Coefficients are written exactly when
+ * they are small fractions and to full double precision otherwise, so the
+ * frozen copy is the same polynomial, not a rounding of it.
+ */
+export function taylorTypedLine(poly: { a: number; coeffs: readonly number[] }): string {
+  const { a, coeffs } = poly
+  const scale = Math.max(0, ...coeffs.map((c) => (Number.isFinite(c) ? Math.abs(c) : 0)))
+  const base = a === 0 ? 'x' : `(x ${a > 0 ? '-' : '+'} ${centreText(a)})`
+  const terms: { neg: boolean; body: string }[] = []
+  coeffs.forEach((c, k) => {
+    if (!Number.isFinite(c) || c === 0 || Math.abs(c) <= 1e-15 * scale) return
+    const pow = k === 0 ? '' : k === 1 ? base : `${base}^${k}`
+    const m = Math.abs(c)
+    let body: string
+    if (Number.isInteger(m)) {
+      body = k === 0 ? String(m) : m === 1 ? pow : `${m}${pow}`
+    } else {
+      const f = smallFraction(m)
+      if (f) body = k === 0 ? `${f.p}/${f.q}` : `${f.p === 1 ? '' : f.p}${pow}/${f.q}`
+      else body = k === 0 ? plainNumber(m) : `${plainNumber(m)}${pow}`
+    }
+    terms.push({ neg: c < 0, body })
+  })
+  if (terms.length === 0) return 'y = 0'
+  const rhs = terms
+    .map((t, i) => (i === 0 ? (t.neg ? `-${t.body}` : t.body) : `${t.neg ? ' - ' : ' + '}${t.body}`))
+    .join('')
+  return `y = ${rhs}`
+}
+
+/**
+ * The inverse relation (f(t), t) as a typed parametric line, from f's own
+ * line ("y = x^2 + 1", "f(x) = sin(x)", or a bare "x^2") and the t-range it is
+ * drawn over: "(t^2 + 1, t) {-2 <= t <= 2}". Null when f's line is not a plain
+ * y = … in x (a relation, a restriction clause, a piecewise).
+ */
+export function inverseTypedLine(parentSource: string, tRange: readonly [number, number] | null): string | null {
+  if (!tRange || !Number.isFinite(tRange[0]) || !Number.isFinite(tRange[1])) return null
+  const text = parentSource.trim()
+  if (text === '' || /[{};]/.test(text)) return null
+  const m = /^(?:y|[A-Za-z]\s*\(\s*x\s*\))\s*=\s*(.+)$/.exec(text)
+  const body = m ? m[1] : text.includes('=') ? null : text
+  if (body === null || /(?<![A-Za-z_])[yt](?![A-Za-z_])/.test(body)) return null
+  const inT = body.replace(/(?<![A-Za-z_])x(?![A-Za-z_])/g, 't')
+  const lo = Math.min(tRange[0], tRange[1])
+  const hi = Math.max(tRange[0], tRange[1])
+  return `(${inT}, t) {${plainNumber(lo)} <= t <= ${plainNumber(hi)}}`
 }

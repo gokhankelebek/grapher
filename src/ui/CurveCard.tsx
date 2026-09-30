@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from 'react'
 import type {
   Asymptote,
@@ -1535,27 +1535,61 @@ export function CurveCard({
     </button>
   )
 
-  /** Up / Down / Home / End walk the menu's items; Tab still leaves it. */
+  /**
+   * Everything the arrow keys walk, in reading order: the menu's items, then
+   * the line-style and end-cap buttons (the sliders keep their own arrows and
+   * stay on Tab). One of them is in the Tab order at a time — a roving
+   * tabindex — so Tab leaves the menu instead of stepping through 25 items.
+   */
+  const menuNavItems = (): HTMLElement[] =>
+    Array.from(
+      menuRef.current?.querySelectorAll<HTMLElement>(
+        '.card-menu [role^="menuitem"]:not([aria-disabled="true"]), .card-menu .dash-btn, .card-menu .ends-btn',
+      ) ?? [],
+    )
+  const rove = (items: readonly HTMLElement[], at: number): void => {
+    items.forEach((el, i) => {
+      el.tabIndex = i === at ? 0 : -1
+    })
+  }
+  // Every render of an open menu: the item holding focus (else the first)
+  // is the one Tab stop — new items arrive with the default tabindex 0.
+  useLayoutEffect(() => {
+    if (!menuOpen) return
+    const items = menuNavItems()
+    const at = Math.max(0, items.indexOf(document.activeElement as HTMLElement))
+    rove(items, at)
+  })
+
+  /**
+   * Up / Down / Home / End walk the menu (items, line styles, end caps); Left
+   * / Right step along a row of style or end buttons. Tab still leaves it and
+   * Escape still closes it.
+   */
   const onMenuKey = (e: ReactKeyboardEvent<HTMLDivElement>): void => {
     if (!menuOpen) return
-    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') return
-    const items = Array.from(
-      menuRef.current?.querySelectorAll<HTMLElement>('.card-menu [role^="menuitem"]:not([aria-disabled="true"])') ?? [],
-    )
+    const inRow =
+      document.activeElement instanceof HTMLElement &&
+      (document.activeElement.classList.contains('dash-btn') || document.activeElement.classList.contains('ends-btn'))
+    const horizontal = inRow && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')
+    if (!horizontal && e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') return
+    const items = menuNavItems()
     if (items.length === 0) return
     e.preventDefault()
     e.stopPropagation()
     const at = items.indexOf(document.activeElement as HTMLElement)
+    const forward = e.key === 'ArrowDown' || e.key === 'ArrowRight'
     const next =
       e.key === 'Home'
         ? 0
         : e.key === 'End'
           ? items.length - 1
-          : e.key === 'ArrowDown'
+          : forward
             ? (at + 1) % items.length
             : at <= 0
               ? items.length - 1
               : at - 1
+    rove(items, next)
     items[next]?.focus()
   }
 
@@ -1843,6 +1877,8 @@ export function CurveCard({
         id: t.linkId,
         node: (
           <TaylorSection
+            // Undo/redo remount the demo (a new epoch), which clears its timer.
+            key={`${t.linkId}:${calc.epoch ?? 0}`}
             row={t}
             onCalcChange={onCalcChange}
             onRemove={() => onCalcRemove(t.linkId)}
@@ -2068,6 +2104,12 @@ export function CurveCard({
               className={`card-menu${showsEnds ? ' card-menu-ends' : ''}`}
               role="menu"
               onClick={(e) => e.stopPropagation()}
+              onFocus={(e) => {
+                // A click or Tab that lands on an item makes IT the roving stop.
+                const items = menuNavItems()
+                const at = items.indexOf(e.target as HTMLElement)
+                if (at >= 0) rove(items, at)
+              }}
             >
               {menuItem('Duplicate', onDuplicate)}
               {menuItem(curve.visible ? 'Hide' : 'Show', onToggleVisible)}
@@ -2104,6 +2146,7 @@ export function CurveCard({
                                 role="menuitem"
                                 className="card-menu-item card-menu-item-off"
                                 aria-disabled="true"
+                                tabIndex={-1}
                                 title={`${calc.taylorBlocked}.`}
                                 onClick={(e) => e.stopPropagation()}
                               >
@@ -2169,8 +2212,11 @@ export function CurveCard({
                   {DASH_STYLES.map((d) => (
                     <button
                       key={d.key}
+                      type="button"
                       className={`dash-btn${activeDashKey === d.key ? ' dash-on' : ''}`}
                       title={d.title}
+                      aria-label={d.key}
+                      aria-pressed={activeDashKey === d.key}
                       onClick={() => onDash(d.dash)}
                     >
                       {d.label}

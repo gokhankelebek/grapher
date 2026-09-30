@@ -138,6 +138,47 @@ function isDarkGround(theme: Theme): boolean {
 /** Keep a far-off coordinate from reaching the canvas as 1e16. */
 const clampPx = (v: number, lim: number): number => Math.max(-lim, Math.min(lim, v))
 
+/**
+ * Segment a→b cut to the box [-lim, 2·hw + lim] × [-lim, 2·hh + lim] around
+ * the view (Liang–Barsky), keeping its direction — clampPx for lines. A guide
+ * to tan⁻¹(1000) would otherwise run ~45,000 pt off the page, past what TeX
+ * can hold in the TikZ export. Null when none of it is near the view.
+ */
+function clipToView(fr: Frame, a: Pt, b: Pt, lim: number): [Pt, Pt] | null {
+  if (![a.x, a.y, b.x, b.y].every(Number.isFinite)) return null
+  const x0 = -lim
+  const x1 = 2 * fr.hw + lim
+  const y0 = -lim
+  const y1 = 2 * fr.hh + lim
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  let t0 = 0
+  let t1 = 1
+  for (const [p, q] of [
+    [-dx, a.x - x0],
+    [dx, x1 - a.x],
+    [-dy, a.y - y0],
+    [dy, y1 - a.y],
+  ] as const) {
+    if (p === 0) {
+      if (q < 0) return null
+      continue
+    }
+    const r = q / p
+    if (p < 0) {
+      if (r > t1) return null
+      if (r > t0) t0 = r
+    } else {
+      if (r < t0) return null
+      if (r < t1) t1 = r
+    }
+  }
+  return [
+    { x: a.x + t0 * dx, y: a.y + t0 * dy },
+    { x: a.x + t1 * dx, y: a.y + t1 * dy },
+  ]
+}
+
 function line(
   ctx: CanvasRenderingContext2D,
   a: Pt,
@@ -590,7 +631,9 @@ function drawOne(ctx: CanvasRenderingContext2D, f: UnitCircleFigure, fr: Frame, 
       const Tc = { x: T.x, y: clampPx(T.y, lim) }
       // The terminal side, extended (backwards through the centre in II and
       // III) until it meets x = 1 — the tangent's whole geometric meaning.
-      line(ctx, cosT >= 0 ? P : C, Tc, circleInk, 1.5 * stroke, [6 * stroke, 4 * stroke])
+      // Cut to the view, not clamped, so a steep side keeps its slope.
+      const side = clipToView(fr, cosT >= 0 ? P : C, T, lim)
+      if (side) line(ctx, side[0], side[1], circleInk, 1.5 * stroke, [6 * stroke, 4 * stroke])
       line(ctx, at(1, 0), Tc, tanInk, 3.5 * stroke)
       disc(ctx, Tc, 4 * stroke, tanInk, st.theme.bg, 1.5 * stroke)
       chip(ctx, Tc, { x: 1, y: 0 }, 4 * stroke, f.tanText, tanInk, st, 1, 6)
@@ -639,7 +682,10 @@ function drawOne(ctx: CanvasRenderingContext2D, f: UnitCircleFigure, fr: Frame, 
       end = at(v, 1.3)
     } else {
       line(ctx, at(1, 2.2), at(1, -2.2), grey, 1 * stroke, [4 * stroke, 4 * stroke])
-      line(ctx, at(-1, -v), at(1, v), rangeInk, 1.5 * stroke, [6 * stroke, 4 * stroke])
+      // The line y = v·x through the centre: for tan⁻¹(1000) its ends are
+      // ~60,000 px away, so it is cut to the view (see clipToView).
+      const guide = clipToView(fr, at(-1, -v), at(1, v), lim)
+      if (guide) line(ctx, guide[0], guide[1], rangeInk, 1.5 * stroke, [6 * stroke, 4 * stroke])
       end = at(1, v)
       disc(ctx, { x: end.x, y: clampPx(end.y, lim) }, 3.5 * stroke, rangeInk, st.theme.bg, 1 * stroke)
     }

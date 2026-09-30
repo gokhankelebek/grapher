@@ -39,6 +39,7 @@ import { FIGURE_STYLES, LIGHT_THEME, ppuX, ppuY, toPrintColor, toScreen } from '
 import type { StyleMap } from '../core/persist'
 import type { AxisUnit, AxisUnits, PaintScale } from '../render/grid'
 import { SCREEN_GRID, drawGrid, labelFont as figureFont, paintScale } from '../render/grid'
+import { textWidthEstimate } from '../render/fontMetrics'
 import type { GridStyle } from '../render/grid'
 import { drawPolarGrid } from '../render/polarGrid'
 import { curveLineWidth, drawCurve, drawInk, traceCurve } from '../render/curves'
@@ -1408,6 +1409,80 @@ function figureOf(scene: BoardScene): FigureStyle | null {
 /** The caption's type size and the paper below it, before `present.type`. */
 export const CAPTION_PX = 14
 export const CAPTION_MARGIN = 10
+/** Side margin the caption keeps from the plot's edges, before `present.type`. */
+export const CAPTION_SIDE = 16
+/** A long caption wraps to at most this many lines. */
+export const CAPTION_MAX_LINES = 3
+/** Line pitch as a multiple of the type size. */
+const CAPTION_LEADING = 1.25
+/** The smallest the type shrinks to (× CAPTION_PX) before a line is cut short. */
+const CAPTION_MIN_SHRINK = 0.75
+
+export interface CaptionLayout {
+  lines: string[]
+  /** Type size in px (after `present.type`, after any last-resort shrink). */
+  px: number
+  /** Baseline-to-baseline distance, px. */
+  lineH: number
+  /** The widest a line may be, px. */
+  maxW: number
+}
+
+/**
+ * How a caption breaks into lines on a plot `widthPx` wide: whole words,
+ * greedily, at most CAPTION_MAX_LINES; if it still does not fit, the type
+ * shrinks (to CAPTION_MIN_SHRINK) and, as the very last resort, the final
+ * line ends in "…". Measured with the font-metric ESTIMATE (the sans face,
+ * the wider one) rather than a canvas, so captionHeight() — which reserves
+ * the band — and drawCaption() — which fills it — always agree on the line
+ * count.
+ */
+export function captionLayout(text: string, widthPx: number, type: number): CaptionLayout {
+  const clean = text.replace(/\s+/g, ' ').trim()
+  const maxW = Math.max(40, widthPx - 2 * CAPTION_SIDE * type)
+  const base = CAPTION_PX * type
+  // 8 % over the Helvetica metrics: the screen's system-ui and an italic face run wider.
+  const width = (s: string, px: number): number => textWidthEstimate(s, 'sans-serif') * px * 1.08
+  const wrap = (px: number): string[] => {
+    const lines: string[] = []
+    let cur = ''
+    for (const word of clean.split(' ')) {
+      if (word === '') continue
+      const next = cur === '' ? word : `${cur} ${word}`
+      if (width(next, px) <= maxW) {
+        cur = next
+        continue
+      }
+      if (cur !== '') lines.push(cur)
+      // A single word wider than the plot is broken where it must be.
+      let w = word
+      while (width(w, px) > maxW && [...w].length > 1) {
+        const chars = [...w]
+        let k = chars.length - 1
+        while (k > 1 && width(chars.slice(0, k).join(''), px) > maxW) k--
+        lines.push(chars.slice(0, k).join(''))
+        w = chars.slice(k).join('')
+      }
+      cur = w
+    }
+    if (cur !== '') lines.push(cur)
+    return lines
+  }
+  let px = base
+  let lines = wrap(px)
+  while (lines.length > CAPTION_MAX_LINES && px > base * CAPTION_MIN_SHRINK + 1e-9) {
+    px = Math.max(base * CAPTION_MIN_SHRINK, px * 0.92)
+    lines = wrap(px)
+  }
+  if (lines.length > CAPTION_MAX_LINES) {
+    const kept = lines.slice(0, CAPTION_MAX_LINES)
+    let last = kept[CAPTION_MAX_LINES - 1]
+    while (last.length > 1 && width(`${last}…`, px) > maxW) last = last.slice(0, -1).trimEnd()
+    kept[CAPTION_MAX_LINES - 1] = `${last}…`
+    lines = kept
+  }
+  return { lines, px, lineH: px * CAPTION_LEADING, maxW }
+}
 
 /**
  * Room a caption needs at the BOTTOM of the plot rect, in CSS px.
@@ -1415,16 +1490,23 @@ export const CAPTION_MARGIN = 10
  * Exported for whoever frames the figure: the caption is drawn inside the
  * viewport (that is the rect the export clips to), so a viewport fitted tightly
  * to the content has to be given this much extra height or the caption lands on
- * the curve.
+ * the curve. Given the caption and the plot width it is exact for a caption
+ * that wraps to two or three lines; without them it is the one-line band.
  */
-export function captionHeight(present?: PaintScale | null): number {
-  return (CAPTION_PX + 2 * CAPTION_MARGIN) * paintScale(present).type
+export function captionHeight(present?: PaintScale | null, text?: string | null, widthPx?: number): number {
+  const type = paintScale(present).type
+  const one = (CAPTION_PX + 2 * CAPTION_MARGIN) * type
+  if (typeof text !== 'string' || text.trim() === '' || !(widthPx !== undefined && widthPx > 0)) return one
+  const lay = captionLayout(text, widthPx, type)
+  return one + Math.max(0, lay.lines.length - 1) * lay.lineH
 }
 
 /**
  * The caption: centred under the figure, in the figure's own face, italic for
- * the AP look. FIGURE, not chrome — it is drawn with `chrome: null` too, which
- * is the whole point of having it in this routine rather than in the App.
+ * the AP look — wrapped to at most three lines inside the plot width (see
+ * captionLayout; captionHeight reserves exactly that band). FIGURE, not
+ * chrome — it is drawn with `chrome: null` too, which is the whole point of
+ * having it in this routine rather than in the App.
  */
 function drawCaption(
   ctx: CanvasRenderingContext2D,
@@ -1437,25 +1519,35 @@ function drawCaption(
   if (!text) return
   const vp = scene.vp
   if (vp.widthPx <= 0 || vp.heightPx <= 0) return
-  const px = CAPTION_PX * type
+  const lay = captionLayout(text, vp.widthPx, type)
+  if (lay.lines.length === 0) return
+  let px = lay.px
   ctx.save()
   ctx.globalAlpha = 1
   ctx.font = figureFont(fig, px, fig?.font === 'serif')
+  // The real face can still run wider than the estimate the layout used: then
+  // the type shrinks to fit (the line count, and so the band, never changes).
+  const widest = Math.max(...lay.lines.map((l) => ctx.measureText(l).width))
+  if (widest > lay.maxW && widest > 0) {
+    px = Math.max(1, px * (lay.maxW / widest))
+    ctx.font = figureFont(fig, px, fig?.font === 'serif')
+  }
   ctx.textAlign = 'center'
   ctx.textBaseline = 'alphabetic'
   const cx = vp.widthPx / 2
-  const baseline = vp.heightPx - CAPTION_MARGIN * type
+  const last = vp.heightPx - CAPTION_MARGIN * type
+  const n = lay.lines.length
   // A knockout in the ground, no border: the caption is laid out INSIDE the
   // plot rect (that is the rect the export clips to), and the y-axis runs
   // straight down the middle of it — measured, the axis and its bottom
   // arrowhead struck through "Graph of f". On white the plate is invisible;
   // what it buys is that no rule ever crosses the words.
-  const w = ctx.measureText(text).width + 10 * type
-  const h = px * 1.5
+  const w = Math.min(vp.widthPx, Math.max(...lay.lines.map((l) => ctx.measureText(l).width)) + 10 * type)
+  const h = px * 1.5 + (n - 1) * lay.lineH
   ctx.fillStyle = theme.bg
-  ctx.fillRect(cx - w / 2, baseline + 0.25 * px - h, w, h)
+  ctx.fillRect(cx - w / 2, last + 0.25 * px - h, w, h)
   ctx.fillStyle = textColor(theme)
-  ctx.fillText(text, cx, baseline)
+  lay.lines.forEach((line, i) => ctx.fillText(line, cx, last - (n - 1 - i) * lay.lineH))
   ctx.restore()
   ctx.textAlign = 'start'
   ctx.textBaseline = 'alphabetic'
@@ -1697,7 +1789,7 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
   // the grid call is the one it has always been.
   const captioned = typeof scene.caption === 'string' && scene.caption.trim() !== ''
   const gridStyle: GridStyle | null = captioned
-    ? { ...(fig ?? SCREEN_GRID), bottomInset: captionHeight(scene.present) }
+    ? { ...(fig ?? SCREEN_GRID), bottomInset: captionHeight(scene.present, scene.caption, vp.widthPx) }
     : fig
   const mono = fig?.curveInk === 'mono'
   const ink = mono ? (): string => theme.axis : paint

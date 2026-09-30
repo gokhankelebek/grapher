@@ -96,6 +96,26 @@
 // the horizontal line test of a periodic domain are read over the parts in
 // the window (right for tan, sec, and every periodic formula).
 //
+// OVERFLOW, UNDERFLOW AND POLES THE DOUBLES HIT. A lone ±∞ sample between
+// two values is f dividing by exactly 0 at that x — a pole, so the point is
+// out (x^(−2/3) at 0). A run of ±∞, or ±∞ next to a value at a domain
+// boundary, is f DIVERGING: the boundary is bisected on "not NaN", so
+// e^(1/x) {x > 0} starts at 0 (open), not where e^(1/x) overflows at 0.0014,
+// and a stretch's end is never closed at ±∞. NaN out to the end of the scan
+// that begins where f was arriving smoothly and far out (overflowEdge:
+// e^x/(e^x + 1) is ∞/∞ past 709.78) is overflow, and the domain goes on. On
+// the range side, an exact 0 that is underflow (e^(−1/x²) at x = 1/30) is not
+// a value f attains, and a core edge that has converged onto its limit in
+// the doubles (tanh x is exactly 1 from x ≈ 19) is read as approaching it.
+//
+// x^x. Its evaluator has a value at the negative rationals with an odd
+// denominator (−1/3, −1, −5/3, …) and nowhere between them, and 0⁰ comes out
+// as 1. The domain reported is the textbook one, (0, ∞): dozens of isolated
+// defined samples are a scattered set that holds no interval, not points of
+// the domain (a lone one or two still are: √(−x²) is {0}), and 0 is out
+// because the parser names it (a zero base under an exponent that is ≤ 0
+// there: 0⁰), which exact arithmetic cannot vouch for.
+//
 // HONEST LIMITS. A gap in the domain narrower than one core sample step
 // (1/60 unit) that no singularity names is not seen; domain structure beyond
 // ±1.3e6 is not examined (the far tail is assumed to continue as the last
@@ -199,6 +219,10 @@ const MAX_WINDOW = 2000
 const SAME = 1e-9
 /** More parts than this and a domain is not worth listing. */
 const MAX_PARTS = 400
+/** More isolated defined samples than this are a scattered set, not points (x^x). */
+const ISOLATED_MAX = 4
+/** At most this many one-to-one stretches are listed (floor(x)/x has one per tread). */
+const MAX_MONOTONE = 24
 /** The internal memo lives this long (ms): one card render, not one drag. */
 const MEMO_MS = 60
 
@@ -294,9 +318,12 @@ const WHOLE = (): IntervalPart => part(-Infinity, Infinity, false, false)
 
 /** Sort and merge intervals that overlap or touch at a point one of them owns. */
 function mergeParts(input: readonly IntervalPart[]): IntervalPart[] {
+  // a part whose ends are the same number is a point: kept only when it is
+  // a closed one ({2}); an open "(a, a)" is empty — a boundary bisection that
+  // collapsed onto a lone sample, not a piece of the set
   const ps = input
-    .filter((p) => p.lo < p.hi || (p.lo === p.hi && p.loClosed && p.hiClosed))
-    .map((p) => ({ ...p }))
+    .filter((p) => (p.lo < p.hi && !same(p.lo, p.hi)) || (same(p.lo, p.hi) && p.loClosed && p.hiClosed))
+    .map((p) => (same(p.lo, p.hi) ? { ...p, hi: p.lo, hiExact: p.loExact } : { ...p }))
     .sort((a, b) => a.lo - b.lo || (a.loClosed === b.loClosed ? 0 : a.loClosed ? -1 : 1))
   const out: IntervalPart[] = []
   for (const p of ps) {
@@ -622,11 +649,20 @@ const isTyped = (spec: ModelSpec): boolean =>
   typeof spec.evalExact === 'function' || typeof spec.taylor === 'function' ||
   typeof spec.pieces === 'function' || typeof spec.singularities === 'function'
 
-/** Bisect a definedness boundary between a (defined = da) and b. */
+/**
+ * Bisect a definedness boundary between a and b. Defined means "not NaN":
+ * ±∞ next to a value is f diverging (e^(1/x) overflowing as x → 0⁺, ln x
+ * diving at 0), which is an OPEN end of the domain at the point f blows up,
+ * not the domain ending where the doubles run out (e^(1/x) {x > 0} starts
+ * at 0, not at 0.0014). Whether the boundary itself is in is definedAt's call.
+ */
 function bisectDefined(f: Fn, a: number, b: number): number {
-  const ok = (x: number) => Number.isFinite(f(x))
+  const ok = (x: number) => !Number.isNaN(f(x))
   let lo = a, hi = b
   const dLo = ok(lo)
+  // the scan split a and b over a ±∞ sample next to a NaN (ln(x² − 1) at 1
+  // exactly): the boundary is that sample itself
+  if (dLo === ok(hi)) return Number.isFinite(f(a)) ? b : a
   for (let i = 0; i < 200; i++) {
     const m = 0.5 * (lo + hi)
     if (m === lo || m === hi) break
@@ -635,6 +671,41 @@ function bisectDefined(f: Fn, a: number, b: number): number {
   }
   // the defined side's last point
   return dLo ? lo : hi
+}
+
+/**
+ * Where a formula that has a value at `xIn` stops having one on the way out
+ * to `xOut` (farther from 0, NaN there), IF that stop is the doubles running
+ * out rather than the formula: e^x/(e^x + 1) is ∞/∞ = NaN past x ≈ 709.78,
+ * and (3eˣ + 2)/(eˣ − 5) with it, though both are defined on all of ℝ. The
+ * edge is overflow when it is far out (|x| ≥ 5 — a real exponential needs
+ * that much room to overflow) and f arrives there SMOOTHLY: its steps
+ * shrink like h as h → 0 (ratio ≤ 1/20 per ×100 in h), where a real edge
+ * of the domain is √-like (steps shrink like √h: 1/10) or ln-like (steps
+ * never shrink). Returns the last x with a value, or null for a real edge.
+ * Exported for ./limits.ts (a limit at ±∞ of a ratio of exponentials).
+ */
+export function overflowEdge(f: (x: number) => number, xIn: number, xOut: number): number | null {
+  if (!Number.isFinite(f(xIn)) || !Number.isNaN(f(xOut))) return null
+  // the last x with a FINITE value: (3eˣ + 2)/(eˣ − 5) is ∞/finite for a
+  // little while before it is ∞/∞
+  let a = xIn, b = xOut
+  for (let i = 0; i < 200; i++) {
+    const m = 0.5 * (a + b)
+    if (m === a || m === b) break
+    if (Number.isFinite(f(m))) a = m
+    else b = m
+  }
+  const X = a
+  if (!(Math.abs(X) >= 5)) return null
+  const dir = xOut > xIn ? 1 : -1
+  const s = Math.max(1, Math.abs(X))
+  const v = [1e-2, 1e-4, 1e-6].map((h) => f(X - dir * h * s))
+  if (!v.every(Number.isFinite)) return null
+  const d1 = Math.abs(v[1] - v[0])
+  const d2 = Math.abs(v[2] - v[1])
+  const tiny = 1e-12 * Math.max(1, Math.abs(v[2]))
+  return d2 <= d1 / 20 + tiny ? X : null
 }
 
 /**
@@ -693,19 +764,56 @@ function scanDomain(ctx: Ctx, wLo: number, wHi: number, mode: ScanMode = 'curve'
   for (let i = 0; i <= n; i++) xs.push(wLo + (width * i) / n)
   for (let k = 1; k <= DOMAIN_TAIL_K; k++) xs.push(wHi + edge * (Math.pow(2, k) - 1))
   // ±∞ at a sample between two samples that have values is overflow (e^x
-  // far out) or a pole the singularities name; next to a NaN it is the edge
-  // of the domain (ln(x² − 1) at −1). The boundary bisection itself is strict.
+  // far out) or a pole; next to a NaN it is the edge of the domain
+  // (ln(x² − 1) at −1). A LONE ±∞ — both neighbours finite — is f dividing
+  // by exactly 0 at that very x (x^(−2/3) at 0): a pole, so the point is out
+  // (below). A run of them is overflow (e^x far right) and stays in.
   const vs = xs.map((x) => f(x))
   const def = vs.map((v, i) =>
     Number.isFinite(v) ||
     (!Number.isNaN(v) && !Number.isNaN(vs[Math.max(0, i - 1)]) && !Number.isNaN(vs[Math.min(vs.length - 1, i + 1)])))
+  // NaN out to the end of the scan that begins where the doubles overflow
+  // (e^x/(e^x + 1) past 709.78) is not the end of the domain: those samples
+  // count as defined, and the stretch is read from the ones that evaluate.
+  for (const side of [1, -1] as const) {
+    const idx = (j: number) => (side > 0 ? xs.length - 1 - j : j)
+    let j = 0
+    while (j < xs.length && Number.isNaN(vs[idx(j)])) j++
+    if (j === 0 || j >= xs.length || !Number.isFinite(vs[idx(j)])) continue
+    const xOut = xs[idx(j - 1)]
+    const xIn = xs[idx(j)]
+    if (overflowEdge(f, xIn, xOut) === null) continue
+    for (let k = 0; k < j; k++) def[idx(k)] = true
+  }
+  const lonePoles: number[] = []
+  for (let i = 1; i + 1 < xs.length; i++) {
+    if (!Number.isNaN(vs[i]) && !Number.isFinite(vs[i]) && Number.isFinite(vs[i - 1]) && Number.isFinite(vs[i + 1])) {
+      lonePoles.push(xs[i])
+    }
+  }
+  // A defined sample with nothing defined on either side of it, however
+  // close, is an isolated point of the domain. One or two are real
+  // (√(−x²) is defined at 0 alone). Dozens are the scan landing on a thin
+  // scattered set: x^x has a value at the negative rationals with an odd
+  // denominator (−1/3, −2/5, −1, …) and nowhere between them. Such a set
+  // holds no interval, and the textbook domain of x^x is (0, ∞): so when
+  // more than ISOLATED_MAX of them turn up, all of them are read as undefined.
+  const isolated: number[] = []
+  for (let i = 0; i < xs.length; i++) {
+    if (!def[i] || !Number.isFinite(vs[i])) continue
+    const d = 1e-7 * Math.max(1, Math.abs(xs[i]))
+    if (Number.isNaN(f(xs[i] - d)) && Number.isNaN(f(xs[i] + d))) isolated.push(i)
+  }
+  if (isolated.length > ISOLATED_MAX) for (const i of isolated) def[i] = false
 
   const events: Event[] = []
   // runs of definedness → boundaries
   for (let i = 0; i + 1 < xs.length; i++) {
     if (def[i] === def[i + 1]) continue
     const b = bisectDefined(f, xs[i], xs[i + 1])
-    const s = snapX(b)
+    // a boundary within 1e-9 of 0 (x^x, whose evaluator counts a tiny
+    // exponent as the integer 0) is at 0 when 0 is in the bracket
+    const s = Math.abs(b) <= 1e-9 && xs[i] <= 0 && xs[i + 1] >= 0 ? { x: 0, exact: exactForm(0) } : snapX(b)
     const kind: 'start' | 'end' = def[i + 1] ? 'start' : 'end'
     const inside = kind === 'start' ? 1 : -1
     // the snapped form must still be on the boundary: inside its own bracket
@@ -732,7 +840,19 @@ function scanDomain(ctx: Ctx, wLo: number, wHi: number, mode: ScanMode = 'curve'
     for (const s of ask([outerLo, outerHi])) if (s < wLo || s > wHi) sing.push(s)
   }
   const pointEvents: Event[] = []
+  for (const x of lonePoles) {
+    const s = snapX(x, 1e-9)
+    pointEvents.push({ x: s.x, kind: 'point', closed: false, exact: s.exact })
+  }
   for (const s0 of sing) {
+    // f infinite on a whole neighbourhood of a far "singularity" is overflow,
+    // not a pole: 1/eˣ is 1/0 once eˣ underflows (x < −745), and the zeros
+    // that underflow fakes are no points of the domain's boundary
+    if (Math.abs(s0) >= 5) {
+      const d = 1e-3 * Math.abs(s0)
+      const isInf = (v: number) => !Number.isNaN(v) && !Number.isFinite(v)
+      if (isInf(f(s0)) && isInf(f(s0 - d)) && isInf(f(s0 + d))) continue
+    }
     const s = snapX(s0, 1e-9)
     const pt = s.exact && spec.evalExact ? exactPointOf(s.exact) : null
     let certified: number | undefined
@@ -745,7 +865,12 @@ function scanDomain(ctx: Ctx, wLo: number, wHi: number, mode: ScanMode = 'curve'
       const v = f(s.x)
       const d = 1e-6 * Math.max(1, Math.abs(s.x))
       const near = Math.abs(f(s.x - d)) + Math.abs(f(s.x + d))
-      const breaks = !Number.isFinite(v) || !(Math.abs(v) <= 1e8 * (1 + (Number.isFinite(near) ? near : 0)))
+      // …or where it has a value only from one side and exact arithmetic
+      // cannot vouch for it: x^x at 0 is 0⁰ (the double says 1)
+      // (a restricted line has no evalExact, and its singularities may be
+      // written exclusions — √x {x != 0} keeps 0 in its natural domain)
+      const oneSided = typeof spec.evalExact === 'function' && Number.isNaN(f(s.x - d)) !== Number.isNaN(f(s.x + d))
+      const breaks = !Number.isFinite(v) || !(Math.abs(v) <= 1e8 * (1 + (Number.isFinite(near) ? near : 0))) || oneSided
       if (!breaks) continue
     }
     pointEvents.push({ x: s.x, kind: 'point', closed: false, exact: s.exact })
@@ -1174,6 +1299,13 @@ function oscEnd(vals: number[], m: number, spread: number): { end: EndKind; runS
   return { end: { kind: 'osc', min, max, unbounded }, runStart: m }
 }
 
+/** Every step of a tail's samples is exactly 0: no direction to read. */
+function flatSamples(seq: number[]): boolean {
+  if (seq.length < 3 || !seq.every(Number.isFinite)) return false
+  for (let i = 0; i + 1 < seq.length; i++) if (seq[i + 1] !== seq[i]) return false
+  return true
+}
+
 /** Golden-section search for a max (sg = 1) or min (sg = −1) of f on [a, b]. */
 function golden(f: Fn, a: number, b: number, sg: 1 | -1): number {
   const phi = 0.6180339887498949
@@ -1297,7 +1429,27 @@ function sampleStretch(ctx: Ctx, s: IntervalPart): {
       if (!Number.isFinite(v)) break
     }
     if (!Number.isFinite(e)) {
-      const c = classifyEnd(seq, noise, TAIL_RUN, coreMin, coreMax)
+      // a tail cut short where the doubles overflow (e^x/(e^x + 1) is NaN
+      // past 709.78: five doublings, not forty-five) is read on the samples
+      // it has — asking it for a run of ten would call it oscillating
+      let minRun = TAIL_RUN
+      const lastPt = pts[pts.length - 1]
+      if (lastPt && Number.isNaN(lastPt.v)) {
+        const fin = pts.filter((p) => Number.isFinite(p.v))
+        const inX = fin.length > 0 ? fin[fin.length - 1].x : edgeSample.x
+        if (overflowEdge(f, inX, lastPt.x) !== null) minRun = Math.min(TAIL_RUN, Math.max(3, fin.length))
+      }
+      let c = classifyEnd(seq, noise, minRun, coreMin, coreMax)
+      // A tail whose samples never move (every step 0 or rounding) says
+      // nothing about direction. When the core next to it is not flat —
+      // floor(x)/x reads exactly 1 at every doubling (they are integers)
+      // yet saws up and down between them — the stretch out there is not
+      // known to be monotone: the end is wobbly, its piece unresolved.
+      if (c.end.kind === 'conv' && !c.end.wobbly && flatSamples(seq)) {
+        const near = sgn > 0 ? core.slice(-10) : core.slice(0, 10)
+        const L = seq[seq.length - 1]
+        if (near.some((p) => Math.abs(p.v - L) > 1e-12 * Math.max(1, Math.abs(L)))) c = { ...c, end: { ...c.end, wobbly: true } }
+      }
       const good = pts.filter((p) => Number.isFinite(p.v))
       // seq[j] is pts[j − 1]: the samples up to the start of the final run
       const run = c.end.kind === 'osc' ? good.length : Math.min(good.length, c.runStart + 1)
@@ -1307,7 +1459,9 @@ function sampleStretch(ctx: Ctx, s: IntervalPart): {
     if (eClosed) {
       const v = valueAt(ctx, e, eExact)
       if (Number.isFinite(v)) pts.push({ x: e, v })
-      return { pts: pts.filter((p) => Number.isFinite(p.v)), end: { kind: 'closed', v }, run: pts.length }
+      // a closed end is never closed at ±∞: f blowing up there diverges
+      const end: EndKind = Number.isNaN(v) || Number.isFinite(v) ? { kind: 'closed', v } : { kind: 'div', sign: v > 0 ? 1 : -1 }
+      return { pts: pts.filter((p) => Number.isFinite(p.v)), end, run: pts.length }
     }
     const last = pts.length > 0 ? pts[pts.length - 1] : edgeSample
     const d = last.x - e
@@ -1390,10 +1544,23 @@ function piecesOf(
   const extremaVals: number[] = []
   const n = pts.length
   if (n === 0) return { pieces, extremaVals }
+  // Rounding is measured against the values NEAR a step, not the whole
+  // core's spread: x^x runs to 1e26 at x = 20, and against that every step
+  // around its minimum at 1/e (values near 0.7) would read as noise.
+  const W = 20
+  const localNoise = (i: number): number => {
+    let lo = Infinity, hi = -Infinity
+    for (let j = Math.max(0, i - W); j <= Math.min(n - 1, i + 1 + W); j++) {
+      const v = pts[j].v
+      if (v < lo) lo = v
+      if (v > hi) hi = v
+    }
+    return Math.min(noise, NOISE_REL * (hi - lo))
+  }
   const dirOf = (i: number): number => {
     const d = pts[i + 1].v - pts[i].v
     if (d === 0) return 0
-    const nz = Math.max(noise, 1e-12 * Math.max(Math.abs(pts[i].v), Math.abs(pts[i + 1].v)))
+    const nz = Math.max(localNoise(i), 1e-12 * Math.max(Math.abs(pts[i].v), Math.abs(pts[i + 1].v)))
     return Math.abs(d) <= nz ? NaN : d > 0 ? 1 : -1
   }
   // cuts: { index where the new piece starts (a sample), x, exact, closed }
@@ -1500,6 +1667,66 @@ function piecesOf(
   return { pieces, extremaVals }
 }
 
+/**
+ * How many samples at one edge of the core (side −1 left, +1 right) sit on
+ * the edge's value to within 1e-11 (relative — the tolerance at which the
+ * range calls two values the same) while the samples before them come in to
+ * it smoothly (within 1e-9): f has converged onto its limit in the doubles,
+ * not reached it. A piecewise constant joins its flat part by a real step,
+ * and is left alone.
+ */
+function saturatedRun(core: Sampled[], side: -1 | 1): number {
+  const n = core.length
+  if (n < 4) return 0
+  const at = (j: number) => core[side > 0 ? n - 1 - j : j].v
+  const v = at(0)
+  const scale = Math.max(1, Math.abs(v))
+  let j = 1
+  while (j < n && Math.abs(at(j) - v) <= 1e-11 * scale) j++
+  if (j < 2 || j >= n - 1) return 0
+  const d = Math.abs(at(j) - v)
+  return d <= 1e-9 * scale ? j : 0
+}
+
+/**
+ * The core samples whose exact 0 is underflow, not a zero of f. A run of 0s
+ * is underflow when, walking from it to the nearest sample that is not 0,
+ * f comes back from 0 through values the doubles can barely hold (below
+ * 1e-290): e^(−900) → 0, while a real zero (x − 1/30, max(0, x)) leaves 0
+ * through ordinary numbers.
+ */
+function underflowZeros(ctx: Ctx, core: Sampled[]): Set<number> {
+  const out = new Set<number>()
+  const n = core.length
+  let i = 0
+  while (i < n) {
+    if (core[i].v !== 0) { i++; continue }
+    let j = i
+    while (j + 1 < n && core[j + 1].v === 0) j++
+    const tiny = (z: number, nz: number): boolean => {
+      // bisect the 0 → non-0 step down to where f first leaves 0
+      let a = core[z].x, b = core[nz].x
+      let vb = core[nz].v
+      for (let k = 0; k < 80; k++) {
+        const m = 0.5 * (a + b)
+        if (m === a || m === b) break
+        const vm = ctx.f(m)
+        if (vm === 0) a = m
+        else if (Number.isFinite(vm)) { b = m; vb = vm }
+        else return false
+      }
+      return Math.abs(vb) < 1e-290
+    }
+    const left = i > 0 && Number.isFinite(core[i - 1].v) ? tiny(i, i - 1) : null
+    const right = j + 1 < n && Number.isFinite(core[j + 1].v) ? tiny(j, j + 1) : null
+    if ((left !== null || right !== null) && left !== false && right !== false) {
+      for (let k = i; k <= j; k++) out.add(k)
+    }
+    i = j + 1
+  }
+  return out
+}
+
 /** Everything about one continuous stretch (no jumps inside). */
 function analyzeStretch(ctx: Ctx, s: IntervalPart): Stretch {
   const smp = sampleStretch(ctx, s)
@@ -1528,8 +1755,15 @@ function analyzeStretch(ctx: Ctx, s: IntervalPart): Stretch {
   const rAll = wob(smp.rightEnd) ? [] : smp.right
   const lPre = lAll.slice(lAll.length - Math.min(lAll.length, smp.leftRun))
   const rPre = rAll.slice(0, smp.rightRun)
+  // A core that runs onto its limit by ROUNDING — (3eˣ + 2)/(eˣ − 5) is
+  // exactly 3 in doubles from x ≈ 36 on — is not flat there and never
+  // reaches 3: the saturated samples at an edge whose end converges are
+  // dropped, as a tail's settled run is.
+  const satL = smp.leftEnd.kind === 'conv' ? saturatedRun(smp.core, -1) : 0
+  const satR = smp.rightEnd.kind === 'conv' ? saturatedRun(smp.core, 1) : 0
+  const coreKept = smp.core.slice(satL, smp.core.length - satR)
   const { pieces, extremaVals } = piecesOf(
-    ctx, s, lPre.concat(smp.core, rPre), lAll.concat(smp.core, rAll), smp.noise, smp.leftEnd, smp.rightEnd,
+    ctx, s, (satL > 0 ? [] : lPre).concat(coreKept, satR > 0 ? [] : rPre), lAll.concat(smp.core, rAll), smp.noise, smp.leftEnd, smp.rightEnd,
   )
   out.pieces = pieces
 
@@ -1542,8 +1776,11 @@ function analyzeStretch(ctx: Ctx, s: IntervalPart): Stretch {
     if (v < inf) { inf = v; infIn = true } else if (v === inf) infIn = true
   }
   // every sample is a value f takes — except the settled run of a tail that
-  // converges: those crowd the limit, and the limit is what they say
-  for (const p of smp.core) attained(p.v)
+  // converges: those crowd the limit, and the limit is what they say — and
+  // an exact 0 that is underflow (e^(−1/x²) at x = 1/30 is e^(−900), which
+  // the doubles hold as 0): f is positive there, never 0
+  const under = underflowZeros(ctx, smp.core)
+  for (let i = satL; i < smp.core.length - satR; i++) if (!under.has(i)) attained(smp.core[i].v)
   // (the last pre-run sample is the run's first: it located the turn, but on
   // a tail that settles by underflow — e^(−x²) far out is 0 — it is not a value)
   for (const p of wob(smp.leftEnd) ? smp.left : lPre.slice(1)) attained(p.v)
@@ -1554,7 +1791,10 @@ function analyzeStretch(ctx: Ctx, s: IntervalPart): Stretch {
   const end = (e: EndKind) => {
     switch (e.kind) {
       case 'closed': attained(e.v); break
-      case 'conv': approached.push(Math.abs(e.L) <= 1e-12 * spread ? 0 : snapY(e.L).v); break
+      // a limit within rounding of 0 is 0 — rounding at the size of the
+      // values out there, not of the core: e^(1/x) on (0, ∞) has a core
+      // reaching 1e26, and its limit 1 at ∞ is not "0"
+      case 'conv': approached.push(Math.abs(e.L) <= 1e-12 * Math.min(1, spread) ? 0 : snapY(e.L).v); break
       case 'div': approached.push(e.sign * Infinity); break
       case 'osc':
         if (e.unbounded) {
@@ -1900,7 +2140,10 @@ export function oneToOneInfo(curve: FittedCurve, models: Record<string, ModelSpe
         }
       }
     }
-    const monotone = mono.map((p) => part(p.lo, p.hi, p.loClosed, p.hiClosed, p.loExact, p.hiExact)).sort(chipOrder)
+    const monotone = mono
+      .map((p) => part(p.lo, p.hi, p.loClosed, p.hiClosed, p.loExact, p.hiExact))
+      .sort(chipOrder)
+      .slice(0, MAX_MONOTONE)
     if (oneToOne) return { oneToOne: true, monotone }
 
     // a witness: the nicest height two pieces share

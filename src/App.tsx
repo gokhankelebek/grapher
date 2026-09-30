@@ -38,6 +38,8 @@ import {
   fixed as fixedNum,
   isCurveLink,
   labelLegend,
+  inverseTypedLine,
+  taylorTypedLine,
   linkNoun,
   changeLabel,
   countPhrase,
@@ -455,7 +457,7 @@ import { PresentLegend } from './ui/PresentLegend'
 import { DEFAULT_PRESENT_TYPE, curveLegend, itemLegend, presentScale } from './ui/present'
 import { copyDocName, nextDocName } from './ui/docName'
 import { ACCUM_MODEL_PREFIX, DERIV_MODEL_PREFIX, INV_MODEL_PREFIX, TAYLOR_MODEL_PREFIX } from './core/persist'
-import type { InverseLink } from './core/persist'
+import type { AccumulationLink, DerivativeLink, InverseLink, TaylorLink } from './core/persist'
 import {
   AUTO_AXIS_UNITS,
   createDoc,
@@ -1066,6 +1068,8 @@ export default function App() {
   const [relatedRates, setRelatedRates] = useState<BoardRelatedRates[]>([])
   /** The animation's t while it plays (the document keeps its own), and the speed. */
   const [rrPlay, setRrPlay] = useState<{ t: number } | null>(null)
+  const rrPlayRef = useRef(rrPlay)
+  rrPlayRef.current = rrPlay
   const [rrSpeed, setRrSpeed] = useState<RRSpeed>(1)
   /**
    * The inequality system (the visible inequalities, taken together): only
@@ -1077,8 +1081,17 @@ export default function App() {
    * The animation: θ while playing (the document keeps its own until the
    * animation stops), and the speed. Neither is the document's.
    */
-  const [ucPlay, setUcPlay] = useState<{ theta: number } | null>(null)
+  const [ucPlay, setUcPlay] = useState<{ id: string; theta: number } | null>(null)
+  const ucPlayRef = useRef(ucPlay)
+  ucPlayRef.current = ucPlay
   const [ucSpeed, setUcSpeed] = useState<PlaySpeed>(1)
+  /**
+   * Bumped by undo and redo. The Taylor ▶ demo's timer lives in its card
+   * (TaylorSection), keyed on this, so a new epoch remounts it — and a
+   * remount clears the timer. Undo during the demo must stop it, or the timer
+   * keeps stepping n over the state undo just restored.
+   */
+  const [playEpoch, setPlayEpoch] = useState(0)
   /**
    * Which RULING this board is drawn on — the square lattice or the polar one.
    *
@@ -1374,6 +1387,14 @@ export default function App() {
   const docStoredRef = useRef(false)
   /** Skips the one autosave run that happens in the same pass as a load. */
   const skipAutosaveRef = useRef(false)
+  /**
+   * True from the moment the autosave effect sees a change (scheduleSave)
+   * until a write succeeds; false again after a load. It is the autosave's own
+   * notion of "changed", so switching documents does not re-write — and
+   * re-stamp — a document nobody touched, which locked a second tab out of
+   * saving ("changed in another tab").
+   */
+  const unsavedRef = useRef(false)
   /**
    * The exact state a load put on the board. While the board is still identical
    * to it, autosave stays quiet: re-writing a document just because it was
@@ -1822,7 +1843,31 @@ export default function App() {
     [applyState, takeSnapshot],
   )
 
+  /** editEnd, for undo/redo (declared below them). */
+  const editEndRef = useRef<() => void>(() => {})
+  /**
+   * Undo and redo first stop everything that is playing — WITHOUT committing
+   * the frame it reached: related rates and the unit circle keep their play
+   * position apart from the document, so dropping it leaves the document as
+   * it was. The Taylor ▶ demo writes n live inside an edit bracket; the
+   * bracket is closed (one undo entry, like a finished demo) and its card is
+   * remounted, which clears its timer.
+   */
+  const haltForHistory = useCallback((): void => {
+    if (rrPlayRef.current) {
+      rrPlayRef.current = null
+      setRrPlay(null)
+    }
+    if (ucPlayRef.current) {
+      ucPlayRef.current = null
+      setUcPlay(null)
+    }
+    editEndRef.current()
+    setPlayEpoch((e) => e + 1)
+  }, [])
+
   const undo = useCallback((): void => {
+    haltForHistory()
     const stack = undoRef.current
     if (stack.length === 0) return
     // Any answer on screen was about the state we are leaving.
@@ -1849,9 +1894,10 @@ export default function App() {
     // An undo that moved 0.6% of the pixels on a measured board said nothing at
     // all. Now it says what it took back.
     showToast(`Undid: ${prev.label}`, { ms: 2200 })
-  }, [applyState, takeSnapshot, showToast])
+  }, [applyState, takeSnapshot, showToast, haltForHistory])
 
   const redo = useCallback((): void => {
+    haltForHistory()
     const stack = redoRef.current
     if (stack.length === 0) return
     window.clearTimeout(featureNoteTimerRef.current)
@@ -1875,7 +1921,7 @@ export default function App() {
         : null,
     )
     showToast(`Redid: ${next.label}`, { ms: 2200 })
-  }, [applyState, takeSnapshot, showToast])
+  }, [applyState, takeSnapshot, showToast, haltForHistory])
 
   /**
    * Live-edit bracket: capture once at edit start, commit once at edit end.
@@ -1926,6 +1972,7 @@ export default function App() {
       bumpHistory((v) => v + 1)
     }
   }, [])
+  editEndRef.current = editEnd
 
   /** Abort the live edit bracket, reverting to the pre-edit state (no history). */
   const editCancel = useCallback((): void => {
@@ -2119,6 +2166,7 @@ export default function App() {
     if (outcome.ok) {
       docMetaRef.current = { ...meta, modifiedAt: doc.modifiedAt }
       docStoredRef.current = true
+      unsavedRef.current = false
       setDocs(listDocs())
       setSaveState('saved')
       setSaveError(null)
@@ -2147,6 +2195,13 @@ export default function App() {
    * abandoned: the work on screen exists nowhere else.
    */
   const saveBeforeSwitch = useCallback((): boolean => {
+    // Unchanged since it was loaded or last written, and on disk: nothing to
+    // save, and writing anyway would bump modifiedAt for no reason.
+    if (hydratedRef.current && docStoredRef.current && !unsavedRef.current) {
+      window.clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = 0
+      return true
+    }
     const res = saveNow()
     if (res.ok) return true
     setSwitchBlocked(
@@ -2159,6 +2214,7 @@ export default function App() {
 
   const scheduleSave = useCallback((): void => {
     if (!hydratedRef.current) return
+    unsavedRef.current = true
     setSaveState('saving')
     window.clearTimeout(saveTimerRef.current)
     saveTimerRef.current = window.setTimeout(saveNow, AUTOSAVE_MS)
@@ -2255,6 +2311,7 @@ export default function App() {
     docMetaRef.current = meta
     exprCounterRef.current = board.exprCounter
     docStoredRef.current = false
+    unsavedRef.current = false
     undoRef.current = []
     redoRef.current = []
     preEditRef.current = null
@@ -3313,10 +3370,148 @@ export default function App() {
     [applyState, editStart],
   )
 
+  /**
+   * A duplicate of a DERIVED curve — one drawn by a closure the board rebuilds
+   * from its link (tay_<link>, inv_<link>, dfdx_N, intf_<link>). A copy with
+   * no link would share the original's model, follow it, and be dropped on
+   * reload. So a Taylor polynomial or an inverse relation is FROZEN as the
+   * typed line it is now (a snapshot); a derivative or an accumulation
+   * function, which has no typed form, gets a link of its own to the same
+   * parent, so the loader rebuilds it like the original. Null: not derived.
+   */
+  const derivedCopyPlan = useCallback(
+    (
+      src: FittedCurve,
+    ):
+      | { kind: 'line'; line: string; calls: string[] | null; params: number[] | null }
+      | { kind: 'link'; link: CalcLink; modelId: string }
+      | { kind: 'refuse'; why: string }
+      | null => {
+      const id = src.id
+      const models = modelsRef.current
+      if (src.modelId.startsWith(TAYLOR_MODEL_PREFIX)) {
+        const link = calcRef.current.find((l): l is TaylorLink => l.kind === 'taylor' && l.curveId === id)
+        const parent = link && curvesRef.current.find((c) => c.id === link.parentId)
+        let line: string | null = null
+        if (link && parent) {
+          try {
+            const tsrc = taylorSourceFor(parent, models, (callsRef.current[parent.id]?.length ?? 0) > 0)
+            const poly = safePoly(tsrc, link.a, link.n)
+            line = poly ? taylorTypedLine(poly) : null
+          } catch {
+            line = null
+          }
+        }
+        return line
+          ? { kind: 'line', line, calls: null, params: null }
+          : { kind: 'refuse', why: 'This Taylor polynomial has no polynomial to copy at this center.' }
+      }
+      if (src.modelId.startsWith(INV_MODEL_PREFIX)) {
+        const link = inversesRef.current.find((l) => l.curveId === id)
+        const parent = link && curvesRef.current.find((c) => c.id === link.parentId)
+        let base: string | null = null
+        if (parent) {
+          const typed = exprSourcesRef.current[parent.id]
+          if (parent.modelId.startsWith('expr_') && typed) {
+            const split = splitTyped(typed)
+            base = split && split !== 'piecewise' && !split.cond ? split.base : null
+          } else {
+            try {
+              base = curveEquationText(parent, models[parent.modelId])
+            } catch {
+              base = null
+            }
+          }
+        }
+        const line = base ? inverseTypedLine(base, src.domain) : null
+        if (!line || !parent) {
+          return { kind: 'refuse', why: 'This inverse has no formula to copy — it follows its curve.' }
+        }
+        const lineCalls = callsRef.current[parent.id]
+        return {
+          kind: 'line',
+          line,
+          calls: lineCalls && lineCalls.length > 0 ? lineCalls.slice() : null,
+          params: parent.params.slice(),
+        }
+      }
+      const drove = calcRef.current.find(
+        (l): l is DerivativeLink | AccumulationLink =>
+          (l.kind === 'derivative' || l.kind === 'accumulation') && l.curveId === id,
+      )
+      if (
+        drove &&
+        (src.modelId.startsWith(DERIV_MODEL_PREFIX) || src.modelId.startsWith(ACCUM_MODEL_PREFIX))
+      ) {
+        const linkId = nextId()
+        const modelId =
+          drove.kind === 'accumulation'
+            ? `${ACCUM_MODEL_PREFIX}${linkId}`
+            : `${DERIV_MODEL_PREFIX}${++derivCounterRef.current}`
+        return { kind: 'link', link: { ...drove, id: linkId, curveId: '' }, modelId }
+      }
+      return null
+    },
+    [],
+  )
+
   const duplicateCurve = useCallback(
     (id: string): void => {
       const src = curvesRef.current.find((c) => c.id === id)
       if (!src) return
+      const plan = derivedCopyPlan(src)
+      if (plan && plan.kind === 'refuse') {
+        showFeatureNote({ kind: 'moved', key: Date.now(), text: plan.why })
+        return
+      }
+      if (plan && plan.kind === 'line') {
+        // Frozen: a new typed curve, parsed from the line it is now.
+        let outcome: ReturnType<typeof parseExpression>
+        try {
+          outcome = parseExpression(plan.line, envFor(plan.calls ?? [], null))
+        } catch {
+          return
+        }
+        if (!outcome.ok) {
+          showFeatureNote({ kind: 'moved', key: Date.now(), text: `This curve could not be copied: ${outcome.error}` })
+          return
+        }
+        const modelId = `expr_${++exprCounterRef.current}`
+        let made: ModelSpec
+        try {
+          made = outcome.plot.makeModel(modelId)
+        } catch {
+          return
+        }
+        registerModels({ [modelId]: made })
+        const params =
+          plan.params && plan.params.length === outcome.plot.defaultParams.length
+            ? plan.params.slice()
+            : outcome.plot.defaultParams.slice()
+        const frozen: FittedCurve = {
+          id: nextId(),
+          modelId,
+          params,
+          kind: outcome.plot.kind,
+          domain: outcome.plot.domain,
+          color: pickColor(),
+          strokeWidth: src.strokeWidth,
+          visible: true,
+          error: 0,
+        }
+        const st = stylesRef.current[id]
+        commitState(
+          {
+            curves: [...curvesRef.current, frozen],
+            exprSources: { ...exprSourcesRef.current, [frozen.id]: plan.line },
+            ...(plan.calls ? { calls: { ...callsRef.current, [frozen.id]: plan.calls } } : {}),
+            ...(st ? { styles: { ...stylesRef.current, [frozen.id]: st } } : {}),
+          },
+          'duplicate curve',
+        )
+        setSelectedId(frozen.id)
+        return
+      }
       const spec = modelsRef.current[src.modelId]
       let params = src.params.slice()
       let stroke = src.sourceStroke
@@ -3336,6 +3531,11 @@ export default function App() {
         color: pickColor(),
         ...(stroke ? { sourceStroke: stroke } : {}),
       }
+      // A derivative or accumulation copy: its own link to the same parent,
+      // its own model id; syncCalc builds the model from the link.
+      const ownLink: CalcLink | null =
+        plan && plan.kind === 'link' ? ({ ...plan.link, curveId: copy.id } as CalcLink) : null
+      if (plan && plan.kind === 'link') copy.modelId = plan.modelId
       const cands = candidatesRef.current.get(id)
       let srcExpr = exprSourcesRef.current[id]
       const brokenWhy = brokenExprRef.current[id]
@@ -3393,12 +3593,13 @@ export default function App() {
           ...(madeEdits !== undefined
             ? { edits: { ...editsRef.current, [copy.id]: madeEdits.slice() } }
             : {}),
+          ...(ownLink ? { calc: [...calcRef.current, ownLink] } : {}),
         },
         'duplicate curve',
       )
       setSelectedId(copy.id)
     },
-    [commitState, envFor, pickColor, registerModels],
+    [commitState, envFor, pickColor, registerModels, derivedCopyPlan, showFeatureNote],
   )
 
   // ------------------------------------------------------------- curve style
@@ -3795,7 +3996,7 @@ export default function App() {
         // overlay on f like the secant: f stays selected and carries a's handle.
         let a: number | null = null
         try {
-          a = defaultLimitA(parent, models, win)
+          a = defaultLimitA(parent, models, win, depKeysRef.current[parent.id] ?? '')
         } catch {
           a = null
         }
@@ -8255,8 +8456,6 @@ export default function App() {
     [applyState, commitState, mapUC],
   )
 
-  const ucPlayRef = useRef(ucPlay)
-  ucPlayRef.current = ucPlay
   const ucSpeedRef = useRef(ucSpeed)
   ucSpeedRef.current = ucSpeed
 
@@ -8275,7 +8474,8 @@ export default function App() {
     setUcPlay(null)
     const theta = settleTheta(cur.theta)
     ucPausedRef.current = theta
-    const u = ucRef.current[0]
+    // The circle that was PLAYING — not whichever happens to be first.
+    const u = ucRef.current.find((c) => c.id === cur.id)
     if (u) patchUnitCircle(u.id, { theta }, 'play θ')
   }, [patchUnitCircle])
 
@@ -8351,7 +8551,7 @@ export default function App() {
         return
       }
       const paused = ucPausedRef.current
-      const start = { theta: paused !== null && paused === u.theta ? playStart(u.theta) : 0 }
+      const start = { id: u.id, theta: paused !== null && paused === u.theta ? playStart(u.theta) : 0 }
       ucPlayRef.current = start
       setUcPlay(start)
     },
@@ -8370,8 +8570,15 @@ export default function App() {
       last = now
       const cur = ucPlayRef.current
       if (!cur) return
+      if (!ucRef.current.some((c) => c.id === cur.id)) {
+        // The circle is gone (an undo took it off the board): nothing is
+        // playing any more, and the card must not stay on ■.
+        ucPlayRef.current = null
+        setUcPlay(null)
+        return
+      }
       const step = playStep(cur.theta, dt, ucSpeedRef.current)
-      const next = { theta: step.theta }
+      const next = { id: cur.id, theta: step.theta }
       ucPlayRef.current = next
       if (step.done) {
         stopUnitCirclePlay()
@@ -8395,7 +8602,9 @@ export default function App() {
   const ucFigures = useMemo<UnitCircleFigure[]>(
     () =>
       kind === 'cartesian'
-        ? unitCircles.map((u) => unitCircleFigure(u, { playTheta: ucPlay ? ucPlay.theta : null }))
+        ? unitCircles.map((u) =>
+            unitCircleFigure(u, { playTheta: ucPlay && ucPlay.id === u.id ? ucPlay.theta : null }),
+          )
         : [],
     [kind, unitCircles, ucPlay],
   )
@@ -8430,7 +8639,7 @@ export default function App() {
     () =>
       unitCircles.map((u) => ({
         u,
-        card: unitCircleCard(ucPlay ? { ...u, theta: ucPlay.theta } : u),
+        card: unitCircleCard(ucPlay && ucPlay.id === u.id ? { ...u, theta: ucPlay.theta } : u),
       })),
     [unitCircles, ucPlay],
   )
@@ -8443,7 +8652,7 @@ export default function App() {
             uc={u}
             card={card}
             selected={selectedId === u.id}
-            playing={ucPlay !== null}
+            playing={ucPlay !== null && ucPlay.id === u.id}
             speed={ucSpeed}
             onSelect={() => selectObject(u.id)}
             onDelete={() => deleteUnitCircle(u.id)}
@@ -8501,8 +8710,6 @@ export default function App() {
     [applyState, commitState, mapRR],
   )
 
-  const rrPlayRef = useRef(rrPlay)
-  rrPlayRef.current = rrPlay
   const rrSpeedRef = useRef(rrSpeed)
   rrSpeedRef.current = rrSpeed
 
@@ -8609,8 +8816,15 @@ export default function App() {
       const dt = Math.min(0.1, Math.max(0, (now - last) / 1000))
       last = now
       const cur = rrPlayRef.current
+      if (!cur) return
       const r = rrRef.current[0]
-      if (!cur || !r) return
+      if (!r) {
+        // The problem is gone (an undo took it off the board): clear the play
+        // state, or the card comes back stuck on ■ with nothing moving.
+        rrPlayRef.current = null
+        setRrPlay(null)
+        return
+      }
       const w = r.pause && r.when ? solveWhen(r.scenario, r.params, r.when.q, r.when.v) : null
       const step = rrPlayStep(cur.t, dt, rrSpeedRef.current, tMaxOf(r), w && w.ok ? w.t : null)
       const next = { t: step.t }
@@ -8931,14 +9145,15 @@ export default function App() {
   const overlays = useMemo<Overlay[]>(() => {
     const base =
       kind === 'cartesian'
-        ? overlaysFor(calcLinks, curves, models, bandSpan, { sources: implicitSources, box: implicitBox })
+        ? overlaysFor(calcLinks, curves, models, bandSpan, { sources: implicitSources, box: implicitBox }, depKeys)
         : []
     const more = motionAreaOverlays.length + domainOverlays.length + sysOverlays.length + seriesMarks.length
     if (more === 0) return base
     // The ghost goes first (under everything else); the marks sort themselves
     // onto the curves by kind.
     return [...domainOverlays, ...base, ...motionAreaOverlays, ...sysOverlays, ...seriesMarks]
-  }, [kind, calcLinks, curves, models, motionAreaOverlays, bandSpan, domainOverlays, sysOverlays, seriesMarks, implicitSources, implicitBox])
+    // depKeys: a secant, limit or volume on p(x) = h(x) + 1 moves when h is retyped.
+  }, [kind, calcLinks, curves, models, motionAreaOverlays, bandSpan, domainOverlays, sysOverlays, seriesMarks, implicitSources, implicitBox, depKeys])
   const overlaysRef = useRef<Overlay[]>(overlays)
   overlaysRef.current = overlays
 
@@ -8973,8 +9188,29 @@ export default function App() {
       }
     }
     for (const [id, src] of Object.entries(implicitSources)) if (sources[id] === undefined) sources[id] = src
-    return cardCalc(calcLinks, curves, models, curveLabel, letters, calls, sources, implicitBox)
+    // A hidden parent has no board letter; its CARD's name stands in for it
+    // (stored letter, typed head, or the letter it would wear if shown), so
+    // a limit on a hidden h is "lim h(x)", never "lim f(x)".
+    const hiddenParent = calcLinks.some((l) => {
+      const c = curves.find((cc) => cc.id === l.parentId)
+      return c !== undefined && !c.visible
+    })
+    const cardLetters = hiddenParent
+      ? curveNames(
+          curves.map((c) => (c.visible ? c : { ...c, visible: true })),
+          { ...displaySources, ...exprSources },
+          calcLinks,
+          names,
+          inverses,
+        )
+      : {}
+    const out = cardCalc(calcLinks, curves, models, curveLabel, letters, calls, sources, implicitBox, depKeys, cardLetters)
+    // Undo/redo's epoch: the Taylor ▶ demo is keyed on it (see playEpoch).
+    if (playEpoch !== 0) for (const card of Object.values(out)) card.epoch = playEpoch
+    return out
   }, [
+    playEpoch,
+    depKeys,
     kind,
     calcLinks,
     curves,
@@ -9183,7 +9419,7 @@ export default function App() {
         if (link.parentId !== selectedId || !Number.isFinite(link.a)) continue
         const vp = vpRef.current
         const half = vp.widthPx / 2 / ppuX(vp)
-        const pts = limitSnapPoints(parent, models, [vp.center.x - half, vp.center.x + half])
+        const pts = limitSnapPoints(parent, models, [vp.center.x - half, vp.center.x + half], depKeysRef.current[parent.id] ?? '')
         const nice = (x: number): number => {
           const v = vpRef.current
           return snapCenter(
@@ -9247,7 +9483,7 @@ export default function App() {
         }
         let h: ReturnType<typeof volumeSliceHandle> = null
         try {
-          h = volumeSliceHandle(link, parent, other, models)
+          h = volumeSliceHandle(link, parent, other, models, depKeysRef.current)
         } catch {
           h = null
         }
@@ -10431,16 +10667,18 @@ export default function App() {
     // Not the window — the FIGURE. A number line exported as the window was
     // a 40px strip in a 2206x1826 image; a graph was whatever happened to be
     // on screen when Download was pressed.
-    const evp = exportViewport(
-      vp,
-      settings,
-      settings.fit ? exportContent() : null,
-      kindRef.current,
-      itemsRef.current,
-      // A caption is drawn inside this rect, so a frame fitted to the curves
-      // has to be told to leave room for it.
-      caption !== '' ? captionHeight() : 0,
-    )
+    const content = settings.fit ? exportContent() : null
+    // A caption is drawn inside this rect, so a frame fitted to the curves
+    // has to be told to leave room for it — ALL of it: a long caption wraps
+    // (up to three lines) at the plot's width, so the band is measured at the
+    // width the frame will have. The width does not depend on the band (the
+    // band comes out of the scale, not the size), so one pass without it says.
+    let capPx = 0
+    if (caption !== '') {
+      const plain = exportViewport(vp, settings, content, kindRef.current, itemsRef.current, 0)
+      capPx = captionHeight(null, caption, plain.widthPx)
+    }
+    const evp = exportViewport(vp, settings, content, kindRef.current, itemsRef.current, capPx)
     // A sequence's dashed partner is part of the figure: sampled across THIS
     // frame, which is not the screen's window when the export is fitted.
     const partners =
