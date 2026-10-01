@@ -290,6 +290,12 @@ interface Props {
    */
   reveal?: SceneReveal | null
   onRevealMark?(key: string): void
+  /**
+   * A read-only view (a "view only" share link): every press that would draw,
+   * drag or reshape pans instead. Zoom, tap-to-select and the "?" marks of
+   * reveal mode still work, so the board can be explored but not changed.
+   */
+  readOnly?: boolean
 }
 
 const FADE_MS = 250
@@ -554,6 +560,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     pointPick,
     reveal,
     onRevealMark,
+    readOnly,
   },
   handle,
 ) {
@@ -597,6 +604,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   const revealRef = useRef<SceneReveal | null | undefined>(reveal)
   const onRevealMarkRef = useRef(onRevealMark)
   onRevealMarkRef.current = onRevealMark
+  const readOnlyRef = useRef(readOnly === true)
+  readOnlyRef.current = readOnly === true
   /** The "?" marks of the last frame drawn: what a press can hit. */
   const revealMarksRef = useRef<readonly RevealMark[]>([])
   /** A reveal's ring is animating: keep drawing frames until it is done. */
@@ -1679,6 +1688,10 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       penRecent: penGuardActive(lastPenAtRef.current, now),
     })
 
+    // Read-only: what would have been ink (a stroke, a handle grab, a curve
+    // drag, an axis stretch) is a pan. Nothing below can change the board.
+    if (readOnlyRef.current && verdict === 'ink') verdict = 'pan'
+
     if (verdict === 'ignore') {
       // A palm (or a phantom second pen). It is never captured and never
       // tracked, so it cannot cancel the stroke, pinch the board, or fire an
@@ -1906,7 +1919,10 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
 
     // Idle hover: handle hover-grow + cursor, or 'move' near the selected curve.
     if (!g) {
-      if (!spaceRef.current && !handleEditRef.current) {
+      if (readOnlyRef.current) {
+        // Nothing here can be grabbed, so nothing may look grabbable.
+        setHover(null)
+      } else if (!spaceRef.current && !handleEditRef.current) {
         const h = handleAt(pos)
         const marker = h ? null : markerAt(pos)
         if (h) {
@@ -2264,7 +2280,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
         ? 'grabbing'
         : hoverInfo
           ? hoverInfo.cursor
-          : spaceHeld
+          : spaceHeld || readOnly
             ? 'grab'
             : 'crosshair'
 

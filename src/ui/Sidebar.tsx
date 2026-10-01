@@ -10,6 +10,7 @@ import type {
   Vec2,
 } from '../core/types'
 import type { ReactNode } from 'react'
+import { useEffect, useRef } from 'react'
 import type { FactoredSpec } from '../core/factored'
 import type { ExpSpec } from '../core/exponential'
 import type { LogisticSpec } from '../core/logistic'
@@ -55,6 +56,12 @@ import { BoardKindSwitch } from './BoardKindSwitch'
 
 interface Props {
   open: boolean
+  /**
+   * A read-only view (a "view only" share link): the cards can be read and
+   * scrolled but nothing in them can be pressed or typed into, and the
+   * controls that add things are gone. A note says how to get an editable copy.
+   */
+  readOnly?: boolean
   /** Which board this is. A number line lists items, not curves. */
   kind: BoardKind
   /** Switch the whole board over. Lossless, and one undo step. */
@@ -370,6 +377,7 @@ const EMPTY_ANALYSIS: SpecialPoint[] = []
 
 export function Sidebar({
   open,
+  readOnly = false,
   kind,
   onSetKind,
   items,
@@ -559,12 +567,24 @@ export function Sidebar({
   exprNames,
 }: Props) {
   const numberLine = kind === 'number-line'
+  // `inert` on a display:contents wrapper: everything inside stops taking
+  // clicks, focus and typing, while the list around it still scrolls.
+  const bodyRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (bodyRef.current) bodyRef.current.inert = readOnly
+  }, [readOnly])
 
   return (
-    <aside className={`sidebar${open ? '' : ' sidebar-closed'}`}>
+    <aside className={`sidebar${open ? '' : ' sidebar-closed'}${readOnly ? ' sidebar-readonly' : ''}`}>
       <div className="sidebar-inner">
         <div className="sidebar-head">
-          <BoardKindSwitch kind={kind} onSetKind={onSetKind} />
+          {readOnly ? (
+            <div className="sidebar-readonly-note" data-testid="sidebar-readonly-note">
+              View only — use <strong>Make a copy</strong> to edit this graph.
+            </div>
+          ) : (
+            <BoardKindSwitch kind={kind} onSetKind={onSetKind} />
+          )}
           <div className="sidebar-head-row">
             <span className="sidebar-title">{numberLine ? 'Solution set' : 'Curves'}</span>
             <span className="sidebar-count">
@@ -572,6 +592,7 @@ export function Sidebar({
                 ? items.length
                 : curves.length + fields.length + shapes.length + data.length + sequences.length + unitCircleCount + relatedRatesCount}
             </span>
+            {!readOnly && (
             <button
               className={`add-btn${exprOpen ? ' add-open' : ''}`}
               title={
@@ -586,7 +607,8 @@ export function Sidebar({
             >
               +
             </button>
-            {!numberLine && (onFactorToggle || onExpToggle || onLogisticToggle || onLogToggle || onSinToggle || onTransformToggle || onPiecewiseToggle || onConicToggle || onMotionToggle || onSeqToggle || onDataAdd || onUnitCircleAdd || onRelatedRatesAdd) && (
+            )}
+            {!readOnly && !numberLine && (onFactorToggle || onExpToggle || onLogisticToggle || onLogToggle || onSinToggle || onTransformToggle || onPiecewiseToggle || onConicToggle || onMotionToggle || onSeqToggle || onDataAdd || onUnitCircleAdd || onRelatedRatesAdd) && (
               <BuildMenu
                 factorOpen={factorOpen}
                 expOpen={expOpen}
@@ -616,6 +638,7 @@ export function Sidebar({
           </div>
         </div>
         <div className="sidebar-list">
+          <div className="sidebar-list-body" ref={bodyRef}>
           {!numberLine && factorOpen && onFactorBuild && onFactorToggle && (
             <FactorEditor onBuild={onFactorBuild} onClose={onFactorToggle} />
           )}
@@ -927,6 +950,7 @@ export function Sidebar({
             })}
           {!numberLine && unitCircleCards}
           {!numberLine && relatedRatesCards}
+          </div>
         </div>
       </div>
     </aside>

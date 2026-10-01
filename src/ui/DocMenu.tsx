@@ -25,6 +25,16 @@ interface Props {
   onImport(file: File): void
   /** Open the worksheet builder: several documents' figures on one page. */
   onWorksheet?(): void
+  /** Open the share dialog: this document as a link (or a QR code). */
+  onShare?(): void
+  /**
+   * The open document came from a share link and is not in this browser's
+   * documents: 'edit' can be changed (and is saved as a copy if it is),
+   * 'view' is a read-only student view. Absent = an ordinary document.
+   */
+  shared?: 'edit' | 'view' | null
+  /** Save the shared document into this browser's documents. */
+  onMakeCopy?(): void
 }
 
 function relativeTime(ts: number): string {
@@ -90,6 +100,9 @@ export function DocMenu({
   onExport,
   onImport,
   onWorksheet,
+  onShare,
+  shared = null,
+  onMakeCopy,
 }: Props) {
   const [open, setOpen] = useState(false)
   const [renaming, setRenaming] = useState(false)
@@ -173,7 +186,8 @@ export function DocMenu({
       ) : (
         <button
           className="doc-name"
-          title="Rename this document"
+          title={shared === 'view' ? 'A shared graph (view only)' : 'Rename this document'}
+          disabled={shared === 'view'}
           onClick={() => {
             setDraft(name)
             setRenaming(true)
@@ -186,7 +200,21 @@ export function DocMenu({
       {/* Only the states worth a teacher's attention. A permanent "saved"
           badge is a promise nobody asked for taking up room beside the name
           every second of the lesson; "saving…" and "unsaved" are news. */}
-      {saveState !== 'saved' && (
+      {shared && (
+        <span
+          className="doc-shared"
+          data-testid="doc-shared-badge"
+          title={
+            shared === 'view'
+              ? 'Opened from a share link, view only. Make a copy to keep it and edit it.'
+              : 'Opened from a share link. It is not in your documents until you make a copy — editing it saves one automatically when you switch away.'
+          }
+        >
+          {shared === 'view' ? 'Shared · view only' : 'Shared'}
+        </span>
+      )}
+
+      {!shared && saveState !== 'saved' && (
         <span
           className={`doc-save doc-save-${saveState}`}
           title={saveState === 'error' ? 'Your latest changes are not saved' : 'Saving…'}
@@ -215,6 +243,28 @@ export function DocMenu({
       {open && (
         <div className="doc-menu" role="menu">
           <div className="doc-menu-actions">
+            {shared && onMakeCopy && (
+              <button
+                className="doc-item doc-item-strong"
+                role="menuitem"
+                data-testid="doc-make-copy"
+                title="Save this shared graph into your own documents"
+                onClick={pick(onMakeCopy)}
+              >
+                Make a copy
+              </button>
+            )}
+            {onShare && (
+              <button
+                className="doc-item"
+                role="menuitem"
+                data-testid="open-share"
+                title="A link (or a QR code) that opens exactly this graph — no account needed"
+                onClick={pick(onShare)}
+              >
+                Share link…
+              </button>
+            )}
             <button className="doc-item" role="menuitem" onClick={pick(() => onNew('cartesian'))}>
               New graph
             </button>
@@ -225,9 +275,11 @@ export function DocMenu({
             >
               New number line
             </button>
-            <button className="doc-item" role="menuitem" onClick={pick(onDuplicate)}>
-              Duplicate
-            </button>
+            {!shared && (
+              <button className="doc-item" role="menuitem" onClick={pick(onDuplicate)}>
+                Duplicate
+              </button>
+            )}
             {onWorksheet && (
               <button
                 className="doc-item"
@@ -247,7 +299,7 @@ export function DocMenu({
             <button className="doc-item" role="menuitem" onClick={() => fileRef.current?.click()}>
               Import from file…
             </button>
-            {confirmClear ? (
+            {shared === 'view' ? null : confirmClear ? (
               <div className="doc-confirm doc-confirm-clear">
                 <span className="doc-confirm-text">{clearTitle}?</span>
                 <button

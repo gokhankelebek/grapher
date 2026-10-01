@@ -440,6 +440,9 @@ import type { BetweenInfo } from './ui/CurveCard'
 import { asymptoteTexts } from './ui/CurveCard'
 import { DocMenu } from './ui/DocMenu'
 import type { SaveState } from './ui/DocMenu'
+import { ShareDialog } from './ui/ShareDialog'
+import { openShare } from './ui/shareOpen'
+import { parseShareHash, urlWithoutShare } from './core/share'
 import { ExportMenu } from './ui/ExportMenu'
 import type { CopyState } from './ui/ExportMenu'
 import type { ExportFormat } from './ui/vectorExport'
@@ -1241,6 +1244,47 @@ export default function App() {
   const [loadNotice, setLoadNotice] = useState<{ problems: string[]; fatal: boolean } | null>(null)
   /** Another tab changed or deleted the document this tab has open. */
   const [conflict, setConflict] = useState<'stale' | 'deleted' | null>(null)
+  /**
+   * The open document came from a share link (src/ui/shareOpen.ts). It is a
+   * TEMPORARY document: a fresh id, never written, never "current" in the
+   * index, so it can never overwrite one of this browser's documents. It is
+   * saved only by Make a copy — or automatically, as a copy, when it has been
+   * edited and the board is about to be switched away from it. `viewOnly` is
+   * the student view: nothing on the board or in the cards can be changed.
+   */
+  const [shared, setShared] = useState<{ viewOnly: boolean } | null>(null)
+  const sharedRef = useRef(shared)
+  const setSharedState = useCallback((v: { viewOnly: boolean } | null): void => {
+    sharedRef.current = v
+    setShared(v)
+  }, [])
+  /** Set by makeSharedCopy once it exists (it is declared below saveBeforeSwitch). */
+  const makeSharedCopyRef = useRef<(why: 'asked' | 'switch') => boolean>(() => true)
+  /** The share dialog, with the document as it was when the dialog opened. */
+  const [shareDialog, setShareDialog] = useState<{ json: string } | null>(null)
+  /**
+   * Where the Shared banner sits: just under the toolbar, wherever the toolbar
+   * is. It wraps to two rows on a narrow board and docks to the bottom on a
+   * phone, so the offset is measured rather than assumed.
+   */
+  const [bannerTop, setBannerTop] = useState(12)
+  useEffect(() => {
+    if (!shared) return
+    const bar = document.querySelector<HTMLElement>('.toolbar')
+    const area = document.querySelector<HTMLElement>('.canvas-area')
+    if (!bar || !area || typeof ResizeObserver === 'undefined') return
+    const measure = (): void => {
+      const b = bar.getBoundingClientRect()
+      const a = area.getBoundingClientRect()
+      const docked = b.top - a.top > a.height / 2
+      setBannerTop(docked ? 12 : Math.round(b.bottom - a.top + 8))
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(bar)
+    ro.observe(area)
+    return () => ro.disconnect()
+  }, [shared])
   /** Set when a document switch was refused because this board isn't saved. */
   const [switchBlocked, setSwitchBlocked] = useState<string | null>(null)
   /** curveId -> the equation text the user typed (rebuilt into models on load). */
@@ -2222,6 +2266,8 @@ export default function App() {
    * unsaved work is gone.
    */
   const saveNow = useCallback((): SaveOutcome => {
+    // A shared document is never written in place (see `shared`).
+    if (sharedRef.current) return { ok: true }
     if (!hydratedRef.current) return { ok: true }
     window.clearTimeout(saveTimerRef.current)
     saveTimerRef.current = 0
@@ -2266,6 +2312,11 @@ export default function App() {
    * abandoned: the work on screen exists nowhere else.
    */
   const saveBeforeSwitch = useCallback((): boolean => {
+    // A shared document: untouched, there is nothing to keep; edited, the
+    // edits are kept as a copy in this browser's documents — never thrown away.
+    if (sharedRef.current) {
+      return undoRef.current.length === 0 ? true : makeSharedCopyRef.current('switch')
+    }
     // Unchanged since it was loaded or last written, and on disk: nothing to
     // save, and writing anyway would bump modifiedAt for no reason.
     if (hydratedRef.current && docStoredRef.current && !unsavedRef.current) {
@@ -2285,6 +2336,10 @@ export default function App() {
 
   const scheduleSave = useCallback((): void => {
     if (!hydratedRef.current) return
+    if (sharedRef.current) {
+      unsavedRef.current = true
+      return
+    }
     unsavedRef.current = true
     setSaveState('saving')
     window.clearTimeout(saveTimerRef.current)
@@ -2293,6 +2348,9 @@ export default function App() {
 
   /** Swap the whole board over to a freshly loaded document. */
   const applyHydrated = useCallback((meta: DocMeta, board: HydratedBoard): void => {
+    // Whatever is loaded now is not the shared document (a share sets it again).
+    sharedRef.current = null
+    setShared(null)
     loadedStateRef.current = {
       curves: board.curves,
       items: board.items,
@@ -2455,46 +2513,134 @@ export default function App() {
     nlStageRef.current?.redraw()
   }, [])
 
-  // Restore the last document on startup. Runs before any save is allowed.
+  /**
+   * Open the share link in `hash` (src/ui/shareOpen.ts) as a new, temporary
+   * document. `fallback` runs when there is nothing to open (startup: restore
+   * the last document); null means a board is already open — a link pasted
+   * into the address bar of a running tab — and it must be kept safe first.
+   */
+  const openShareFromHash = useCallback(
+    async (hash: string, fallback: (() => void) | null): Promise<void> => {
+      const outcome = await openShare(hash, {
+        load: (json) => deserializeDoc(json, { resolve: resolveName, singularities: singularOf }),
+        newId: () => createDoc('Shared graph', emptyBoard()).id,
+        now: () => Date.now(),
+      })
+      // Read once: a reload must not import it again (the document is in
+      // memory now, and in the student's documents if they make a copy).
+      try {
+        window.history.replaceState(window.history.state, '', urlWithoutShare(window.location.href))
+      } catch {
+        /* a sandboxed frame may refuse; the link then simply re-opens on reload */
+      }
+      if (outcome.kind !== 'open') {
+        fallback?.()
+        if (outcome.kind === 'error') showToast(outcome.message, { ms: 7000 })
+        return
+      }
+      if (fallback === null && !saveBeforeSwitch()) return
+      // Reveal mode is one state per document (see revealByDocRef): seed this
+      // one's, and the switch below picks it up.
+      if (outcome.flags.reveal) revealByDocRef.current.set(outcome.meta.id, { ...REVEAL_OFF, on: true })
+      applyHydrated(outcome.meta, outcome.board)
+      setSharedState({ viewOnly: outcome.flags.view })
+      docStoredRef.current = false
+      hydratedRef.current = true
+      setConflict(null)
+      setSwitchBlocked(null)
+      setSaveError(null)
+      setSaveState('saved')
+      setLoadNotice(outcome.problems.length > 0 ? { problems: outcome.problems, fatal: false } : null)
+      if (outcome.flags.view) setSidebarOpen(false)
+      setDocs(listDocs())
+      // The banner says "Shared" already; the toast says what that means —
+      // except in reveal mode, whose bar sits where the toast would.
+      if (!outcome.flags.reveal) showToast(
+        outcome.flags.view
+          ? `Opened “${outcome.meta.name}” from a share link — view only. Make a copy to keep it.`
+          : `Opened “${outcome.meta.name}” from a share link. It isn’t in your documents until you make a copy.`,
+        { ms: 5000 },
+      )
+    },
+    [applyHydrated, resolveName, saveBeforeSwitch, setSharedState, showToast, singularOf],
+  )
+
+  // Restore the last document on startup. Runs before any save is allowed —
+  // unless the address carries a share link, which opens instead (and falls
+  // back to this when the link is unreadable).
   useEffect(() => {
-    const index = readIndex()
-    const id = index.currentId ?? index.docs[0]?.id ?? null
-    if (id) {
-      const json = readDocJSON(id)
-      if (json !== null) {
-        const res = deserializeDoc(json, { resolve: resolveName, singularities: singularOf })
-        if (res.meta && res.board) {
-          applyHydrated(res.meta, res.board)
-          docStoredRef.current = true
-          if (res.problems.length > 0) {
-            setLoadNotice({ problems: res.problems, fatal: false })
+    if (parseShareHash(window.location.hash).kind === 'share') {
+      void openShareFromHash(window.location.hash, restoreLast)
+      return
+    }
+    restoreLast()
+    function restoreLast(): void {
+      const index = readIndex()
+      const id = index.currentId ?? index.docs[0]?.id ?? null
+      if (id) {
+        const json = readDocJSON(id)
+        if (json !== null) {
+          const res = deserializeDoc(json, { resolve: resolveName, singularities: singularOf })
+          if (res.meta && res.board) {
+            applyHydrated(res.meta, res.board)
+            docStoredRef.current = true
+            if (res.problems.length > 0) {
+              setLoadNotice({ problems: res.problems, fatal: false })
+            }
+            hydratedRef.current = true
+            setCurrentDoc(res.meta.id)
+            setDocs(listDocs())
+            return
           }
-          hydratedRef.current = true
-          setCurrentDoc(res.meta.id)
-          setDocs(listDocs())
-          return
+          // Unreadable: keep the damaged record on disk (the user may want to
+          // recover or export it) and start a new document so work can continue.
+          setLoadNotice({ problems: res.problems, fatal: true })
         }
-        // Unreadable: keep the damaged record on disk (the user may want to
-        // recover or export it) and start a new document so work can continue.
-        setLoadNotice({ problems: res.problems, fatal: true })
+      }
+      const doc = createDoc(nextDocName('cartesian', listDocs().map((d) => d.name)), emptyBoard())
+      const meta: DocMeta = {
+        id: doc.id,
+        name: doc.name,
+        createdAt: doc.createdAt,
+        modifiedAt: doc.modifiedAt,
+      }
+      docMetaRef.current = meta
+      setDocMeta(meta)
+      hydratedRef.current = true
+      // Not written yet — but claim it as current now, so a reload doesn't guess
+      // from index order which document this tab was working on.
+      docStoredRef.current = false
+      setCurrentDoc(meta.id)
+      setDocs(listDocs())
+    }
+    // Runs once, on mount: the share opener is stable for the session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [applyHydrated])
+
+  // A share link pasted into the address bar of a tab that is already open
+  // changes only the fragment — no reload — so it is picked up here.
+  useEffect(() => {
+    const onHash = (): void => {
+      if (parseShareHash(window.location.hash).kind === 'share') {
+        void openShareFromHash(window.location.hash, null)
       }
     }
-    const doc = createDoc(nextDocName('cartesian', listDocs().map((d) => d.name)), emptyBoard())
-    const meta: DocMeta = {
-      id: doc.id,
-      name: doc.name,
-      createdAt: doc.createdAt,
-      modifiedAt: doc.modifiedAt,
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [openShareFromHash])
+
+  // Leaving a shared document that has edits, by closing the tab: ask first.
+  // (Switching documents inside the app keeps them as a copy instead.)
+  useEffect(() => {
+    const warn = (e: BeforeUnloadEvent): void => {
+      if (sharedRef.current && undoRef.current.length > 0) {
+        e.preventDefault()
+        e.returnValue = ''
+      }
     }
-    docMetaRef.current = meta
-    setDocMeta(meta)
-    hydratedRef.current = true
-    // Not written yet — but claim it as current now, so a reload doesn't guess
-    // from index order which document this tab was working on.
-    docStoredRef.current = false
-    setCurrentDoc(meta.id)
-    setDocs(listDocs())
-  }, [applyHydrated])
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [])
 
   // Autosave: any board change schedules a debounced write. A board that is
   // still exactly what was just loaded is not a change.
@@ -2768,10 +2914,54 @@ export default function App() {
     [],
   )
 
+  /**
+   * Keep the shared document: write it into this browser's documents under a
+   * fresh id, and from then on it is an ordinary document of theirs. The
+   * reveal state comes along (the class is mid-lesson), and so does undo.
+   */
+  const makeSharedCopy = useCallback(
+    (why: 'asked' | 'switch'): boolean => {
+      const was = sharedRef.current
+      if (!was) return true
+      const names = listDocs().map((d) => d.name)
+      const base = docMetaRef.current.name
+      const taken = names.some((n) => n.trim().toLowerCase() === base.trim().toLowerCase())
+      const name = taken ? copyDocName(kindRef.current, base, names) : base
+      const revealNow = revealRef.current
+      // No longer shared BEFORE the write, or the save path would refuse it.
+      setSharedState(null)
+      if (!saveBoardAsNewDoc(name)) {
+        setSharedState(was)
+        showToast('Couldn’t save a copy — browser storage refused it. Use Save a backup… instead.', { ms: 6000 })
+        return false
+      }
+      revealByDocRef.current.set(docMetaRef.current.id, revealNow)
+      showToast(
+        why === 'switch'
+          ? `Your changes to the shared graph were saved to your documents as “${name}”.`
+          : `Saved “${name}” to your documents — it’s yours to edit.`,
+        { ms: 4500 },
+      )
+      return true
+    },
+    [saveBoardAsNewDoc, setSharedState, showToast],
+  )
+  makeSharedCopyRef.current = makeSharedCopy
+
   const duplicateDocument = useCallback((): void => {
+    // Duplicating a shared document is keeping it.
+    if (sharedRef.current) {
+      makeSharedCopy('asked')
+      return
+    }
     if (!saveBeforeSwitch()) return
     saveBoardAsNewDoc(copyName())
-  }, [saveBeforeSwitch, saveBoardAsNewDoc, copyName])
+  }, [saveBeforeSwitch, saveBoardAsNewDoc, copyName, makeSharedCopy])
+
+  /** Document menu → Share link…: the board as it is right now. */
+  const openShareDialog = useCallback((): void => {
+    setShareDialog({ json: serializeDoc(docFromBoard(docMetaRef.current, currentBoardInput())) })
+  }, [currentBoardInput])
 
   const deleteDocument = useCallback(
     (id: string): void => {
@@ -12041,6 +12231,18 @@ export default function App() {
         else revealStep(ra)
         return
       }
+      // View only: the keys that change the board do nothing. Looking keys
+      // (reveal, present, analysis, the sidebar) still work.
+      if (
+        sharedRef.current?.viewOnly &&
+        ((meta && (key === 'z' || key === 'y')) ||
+          e.key === 'Delete' ||
+          e.key === 'Backspace' ||
+          NUDGE[e.key] ||
+          (key === 'p' && e.shiftKey && !meta))
+      ) {
+        return
+      }
       if (meta && key === 'z') {
         e.preventDefault()
         if (e.shiftKey) redo()
@@ -12103,6 +12305,7 @@ export default function App() {
       }
     }
     const onKeyUp = (e: KeyboardEvent): void => {
+      if (sharedRef.current?.viewOnly) return
       if (e.key.startsWith('Arrow')) commitWithSnap(selectedRef.current, false)
     }
     window.addEventListener('keydown', onKeyDown)
@@ -12235,6 +12438,7 @@ export default function App() {
       <AnswerContext.Provider value={answerBoard}>
       <Sidebar
         open={sidebarOpen && !presentMode}
+        readOnly={shared?.viewOnly === true}
         kind={kind}
         onSetKind={setBoardKind}
         items={items}
@@ -12601,7 +12805,7 @@ export default function App() {
             theme={boardTheme}
             {...(boardFigure ? { figure: boardFigure } : {})}
             selectedId={selectedId}
-            mode={MODE}
+            mode={shared?.viewOnly ? 'pan' : MODE}
             inkColor={pickColor()}
             vpRef={vpRef}
             onSelect={selectObject}
@@ -12665,7 +12869,27 @@ export default function App() {
           pointPick={pointPick}
           reveal={sceneReveal}
           onRevealMark={revealKey}
+          readOnly={shared?.viewOnly === true}
         />
+        )}
+
+        {/* A shared document says so on the board, with the one thing to do
+            about it. DOM, so it never reaches an export. */}
+        {shared && !presentMode && (
+          <div className="share-banner" data-testid="share-banner" role="status" style={{ top: bannerTop }}>
+            <span className="share-banner-text">
+              <strong>Shared graph</strong>
+              {shared.viewOnly ? ' · view only' : ' · not in your documents yet'}
+            </span>
+            <button
+              className="share-banner-btn"
+              data-testid="share-make-copy"
+              onClick={() => makeSharedCopy('asked')}
+              title="Save this graph into your own documents, where you can edit it"
+            >
+              Make a copy
+            </button>
+          </div>
         )}
 
         {/* A preview is a temporary state the board is in, and the one thing a
@@ -12736,6 +12960,9 @@ export default function App() {
               onExport={exportDocument}
               onImport={importDocument}
               onWorksheet={openWorksheet}
+              onShare={openShareDialog}
+              shared={shared ? (shared.viewOnly ? 'view' : 'edit') : null}
+              onMakeCopy={() => makeSharedCopy('asked')}
             />
           }
           exportMenu={
@@ -13064,6 +13291,15 @@ export default function App() {
             screen={{ widthPx: vpRef.current.widthPx, heightPx: vpRef.current.heightPx }}
             onClose={() => setWorksheetOpen(false)}
             toast={(msg) => showToast(msg)}
+          />
+        )}
+
+        {shareDialog && (
+          <ShareDialog
+            name={docMeta.name}
+            json={shareDialog.json}
+            baseHref={window.location.href}
+            onClose={() => setShareDialog(null)}
           />
         )}
 
