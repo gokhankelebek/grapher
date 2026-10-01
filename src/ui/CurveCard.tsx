@@ -44,6 +44,7 @@ import { axisKeys, featureAxes } from './featureEdit'
 import { curveEquationText, displayEquationLatex } from './equationText'
 import { N_MAX, N_MIN, RIEMANN_METHODS } from './calcLinks'
 import type { CalcChange, CalcKind, CardCalc } from './calcLinks'
+import { CALC_GROUPS, calcMenuOffers } from './calcMenu'
 import { TaylorSection } from './TaylorSection'
 import { SecantSection } from './SecantSection'
 import { ParamCalcSection, PolarBetweenSection } from './ParamCalcSection'
@@ -291,49 +292,8 @@ export interface BetweenInfo {
 /** One array, so a card with nothing to say re-renders no more than before. */
 const EMPTY_NOTES: string[] = []
 
-/**
- * The calculus the ⋯ menu offers, grouped the way an AP course meets it:
- * limits and derivatives (Units 1–2, and the secant of Unit 5's MVT), then
- * integrals (Riemann sums and the definite integral of Unit 6, the areas and
- * volumes of Unit 8), then series (BC Unit 10).
- */
-export const CALC_GROUPS: { title: string; items: { kind: CalcKind | 'between'; label: string }[] }[] = [
-  {
-    title: 'Limits & derivatives',
-    items: [
-      { kind: 'limit', label: 'Limit at a point' },
-      { kind: 'secant', label: 'Average rate of change (secant)' },
-      { kind: 'tangent', label: 'Tangent line' },
-      { kind: 'derivative', label: 'Derivative f\u2032' },
-      { kind: 'signchart', label: 'Sign chart (f\u2032, f\u2033)' },
-    ],
-  },
-  {
-    title: 'Integrals',
-    items: [
-      { kind: 'riemann', label: 'Riemann sum' },
-      { kind: 'area', label: 'Area under curve' },
-      { kind: 'between', label: 'Area between curves\u2026' },
-      { kind: 'accumulation', label: 'Accumulation function \u222b\u2090\u02e3 f' },
-      { kind: 'volume', label: 'Volume of a solid\u2026' },
-    ],
-  },
-  {
-    title: 'Series',
-    items: [{ kind: 'taylor', label: 'Taylor polynomial P\u2099' }],
-  },
-  {
-    // BC Unit 9: offered only on a parametric or polar curve, and there alone
-    title: 'Parametric & polar',
-    items: [
-      { kind: 'pcalc', label: 'Calculus at t (dy/dx, speed, arc length)' },
-      { kind: 'polarbetween', label: 'Area between polar curves' },
-    ],
-  },
-]
-
-/** The menu items that belong to parametric and polar curves only. */
-const MOTION_ITEMS: ReadonlySet<string> = new Set(['pcalc', 'polarbetween'])
+/** The ⋯ menu's calculus groups and the rule for which it offers live in calcMenu.ts (shared with the command palette). */
+export { CALC_GROUPS }
 
 const METHOD_LABELS: Record<string, string> = {
   left: 'left',
@@ -2178,15 +2138,7 @@ export function CurveCard({
                     </div>
                     {CALC_GROUPS.map((group) => {
                       // An implicit curve (x² + y² = 25) offers the tangent line only.
-                      const items = group.items.filter((item) =>
-                        calc.motion
-                          ? item.kind === 'pcalc' || (item.kind === 'polarbetween' && calc.polarPartner === true)
-                          : MOTION_ITEMS.has(item.kind)
-                            ? false
-                            : calc.implicitOnly
-                              ? item.kind === 'tangent'
-                              : item.kind !== 'between' || between?.canAdd,
-                      )
+                      const items = group.items.filter((item) => calcMenuOffers(item.kind, calc, between?.canAdd))
                       if (items.length === 0) return null
                       return (
                         <div key={group.title} role="group" aria-label={group.title}>

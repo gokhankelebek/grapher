@@ -572,6 +572,20 @@ import {
 import type { RevealApi } from './ui/RevealAnswer'
 import { REVEAL_API_OFF, RevealContext } from './ui/RevealAnswer'
 import { RevealControls } from './ui/RevealControls'
+import { CommandPalette } from './ui/CommandPalette'
+import { HelpSheet } from './ui/HelpSheet'
+import { COMMAND_BY_ID, availability, isMacPlatform, pushRecent } from './ui/commands'
+import type {
+  BuilderKey,
+  Command,
+  CommandActions,
+  CommandContext,
+  CurveFacts,
+  SequenceFacts,
+  SolveFacts,
+  TargetFacts,
+} from './ui/commands'
+import { MAX_RECENT_COMMANDS } from './ui/storage'
 import type { RevealControlsProps } from './ui/RevealControls'
 
 /** How long the board sits idle before it is written to storage. */
@@ -1380,6 +1394,16 @@ export default function App() {
    */
   const [presentMode, setPresentMode] = useState(false)
   const [presentType, setPresentType] = useState<number>(() => readPrefs().presentScale)
+  /**
+   * The command palette (⌘K, /) and the help sheet (?). `pick` opens the
+   * palette straight into "which curve?" for one command (the help sheet's
+   * "Do it" with nothing selected). Neither is part of the document.
+   */
+  const [palette, setPalette] = useState<{ key: number; pick?: string } | null>(null)
+  const [helpOpen, setHelpOpen] = useState(false)
+  const [recentCommands, setRecentCommands] = useState<string[]>(() => readPrefs().recentCommands)
+  /** Text the + box opens with when a palette command opened it ("dy/dx = "). */
+  const [exprSeed, setExprSeed] = useState<{ text: string; key: number } | null>(null)
   const [legendCorner, setLegendCorner] = useState<
     'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
   >('bottom-left')
@@ -12208,6 +12232,360 @@ export default function App() {
     }
   }, [endDrop])
 
+  // ------------------------------------------------- editors in the sidebar
+  /**
+   * Open (or toggle) one of the sidebar's editors — the + box or a Build ▾
+   * builder — and close the others: one editor at the top of the list at a
+   * time. `null` closes them all. The + box's seed is cleared: only the
+   * command palette's typeLine sets one.
+   */
+  const showBuilder = useCallback((which: BuilderKey | null, mode: 'toggle' | 'open'): void => {
+    type SetBool = (v: boolean | ((o: boolean) => boolean)) => void
+    const setters: Record<BuilderKey, SetBool> = {
+      expr: setExprOpen,
+      factor: setFactorOpen,
+      exp: setExpOpen,
+      logistic: setLogisticOpen,
+      log: setLogOpen,
+      sin: setSinOpen,
+      transform: setTransformOpen,
+      piecewise: setPiecewiseOpen,
+      conic: setConicOpen,
+      motion: setMotionOpen,
+      seq: setSeqOpen,
+    }
+    for (const k of Object.keys(setters) as BuilderKey[]) {
+      if (k === which) setters[k](mode === 'toggle' ? (o) => !o : true)
+      else setters[k](false)
+    }
+    setExprSeed(null)
+  }, [])
+
+  /** An editor is about to open: make the sidebar it lives in visible. */
+  const revealSidebar = useCallback((): void => {
+    setPresentMode(false)
+    setSidebarOpen(true)
+  }, [])
+
+  /** The + box, open (with `seed` typed in it, caret at the end). */
+  const typeLine = useCallback(
+    (seed?: string): void => {
+      revealSidebar()
+      showBuilder('expr', 'open')
+      if (seed) setExprSeed({ text: seed, key: Date.now() })
+    },
+    [revealSidebar, showBuilder],
+  )
+
+  /**
+   * Delete whatever is selected — a curve, a field, a shape, a table, a
+   * sequence, the unit circle, a related-rates problem, or a number-line item.
+   * The Delete key and the palette's "Delete the selection".
+   */
+  const deleteSelection = useCallback((): void => {
+    const id = selectedRef.current
+    if (!id) return
+    if (kindRef.current === 'number-line') deleteItem(id)
+    else if (fieldsRef.current.some((f) => f.id === id)) deleteField(id)
+    else if (shapesRef.current.some((sh) => sh.id === id)) deleteShape(id)
+    else if (dataRef.current.some((d) => d.id === id)) deleteData(id)
+    else if (seqRef.current.some((q) => q.id === id)) deleteSequence(id)
+    else if (ucRef.current.some((u) => u.id === id)) deleteUnitCircle(id)
+    else if (rrRef.current.some((r) => r.id === id)) deleteRelatedRates(id)
+    else deleteCurve(id)
+    // deleteUnitCircle / deleteRelatedRates read refs only, as in the Delete key's handler
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deleteCurve, deleteField, deleteShape, deleteData, deleteSequence, deleteItem])
+
+  /**
+   * "Domain & range" / "Restrict the domain…" from the palette: the function's
+   * own rows on its own card, brought into view (and the restrict editor
+   * opened). The card is the one place those rows live, so this selects the
+   * curve, opens its Analysis section if it was folded, and presses the same
+   * Restrict button the teacher would.
+   */
+  const showDomain = useCallback(
+    (id: string, restrict: boolean): void => {
+      revealSidebar()
+      setSelectedId(id)
+      let tries = 0
+      const find = (): void => {
+        const card = document.querySelector<HTMLElement>('.sidebar .card-selected')
+        const rows = card?.querySelector<HTMLElement>('[data-testid="domain-section"]')
+        if (!card || !rows) {
+          const section = card?.querySelector<HTMLElement>('[data-testid="analysis-section"]')
+          if (section?.classList.contains('cs-closed')) section.querySelector<HTMLElement>('.cs-toggle')?.click()
+          if (++tries < 20) window.setTimeout(find, 40)
+          return
+        }
+        rows.scrollIntoView({ block: 'center', behavior: 'smooth' })
+        rows.classList.remove('cmdk-flash')
+        void rows.offsetWidth
+        rows.classList.add('cmdk-flash')
+        if (!restrict) return
+        const btn = rows.querySelector<HTMLButtonElement>('[data-testid="restrict-domain"]')
+        if (!btn) return
+        if (btn.disabled) {
+          showToast(btn.title || 'This function’s domain can’t be restricted here.')
+          return
+        }
+        if (!rows.querySelector('[data-testid="restrict-editor"]')) btn.click()
+        window.setTimeout(() => rows.querySelector<HTMLInputElement>('[data-testid="restrict-editor"] input')?.focus(), 60)
+      }
+      window.setTimeout(find, 0)
+    },
+    [revealSidebar, showToast],
+  )
+
+  /** Import from file… without the document menu: the same file picker, the same import. */
+  const pickImportFile = useCallback((): void => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = 'application/json,.json'
+    input.onchange = () => {
+      const file = input.files?.[0]
+      if (file) importDocument(file)
+    }
+    input.click()
+  }, [importDocument])
+
+  // ------------------------------------------------------ the command palette
+  const mac = useMemo(() => isMacPlatform(), [])
+  const recentRef = useRef(recentCommands)
+  recentRef.current = recentCommands
+  const commandsLive = palette !== null || helpOpen
+
+  /** Each curve as the palette sees it: its name, its equation, and what its ⋯ menu offers. */
+  const commandCurves = useMemo<CurveFacts[]>(() => {
+    if (!commandsLive || kind !== 'cartesian') return []
+    const shown = curveLegend(
+      curves.map((c) => (c.visible ? c : { ...c, visible: true })),
+      models,
+      displaySources,
+    )
+    const texOf = new Map(shown.map((e) => [e.id, e]))
+    return curves.map((c) => {
+      const calc = calcCards[c.id]
+      const spec = models[c.modelId]
+      const broken = Boolean(brokenExpr[c.id])
+      const typed = exprSources[c.id] ?? displaySources[c.id]
+      const e = texOf.get(c.id)
+      return {
+        id: c.id,
+        name: cardNames[c.id] ?? curveLabel(c),
+        tex: e?.tex,
+        text: typed ?? e?.text ?? spec?.name ?? c.modelId,
+        color: c.color,
+        kind: c.kind,
+        calc: calc
+          ? {
+              canAdd: calc.canAdd,
+              implicitOnly: calc.implicitOnly,
+              motion: calc.motion,
+              polarPartner: calc.polarPartner,
+              taylorBlocked: calc.taylorBlocked,
+            }
+          : null,
+        between: betweenCards[c.id]?.canAdd === true,
+        // the ⋯ menu's "Show inverse": an explicit curve that is not broken
+        inverse: c.kind === 'explicit' && !broken,
+        // the Domain / range rows: a function's own card (not an inequality's, not f⁻¹'s)
+        domain:
+          c.kind === 'explicit' &&
+          !broken &&
+          typeof spec?.inequality !== 'function' &&
+          !inverses.some((l) => l.curveId === c.id),
+        hlt: typeof lens[c.id]?.hlt === 'number',
+      }
+    })
+  }, [
+    commandsLive,
+    kind,
+    curves,
+    models,
+    displaySources,
+    exprSources,
+    calcCards,
+    betweenCards,
+    brokenExpr,
+    cardNames,
+    curveLabel,
+    inverses,
+    lens,
+  ])
+
+  const commandActions: CommandActions = {
+    select: (id) => setSelectedId(id),
+    typeLine,
+    openBuilder: (which) => {
+      revealSidebar()
+      showBuilder(which, 'open')
+    },
+    addDataTable: () => {
+      revealSidebar()
+      showBuilder(null, 'open')
+      addDataTable()
+    },
+    addUnitCircle,
+    addRelatedRates,
+    addCalc: addCalcObject,
+    addAreaBetween,
+    showInverse: showInverseOf,
+    setHlt: toggleHlt,
+    showDomain,
+    duplicateCurve,
+    toggleVisible,
+    deleteSelected: deleteSelection,
+    addEuler,
+    toggleSeqSeries,
+    toggleSeqSums,
+    solveShow: setSolveShow,
+    solveGraph: (id) => {
+      const err = graphSolve(id)
+      if (err) showToast(err)
+    },
+    undo,
+    redo,
+    newDocument,
+    setBoardKind,
+    duplicateDocument,
+    openWorksheet,
+    share: openShareDialog,
+    backup: exportDocument,
+    importFile: pickImportFile,
+    makeCopy: () => makeSharedCopy('asked'),
+    download: exportCurrent,
+    downloadAs: (f) => (f === 'png' ? exportPNG() : exportVector(f)),
+    copyPng: copyPNG,
+    copyLatex,
+    setFigure: chooseFigureStyle,
+    setPreview: setPreviewFigure,
+    setAxisUnitX: (choice) => setAxisUnit('x', choice),
+    cycleAxisX: cycleAxisUnitX,
+    setRuling,
+    toggleAnalysis,
+    toggleTheme: toggleCanvasTheme,
+    setPresent: setPresentMode,
+    toggleReveal,
+    revealStep,
+    toggleSidebar: () => setSidebarOpen((o) => !o),
+    zoomFit: fitToContent,
+    zoomIn: () => zoomBy(1.25),
+    zoomOut: () => zoomBy(1 / 1.25),
+    resetView,
+    help: () => setHelpOpen(true),
+  }
+
+  const commandCtx: CommandContext | null = !commandsLive
+    ? null
+    : {
+        board: kind,
+        readOnly: shared?.viewOnly === true,
+        shared: shared !== null,
+        selectedId,
+        curves: commandCurves,
+        fields:
+          kind === 'cartesian'
+            ? fields.map<TargetFacts>((f, i) => ({
+                id: f.id,
+                name: fields.length > 1 ? `Slope field ${i + 1}` : 'Slope field',
+                text: f.src,
+                color: f.color,
+              }))
+            : [],
+        sequences:
+          kind === 'cartesian'
+            ? sequences.map<SequenceFacts>((q, i) => ({
+                id: q.id,
+                name: q.name ?? (sequences.length > 1 ? `Sequence ${i + 1}` : 'Sequence'),
+                text: q.src,
+                color: q.color,
+                series: q.series !== undefined,
+                sums: q.showSums,
+              }))
+            : [],
+        solves:
+          kind === 'number-line'
+            ? items.flatMap<SolveFacts>((it, i) =>
+                it.kind === 'solve'
+                  ? [
+                      {
+                        id: it.id,
+                        name: it.label || `Inequality ${i + 1}`,
+                        text: it.src,
+                        color: it.color,
+                        signs: it.show.signs ?? NL_SOLVE_DEFAULTS.signs,
+                        tests: it.show.tests ?? NL_SOLVE_DEFAULTS.tests,
+                      },
+                    ]
+                  : [],
+              )
+            : [],
+        canUndo: undoRef.current.length > 0,
+        canRedo: redoRef.current.length > 0,
+        hasContent:
+          kind === 'number-line'
+            ? items.length > 0
+            : curves.length > 0 || fields.length > 0 || shapes.length > 0 || dataSets.length > 0 || sequences.length > 0,
+        showAnalysis,
+        canvasTheme,
+        presentMode,
+        revealOn: reveal.on,
+        sidebarOpen,
+        figure: kind === 'cartesian' ? figureStyle : null,
+        previewFigure,
+        exportFormat,
+        axisX: kind === 'cartesian' ? axisUnitChoice.x : null,
+        grid: kind === 'cartesian' ? boardGrid : null,
+        actions: commandActions,
+      }
+
+  /** Remember a run command at the front of the recent list (Prefs.recentCommands). */
+  const noteRecent = useCallback((id: string): void => {
+    const next = pushRecent(recentRef.current, id, MAX_RECENT_COMMANDS)
+    recentRef.current = next
+    setRecentCommands(next)
+    updatePrefs({ recentCommands: next })
+  }, [])
+
+  /** Run a command the palette chose — on `targetId` when it was picked. */
+  const runCommand = (cmd: Command, targetId?: string): void => {
+    const ctx = commandCtx
+    setPalette(null)
+    setHelpOpen(false)
+    if (!ctx) return
+    noteRecent(cmd.id)
+    if (targetId && targetId !== ctx.selectedId) setSelectedId(targetId)
+    cmd.run(ctx, targetId)
+  }
+
+  /** The help sheet's "Do it": run it here, or ask "which curve?" in the palette. */
+  const doFromHelp = (id: string): void => {
+    const cmd = COMMAND_BY_ID.get(id)
+    if (!cmd || !commandCtx) return
+    const av = availability(cmd, commandCtx)
+    if (av.state === 'ready') runCommand(cmd, av.targetId)
+    else if (av.state === 'pick') {
+      setHelpOpen(false)
+      setPalette({ key: Date.now(), pick: id })
+    }
+  }
+
+  // ⌘K / Ctrl+K opens the palette from anywhere — even with the cursor in the
+  // equation box, which is exactly when a teacher reaches for a tool by name.
+  // While the palette or the help sheet is open they handle ⌘K themselves.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      const isK = e.key.toLowerCase() === 'k'
+      if (!isK || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return
+      e.preventDefault()
+      setHelpOpen(false)
+      setPalette((p) => (p ? null : { key: Date.now() }))
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   // ---------------------------------------------------------------- keyboard
   useEffect(() => {
     const NUDGE: Record<string, [number, number]> = {
@@ -12221,6 +12599,19 @@ export default function App() {
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
       const meta = e.metaKey || e.ctrlKey
       const key = e.key.toLowerCase()
+      // The command palette (/) and the help sheet (?). Free keys: the board's
+      // letters are A, F, R, ⇧P, \ and ⌘Z / ⌘Y (src/ui/commands.ts lists them).
+      if (!meta && !e.altKey && (e.key === '/' || e.key === '?')) {
+        e.preventDefault()
+        if (e.key === '/') {
+          setHelpOpen(false)
+          setPalette({ key: Date.now() })
+        } else {
+          setPalette(null)
+          setHelpOpen(true)
+        }
+        return
+      }
       // Reveal mode first: R, and — while it is on — → / PageDown (next) and
       // ← / PageUp (back), which is what a presentation clicker sends. See
       // revealKeyAction for why these keys and not others.
@@ -12252,20 +12643,7 @@ export default function App() {
         redo()
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedRef.current) {
         e.preventDefault()
-        if (kindRef.current === 'number-line') deleteItem(selectedRef.current)
-        else if (fieldsRef.current.some((f) => f.id === selectedRef.current)) {
-          deleteField(selectedRef.current)
-        } else if (shapesRef.current.some((sh) => sh.id === selectedRef.current)) {
-          deleteShape(selectedRef.current)
-        } else if (dataRef.current.some((d) => d.id === selectedRef.current)) {
-          deleteData(selectedRef.current)
-        } else if (seqRef.current.some((q) => q.id === selectedRef.current)) {
-          deleteSequence(selectedRef.current)
-        } else if (ucRef.current.some((u) => u.id === selectedRef.current)) {
-          deleteUnitCircle(selectedRef.current)
-        } else if (rrRef.current.some((r) => r.id === selectedRef.current)) {
-          deleteRelatedRates(selectedRef.current)
-        } else deleteCurve(selectedRef.current)
+        deleteSelection()
       } else if (NUDGE[e.key]) {
         const [ux, uy] = NUDGE[e.key]
         const step = e.shiftKey ? 1 : 0.1
@@ -12318,12 +12696,7 @@ export default function App() {
     undo,
     redo,
     cancelBetween,
-    deleteCurve,
-    deleteField,
-    deleteShape,
-    deleteData,
-    deleteSequence,
-    deleteItem,
+    deleteSelection,
     nudgeSelected,
     commitWithSnap,
     cycleAxisUnitX,
@@ -12431,7 +12804,7 @@ export default function App() {
     <div
       className={`app${lightBoard ? ' canvas-light' : ''}${
         presentMode ? ' present-mode' : ''
-      }`}
+      }${helpOpen ? ' help-open' : ''}`}
       data-present={presentMode ? 'on' : 'off'}
     >
       <RevealContext.Provider value={revealApi}>
@@ -12456,6 +12829,7 @@ export default function App() {
         models={models}
         selectedId={selectedId}
         exprOpen={exprOpen}
+        exprSeed={exprSeed}
         snapFlash={snapFlash}
         shake={shake}
         exprSources={exprSources}
@@ -12483,157 +12857,37 @@ export default function App() {
         onDash={setDash}
         onEnds={setEnds}
         onOpacity={setOpacity}
-        onExprToggle={() => {
-          setFactorOpen(false)
-          setExpOpen(false)
-          setLogisticOpen(false)
-          setLogOpen(false)
-          setSinOpen(false)
-          setTransformOpen(false)
-          setPiecewiseOpen(false)
-          setConicOpen(false)
-          setMotionOpen(false)
-          setSeqOpen(false)
-          setExprOpen((o) => !o)
-        }}
+        onExprToggle={() => showBuilder('expr', 'toggle')}
         factorOpen={factorOpen}
-        onFactorToggle={() => {
-          setExprOpen(false)
-          setExpOpen(false)
-          setLogisticOpen(false)
-          setLogOpen(false)
-          setSinOpen(false)
-          setTransformOpen(false)
-          setPiecewiseOpen(false)
-          setConicOpen(false)
-          setMotionOpen(false)
-          setSeqOpen(false)
-          setFactorOpen((o) => !o)
-        }}
+        onFactorToggle={() => showBuilder('factor', 'toggle')}
         expOpen={expOpen}
-        onExpToggle={() => {
-          setExprOpen(false)
-          setLogisticOpen(false)
-          setFactorOpen(false)
-          setLogOpen(false)
-          setSinOpen(false)
-          setTransformOpen(false)
-          setPiecewiseOpen(false)
-          setConicOpen(false)
-          setMotionOpen(false)
-          setSeqOpen(false)
-          setExpOpen((o) => !o)
-        }}
+        onExpToggle={() => showBuilder('exp', 'toggle')}
         logisticOpen={logisticOpen}
-        onLogisticToggle={() => {
-          setExprOpen(false)
-          setFactorOpen(false)
-          setExpOpen(false)
-          setLogOpen(false)
-          setSinOpen(false)
-          setTransformOpen(false)
-          setPiecewiseOpen(false)
-          setConicOpen(false)
-          setMotionOpen(false)
-          setSeqOpen(false)
-          setLogisticOpen((o) => !o)
-        }}
+        onLogisticToggle={() => showBuilder('logistic', 'toggle')}
         onLogisticBuild={buildLogistic}
         onLogisticRestate={restateFactors}
         onShowLogisticField={showLogisticField}
         logOpen={logOpen}
-        onLogToggle={() => {
-          setExprOpen(false)
-          setFactorOpen(false)
-          setExpOpen(false)
-          setLogisticOpen(false)
-          setSinOpen(false)
-          setTransformOpen(false)
-          setPiecewiseOpen(false)
-          setConicOpen(false)
-          setMotionOpen(false)
-          setSeqOpen(false)
-          setLogOpen((o) => !o)
-        }}
+        onLogToggle={() => showBuilder('log', 'toggle')}
         sinOpen={sinOpen}
-        onSinToggle={() => {
-          setExprOpen(false)
-          setFactorOpen(false)
-          setExpOpen(false)
-          setLogisticOpen(false)
-          setLogOpen(false)
-          setTransformOpen(false)
-          setPiecewiseOpen(false)
-          setConicOpen(false)
-          setMotionOpen(false)
-          setSeqOpen(false)
-          setSinOpen((o) => !o)
-        }}
+        onSinToggle={() => showBuilder('sin', 'toggle')}
         onSinBuild={buildSinusoid}
         onSinRestate={restateFactors}
         transformOpen={transformOpen}
-        onTransformToggle={() => {
-          setExprOpen(false)
-          setFactorOpen(false)
-          setExpOpen(false)
-          setLogisticOpen(false)
-          setLogOpen(false)
-          setSinOpen(false)
-          setPiecewiseOpen(false)
-          setConicOpen(false)
-          setMotionOpen(false)
-          setSeqOpen(false)
-          setTransformOpen((o) => !o)
-        }}
+        onTransformToggle={() => showBuilder('transform', 'toggle')}
         onTransformBuild={buildTransformation}
         onTransformRestate={restateFactors}
         piecewiseOpen={piecewiseOpen}
-        onPiecewiseToggle={() => {
-          setExprOpen(false)
-          setFactorOpen(false)
-          setExpOpen(false)
-          setLogisticOpen(false)
-          setLogOpen(false)
-          setSinOpen(false)
-          setTransformOpen(false)
-          setConicOpen(false)
-          setMotionOpen(false)
-          setSeqOpen(false)
-          setPiecewiseOpen((o) => !o)
-        }}
+        onPiecewiseToggle={() => showBuilder('piecewise', 'toggle')}
         onPiecewiseBuild={buildPiecewise}
         conicOpen={conicOpen}
-        onConicToggle={() => {
-          setExprOpen(false)
-          setFactorOpen(false)
-          setExpOpen(false)
-          setLogisticOpen(false)
-          setLogOpen(false)
-          setSinOpen(false)
-          setTransformOpen(false)
-          setPiecewiseOpen(false)
-          setMotionOpen(false)
-          setSeqOpen(false)
-          setConicOpen((o) => !o)
-        }}
+        onConicToggle={() => showBuilder('conic', 'toggle')}
         onConicBuild={buildConic}
         onConicRestate={restateFactors}
         conicConstructionFor={conicConstructionFor}
         onConicConstruction={setConicConstruction}
         motionOpen={motionOpen}
-        onMotionToggle={() => {
-          setExprOpen(false)
-          setFactorOpen(false)
-          setExpOpen(false)
-          setLogisticOpen(false)
-          setLogOpen(false)
-          setSinOpen(false)
-          setTransformOpen(false)
-          setPiecewiseOpen(false)
-          setConicOpen(false)
-          setSeqOpen(false)
-          setMotionOpen((o) => !o)
-        }}
+        onMotionToggle={() => showBuilder('motion', 'toggle')}
         onMotionBuild={buildMotion}
         onUnitCircleAdd={addUnitCircle}
         unitCircleCards={unitCircleCardNodes}
@@ -12643,19 +12897,7 @@ export default function App() {
         relatedRatesCards={relatedRatesCardNodes}
         relatedRatesCount={kind === 'cartesian' ? relatedRates.length : 0}
         seqOpen={seqOpen}
-        onSeqToggle={() => {
-          setExprOpen(false)
-          setFactorOpen(false)
-          setExpOpen(false)
-          setLogisticOpen(false)
-          setLogOpen(false)
-          setSinOpen(false)
-          setTransformOpen(false)
-          setPiecewiseOpen(false)
-          setConicOpen(false)
-          setMotionOpen(false)
-          setSeqOpen((o) => !o)
-        }}
+        onSeqToggle={() => showBuilder('seq', 'toggle')}
         onSeqBuild={buildSequence}
         seqDefaultName={seqDefaultName}
         sequences={sequences}
@@ -12741,17 +12983,7 @@ export default function App() {
         onShapeEquation={setShapeEquation}
         onShapeCoord={setShapeCoord}
         onDataAdd={() => {
-          setExprOpen(false)
-          setFactorOpen(false)
-          setExpOpen(false)
-          setLogisticOpen(false)
-          setLogOpen(false)
-          setSinOpen(false)
-          setTransformOpen(false)
-          setPiecewiseOpen(false)
-          setConicOpen(false)
-          setMotionOpen(false)
-          setSeqOpen(false)
+          showBuilder(null, 'open')
           addDataTable()
         }}
         data={dataSets}
@@ -13060,6 +13292,10 @@ export default function App() {
           onToggleSidebar={() => setSidebarOpen((o) => !o)}
           onUndo={undo}
           onRedo={redo}
+          onHelp={() => {
+            setPalette(null)
+            setHelpOpen(true)
+          }}
         />
         )}
 
@@ -13356,6 +13592,31 @@ export default function App() {
         </div>
       </main>
       </RevealContext.Provider>
+
+      {/* ⌘K and ?: outside <main>, so the help sheet can print on its own. */}
+      {palette && commandCtx && (
+        <CommandPalette
+          key={palette.key}
+          ctx={commandCtx}
+          recent={recentCommands}
+          pickFor={palette.pick}
+          mac={mac}
+          onRun={runCommand}
+          onClose={() => setPalette(null)}
+        />
+      )}
+      {helpOpen && commandCtx && (
+        <HelpSheet
+          ctx={commandCtx}
+          mac={mac}
+          onDo={doFromHelp}
+          onPalette={() => {
+            setHelpOpen(false)
+            setPalette({ key: Date.now() })
+          }}
+          onClose={() => setHelpOpen(false)}
+        />
+      )}
     </div>
   )
 }

@@ -379,6 +379,12 @@ export interface Prefs {
    * (src/ui/CardSection.tsx).
    */
   sections: Record<string, boolean>
+  /**
+   * The command palette's recently run commands (⌘K), most recent first, by
+   * command id (src/ui/commands.ts). They float to the top of the palette. An
+   * id the registry no longer knows is simply never shown.
+   */
+  recentCommands: string[]
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -392,6 +398,7 @@ export const DEFAULT_PREFS: Prefs = {
   exportFormat: 'png',
   latexWidthCm: DEFAULT_LATEX_WIDTH_CM,
   sections: {},
+  recentCommands: [],
 }
 
 /** Never trust what came back from storage: a bad value falls back silently. */
@@ -409,12 +416,12 @@ function exportOf(v: unknown, fallback: FitExportSettings): FitExportSettings {
 
 export function readPrefs(): Prefs {
   const s = storage()
-  if (!s) return { ...DEFAULT_PREFS, exportByDoc: {}, sections: {} }
+  if (!s) return { ...DEFAULT_PREFS, exportByDoc: {}, sections: {}, recentCommands: [] }
   try {
     const raw = s.getItem(PREFS_KEY)
-    if (!raw) return { ...DEFAULT_PREFS, exportByDoc: {}, sections: {} }
+    if (!raw) return { ...DEFAULT_PREFS, exportByDoc: {}, sections: {}, recentCommands: [] }
     const parsed: unknown = JSON.parse(raw)
-    if (!isObj(parsed)) return { ...DEFAULT_PREFS, exportByDoc: {}, sections: {} }
+    if (!isObj(parsed)) return { ...DEFAULT_PREFS, exportByDoc: {}, sections: {}, recentCommands: [] }
     const exportDefaults = exportOf(parsed.exportDefaults, DEFAULT_PREFS.exportDefaults)
     const exportByDoc: Record<string, FitExportSettings> = {}
     if (isObj(parsed.exportByDoc)) {
@@ -437,10 +444,26 @@ export function readPrefs(): Prefs {
       latexWidthCm:
         parsed.latexWidthCm === undefined ? DEFAULT_PREFS.latexWidthCm : clampLatexWidth(parsed.latexWidthCm),
       sections: sectionsOf(parsed.sections),
+      recentCommands: recentOf(parsed.recentCommands),
     }
   } catch {
-    return { ...DEFAULT_PREFS, exportByDoc: {}, sections: {} }
+    return { ...DEFAULT_PREFS, exportByDoc: {}, sections: {}, recentCommands: [] }
   }
+}
+
+/** How many recently run palette commands are remembered. */
+export const MAX_RECENT_COMMANDS = 8
+
+/** Recent command ids: short strings, no repeats, at most MAX_RECENT_COMMANDS. */
+function recentOf(v: unknown): string[] {
+  if (!Array.isArray(v)) return []
+  const out: string[] = []
+  for (const id of v) {
+    if (typeof id !== 'string' || id.length === 0 || id.length > 64 || out.includes(id)) continue
+    out.push(id)
+    if (out.length >= MAX_RECENT_COMMANDS) break
+  }
+  return out
 }
 
 /** Section open/closed choices: string keys, boolean values, nothing else. */

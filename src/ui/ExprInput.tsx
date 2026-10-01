@@ -17,17 +17,25 @@ interface Props {
    * `g(x) = 2f(x − 1) + 3` is a thing this box understands.
    */
   names?: readonly string[]
+  /**
+   * Text to start with, caret at its end — "dy/dx = " when the command
+   * palette's "Slope field" opened the box. Read once, at mount.
+   */
+  initial?: string
 }
 
 /** Inline equation-entry card ("+" in the sidebar). Enter submits, Esc closes;
  *  stays open after a successful submit for rapid multi-entry. */
-export function ExprInput({ onSubmit, onClose, placeholder, names }: Props) {
-  const [text, setText] = useState('')
+export function ExprInput({ onSubmit, onClose, placeholder, names, initial }: Props) {
+  const [text, setText] = useState(initial ?? '')
   const [error, setError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    inputRef.current?.focus()
+    const el = inputRef.current
+    el?.focus()
+    const at = el?.value.length ?? 0
+    el?.setSelectionRange(at, at)
   }, [])
 
   /** `f(x)` at the caret (over any selection), caret left after it. */

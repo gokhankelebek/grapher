@@ -85,6 +85,8 @@ interface Props {
   models: Record<string, ModelSpec>
   selectedId: string | null
   exprOpen: boolean
+  /** Text the + box opens with (the command palette's seeded lines); `key` remounts it. */
+  exprSeed?: { text: string; key: number } | null
   snapFlash: { id: string; mask: boolean[]; key: number } | null
   shake: { id: string; key: number } | null
   /** curveId -> the equation text, for typed curves. */
@@ -395,6 +397,7 @@ export function Sidebar({
   models,
   selectedId,
   exprOpen,
+  exprSeed,
   snapFlash,
   shake,
   exprSources,
@@ -677,6 +680,8 @@ export function Sidebar({
           )}
           {exprOpen && (
             <ExprInput
+              key={exprSeed?.key ?? 0}
+              initial={exprSeed?.text}
               onSubmit={onExprSubmit}
               onClose={onExprToggle}
               names={numberLine ? undefined : exprNames}

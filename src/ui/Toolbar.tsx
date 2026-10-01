@@ -16,6 +16,8 @@ interface Props {
   onToggleSidebar(): void
   onUndo(): void
   onRedo(): void
+  /** "?": the help sheet — everything Grapher can do (src/ui/HelpSheet.tsx). */
+  onHelp?(): void
 }
 
 /**
@@ -43,6 +45,7 @@ export function Toolbar({
   onToggleSidebar,
   onUndo,
   onRedo,
+  onHelp,
 }: Props) {
   return (
     <div className="toolbar">
@@ -134,6 +137,18 @@ export function Toolbar({
       <div className="tb-sep" />
 
       {exportMenu}
+
+      {onHelp && (
+        <button
+          className="tb-btn tb-icon tb-help"
+          onClick={onHelp}
+          data-testid="help-open"
+          title="What Grapher can do (?) — and ⌘K to find any tool"
+          aria-label="Help: what Grapher can do"
+        >
+          ?
+        </button>
+      )}
     </div>
   )
 }
