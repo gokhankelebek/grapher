@@ -4243,3 +4243,167 @@ export function docFromBoard(meta: DocMeta, input: BoardInput, now = Date.now())
     board: boardToStored(input),
   }
 }
+
+// ================================================================ worksheets
+//
+// A worksheet is a PAGE OF FIGURES: references to documents (never copies of
+// them), each with an optional label override, caption and figure style, laid
+// out in a grid on a letter or A4 page. It is stored beside the documents under
+// a key of its own (src/ui/storage.ts), so no document's bytes change and an
+// older reader never sees it. The figures are rebuilt from the documents every
+// time the sheet is opened or exported: a worksheet follows its documents.
+
+export type SheetPage = 'letter' | 'a4'
+export type SheetOrientation = 'portrait' | 'landscape'
+export type SheetCols = 1 | 2 | 3
+/** (a) (b) (c) …, 1 2 3 …, or no labels at all. */
+export type SheetNumbering = 'a' | '1' | 'none'
+
+export interface WorksheetItem {
+  /** The document this figure is drawn from. */
+  docId: string
+  /** Replaces the automatic "(a)" — e.g. "7." or "(iii)". Blank = automatic. */
+  label?: string
+  /** One line printed under the figure. */
+  caption?: string
+  /** This figure's style; absent = the sheet's style. */
+  style?: FigureStyleId
+}
+
+export interface Worksheet {
+  id: string
+  name: string
+  page: SheetPage
+  orientation: SheetOrientation
+  cols: SheetCols
+  items: WorksheetItem[]
+  numbering: SheetNumbering
+  /** Printed across the top of page 1. */
+  title?: string
+  /**
+   * The answer key: analysis markers, their labels and the intersection chips
+   * on every figure. Off (absent) = the clean student version.
+   */
+  showAnswers?: boolean
+  /** The style every figure takes unless it says otherwise. Absent = 'textbook'. */
+  style?: FigureStyleId
+  /** "Name: ______  Date: ____" under the title. Absent = shown. */
+  nameLine?: boolean
+  createdAt: number
+  modifiedAt: number
+}
+
+export const WORKSHEET_VERSION = 1
+export const MAX_SHEET_ITEMS = 60
+export const MAX_SHEETS = 200
+const MAX_SHEET_NAME = 80
+const MAX_SHEET_TITLE = 160
+const MAX_SHEET_CAPTION = 200
+const MAX_SHEET_LABEL = 12
+/** The style a new sheet's figures are drawn in: paper, light, unfussy. */
+export const DEFAULT_SHEET_STYLE: FigureStyleId = 'textbook'
+
+/** Printable text: control characters become spaces, then trimmed and capped. */
+function sheetText(v: unknown, max: number): string | undefined {
+  if (typeof v !== 'string') return undefined
+  // eslint-disable-next-line no-control-regex
+  const t = v.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim()
+  return t === '' ? undefined : t.slice(0, max)
+}
+
+export function newWorksheet(name: string, now = Date.now()): Worksheet {
+  return {
+    id: newId(),
+    name: sheetText(name, MAX_SHEET_NAME) ?? 'Worksheet',
+    page: 'letter',
+    orientation: 'portrait',
+    cols: 2,
+    items: [],
+    numbering: 'a',
+    showAnswers: false,
+    style: DEFAULT_SHEET_STYLE,
+    nameLine: true,
+    createdAt: now,
+    modifiedAt: now,
+  }
+}
+
+/**
+ * Read one worksheet out of untrusted JSON. Null when it is not a worksheet at
+ * all (no id); otherwise every field is repaired to something valid, and an
+ * item that names no document is dropped.
+ */
+export function storedToWorksheet(raw: unknown): Worksheet | null {
+  if (!isObj(raw)) return null
+  const id = typeof raw.id === 'string' && raw.id.trim() !== '' ? raw.id.slice(0, 64) : null
+  if (!id) return null
+  const items: WorksheetItem[] = []
+  if (Array.isArray(raw.items)) {
+    for (const it of raw.items.slice(0, MAX_SHEET_ITEMS)) {
+      if (!isObj(it) || typeof it.docId !== 'string' || it.docId === '') continue
+      const label = sheetText(it.label, MAX_SHEET_LABEL)
+      const caption = sheetText(it.caption, MAX_SHEET_CAPTION)
+      items.push({
+        docId: it.docId.slice(0, 64),
+        ...(label !== undefined ? { label } : {}),
+        ...(caption !== undefined ? { caption } : {}),
+        ...(isFigureStyleId(it.style) ? { style: it.style } : {}),
+      })
+    }
+  }
+  const title = sheetText(raw.title, MAX_SHEET_TITLE)
+  const at = (v: unknown): number => (isNum(v) && v >= 0 ? v : 0)
+  return {
+    id,
+    name: sheetText(raw.name, MAX_SHEET_NAME) ?? 'Worksheet',
+    page: raw.page === 'a4' ? 'a4' : 'letter',
+    orientation: raw.orientation === 'landscape' ? 'landscape' : 'portrait',
+    cols: raw.cols === 1 || raw.cols === 3 ? raw.cols : 2,
+    items,
+    numbering: raw.numbering === '1' || raw.numbering === 'none' ? raw.numbering : 'a',
+    ...(title !== undefined ? { title } : {}),
+    showAnswers: raw.showAnswers === true,
+    style: isFigureStyleId(raw.style) ? raw.style : DEFAULT_SHEET_STYLE,
+    nameLine: raw.nameLine !== false,
+    createdAt: at(raw.createdAt),
+    modifiedAt: at(raw.modifiedAt),
+  }
+}
+
+/** The on-disk record for every worksheet: a version and the list. */
+export function serializeWorksheets(sheets: readonly Worksheet[]): string {
+  return JSON.stringify({ version: WORKSHEET_VERSION, sheets: sheets.slice(0, MAX_SHEETS) })
+}
+
+/**
+ * Read the worksheets record. Never throws: a damaged record reads as empty,
+ * an unreadable sheet is skipped and REPORTED, a duplicate id keeps the first.
+ */
+export function deserializeWorksheets(json: string | null): { sheets: Worksheet[]; problems: string[] } {
+  if (json === null || json.trim() === '') return { sheets: [], problems: [] }
+  let raw: unknown
+  try {
+    raw = JSON.parse(json)
+  } catch {
+    return { sheets: [], problems: ['The saved worksheets are corrupted and could not be read.'] }
+  }
+  const list = isObj(raw) && Array.isArray(raw.sheets) ? raw.sheets : Array.isArray(raw) ? raw : null
+  if (!list) return { sheets: [], problems: ['The saved worksheets are not in a format this app reads.'] }
+  const problems: string[] = []
+  if (isObj(raw) && isNum(raw.version) && raw.version > WORKSHEET_VERSION) {
+    problems.push('These worksheets were saved by a newer version of Grapher; anything unknown was skipped.')
+  }
+  const sheets: Worksheet[] = []
+  const seen = new Set<string>()
+  for (const s of list.slice(0, MAX_SHEETS)) {
+    const w = storedToWorksheet(s)
+    if (!w) {
+      problems.push('An unreadable worksheet was skipped.')
+      continue
+    }
+    if (seen.has(w.id)) continue
+    seen.add(w.id)
+    sheets.push(w)
+  }
+  return { sheets, problems }
+}

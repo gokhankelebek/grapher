@@ -204,6 +204,29 @@ export interface BoardScene {
   /** Markers + labels for one curve. Null/absent when the toggle is off. */
   analysis?: { curve: FittedCurve; points: readonly SpecialPoint[] } | null
   /**
+   * ANSWER-KEY labelling, for a printed key (the worksheet builder). Never set
+   * by the screen or the document's own export, which keep the crowding rules
+   * they have always had.
+   *
+   * A key has to STATE its answers, and the screen's rules drop a chip whose
+   * neighbour is within 28 px along the curve — in a 6 cm figure that is the
+   * zeros ±√3 of x² − 3 beside the vertex, which then printed as bare dots. So
+   * under a key every analysis point (and every crossing) asks for a chip, and
+   * a chip may only sit NEAR its point: a short ring of positions around the
+   * marker, whose leader does not cross the curve, clear of every other plate
+   * and marker. Chips shrink in a small figure. A point that still finds no
+   * room is pushed onto `unlabelled`, for the caller to state in a line of
+   * text under the figure — a key never leaves an answer unstated.
+   *
+   * `more` is the other visible curves' points, labelled in the same pass and
+   * against the same plates (the screen draws those as bare markers).
+   */
+  answerKey?: {
+    more?: readonly { curve: FittedCurve; points: readonly SpecialPoint[] }[]
+    /** OUT: every point that got no chip, in the order they were tried. */
+    unlabelled: SpecialPoint[]
+  }
+  /**
    * Where the curves MEET each other — the one analysis point that does not
    * belong to a curve.
    *
@@ -545,6 +568,11 @@ function textColor(theme: Theme): string {
  * Every surface goes through pointText, so the chip and the card can never
  * disagree about what this point is called.
  */
+/** The words a point's chip says — also what an answer key's text line states. */
+export function answerLabel(p: SpecialPoint): string {
+  return labelFor(p)
+}
+
 function labelFor(p: SpecialPoint): string {
   const text = pointText(p, { decimal: false })
   if (p.kind === 'zero') return `${text}${p.tangent ? ' (touches)' : ''}`
@@ -841,6 +869,47 @@ interface AnalysisOpts {
    * omits it lays out exactly the boxes it always did.
    */
   reserve?: LabelBox[]
+  /** Answer-key labelling (see BoardScene.answerKey); null = the screen's rules. */
+  key?: KeyLabelling | null
+}
+
+/** What answer-key labelling needs while a layer places its chips. */
+interface KeyLabelling {
+  /** Points that found no room. */
+  unlabelled: SpecialPoint[]
+  /** Every marker on the figure, screen px: a plate never covers one. */
+  markers: { x: number; y: number }[]
+  /** Chip size relative to the screen's. */
+  shrink: number
+  /**
+   * Chips left to place. A small figure carries only a few, so the answers
+   * that matter most (by labelRank) get chips that can be read and the rest
+   * go into the text line rather than into a pile.
+   */
+  budget: number
+  /** Where (math coords) an answer has already been stated, chip or text: a twin is not stated again. */
+  seen: { x: number; y: number }[]
+}
+
+/** A figure narrower than this sets its key chips smaller. */
+const KEY_SMALL_W = 360
+/** Chip scale in a small figure. */
+const KEY_SMALL_SHRINK = 0.82
+
+/** Plot area per key chip, px²: a 200 x 200 figure carries four. */
+const KEY_AREA_PER_CHIP = 9000
+
+/**
+ * Has this answer already been stated (the minimum that is also the
+ * y-intercept, a zero that is also an inflection)? Compared in MATH
+ * coordinates: two different answers a pixel apart in a small figure are
+ * still two answers.
+ */
+function keySeen(key: KeyLabelling, p: SpecialPoint): boolean {
+  const near = (a: number, b: number): boolean => Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b))
+  if (key.seen.some((q) => near(q.x, p.pos.x) && near(q.y, p.pos.y))) return true
+  key.seen.push({ x: p.pos.x, y: p.pos.y })
+  return false
 }
 
 export function drawAnalysis(
@@ -899,9 +968,12 @@ export function drawAnalysis(
   // --- labels: the same crowding budget, spent on the points a class reads
   // first. MAX_LABELS no longer means "more than eight points, so draw none";
   // it means "label the eight that matter most".
-  const fpx = LABEL_PX * type
+  const key = o.key ?? null
+  // A key's chips may be set smaller; the plate geometry follows the text.
+  const ctype = key ? type * key.shrink : type
+  const fpx = LABEL_PX * ctype
   const gap = MIN_LABEL_GAP * type
-  const h = 16 * type
+  const h = 16 * ctype
   ctx.font = o.font ? figureFont({ font: o.font }, fpx) : labelFont(fpx)
   ctx.textBaseline = 'middle'
   const placed: LabelBox[] = o.reserve ?? []
@@ -915,20 +987,38 @@ export function drawAnalysis(
   })
 
   for (const m of ranked) {
-    if (placed.length >= MAX_LABELS) break
-    // crowded neighbours: keep the marker, drop the text
-    if (!emph(m.i) && anchors.some((a) => Math.abs(a - m.sx) < gap)) continue
+    if (key) {
+      // A crossing has its own layer; everything else is an answer.
+      if (!hasMarkerGlyph(m.p.kind) && m.p.kind !== 'hole') continue
+      if (keySeen(key, m.p)) continue
+      // A hole is stated in words ("hole: (1, 2)"): a bare pair beside an
+      // open ring would read as a point ON the graph, which is what it is not.
+      if (key.budget <= 0 || m.p.kind === 'hole') {
+        key.unlabelled.push(m.p)
+        continue
+      }
+    } else {
+      if (placed.length >= MAX_LABELS) break
+      // crowded neighbours: keep the marker, drop the text
+      if (!emph(m.i) && anchors.some((a) => Math.abs(a - m.sx) < gap)) continue
+    }
 
     const text = labelFor(m.p)
-    const w = ctx.measureText(text).width + 10 * type
+    const w = ctx.measureText(text).width + 10 * ctype
     // A masked point has a handle standing on it, which is bigger than any
     // marker: step off from the handle's radius so the plate clears it too.
     const mr = m.masked
       ? 7 * stroke
       : markerRadius(m.p, stroke, emph(m.i) ? 2.5 : 0, filled)
     const n = labelNormal(m.p, o.slopeAt, ppuY(vp) / ppuX(vp))
-    const box = placeLabel(vp, m.sx, m.sy, w, h, mr, n, type, placed, o.screenY ?? null)
-    if (!box) continue
+    const box = key
+      ? placeKeyLabel(vp, m.sx, m.sy, w, h, mr, n, ctype, placed, key.markers, o.screenY ?? null)
+      : placeLabel(vp, m.sx, m.sy, w, h, mr, n, type, placed, o.screenY ?? null)
+    if (!box) {
+      if (key) key.unlabelled.push(m.p)
+      continue
+    }
+    if (key) key.budget--
 
     drawLabelPlate(
       ctx,
@@ -942,7 +1032,7 @@ export function drawAnalysis(
         border: emph(m.i) ? o.color : o.theme.gridMajor,
         text: emph(m.i) ? o.color : text0,
       },
-      type,
+      ctype,
       stroke,
     )
 
@@ -1003,6 +1093,8 @@ export interface IntersectionOpts {
   font?: 'sans' | 'serif' | null
   /** Plates already on the board; this layer steps around them and adds its own. */
   reserve?: LabelBox[]
+  /** Answer-key labelling (see BoardScene.answerKey). */
+  key?: KeyLabelling | null
 }
 
 /**
@@ -1042,9 +1134,14 @@ export function drawIntersections(
     if (!p || !p.pos || !Number.isFinite(p.pos.x) || !Number.isFinite(p.pos.y)) continue
     const s = toScreen(p.pos, vp)
     if (s.x < -30 || s.y < -30 || s.x > vp.widthPx + 30 || s.y > vp.heightPx + 30) continue
+    // Three curves through one point answer with the same place twice. An
+    // answer key compares those in math coordinates instead (keySeen), so two
+    // DIFFERENT crossings a pixel apart in a small figure are both stated.
     const key = `${Math.round(s.x)},${Math.round(s.y)}`
-    if (seen.has(key)) continue
-    seen.add(key)
+    if (!o.key) {
+      if (seen.has(key)) continue
+      seen.add(key)
+    }
     shown.push({ p, sx: s.x, sy: s.y })
   }
   if (shown.length === 0) return
@@ -1070,8 +1167,10 @@ export function drawIntersections(
 
   // --- the chips, through the same clearance the analysis plates use, and
   // around the ones the analysis layer has already put down.
-  const fpx = LABEL_PX * type
-  const h = 16 * type
+  const key = o.key ?? null
+  const ctype = key ? type * key.shrink : type
+  const fpx = LABEL_PX * ctype
+  const h = 16 * ctype
   ctx.font = o.font ? figureFont({ font: o.font }, fpx) : labelFont(fpx)
   ctx.textBaseline = 'middle'
   const placed: LabelBox[] = o.reserve ?? []
@@ -1085,17 +1184,30 @@ export function drawIntersections(
   // still decides where a plate may sit; it just does not decide how many.
   let mine = 0
   for (const m of shown) {
-    if (mine >= MAX_LABELS) break
+    if (!key && mine >= MAX_LABELS) break
+    if (key) {
+      if (keySeen(key, m.p)) continue
+      if (key.budget <= 0) {
+        key.unlabelled.push(m.p)
+        continue
+      }
+    }
     // The string that is actually drawn, exact form and all: a plate measured
     // on "(1.414, 2.000)" and printed with "(√2, 2)" is a box of the wrong
     // width, and the crowding test it feeds is then wrong too.
     const text = pointText(m.p, { decimal: false })
-    const w = ctx.measureText(text).width + 10 * type
+    const w = ctx.measureText(text).width + 10 * ctype
     // Straight up off the crossing. There are two tangents here and no reason
     // to prefer either, so the plate takes the direction that reads as a
     // callout — and placeLabel tries straight down when that spot is taken.
-    const box = placeLabel(vp, m.sx, m.sy, w, h, ring, { x: 0, y: -1 }, type, placed, null)
-    if (!box) continue
+    const box = key
+      ? placeKeyLabel(vp, m.sx, m.sy, w, h, ring, { x: 0, y: -1 }, ctype, placed, key.markers, null)
+      : placeLabel(vp, m.sx, m.sy, w, h, ring, { x: 0, y: -1 }, type, placed, null)
+    if (!box) {
+      if (key) key.unlabelled.push(m.p)
+      continue
+    }
+    if (key) key.budget--
     drawLabelPlate(
       ctx,
       m.sx,
@@ -1103,7 +1215,7 @@ export function drawIntersections(
       box,
       text,
       { bg, leader: o.color, border: o.theme.gridMajor, text: text0 },
-      type,
+      ctype,
       stroke,
     )
     placed.push(box)
@@ -1217,6 +1329,99 @@ function placeLabel(
       if (clash) continue
       const box = { x, y, w, h }
       if (onCurve(box)) continue
+      return box
+    }
+  }
+  return null
+}
+
+/**
+ * An answer key's chip: as NEAR its point as it can be. A ring of positions
+ * around the marker — along the curve's normal first, then the other seven
+ * compass directions — at three short distances, nearest first. A position is
+ * taken only when the plate is on the figure, clear of every plate and every
+ * other marker, off the curve, and joined to its point by a leader that does
+ * not cross the curve. Null when no short position works: the caller states
+ * the answer in text instead of sending the chip across the figure.
+ */
+function placeKeyLabel(
+  vp: Viewport,
+  sx: number,
+  sy: number,
+  w: number,
+  h: number,
+  markerR: number,
+  n: { x: number; y: number },
+  type: number,
+  placed: readonly LabelBox[],
+  markers: readonly { x: number; y: number }[],
+  screenY: ((px: number) => number | null) | null,
+): LabelBox | null {
+  const D = Math.SQRT1_2
+  const dirs = [
+    n,
+    { x: -n.x, y: -n.y },
+    { x: 0, y: -1 },
+    { x: 0, y: 1 },
+    { x: 1, y: 0 },
+    { x: -1, y: 0 },
+    { x: D, y: -D },
+    { x: -D, y: -D },
+    { x: D, y: D },
+    { x: -D, y: D },
+  ]
+  const onCurve = (b: LabelBox): boolean => {
+    if (!screenY) return false
+    const step = Math.max(1, b.w / 32)
+    for (let px = b.x; px <= b.x + b.w; px += step) {
+      const py = screenY(px)
+      if (py === null) continue
+      if (py >= b.y - 1 && py <= b.y + b.h + 1) return true
+    }
+    return false
+  }
+  /** Does the visible part of the leader (marker edge → plate edge) meet the curve? */
+  const leaderCrosses = (b: LabelBox): boolean => {
+    if (!screenY) return false
+    const cx = b.x + b.w / 2
+    const cy = b.y + b.h / 2
+    const len = Math.hypot(cx - sx, cy - sy)
+    if (len < 1e-6) return false
+    const steps = Math.ceil(len)
+    let prev: number | null = null
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps
+      const x = sx + (cx - sx) * t
+      const y = sy + (cy - sy) * t
+      if (Math.hypot(x - sx, y - sy) < markerR + 3) continue
+      if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) break
+      const py = screenY(x)
+      if (py === null) {
+        prev = null
+        continue
+      }
+      const side = Math.sign(y - py)
+      if (Math.abs(y - py) < 1.5) return true
+      if (prev !== null && side !== 0 && side !== prev) return true
+      if (side !== 0) prev = side
+    }
+    return false
+  }
+  for (const k of [0, 1, 2]) {
+    for (const dir of dirs) {
+      const clearance = Math.abs(dir.x) * (w / 2) + Math.abs(dir.y) * (h / 2)
+      const d = markerR + clearance + (3 + k * 7) * type
+      const cx = sx + dir.x * d
+      const cy = sy + dir.y * d
+      const x = cx - w / 2
+      const y = cy - h / 2
+      if (x < 2 || y < 2 || x + w > vp.widthPx - 2 || y + h > vp.heightPx - 2) continue
+      const box = { x, y, w, h }
+      if (placed.some((r) => x < r.x + r.w && x + w > r.x && y < r.y + r.h && y + h > r.y)) continue
+      // never over a marker — its own or another answer's
+      if (markers.some((m) => m.x > x - 4 && m.x < x + w + 4 && m.y > y - 4 && m.y < y + h + 4)) continue
+      if (sx > x - 2 && sx < x + w + 2 && sy > y - 2 && sy < y + h + 2) continue
+      if (onCurve(box) || leaderCrosses(box)) continue
       return box
     }
   }
@@ -2267,10 +2472,32 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
   // the selected curve's, because they are labels on the same picture.
   const plates: LabelBox[] = overlayPlates
 
+  // An answer key labels every curve's points against one set of plates and
+  // one list of markers, so no chip covers another answer's dot.
+  const ak = scene.answerKey
+  let key: KeyLabelling | null = null
+  if (ak) {
+    const markers: { x: number; y: number }[] = []
+    const addMarks = (pts: readonly SpecialPoint[]): void => {
+      for (const p of pts) if (p && p.pos && Number.isFinite(p.pos.x) && Number.isFinite(p.pos.y)) markers.push(toScreen(p.pos, vp))
+    }
+    if (scene.analysis && scene.analysis.curve.visible) addMarks(scene.analysis.points)
+    for (const m of ak.more ?? []) if (m.curve.visible) addMarks(m.points)
+    for (const c of scene.intersections ?? []) addMarks([c.point])
+    key = {
+      unlabelled: ak.unlabelled,
+      markers,
+      shrink: vp.widthPx < KEY_SMALL_W ? KEY_SMALL_SHRINK : 1,
+      budget: Math.max(3, Math.floor((vp.widthPx * vp.heightPx) / KEY_AREA_PER_CHIP)),
+      seen: [],
+    }
+  }
+
   const an = scene.analysis ?? null
   if (an && an.points.length > 0 && an.curve.visible) {
     try {
       drawAnalysis(ctx, vp, an.points, {
+        key,
         reserve: plates,
         color: ink(an.curve.color),
         theme,
@@ -2287,6 +2514,33 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
       })
     } catch {
       /* analysis render failed — the board still stands */
+    }
+  }
+
+  // The key's other curves: their markers and chips, in their own ink.
+  if (key && ak?.more) {
+    for (const m of ak.more) {
+      if (!m.curve.visible || m.points.length === 0) continue
+      try {
+        drawAnalysis(ctx, vp, m.points, {
+          key,
+          reserve: plates,
+          color: ink(m.curve.color),
+          theme,
+          pointStyle: fig?.pointStyle ?? null,
+          font: fig?.font ?? null,
+          handles: [],
+          highlight: null,
+          openIdx: null,
+          hoverIdx: null,
+          halos: false,
+          scale,
+          slopeAt: explicitSlope(m.curve, models),
+          screenY: explicitScreenY(m.curve, models, vp),
+        })
+      } catch {
+        /* one curve's answers failing must not take the key with it */
+      }
     }
   }
 
@@ -2311,6 +2565,7 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
           font: fig?.font ?? null,
           scale,
           reserve: plates,
+          key,
         })
       }
     } catch {

@@ -447,6 +447,7 @@ import {
   recordScene,
 } from './ui/vectorExport'
 import { toPgfplots } from './ui/pgfplotsExport'
+import { WorksheetEditor } from './ui/WorksheetEditor'
 import { toSvg } from './render/vectorSvg'
 import { toPdf } from './render/vectorPdf'
 import { toTikz } from './render/vectorTikz'
@@ -2578,6 +2579,19 @@ export default function App() {
     window.addEventListener('storage', onStorage)
     return () => window.removeEventListener('storage', onStorage)
   }, [])
+
+  // ------------------------------------------------------------ worksheets
+  //
+  // The sheet reads documents from STORAGE, so the open one is written first
+  // (when it has unsaved changes) — otherwise its figure on the sheet would be
+  // the version from before the last edit. The board itself is untouched
+  // underneath and is exactly as it was when the sheet closes.
+  const [worksheetOpen, setWorksheetOpen] = useState(false)
+  const openWorksheet = useCallback((): void => {
+    saveBeforeSwitch()
+    setDocs(listDocs())
+    setWorksheetOpen(true)
+  }, [saveBeforeSwitch])
 
   const renameDoc = useCallback((name: string): void => {
     const next = { ...docMetaRef.current, name }
@@ -12302,6 +12316,7 @@ export default function App() {
               onDelete={deleteDocument}
               onExport={exportDocument}
               onImport={importDocument}
+              onWorksheet={openWorksheet}
             />
           }
           exportMenu={
@@ -12597,6 +12612,15 @@ export default function App() {
             </div>
           </div>
           )}
+
+        {worksheetOpen && (
+          <WorksheetEditor
+            docs={docs}
+            screen={{ widthPx: vpRef.current.widthPx, heightPx: vpRef.current.heightPx }}
+            onClose={() => setWorksheetOpen(false)}
+            toast={(msg) => showToast(msg)}
+          />
+        )}
 
         {dropActive && (
           <div className="drop-overlay" aria-hidden="true">

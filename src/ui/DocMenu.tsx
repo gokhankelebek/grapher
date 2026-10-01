@@ -23,6 +23,8 @@ interface Props {
   onDelete(id: string): void
   onExport(): void
   onImport(file: File): void
+  /** Open the worksheet builder: several documents' figures on one page. */
+  onWorksheet?(): void
 }
 
 function relativeTime(ts: number): string {
@@ -87,6 +89,7 @@ export function DocMenu({
   onDelete,
   onExport,
   onImport,
+  onWorksheet,
 }: Props) {
   const [open, setOpen] = useState(false)
   const [renaming, setRenaming] = useState(false)
@@ -225,6 +228,17 @@ export function DocMenu({
             <button className="doc-item" role="menuitem" onClick={pick(onDuplicate)}>
               Duplicate
             </button>
+            {onWorksheet && (
+              <button
+                className="doc-item"
+                role="menuitem"
+                title="Put figures from several documents on one printable page"
+                data-testid="open-worksheet"
+                onClick={pick(onWorksheet)}
+              >
+                Worksheet…
+              </button>
+            )}
             {/* "Save a backup…" writes a DOCUMENT; Download writes a PNG. The
                 old wording ("Export to file…") was being read as the picture. */}
             <button className="doc-item" role="menuitem" onClick={pick(onExport)}>

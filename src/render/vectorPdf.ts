@@ -176,39 +176,49 @@ export interface PdfOptions {
   title?: string
 }
 
-/**
- * The PDF as a string of single-byte characters (every char code ≤ 255), so
- * its length IS its byte length. Use toPdf() for the bytes.
- */
-export function toPdfString(list: DisplayList, opts: PdfOptions = {}): string {
-  const k = opts.ptPerPx ?? PT_PER_PX
-  const Wpt = list.width * k
+/** Font and transparency resources shared by every page of one file. */
+interface PdfResources {
+  fontRes(name: string): string
+  gs(fill: number, stroke: number): string | null
+  fonts: Map<string, string>
+  states: Map<string, string>
+}
+
+function pdfResources(): PdfResources {
+  const fonts = new Map<string, string>() // BaseFont → /Fn
+  const states = new Map<string, string>() // "ca|CA" → /GSn
+  return {
+    fonts,
+    states,
+    fontRes(name: string): string {
+      let r = fonts.get(name)
+      if (!r) {
+        r = `F${fonts.size + 1}`
+        fonts.set(name, r)
+      }
+      return r
+    },
+    gs(fill: number, stroke: number): string | null {
+      const ca = Math.max(0, Math.min(1, fill))
+      const CA = Math.max(0, Math.min(1, stroke))
+      if (ca >= 0.9995 && CA >= 0.9995) return null
+      const key = `${num(ca, 3)}|${num(CA, 3)}`
+      let r = states.get(key)
+      if (!r) {
+        r = `GS${states.size + 1}`
+        states.set(key, r)
+      }
+      return r
+    },
+  }
+}
+
+/** One display list as a page content stream, in points, y flipped. */
+function pdfContent(list: DisplayList, k: number, res: PdfResources): string {
   const Hpt = list.height * k
   const X = (x: number): string => num(x * k)
   const Y = (y: number): string => num(Hpt - y * k)
-
-  const fonts = new Map<string, string>() // BaseFont → /Fn
-  const fontRes = (name: string): string => {
-    let r = fonts.get(name)
-    if (!r) {
-      r = `F${fonts.size + 1}`
-      fonts.set(name, r)
-    }
-    return r
-  }
-  const states = new Map<string, string>() // "ca|CA" → /GSn
-  const gs = (fill: number, stroke: number): string | null => {
-    const ca = Math.max(0, Math.min(1, fill))
-    const CA = Math.max(0, Math.min(1, stroke))
-    if (ca >= 0.9995 && CA >= 0.9995) return null
-    const key = `${num(ca, 3)}|${num(CA, 3)}`
-    let r = states.get(key)
-    if (!r) {
-      r = `GS${states.size + 1}`
-      states.set(key, r)
-    }
-    return r
-  }
+  const { fontRes, gs } = res
 
   const pathOps = (segs: readonly Seg[]): string => {
     const out: string[] = []
@@ -270,9 +280,8 @@ export function toPdfString(list: DisplayList, opts: PdfOptions = {}): string {
     return out.join('\n')
   }
 
-  // ---- content stream ----------------------------------------------------
   const body: string[] = []
-  let open: number[] = []
+  const open: number[] = []
   for (const it of list.items) {
     const chain = clipChain(list, it.clip)
     let keep = 0
@@ -293,30 +302,17 @@ export function toPdfString(list: DisplayList, opts: PdfOptions = {}): string {
     body.push('Q')
     open.pop()
   }
-  const content = body.join('\n') + '\n'
+  return body.join('\n') + '\n'
+}
 
-  // ---- objects -------------------------------------------------------------
-  // 1 catalog, 2 pages, 3 page, 4 contents, 5 info, then fonts, then states.
-  const objects: string[] = []
-  const fontList = [...fonts.entries()]
-  const stateList = [...states.entries()]
-  const firstFont = 6
+/** The /Font and /ExtGState dictionaries' entries, numbered from `firstFont`. */
+function resourceObjects(res: PdfResources, firstFont: number): { dict: string; objects: string[] } {
+  const fontList = [...res.fonts.entries()]
+  const stateList = [...res.states.entries()]
   const firstState = firstFont + fontList.length
   const fontDict = fontList.map(([, r], i) => `/${r} ${firstFont + i} 0 R`).join(' ')
   const stateDict = stateList.map(([, r], i) => `/${r} ${firstState + i} 0 R`).join(' ')
-  objects.push('<< /Type /Catalog /Pages 2 0 R >>')
-  objects.push('<< /Type /Pages /Kids [3 0 R] /Count 1 >>')
-  objects.push(
-    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${num(Wpt)} ${num(Hpt)}] ` +
-      `/Resources << /ProcSet [/PDF /Text]` +
-      (fontDict ? ` /Font << ${fontDict} >>` : '') +
-      (stateDict ? ` /ExtGState << ${stateDict} >>` : '') +
-      ` >> /Contents 4 0 R >>`,
-  )
-  objects.push(`<< /Length ${content.length} >>\nstream\n${content}endstream`)
-  objects.push(
-    `<< /Producer (Grapher)` + (opts.title ? ` /Title ${pdfTextString(opts.title)}` : '') + ' >>',
-  )
+  const objects: string[] = []
   for (const [name] of fontList) {
     objects.push(
       SYMBOLIC_FONTS.has(name)
@@ -328,11 +324,19 @@ export function toPdfString(list: DisplayList, opts: PdfOptions = {}): string {
     const [ca, CA] = key.split('|')
     objects.push(`<< /Type /ExtGState /ca ${ca} /CA ${CA} >>`)
   }
+  const dict =
+    `/Resources << /ProcSet [/PDF /Text]` +
+    (fontDict ? ` /Font << ${fontDict} >>` : '') +
+    (stateDict ? ` /ExtGState << ${stateDict} >>` : '') +
+    ` >>`
+  return { dict, objects }
+}
 
-  // ---- file ------------------------------------------------------------------
+/** Objects 1..n as a file, with its xref table and trailer. */
+function pdfFile(objects: readonly string[], infoObj: number): string {
   // The second line is the customary binary marker: four bytes above 127 tell
   // a transfer program this is not a text file.
-  let pdf = '%PDF-1.4\n%âãÏÓ\n'
+  let pdf = '%PDF-1.4\n%\u00e2\u00e3\u00cf\u00d3\n'
   const offsets: number[] = []
   objects.forEach((o, i) => {
     offsets.push(pdf.length)
@@ -341,14 +345,80 @@ export function toPdfString(list: DisplayList, opts: PdfOptions = {}): string {
   const xrefAt = pdf.length
   pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`
   for (const off of offsets) pdf += `${String(off).padStart(10, '0')} 00000 n \n`
-  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R /Info 5 0 R >>\nstartxref\n${xrefAt}\n%%EOF\n`
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R /Info ${infoObj} 0 R >>\nstartxref\n${xrefAt}\n%%EOF\n`
   return pdf
+}
+
+const infoObject = (title: string | undefined): string =>
+  `<< /Producer (Grapher)` + (title ? ` /Title ${pdfTextString(title)}` : '') + ' >>'
+
+/**
+ * The PDF as a string of single-byte characters (every char code ≤ 255), so
+ * its length IS its byte length. Use toPdf() for the bytes.
+ */
+export function toPdfString(list: DisplayList, opts: PdfOptions = {}): string {
+  const k = opts.ptPerPx ?? PT_PER_PX
+  const Wpt = list.width * k
+  const Hpt = list.height * k
+  const res = pdfResources()
+  const content = pdfContent(list, k, res)
+  // 1 catalog, 2 pages, 3 page, 4 contents, 5 info, then fonts, then states.
+  const { dict, objects: resObjs } = resourceObjects(res, 6)
+  const objects: string[] = []
+  objects.push('<< /Type /Catalog /Pages 2 0 R >>')
+  objects.push('<< /Type /Pages /Kids [3 0 R] /Count 1 >>')
+  objects.push(
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${num(Wpt)} ${num(Hpt)}] ${dict} /Contents 4 0 R >>`,
+  )
+  objects.push(`<< /Length ${content.length} >>\nstream\n${content}endstream`)
+  objects.push(infoObject(opts.title))
+  objects.push(...resObjs)
+  return pdfFile(objects, 5)
+}
+
+/**
+ * Several display lists as the pages of ONE PDF, in order — a worksheet.
+ * Every page shares one set of font and transparency resources.
+ *
+ *   1 catalog, 2 pages, 3 info, then (page, contents) per page, then the
+ *   fonts, then the graphics states.
+ */
+export function toPdfPagesString(lists: readonly DisplayList[], opts: PdfOptions = {}): string {
+  if (lists.length === 0) throw new Error('a PDF needs at least one page')
+  const k = opts.ptPerPx ?? PT_PER_PX
+  const res = pdfResources()
+  const contents = lists.map((l) => pdfContent(l, k, res))
+  const firstFont = 4 + 2 * lists.length
+  const { dict, objects: resObjs } = resourceObjects(res, firstFont)
+  const pageObj = (i: number): number => 4 + 2 * i
+  const objects: string[] = []
+  objects.push('<< /Type /Catalog /Pages 2 0 R >>')
+  objects.push(
+    `<< /Type /Pages /Kids [${lists.map((_, i) => `${pageObj(i)} 0 R`).join(' ')}] /Count ${lists.length} >>`,
+  )
+  objects.push(infoObject(opts.title))
+  lists.forEach((l, i) => {
+    objects.push(
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${num(l.width * k)} ${num(l.height * k)}] ${dict} /Contents ${pageObj(i) + 1} 0 R >>`,
+    )
+    objects.push(`<< /Length ${contents[i].length} >>\nstream\n${contents[i]}endstream`)
+  })
+  objects.push(...resObjs)
+  return pdfFile(objects, 3)
+}
+
+/** The bytes of a multi-page PDF. */
+export function toPdfPages(lists: readonly DisplayList[], opts: PdfOptions = {}): Uint8Array {
+  return latin1Bytes(toPdfPagesString(lists, opts))
+}
+
+const latin1Bytes = (s: string): Uint8Array => {
+  const out = new Uint8Array(s.length)
+  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i) & 0xff
+  return out
 }
 
 /** The PDF file's bytes. */
 export function toPdf(list: DisplayList, opts: PdfOptions = {}): Uint8Array {
-  const s = toPdfString(list, opts)
-  const out = new Uint8Array(s.length)
-  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i) & 0xff
-  return out
+  return latin1Bytes(toPdfString(list, opts))
 }

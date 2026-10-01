@@ -12,8 +12,8 @@
 // ============================================================================
 
 import type { BoardKind } from '../core/types'
-import type { DocCounts, DocMeta, StoredDoc } from '../core/persist'
-import { countBoard, serializeDoc } from '../core/persist'
+import type { DocCounts, DocMeta, StoredDoc, Worksheet } from '../core/persist'
+import { countBoard, deserializeWorksheets, serializeDoc, serializeWorksheets } from '../core/persist'
 import { DEFAULT_EXPORT } from './renderBoard'
 import type { FitExportSettings } from './exportFit'
 import { clampFitSettings, defaultFit, isAspect } from './exportFit'
@@ -25,6 +25,11 @@ const PREFIX = 'grapher.v1'
 const INDEX_KEY = `${PREFIX}.index`
 const PREFS_KEY = `${PREFIX}.prefs`
 const docKey = (id: string): string => `${PREFIX}.doc.${id}`
+/**
+ * Every worksheet, in one record of its own. Beside the documents, never
+ * inside them: a document's bytes do not change because a sheet uses it.
+ */
+const SHEETS_KEY = `${PREFIX}.worksheets`
 
 export interface DocIndex {
   currentId: string | null
@@ -544,4 +549,30 @@ export function usedBytes(): number {
     return total
   }
   return total
+}
+
+// -------------------------------------------------------------- worksheets
+
+/** Every saved worksheet, newest-modified first. A damaged record reads as none. */
+export function listWorksheets(): Worksheet[] {
+  const s = storage()
+  if (!s) return []
+  let raw: string | null = null
+  try {
+    raw = s.getItem(SHEETS_KEY)
+  } catch {
+    return []
+  }
+  return deserializeWorksheets(raw).sheets.sort((a, b) => b.modifiedAt - a.modifiedAt)
+}
+
+/** Save one worksheet (insert or replace by id). */
+export function writeWorksheet(sheet: Worksheet): SaveOutcome {
+  const rest = listWorksheets().filter((w) => w.id !== sheet.id)
+  return write(SHEETS_KEY, serializeWorksheets([sheet, ...rest]))
+}
+
+/** Remove one worksheet. Its documents are untouched. */
+export function removeWorksheet(id: string): SaveOutcome {
+  return write(SHEETS_KEY, serializeWorksheets(listWorksheets().filter((w) => w.id !== id)))
 }
