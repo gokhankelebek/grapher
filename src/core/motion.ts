@@ -172,13 +172,14 @@ const INTEGRAL_TOL = 1e-9
 /** Each defined run is integrated as this many panels. */
 const PANELS = 16
 
-type Fn = (t: number) => number
+export type Fn = (t: number) => number
 
 // ----------------------------------------------------------------------------
 // The track
 // ----------------------------------------------------------------------------
 
-interface Track {
+/** The curve as a moving point (exported for src/core/paramCalc.ts). */
+export interface Track {
   kind: 'parametric' | 'polar' | 'explicit'
   interval: [number, number]
   X: Fn
@@ -196,7 +197,7 @@ function intervalOf(d: [number, number] | null | undefined, fallback: [number, n
   return [fallback[0], fallback[1]]
 }
 
-function trackOf(curve: FittedCurve, models: Record<string, ModelSpec>): Track | null {
+export function trackOf(curve: FittedCurve, models: Record<string, ModelSpec>): Track | null {
   const spec = curve ? models?.[curve.modelId] : undefined
   if (!spec) return null
   const p = curve.params
@@ -354,7 +355,7 @@ function goldenMin(g: Fn, a: number, b: number): number {
   return 0.5 * (lo + hi)
 }
 
-interface Scanned { ts: number[]; fs: number[]; scale: number }
+export interface Scanned { ts: number[]; fs: number[]; scale: number }
 
 function sample(f: Fn, a: number, b: number, n: number): Scanned {
   const ts: number[] = [], fs: number[] = []
@@ -373,7 +374,7 @@ function sample(f: Fn, a: number, b: number, n: number): Scanned {
  * end of the interval where f is already ~0. `tol` is what counts as zero.
  * A function that is ~0 everywhere has no isolated zeros: [].
  */
-function zerosOf(f: Fn, a: number, b: number, tol: number, s?: Scanned): number[] {
+export function zerosOf(f: Fn, a: number, b: number, tol: number, s?: Scanned): number[] {
   const { ts, fs } = s ?? sample(f, a, b, SCAN_N)
   const n = ts.length - 1
   const out: number[] = []
@@ -454,7 +455,7 @@ function definedEdge(f: Fn, inside: number, outside: number): number {
 }
 
 /** ∫ₐᵇ f over the runs where f is defined (an undefined stretch adds nothing). */
-function integrate(f: Fn, a: number, b: number): number {
+export function integrate(f: Fn, a: number, b: number): number {
   if (a === b) return 0
   if (a > b) return -integrate(f, b, a)
   const { ts, fs, scale } = sample(f, a, b, RUN_N)
@@ -541,7 +542,7 @@ function intervalText(tr: Track, a: number, b: number): string {
 // Analysis shared by paramFeatures and paramArcLength
 // ----------------------------------------------------------------------------
 
-interface Crit {
+export interface Crit {
   vScale: number
   horizontal: number[]
   vertical: number[]
@@ -551,7 +552,7 @@ interface Crit {
   checkBoth: (c: number) => boolean
 }
 
-function critical(tr: Track, a: number, b: number): Crit {
+export function critical(tr: Track, a: number, b: number): Crit {
   const { vx, vy } = velocity(tr)
   const sx = sample(vx, a, b, SCAN_N)
   const sy = sample(vy, a, b, SCAN_N)

@@ -3232,6 +3232,58 @@ function parseParametric(src: string, env?: FunctionEnv | null): ParsedPlot | nu
   }
 }
 
+/**
+ * The component TREES of a typed parametric line — (x(t), y(t)) in any of its
+ * three spellings, interval dropped — for symbolic work
+ * (src/core/paramCalc.ts). Parsed with no env, so a named call f(t) reads as
+ * the product f·t here: the caller must check the trees against the curve's
+ * own model before believing them. Null when the line is not a pair.
+ */
+export function parametricComponentAsts(src: string): { x: ExprNode; y: ExprNode } | null {
+  try {
+    const shape = paramShapeOf(src)
+    if (!shape || shape.comps.length !== 2) return null
+    const out: ExprNode[] = []
+    for (const c of shape.comps) {
+      const { lhs, rhs } = new Parser(c.text).parseInput()
+      if (rhs !== null) return null
+      out.push(lhs)
+    }
+    return { x: out[0], y: out[1] }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The body r(θ) of a typed polar line — `r = 1 + cos(theta)`, with or without
+ * a trailing θ-interval — as a tree, for symbolic work. Same caveat as
+ * parametricComponentAsts: no env, so check it against the model. Null when
+ * the line is not `r = f(θ)`.
+ */
+export function polarBodyAst(src: string): ExprNode | null {
+  try {
+    const marker = paramIntervalMarker(src)
+    const body = marker ? src.slice(0, marker.at) : src
+    if (body.trim() === '') return null
+    const { lhs, rhs } = new Parser(body).parseInput()
+    const vars = (n: Node): Set<VarName> => {
+      const v = new Set<VarName>()
+      collectVars(n, v)
+      return v
+    }
+    if (rhs === null) return vars(lhs).has('r') ? null : lhs
+    // r = f(θ), f(θ) = r, and r(θ) = f(θ) (read as the product r·θ)
+    const isHead = (n: Node): boolean =>
+      isVar(n, 'r') || (n.t === 'bin' && n.op === '*' && isVar(n.a, 'r') && isVar(n.b, 'theta'))
+    if (isHead(lhs) && !vars(rhs).has('r')) return rhs
+    if (isHead(rhs) && !vars(lhs).has('r')) return lhs
+    return null
+  } catch {
+    return null
+  }
+}
+
 /** parseParametric as an outcome; null when the line is not parametric-shaped. */
 function tryParametric(src: string, env?: FunctionEnv | null): ParseOutcome | null {
   try {

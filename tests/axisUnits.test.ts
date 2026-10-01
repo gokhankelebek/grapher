@@ -293,3 +293,15 @@ describe('what the App resolves is what the board draws', () => {
     expect(labels.some((t) => t.includes('π'))).toBe(false)
   })
 })
+
+describe('suggestAxisUnits — polar and parametric trig keep a plain x-axis', () => {
+  const mk = (id: string, kind: FittedCurve['kind']): FittedCurve => ({
+    id, modelId: `expr_${id}`, params: [], kind, domain: null,
+    color: '#fff', strokeWidth: 2, visible: true, error: 0,
+  })
+  it('r = 3 sin(θ) and (cos t, sin t) do not suggest π; y = sin(x) does', () => {
+    expect(suggestAxisUnits([mk('a', 'polar')], { a: 'r = 3sin(theta)' })).toEqual({})
+    expect(suggestAxisUnits([mk('b', 'parametric')], { b: '(cos(t), sin(t))' })).toEqual({})
+    expect(suggestAxisUnits([mk('c', 'explicit')], { c: 'y = sin(x)' })).toEqual({ x: 'pi' })
+  })
+})

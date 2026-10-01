@@ -842,6 +842,27 @@ function leadsWithDigit(s: S): boolean {
   return false
 }
 
+/**
+ * The letter the variable prints as. 'x' everywhere except inside printIn,
+ * which parametric and polar calculus (src/core/paramCalc.ts) use to print a
+ * tree built in x as a formula in t or θ.
+ */
+let VAR_TEXT = 'x'
+let VAR_TEX = 'x'
+
+/** Run `f` with the variable printed as `name` (and `texName` in KaTeX). */
+function printIn<T>(name: string, texName: string, f: () => T): T {
+  const was = [VAR_TEXT, VAR_TEX]
+  VAR_TEXT = name
+  VAR_TEX = texName
+  try {
+    return f()
+  } finally {
+    VAR_TEXT = was[0]
+    VAR_TEX = was[1]
+  }
+}
+
 function text(s: S, parent = 0): string {
   const p = PREC[s.t]
   const wrap = (body: string): string => (p < parent ? `(${body})` : body)
@@ -851,7 +872,7 @@ function text(s: S, parent = 0): string {
     case 'c':
       return CONST_TEXT[s.name] ?? s.name
     case 'x':
-      return 'x'
+      return VAR_TEXT
     case 'y':
       return 'y'
     case 'yp':
@@ -896,7 +917,7 @@ function tex(s: S, parent = 0): string {
     case 'c':
       return CONST_TEX[s.name] ?? s.name
     case 'x':
-      return 'x'
+      return VAR_TEX
     case 'y':
       return 'y'
     case 'yp':
@@ -951,6 +972,7 @@ export {
   evalS,
   text,
   tex,
+  printIn,
   numText,
   MATH_FN,
   CONST_VAL,

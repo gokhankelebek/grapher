@@ -106,6 +106,8 @@ export type CalcKind =
   | 'limit'
   | 'volume'
   | 'signchart'
+  | 'pcalc'
+  | 'polarbetween'
 
 /** A tangent line at one point of `parentId`, drawn as the curve `curveId`. */
 export interface TangentLink {
@@ -374,6 +376,57 @@ export function cleanSignRows(rows: unknown, as: SignLevel | undefined): SignLev
   return ok.filter((r) => want.includes(r))
 }
 
+/**
+ * Parametric / polar calculus at one point of `parentId` (AP Calculus BC
+ * Unit 9): dx/dt, dy/dt, dy/dx and d²y/dx² written out, and at the chosen
+ * parameter `t` (θ for a polar curve) the point, the tangent line (drawn),
+ * speed, velocity and acceleration — for polar r, r′ and what r′ says about
+ * the pole; the horizontal / vertical tangents and singular points of the
+ * interval (`marks`: drawn on the board too); the arc length over [a, b]
+ * (absent: the curve's own interval) with, for a parametric curve, the
+ * displacement beside the distance travelled.
+ *
+ * Nothing computed is stored: `t` always, `marks` only when on, a and b only
+ * as a pair — so a file that never had one is byte-for-byte what it was.
+ *   src/core/paramCalc.ts       paramSymbolic / atParam / tangentLists /
+ *                               arcLengthOf
+ *   src/ui/paramCalcLinks.ts    paramCalcRow / paramCalcOverlays
+ */
+export interface ParamCalcLink {
+  kind: 'pcalc'
+  id: string
+  parentId: string
+  /** The chosen parameter: t, or θ for a polar curve. */
+  t: number
+  /** The horizontal and vertical tangents (and singular points) marked on the board. */
+  marks?: true
+  /** The arc-length interval; absent: the curve's own. */
+  a?: number
+  b?: number
+}
+
+/**
+ * The area inside one polar curve and outside another — the AP classic
+ * "inside r = 3 sin θ, outside r = 1 + sin θ": ½∫(R² − r²) dθ between the
+ * θ where they meet, the region shaded. By default the region is inside the
+ * parent and outside `otherId`; `swap` turns it round. a and b are the
+ * θ-bounds when the teacher set them (a pair, or absent: the meetings around
+ * the region, re-found on every change). Deleting either curve removes it.
+ *   src/core/paramCalc.ts      polarIntersections / defaultBetweenBounds /
+ *                              polarBetween / betweenRegion
+ *   src/ui/paramCalcLinks.ts   polarBetweenRow / polarBetweenOverlays
+ */
+export interface PolarBetweenLink {
+  kind: 'polarbetween'
+  id: string
+  parentId: string
+  otherId: string
+  /** Inside the other curve and outside the parent. */
+  swap?: true
+  a?: number
+  b?: number
+}
+
 export type CalcLink =
   | TangentLink
   | DerivativeLink
@@ -385,6 +438,8 @@ export type CalcLink =
   | LimitLink
   | VolumeLink
   | SignChartLink
+  | ParamCalcLink
+  | PolarBetweenLink
 
 /** The links that own a curve of their own. */
 export type CurveLink = TangentLink | DerivativeLink | AccumulationLink | TaylorLink
@@ -1704,8 +1759,12 @@ export interface StoredCalcLink {
   perp?: 'y'
   /** Tangent on an implicit curve only: the point's y (its branch). */
   y?: number
-  /** Tangent on an implicit curve only, and only when on: the H/V tangents marked. */
+  /** Tangent on an implicit curve, or parametric / polar calculus, only when on: the H/V tangents marked. */
   marks?: true
+  /** Parametric / polar calculus only: the chosen t (θ). */
+  t?: number
+  /** Area between polar curves only, and only when on: inside the other curve, outside the parent. */
+  swap?: true
   /** Sign chart only: what the curve is (absent: f), its rows, and the switches when on. */
   as?: 'f1' | 'f2'
   rows?: SignLevel[]
@@ -2683,6 +2742,28 @@ export function calcLinkToStored(l: CalcLink): StoredCalcLink {
         ...(pair ? { a: Math.min(l.a as number, l.b as number), b: Math.max(l.a as number, l.b as number) } : {}),
       }
     }
+    case 'pcalc': {
+      const pair = isNum(l.a) && isNum(l.b) && l.a !== l.b
+      return {
+        kind: 'pcalc',
+        id: l.id,
+        parentId: l.parentId,
+        t: l.t,
+        ...(l.marks === true ? { marks: true as const } : {}),
+        ...(pair ? { a: Math.min(l.a as number, l.b as number), b: Math.max(l.a as number, l.b as number) } : {}),
+      }
+    }
+    case 'polarbetween': {
+      const pair = isNum(l.a) && isNum(l.b) && l.a !== l.b
+      return {
+        kind: 'polarbetween',
+        id: l.id,
+        parentId: l.parentId,
+        otherId: l.otherId,
+        ...(l.swap === true ? { swap: true as const } : {}),
+        ...(pair ? { a: Math.min(l.a as number, l.b as number), b: Math.max(l.a as number, l.b as number) } : {}),
+      }
+    }
   }
 }
 
@@ -2870,6 +2951,37 @@ export function storedToCalcLink(raw: unknown): CalcLink | null {
           : {}),
       }
     }
+    case 'pcalc': {
+      // The chosen t IS the object: without it there is no point to read at.
+      // The switch is true or off; the interval a pair or nothing.
+      if (!isNum(raw.t)) return null
+      const pair = isNum(raw.a) && isNum(raw.b) && raw.a !== raw.b
+      return {
+        kind: 'pcalc',
+        id,
+        parentId,
+        t: raw.t,
+        ...(raw.marks === true ? { marks: true as const } : {}),
+        ...(pair
+          ? { a: Math.min(raw.a as number, raw.b as number), b: Math.max(raw.a as number, raw.b as number) }
+          : {}),
+      }
+    }
+    case 'polarbetween': {
+      // The second curve IS half the region: without it there is nothing.
+      if (!isStr(raw.otherId) || !raw.otherId || raw.otherId === parentId) return null
+      const pair = isNum(raw.a) && isNum(raw.b) && raw.a !== raw.b
+      return {
+        kind: 'polarbetween',
+        id,
+        parentId,
+        otherId: raw.otherId,
+        ...(raw.swap === true ? { swap: true as const } : {}),
+        ...(pair
+          ? { a: Math.min(raw.a as number, raw.b as number), b: Math.max(raw.a as number, raw.b as number) }
+          : {}),
+      }
+    }
     default:
       return null
   }
@@ -2898,6 +3010,10 @@ export function calcNoun(kind: CalcKind): string {
       return 'volume'
     case 'signchart':
       return 'sign chart'
+    case 'pcalc':
+      return 'parametric / polar calculus point'
+    case 'polarbetween':
+      return 'area between polar curves'
   }
 }
 
@@ -3379,7 +3495,7 @@ export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResu
         continue
       }
       if (
-        (link.kind === 'area' || link.kind === 'volume') &&
+        (link.kind === 'area' || link.kind === 'volume' || link.kind === 'polarbetween') &&
         link.otherId !== undefined &&
         !curveIds.has(link.otherId)
       ) {

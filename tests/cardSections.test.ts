@@ -302,8 +302,10 @@ describe('no domain or range said twice', () => {
 
 describe('the ⋯ menu', () => {
   it('offers every calculus tool once, grouped in AP order', () => {
-    expect(CALC_GROUPS.map((g) => g.title)).toEqual(['Limits & derivatives', 'Integrals', 'Series'])
-    const kinds = CALC_GROUPS.flatMap((g) => g.items.map((i) => i.kind))
+    expect(CALC_GROUPS.map((g) => g.title)).toEqual(['Limits & derivatives', 'Integrals', 'Series', 'Parametric & polar'])
+    // the last group is offered on parametric / polar curves only (BC Unit 9)
+    expect(CALC_GROUPS[3].items.map((i) => i.kind)).toEqual(['pcalc', 'polarbetween'])
+    const kinds = CALC_GROUPS.slice(0, 3).flatMap((g) => g.items.map((i) => i.kind))
     const all: CalcKind[] = ['limit', 'secant', 'tangent', 'derivative', 'riemann', 'area', 'accumulation', 'volume', 'taylor']
     for (const k of all) expect(kinds.filter((x) => x === k)).toHaveLength(1)
     expect(kinds).toContain('between')

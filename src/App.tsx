@@ -64,6 +64,18 @@ import {
 } from './ui/taylorLinks'
 import { defaultSecant } from './ui/secantLinks'
 import { applyVolumeChange, defaultVolume, isVolumeChange, snapSlice, volumeSliceHandle } from './ui/volumeLinks'
+import {
+  applyParamCalcChange,
+  betweenBounds,
+  defaultParamT,
+  defaultPolarBetween,
+  dragBetweenBound,
+  dragParamT,
+  isParamCalcChange,
+  orientBetween,
+  outerOf,
+  polarPartners,
+} from './ui/paramCalcLinks'
 import { defaultLimitA, limitSnapPoints, snapLimitA } from './ui/limitLinks'
 import { defaultSignRows, signChartFigures, signRange } from './ui/signChartLinks'
 import type { SignChartLink } from './ui/signChartLinks'
@@ -382,6 +394,7 @@ import {
   nearestT,
   particleShapes,
   poleRay,
+  posAt,
   readIntervalEdit,
   safeFeatures,
   safeState,
@@ -640,7 +653,7 @@ export function betweenCardInfo(
   }
   const byId = new Map(curves.map((c) => [c.id, c]))
   for (const l of links) {
-    if ((l.kind !== 'area' && l.kind !== 'volume') || !l.otherId) continue
+    if ((l.kind !== 'area' && l.kind !== 'volume' && l.kind !== 'polarbetween') || !l.otherId) continue
     const parent = byId.get(l.parentId)
     const here = out[l.otherId]
     if (!parent || !here) continue
@@ -648,7 +661,9 @@ export function betweenCardInfo(
     here.notes.push(
       l.kind === 'volume'
         ? `solid on the region between this and ${name} \u2014 see ${name}\u2019s card`
-        : `area between this and ${name} \u2014 see ${name}\u2019s card`,
+        : l.kind === 'polarbetween'
+          ? `polar area between this and ${name} \u2014 see ${name}\u2019s card`
+          : `area between this and ${name} \u2014 see ${name}\u2019s card`,
     )
   }
   return out
@@ -3799,6 +3814,60 @@ export default function App() {
         setSelectedId(parentId)
         return
       }
+      if (kind === 'pcalc' || kind === 'polarbetween') {
+        // Parametric / polar calculus (BC Unit 9): overlays on the curve, like
+        // a secant — no curve of their own, and the parent stays selected so
+        // its card holds the readouts and the point is a handle to drag.
+        const mk = motionKindOf(parent, models)
+        if (!mk) {
+          showToast('Only a parametric or polar curve carries this.')
+          return
+        }
+        const id = nextId()
+        if (kind === 'pcalc') {
+          let t = motionInterval(parent)[0]
+          try {
+            t = defaultParamT(parent, models)
+          } catch {
+            /* the start of the interval */
+          }
+          commitState(
+            { calc: [...calcRef.current, { kind: 'pcalc', id, parentId, t }] },
+            mk === 'polar' ? 'add polar calculus' : 'add parametric calculus',
+          )
+          setSelectedId(parentId)
+          return
+        }
+        if (mk !== 'polar') {
+          showToast('The area between polar curves needs two polar curves.')
+          return
+        }
+        let pick: ReturnType<typeof defaultPolarBetween> = null
+        try {
+          pick = defaultPolarBetween(parent, curvesRef.current, models)
+        } catch {
+          pick = null
+        }
+        if (!pick) {
+          showToast(
+            polarPartners(parent, curvesRef.current, models).length === 0
+              ? 'Type a second polar curve first, e.g. r = 1 + sin(theta).'
+              : 'These polar curves do not meet, so there is no region between them.',
+          )
+          return
+        }
+        commitState(
+          {
+            calc: [
+              ...calcRef.current,
+              { kind: 'polarbetween', id, parentId, otherId: pick.otherId, ...(pick.swap ? { swap: true as const } : {}) },
+            ],
+          },
+          'add area between polar curves',
+        )
+        setSelectedId(parentId)
+        return
+      }
       if (!spec || spec.kind !== 'explicit') {
         showToast('Only a curve that is a function of x can carry calculus objects.')
         return
@@ -4268,7 +4337,23 @@ export default function App() {
       if (i < 0) return
       const l = links[i]
       let next: CalcLink | null = null
-      if (isVolumeChange(change)) {
+      if (isParamCalcChange(change)) {
+        let c = change
+        if (change.kind === 'pbetweenOther' && l.kind === 'polarbetween') {
+          // A new partner: the region is turned the way round it exists.
+          const otherId = change.otherId
+          const par = curvesRef.current.find((cc) => cc.id === l.parentId)
+          const oth = curvesRef.current.find((cc) => cc.id === otherId)
+          let o: ReturnType<typeof orientBetween> = null
+          try {
+            o = par && oth ? orientBetween(par, oth, modelsRef.current) : null
+          } catch {
+            o = null
+          }
+          c = { ...change, swap: o?.swap ?? false }
+        }
+        next = applyParamCalcChange(l, c)
+      } else if (isVolumeChange(change)) {
         if (l.kind !== 'volume') return
         next = applyVolumeChange(l, change, {
           curves: curvesRef.current,
@@ -9249,7 +9334,8 @@ export default function App() {
         l.kind === 'secant' ||
         l.kind === 'limit' ||
         l.kind === 'volume' ||
-        l.kind === 'signchart',
+        l.kind === 'signchart' ||
+        l.kind === 'polarbetween',
     )
       ? curveNames(curves, { ...displaySources, ...exprSources }, calcLinks, names, inverses)
       : {}
@@ -9267,6 +9353,26 @@ export default function App() {
       }
     }
     for (const [id, src] of Object.entries(implicitSources)) if (sources[id] === undefined) sources[id] = src
+    // Parametric / polar calculus writes dy/dx from the typed line itself —
+    // interval and all — or, for a sketched polar family, from its equation.
+    // A line that calls another curve is measured, never written.
+    for (const l of calcLinks) {
+      if (l.kind !== 'pcalc' && l.kind !== 'polarbetween') continue
+      for (const id of l.kind === 'polarbetween' ? [l.parentId, l.otherId] : [l.parentId]) {
+        if (sources[id] !== undefined || (calls[id]?.length ?? 0) > 0) continue
+        const c = curves.find((cc) => cc.id === id)
+        if (!c) continue
+        let src: string | null = exprSources[c.id] ?? null
+        if (!src && !c.modelId.startsWith('expr_')) {
+          try {
+            src = curveEquationText(c, models[c.modelId])
+          } catch {
+            src = null
+          }
+        }
+        if (src) sources[id] = src
+      }
+    }
     // A hidden parent has no board letter; its CARD's name stands in for it
     // (stored letter, typed head, or the letter it would wear if shown), so
     // a limit on a hidden h is "lim h(x)", never "lim f(x)".
@@ -9368,6 +9474,56 @@ export default function App() {
     for (const link of calcLinks) {
       const parent = byId.get(link.parentId)
       if (!parent) continue
+      if (link.kind === 'pcalc') {
+        // The point rides its curve: a drag finds the nearest t, snapped to a
+        // whole number or (near one) a multiple of π/12 — "drag to π/4".
+        if (link.parentId !== selectedId) continue
+        const p = posAt(parent, models, link.t)
+        if (!p) continue
+        const polar = motionKindOf(parent, models) === 'polar'
+        out.push({
+          id: `calc:${link.id}:t`,
+          pos: p,
+          label: polar ? 'θ' : 't',
+          onDrag: (pos) => {
+            const par = curvesRef.current.find((c) => c.id === link.parentId)
+            if (!par) return
+            const vp = vpRef.current
+            const t = dragParamT(par, modelsRef.current, pos, ppuX(vp), polar || axisUnitsRef.current.x === 'pi')
+            changeCalc({ kind: 'pcalcT', linkId: link.id, t }, true)
+          },
+        })
+        continue
+      }
+      if (link.kind === 'polarbetween') {
+        // θ from and θ to ride the OUTER curve, where the rays from the pole meet it.
+        const other = byId.get(link.otherId)
+        if (!other || (link.parentId !== selectedId && link.otherId !== selectedId)) continue
+        const bounds = betweenBounds(link, parent, other, models)
+        if (!bounds) continue
+        const outer = outerOf(link, parent, other)
+        for (const which of [0, 1] as const) {
+          const p = posAt(outer, models, bounds[which])
+          if (!p) continue
+          out.push({
+            id: `calc:${link.id}:${which === 0 ? 'a' : 'b'}`,
+            pos: p,
+            label: which === 0 ? 'θ from' : 'θ to',
+            onDrag: (pos) => {
+              const live = calcRef.current.find((l) => l.id === link.id)
+              const par = curvesRef.current.find((c) => c.id === link.parentId)
+              const oth = curvesRef.current.find((c) => c.id === link.otherId)
+              if (!live || live.kind !== 'polarbetween' || !par || !oth) return
+              const cur = betweenBounds(live, par, oth, modelsRef.current)
+              if (!cur) return
+              const th = dragBetweenBound(outerOf(live, par, oth), modelsRef.current, pos, ppuX(vpRef.current))
+              const nb = which === 0 ? [th, cur[1]] : [cur[0], th]
+              changeCalc({ kind: 'pbetweenBounds', linkId: link.id, a: nb[0], b: nb[1] }, true)
+            },
+          })
+        }
+        continue
+      }
       if (link.kind === 'tangent' && isImplicitCurve(parent, models)) {
         // The point slides along the implicit curve — round a circle, through
         // its vertical tangents — snapping to round coordinates on the way.

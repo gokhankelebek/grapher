@@ -495,7 +495,10 @@ export function suggestAxisUnits(
   for (const curve of curves) {
     if (!curve.visible) continue
     if (curve.modelId === 'sine') return { x: 'pi' }
-    if (curve.modelId.startsWith('expr_')) {
+    // Only y = f(x) takes x as its trig ARGUMENT. A polar r = 3 sin θ or a
+    // parametric (cos t, sin t) puts a length on the x-axis — π ticks there
+    // would label distances as angles.
+    if (curve.modelId.startsWith('expr_') && curve.kind === 'explicit') {
       const src = sources?.[curve.id]
       if (typeof src === 'string' && TRIG_SOURCE.test(src) && !periodIsRational(src)) return { x: 'pi' }
     }

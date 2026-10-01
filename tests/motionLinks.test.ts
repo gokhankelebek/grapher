@@ -495,7 +495,8 @@ describe('the Motion section on a card', () => {
         onInterval: () => null,
       }),
     )
-    expect(html).toContain('½∫ r² dθ = π/3 ≈ 1.047')
+    // the readout is the integral written with r (typeset; its words on the label)
+    expect(html).toContain('½∫ from 0 to π/3 of (2cos(3θ))² dθ = π/3 ≈ 1.047')
     expect(html).toContain('Velocity drawn ×0.5, acceleration ×0.1')
     expect(html).toContain('aria-label="Pause"')
     expect(html).toMatch(/aria-pressed="true"[^>]*>2×/)

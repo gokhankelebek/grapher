@@ -36,6 +36,8 @@ import {
 } from './motionLinks'
 import type { MotionDraft, MotionKind, MotionPlayState, MotionScales, MotionSpeed } from './motionLinks'
 import type { ParamFeatures } from '../core/motion'
+import { polarAreaFormula } from '../core/paramCalc'
+import { symbolicFor } from './paramCalcLinks'
 
 // ============================================================================
 // src/ui/MotionEditor.tsx — parametric and polar curves, the AP Calculus BC
@@ -399,6 +401,17 @@ export function MotionSection({ curve, models, kind, src, depKey, play, scales, 
     [sig, models, areaBounds && !('error' in areaBounds) ? `${areaBounds.a},${areaBounds.b}` : ''],
   )
   const areaText = polarAreaText(areaRes)
+  // The same number written as the integral a student sets up: ½∫ (1 + cos θ)² dθ.
+  const areaFormula = useMemo(() => {
+    if (!areaRes || !areaBounds || 'error' in areaBounds) return null
+    try {
+      const sym = symbolicFor(curve, models, src, depKey ?? '')
+      return polarAreaFormula(sym, areaBounds.a, areaBounds.b, areaRes.value)
+    } catch {
+      return null
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [areaRes, sig, src, models])
 
   const f = features
   const step = (hi - lo) / 1000
@@ -596,8 +609,13 @@ export function MotionSection({ curve, models, kind, src, depKey, play, scales, 
               )}
               {area?.on && areaBounds && 'error' in areaBounds && <div className="expr-error">{areaBounds.error}</div>}
               {area?.on && areaText && (
-                <div className="mo-area-readout" data-testid="motion-area-readout">
-                  {areaText}
+                <div
+                  className="mo-area-readout"
+                  data-testid="motion-area-readout"
+                  title={areaFormula?.text ?? areaText}
+                  aria-label={areaFormula?.text ?? areaText}
+                >
+                  {areaFormula ? <Latex tex={areaFormula.tex} /> : areaText}
                 </div>
               )}
             </div>

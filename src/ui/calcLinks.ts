@@ -45,6 +45,8 @@ import type {
   CurveLink,
   DerivativeLink,
   LimitLink,
+  ParamCalcLink,
+  PolarBetweenLink,
   RiemannLink,
   SecantLink,
   SignChartLink,
@@ -54,6 +56,18 @@ import type {
   VolumeLink,
 } from '../core/persist'
 import { secantOverlays, secantRow } from './secantLinks'
+import {
+  applyParamCalcChange,
+  isParamCalcChange,
+  paramCalcChangeLabel,
+  paramCalcOverlays,
+  paramCalcRow,
+  polarBetweenOverlays,
+  polarBetweenRow,
+  polarPartners,
+} from './paramCalcLinks'
+import type { ParamCalcChange, ParamCalcRow, PolarBetweenRow } from './paramCalcLinks'
+import { motionKindOf } from './motionLinks'
 import { signChartRow } from './signChartLinks'
 import type { SignChartRow } from './signChartLinks'
 import { regionChoices, volumeOverlays, volumeRow } from './volumeLinks'
@@ -97,6 +111,11 @@ export type {
   DerivativeLink,
   LimitLink,
   LimitRow,
+  ParamCalcChange,
+  ParamCalcLink,
+  ParamCalcRow,
+  PolarBetweenLink,
+  PolarBetweenRow,
   RiemannLink,
   RiemannMethod,
   SecantLink,
@@ -110,7 +129,7 @@ export type {
   VolumeLink,
   VolumeRow,
 }
-export { isCurveLink }
+export { isCurveLink, applyParamCalcChange, isParamCalcChange }
 
 export const RIEMANN_METHODS: readonly RiemannMethod[] = [
   'left',
@@ -157,7 +176,9 @@ export function dependentsOf(
       const doomed =
         deadCurves.has(l.parentId) ||
         (isCurveLink(l) && deadCurves.has(l.curveId)) ||
-        ((l.kind === 'area' || l.kind === 'volume') && l.otherId !== undefined && deadCurves.has(l.otherId))
+        ((l.kind === 'area' || l.kind === 'volume' || l.kind === 'polarbetween') &&
+          l.otherId !== undefined &&
+          deadCurves.has(l.otherId))
       if (!doomed) continue
       deadLinks.add(l.id)
       if (isCurveLink(l)) deadCurves.add(l.curveId)
@@ -196,6 +217,10 @@ export function linkNoun(kind: CalcKind): string {
       return 'volume'
     case 'signchart':
       return 'sign chart'
+    case 'pcalc':
+      return 'parametric / polar calculus point'
+    case 'polarbetween':
+      return 'area between polar curves'
   }
 }
 
@@ -346,6 +371,25 @@ export function overlaysFor(
       out.push(...limitOverlays(limits, curves, models, deps))
     } catch {
       /* the limit marks are lost this frame; the rest of the figure stands */
+    }
+  }
+  // Parametric / polar calculus (BC Unit 9): the region between two polar
+  // curves washes under them; the tangent at t, the point, its chip, the ray
+  // from the pole and the H/V tangent marks go on top (src/ui/paramCalcLinks.ts).
+  const betweens = links.filter((l): l is PolarBetweenLink => l.kind === 'polarbetween')
+  if (betweens.length > 0) {
+    try {
+      out.push(...polarBetweenOverlays(betweens, curves, models))
+    } catch {
+      /* the polar region is lost this frame; the rest of the figure stands */
+    }
+  }
+  const pcalcs = links.filter((l): l is ParamCalcLink => l.kind === 'pcalc')
+  if (pcalcs.length > 0) {
+    try {
+      out.push(...paramCalcOverlays(pcalcs, curves, models, deps))
+    } catch {
+      /* the tangent at t is lost this frame; the rest of the figure stands */
     }
   }
   return out
@@ -1594,6 +1638,17 @@ export interface CardCalc {
   /** The sign charts drawn for this curve: rows, "treat as f′", the AP statements. */
   signs: SignChartRow[]
   /**
+   * A parametric or polar curve: the menu offers only its own calculus
+   * (calculus at t, and for polar the area between two polar curves).
+   */
+  motion?: 'parametric' | 'polar'
+  /** Calculus at t on this parametric / polar curve (BC Unit 9). */
+  pcalcs?: ParamCalcRow[]
+  /** Areas between this polar curve and another, which this card owns. */
+  pbetweens?: PolarBetweenRow[]
+  /** A polar curve with another visible polar curve to find the area between. */
+  polarPartner?: boolean
+  /**
    * The link ids of everything above that is ATTACHED to this curve (areas,
    * sums, accumulations, Taylor, secants, limits, volumes), in the order they
    * were added — the order the card lists them in. Absent: the card falls
@@ -1717,9 +1772,12 @@ export type CalcChange =
   | { kind: 'signFlag'; linkId: string; flag: 'arrows' | 'cup' | 'guides'; on: boolean }
   /** The Candidates Test interval; null clears it. */
   | { kind: 'signInterval'; linkId: string; a: number | null; b: number | null }
+  /** Parametric / polar calculus (src/ui/paramCalcLinks.ts). */
+  | ParamCalcChange
 
 /** The undo entry each change deserves, in a teacher's words. */
 export function changeLabel(change: CalcChange): string {
+  if (isParamCalcChange(change)) return paramCalcChangeLabel(change)
   switch (change.kind) {
     case 'tangentX':
     case 'tangentPoint':
@@ -1840,9 +1898,13 @@ export function cardCalc(
   // The board's letters first; a hidden curve falls back to its card's name.
   const letters: Readonly<Record<string, string>> = { ...cardLetters, ...boardLetters }
   const callsOthers = (id: string): boolean => (calls[id]?.length ?? 0) > 0
-  const blank = (curve: FittedCurve): CardCalc => ({
-    canAdd: models[curve.modelId]?.kind === 'explicit' || isImplicitCurve(curve, models),
+  const blank = (curve: FittedCurve): CardCalc => {
+    const mk = motionKindOf(curve, models)
+    return {
+    canAdd: models[curve.modelId]?.kind === 'explicit' || isImplicitCurve(curve, models) || mk !== null,
     ...(isImplicitCurve(curve, models) ? { implicitOnly: true, implicits: [] } : {}),
+    ...(mk ? { motion: mk, pcalcs: [], pbetweens: [] } : {}),
+    ...(mk === 'polar' && polarPartners(curve, curves, models).length > 0 ? { polarPartner: true } : {}),
     origin: null,
     areas: [],
     riemanns: [],
@@ -1854,7 +1916,8 @@ export function cardCalc(
     volumes: [],
     signs: [],
     order: [],
-  })
+    }
+  }
   const slot = (id: string): CardCalc | null => {
     const curve = curveById(curves, id)
     if (!curve) return null
@@ -1867,7 +1930,7 @@ export function cardCalc(
   // the curve (is it a function of x?) rather than about the links.
   for (const curve of curves) {
     const card = blank(curve)
-    if (card.canAdd && !card.implicitOnly) {
+    if (card.canAdd && !card.implicitOnly && !card.motion) {
       try {
         card.taylorBlocked = taylorBlocked(curve, models, callsOthers(curve.id))
       } catch {
@@ -2109,6 +2172,34 @@ export function cardCalc(
         }
         own.order?.push(link.id)
         own.signs.push(row)
+        break
+      }
+      case 'pcalc': {
+        const own = slot(link.parentId)
+        if (!own) break
+        let row: ParamCalcRow
+        try {
+          row = paramCalcRow(link, parent, models, sources[link.parentId] ?? null, deps[link.parentId] ?? '')
+        } catch {
+          row = { ...paramCalcRow(link, undefined, models, null), problem: 'this could not be measured' }
+        }
+        own.order?.push(link.id)
+        ;(own.pcalcs ??= []).push(row)
+        break
+      }
+      case 'polarbetween': {
+        const own = slot(link.parentId)
+        if (!own) break
+        const other = curveById(curves, link.otherId)
+        const label = (c: FittedCurve): string => letters[c.id] ?? nameOf(c)
+        let row: PolarBetweenRow
+        try {
+          row = polarBetweenRow(link, parent, other, models, curves, label, sources, deps)
+        } catch {
+          row = { ...polarBetweenRow(link, undefined, undefined, models, curves, label), problem: 'this area could not be measured' }
+        }
+        own.order?.push(link.id)
+        ;(own.pbetweens ??= []).push(row)
         break
       }
     }

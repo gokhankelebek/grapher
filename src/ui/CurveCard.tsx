@@ -46,6 +46,7 @@ import { N_MAX, N_MIN, RIEMANN_METHODS } from './calcLinks'
 import type { CalcChange, CalcKind, CardCalc } from './calcLinks'
 import { TaylorSection } from './TaylorSection'
 import { SecantSection } from './SecantSection'
+import { ParamCalcSection, PolarBetweenSection } from './ParamCalcSection'
 import { LimitSection } from './LimitSection'
 import { SignChartSection } from './SignChartSection'
 import { VolumeSection } from './VolumeSection'
@@ -319,7 +320,18 @@ export const CALC_GROUPS: { title: string; items: { kind: CalcKind | 'between'; 
     title: 'Series',
     items: [{ kind: 'taylor', label: 'Taylor polynomial P\u2099' }],
   },
+  {
+    // BC Unit 9: offered only on a parametric or polar curve, and there alone
+    title: 'Parametric & polar',
+    items: [
+      { kind: 'pcalc', label: 'Calculus at t (dy/dx, speed, arc length)' },
+      { kind: 'polarbetween', label: 'Area between polar curves' },
+    ],
+  },
 ]
+
+/** The menu items that belong to parametric and polar curves only. */
+const MOTION_ITEMS: ReadonlySet<string> = new Set(['pcalc', 'polarbetween'])
 
 const METHOD_LABELS: Record<string, string> = {
   left: 'left',
@@ -1860,6 +1872,18 @@ export function CurveCard({
         node: <SecantSection row={sc} onCalcChange={onCalcChange} onRemove={() => onCalcRemove(sc.linkId)} />,
       })
     }
+    for (const pc of calc.pcalcs ?? []) {
+      calcTools.push({
+        id: pc.linkId,
+        node: <ParamCalcSection row={pc} onCalcChange={onCalcChange} onRemove={() => onCalcRemove(pc.linkId)} />,
+      })
+    }
+    for (const pb of calc.pbetweens ?? []) {
+      calcTools.push({
+        id: pb.linkId,
+        node: <PolarBetweenSection row={pb} onCalcChange={onCalcChange} onRemove={() => onCalcRemove(pb.linkId)} />,
+      })
+    }
     for (const sg of calc.signs ?? []) {
       calcTools.push({
         id: sg.linkId,
@@ -2134,7 +2158,13 @@ export function CurveCard({
                     {CALC_GROUPS.map((group) => {
                       // An implicit curve (x² + y² = 25) offers the tangent line only.
                       const items = group.items.filter((item) =>
-                        calc.implicitOnly ? item.kind === 'tangent' : item.kind !== 'between' || between?.canAdd,
+                        calc.motion
+                          ? item.kind === 'pcalc' || (item.kind === 'polarbetween' && calc.polarPartner === true)
+                          : MOTION_ITEMS.has(item.kind)
+                            ? false
+                            : calc.implicitOnly
+                              ? item.kind === 'tangent'
+                              : item.kind !== 'between' || between?.canAdd,
                       )
                       if (items.length === 0) return null
                       return (
@@ -2163,7 +2193,12 @@ export function CurveCard({
                               </button>
                             ) : (
                               <Fragment key={item.kind}>
-                                {menuItem(item.label, () => onAddCalc(item.kind as CalcKind))}
+                                {menuItem(
+                                  item.kind === 'pcalc' && calc.motion === 'polar'
+                                    ? 'Calculus at \u03b8 (dy/dx, dr/d\u03b8, arc length)'
+                                    : item.label,
+                                  () => onAddCalc(item.kind as CalcKind),
+                                )}
                               </Fragment>
                             ),
                           )}
