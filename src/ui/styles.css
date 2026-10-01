@@ -157,6 +157,20 @@ button.param-value:focus-visible {
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
+  /* A long press on the board is a pen or a finger resting, never a request
+     for iOS's "Save Image / Copy" callout. */
+  -webkit-touch-callout: none;
+}
+
+/* Two quick taps on Undo (or on a stepper) are two taps, not iPad Safari's
+   double-tap-to-zoom of the whole page. Pinch-zoom and scrolling still work. */
+button,
+[role='button'],
+input,
+select,
+label,
+summary {
+  touch-action: manipulation;
 }
 
 /* ------------------------------------------------------------ range inputs
@@ -871,7 +885,9 @@ button.card-formula:hover {
 .zoom-controls {
   position: absolute;
   right: var(--sp-4);
-  bottom: var(--sp-4);
+  /* --sign-band: the sign chart's strip along the bottom of the board (App
+     sets it only when there is one) — the stack sits above it, not on it. */
+  bottom: calc(var(--sp-4) + var(--sign-band, 0px));
   z-index: 10;
   display: flex;
   flex-direction: column;
@@ -1247,6 +1263,24 @@ button.card-formula:hover {
     background: var(--border-strong);
     border-radius: 2px;
   }
+
+  /* The board stops above the docked toolbar. It used to run underneath it,
+     and what lives along the bottom of a board — a sign chart's f′ and f″
+     rows, the x-axis numbers when the axis is below the view — was simply
+     under the dock on a student's phone. */
+  .stage {
+    bottom: var(--toolbar-reserve);
+  }
+
+  /* (.canvas-area: these come after this block in the file) */
+  .canvas-area .toast,
+  .canvas-area .feature-note {
+    bottom: calc(var(--toolbar-reserve) + var(--sp-2) + var(--sign-band, 0px));
+  }
+
+  .has-sign-band .zoom-controls {
+    bottom: calc(var(--toolbar-reserve) + var(--sp-2) + var(--sign-band, 0px));
+  }
 }
 
 /* ------------------------------------------------------------ curve editing */
@@ -1370,9 +1404,14 @@ button.param-value:hover {
 .toast {
   position: absolute;
   left: 50%;
-  bottom: 24px;
+  bottom: calc(24px + var(--sign-band, 0px));
   transform: translateX(-50%);
   z-index: 20;
+  /* Centred with left: 50%, an auto width shrinks to the HALF of the board
+     right of centre: on a phone the polar offer wrapped to six lines in
+     190px. As wide as its text, up to the board less a margin. */
+  width: max-content;
+  max-width: min(560px, calc(100% - 32px));
   padding: var(--sp-2) var(--sp-3);
   border-radius: 8px;
   background: rgba(19, 23, 34, 0.94);
@@ -1401,12 +1440,13 @@ button.param-value:hover {
 .feature-note {
   position: absolute;
   left: 50%;
-  bottom: 24px;
+  bottom: calc(24px + var(--sign-band, 0px));
   transform: translateX(-50%);
   z-index: 20;
   display: flex;
   align-items: center;
   gap: var(--sp-3);
+  width: max-content;
   max-width: min(560px, calc(100% - 32px));
   padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-3);
   border-radius: 9px;
@@ -2939,6 +2979,47 @@ button.an-value {
     border-radius: 50%;
   }
 
+  /* The card's ⋯ menu was 24px and its letter chip 22×20 — the two most used
+     controls on a card, and the two a fingertip missed on an iPad. The menu
+     button takes a full 44px square (the head already wraps on touch); the
+     chip keeps its look and answers to a 44px target, like the colour dot. */
+  .card-menu-btn {
+    width: 44px;
+    height: 44px;
+  }
+
+  .name-chip-btn {
+    position: relative;
+  }
+
+  .name-chip-btn::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 44px;
+    height: 44px;
+    transform: translate(-50%, -50%);
+  }
+
+  /* A student opening a share link on a phone: "Make a copy" was 28px tall,
+     and a toast's one action (Undo, Polar ruling) 20px. */
+  .share-banner-btn,
+  .toast-action {
+    min-height: 44px;
+  }
+
+  /* Already 44px tall on touch, but a "0", a ×, a ‹ › stepper and the Taylor
+     centre were 20–32px wide: wide enough to see, not to hit. */
+  .dr-notation,
+  .calc-drop,
+  .taylor-step,
+  .taylor-play,
+  .calc-field-btn,
+  button.an-value {
+    min-width: 44px;
+  }
+
   /* Three 44px buttons and a 44px colour target do not fit beside an equation
      in a 264px drawer, so the card head wraps: the equation takes a full-width
      line of its own and the colour chip and actions share the line under it. */
@@ -3735,12 +3816,12 @@ button.card-eq {
 }
 
 .present-legend-bottom-left {
-  inset-block-end: var(--sp-3);
+  inset-block-end: calc(var(--sp-3) + var(--sign-band, 0px));
   inset-inline-start: var(--sp-3);
 }
 
 .present-legend-bottom-right {
-  inset-block-end: var(--sp-3);
+  inset-block-end: calc(var(--sp-3) + var(--sign-band, 0px));
   inset-inline-end: var(--sp-3);
 }
 

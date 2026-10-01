@@ -18,7 +18,7 @@ import type { LogSpec } from '../core/logarithmic'
 import type { StyleMap } from '../App'
 import type { NLPart } from '../render/numberline'
 import type { DomainActions, DomainPanel, SetNotation } from './domainLinks'
-import { CurveCard } from './CurveCard'
+import { StableCurveCard } from './CurveCard'
 import type { BetweenInfo } from './CurveCard'
 import type { CurveIntersections } from './intersections'
 import type { CalcChange, CalcKind, CardCalc } from './calcLinks'
@@ -734,7 +734,7 @@ export function Sidebar({
             )}
           {!numberLine &&
             curves.map((curve) => (
-            <CurveCard
+            <StableCurveCard
               key={curve.id}
               curve={curve}
               style={styles[curve.id]}

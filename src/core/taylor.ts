@@ -360,7 +360,27 @@ function multBig(m: Mult, k: number): bigint {
   return b * BigInt(m.p) ** BigInt(m.e)
 }
 
+/**
+ * recognise() is pure in (c, k) and dear — a sweep of closed-form candidates
+ * per coefficient — and the same coefficients are asked for over and over: a
+ * Taylor polynomial is rebuilt by the card, the overlay and the curve's model
+ * on every render, and scrubbing the degree slider revisits the same n. So the
+ * answers are remembered (Coef is never mutated by a caller), up to a bound.
+ */
+const RECOGNISED = new Map<string, Coef | null>()
+const RECOGNISED_MAX = 4096
+
 function recognise(c: number, k: number): Coef | null {
+  const key = `${k}|${c}`
+  const hit = RECOGNISED.get(key)
+  if (hit !== undefined) return hit
+  const out = recogniseUncached(c, k)
+  if (RECOGNISED.size >= RECOGNISED_MAX) RECOGNISED.clear()
+  RECOGNISED.set(key, out)
+  return out
+}
+
+function recogniseUncached(c: number, k: number): Coef | null {
   if (c === 0) return { sign: 1, num: 0n, den: 1n, head: null }
   const sign: 1 | -1 = c < 0 ? -1 : 1
   const v = Math.abs(c)

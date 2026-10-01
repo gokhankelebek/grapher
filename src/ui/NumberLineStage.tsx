@@ -270,7 +270,9 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
         canvas.style.height = `${h}px`
         vpRef.current.widthPx = w
         vpRef.current.heightPx = h
-        scheduleRender()
+        // canvas.width just cleared it; a scheduled redraw would land a frame
+        // late and paint an empty line for every frame of a sidebar slide.
+        draw()
       }
       resize()
       const ro = new ResizeObserver(resize)
@@ -280,7 +282,7 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
         if (rafRef.current) cancelAnimationFrame(rafRef.current)
         rafRef.current = 0
       }
-    }, [scheduleRender, vpRef])
+    }, [draw, vpRef])
 
     // --------------------------------------------------------- space-to-pan
     useEffect(() => {

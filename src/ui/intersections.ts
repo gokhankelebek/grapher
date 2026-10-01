@@ -91,13 +91,21 @@ export function intersectionKey(
    * own params untouched. Absent: nothing calls anything.
    */
   deps?: Readonly<Record<string, string>>,
+  /**
+   * The identity of each curve's formula (App: specSerial of its model), so
+   * the memo can drop `models` from its dependencies: that map is a new object
+   * whenever any model is re-registered — a Taylor polynomial's, on every
+   * frame its parent's slider moves — and keyed on it, every pair was solved
+   * twice per frame. Absent: formulas are not part of the key (as before).
+   */
+  specOf?: (c: FittedCurve) => string | number,
 ): string {
   const parts: string[] = []
   for (const c of curves) {
     if (!crossable(c)) continue
     const dep = deps?.[c.id]
     parts.push(
-      `${c.id}:${c.modelId}:${c.params.join(',')}:${c.domain ? c.domain.join(',') : ''}${
+      `${c.id}:${c.modelId}${specOf ? `#${specOf(c)}` : ''}:${c.params.join(',')}:${c.domain ? c.domain.join(',') : ''}${
         dep ? `:${dep}` : ''
       }`,
     )

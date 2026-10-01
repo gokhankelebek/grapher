@@ -40,6 +40,12 @@ interface Props {
   marked: readonly CurveMarkers[]
   theme: Theme
   vpRef: MutableRefObject<Viewport>
+  /**
+   * CSS px along the bottom of the board that belong to something opaque the
+   * board paints there — the sign chart's band. A marker of a curve that runs
+   * behind the band is not drawn on top of the chart's rows.
+   */
+  bottomInset?: number
 }
 
 /** Marker radius by kind, matching renderBoard's own vocabulary. */
@@ -74,8 +80,11 @@ export function drawContextMarkers(
   color: string,
   bg: string,
   alpha = 0.7,
+  /** Screen y below which nothing is drawn (the sign chart's band); none when absent. */
+  floorY?: number,
 ): void {
   if (points.length === 0) return
+  const floor = typeof floorY === 'number' && Number.isFinite(floorY) ? floorY : Number.POSITIVE_INFINITY
   ctx.save()
   ctx.globalAlpha = alpha
   for (const p of points) {
@@ -89,6 +98,7 @@ export function drawContextMarkers(
     if (!hasMarkerGlyph(p.kind)) continue
     const s = toScreen(p.pos, vp)
     if (s.x < -30 || s.y < -30 || s.x > vp.widthPx + 30 || s.y > vp.heightPx + 30) continue
+    if (s.y > floor) continue
     const r = radiusOf(p.kind)
     if (p.kind === 'inflection') {
       ctx.beginPath()
@@ -126,14 +136,16 @@ export function drawContextMarkers(
 }
 
 export const AnalysisOverlay = forwardRef<AnalysisOverlayHandle, Props>(function AnalysisOverlay(
-  { marked, theme, vpRef },
+  { marked, theme, vpRef, bottomInset = 0 },
   handle,
 ) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const markedRef = useRef(marked)
   const themeRef = useRef(theme)
+  const insetRef = useRef(bottomInset)
   markedRef.current = marked
   themeRef.current = theme
+  insetRef.current = bottomInset
   const rafRef = useRef(0)
 
   const draw = useCallback((): void => {
@@ -153,8 +165,9 @@ export const AnalysisOverlay = forwardRef<AnalysisOverlayHandle, Props>(function
     canvas.style.height = `${vp.heightPx}px`
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, vp.widthPx, vp.heightPx)
+    const floor = insetRef.current > 0 ? vp.heightPx - insetRef.current : undefined
     for (const m of markedRef.current) {
-      drawContextMarkers(ctx, vp, m.points, m.curve.color, themeRef.current.bg)
+      drawContextMarkers(ctx, vp, m.points, m.curve.color, themeRef.current.bg, 0.7, floor)
     }
   }, [vpRef])
 
@@ -166,7 +179,7 @@ export const AnalysisOverlay = forwardRef<AnalysisOverlayHandle, Props>(function
 
   useEffect(() => {
     schedule()
-  }, [marked, theme, schedule])
+  }, [marked, theme, bottomInset, schedule])
 
   useEffect(
     () => () => {

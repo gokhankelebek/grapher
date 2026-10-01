@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from 'react'
 import type {
   Asymptote,
@@ -12,6 +12,8 @@ import type {
   Vec2,
 } from '../core/types'
 import type { CurveStyle } from '../App'
+import { useStableHandlers } from './stableProps'
+import { cardModelsKey } from './valueKeys'
 import { RootsSection } from './FactorEditor'
 import { safeReadFactored } from './factorLinks'
 import { ExpSection } from './ExpEditor'
@@ -719,6 +721,25 @@ export function ParamRow({
       )}
     </div>
   )
+}
+
+/**
+ * The card as the sidebar renders it: memoised, with every handler made
+ * stable (src/ui/stableProps.ts), so a slider drag on one curve re-renders
+ * that curve's card — not all of them, every frame.
+ */
+const CurveCardMemo = memo(CurveCard)
+export function StableCurveCard(props: Props) {
+  const stable = useStableHandlers(props)
+  // `models` is a new map whenever ANY model is registered — a Taylor
+  // polynomial's on every frame its parent's slider moves — which re-rendered
+  // every card on the board each frame. A card only ever reads its own
+  // curve's model and its candidates' (cardModelsKey), so it keeps the map it
+  // last rendered with until one of THOSE changes.
+  const key = cardModelsKey(props.curve, props.models, props.candidates)
+  const held = useRef<{ key: string; models: Props['models'] } | null>(null)
+  if (!held.current || held.current.key !== key) held.current = { key, models: props.models }
+  return <CurveCardMemo {...stable} models={held.current.models} />
 }
 
 export function CurveCard({

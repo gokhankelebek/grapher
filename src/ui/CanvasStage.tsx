@@ -263,6 +263,14 @@ interface Props {
   onCurveEditCancel(): void
   /** Pan/zoom changed. Hot: must not trigger a React render on its own. */
   onViewportChange?(): void
+  /**
+   * The stage changed SIZE (the sidebar opened or closed, the window or the
+   * iPad turned, presentation mode). The view's centre and scale are the same,
+   * so nothing is saved — but everything drawn in screen px from vpRef outside
+   * this stage (the other curves' analysis markers) has to be redrawn, or it
+   * sits half the width change away from its curve.
+   */
+  onStageResize?(): void
   /** Special points of the selected curve. Empty when markers are hidden. */
   analysis: SpecialPoint[]
   /**
@@ -538,6 +546,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     onCurveEditEnd,
     onCurveEditCancel,
     onViewportChange,
+    onStageResize,
     analysis,
     analysisHighlight,
     intersections,
@@ -619,6 +628,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   const hoverRef = useRef<HoverInfo | null>(null)
   const viewportChangeRef = useRef(onViewportChange)
   viewportChangeRef.current = onViewportChange
+  const stageResizeRef = useRef(onStageResize)
+  stageResizeRef.current = onStageResize
   const analysisRef = useRef<SpecialPoint[]>(analysis)
   const intersectionsRef = useRef<Props['intersections']>(intersections)
   const highlightRef = useRef<number | null>(analysisHighlight)
@@ -934,12 +945,19 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       canvas.height = Math.round(h * dpr)
       canvas.style.width = `${w}px`
       canvas.style.height = `${h}px`
+      const changed = vpRef.current.widthPx !== w || vpRef.current.heightPx !== h
       vpRef.current.widthPx = w
       vpRef.current.heightPx = h
       // The stage just changed shape (the sidebar opened, the window resized):
       // an open popover's screen anchor is stale the instant this happens.
       reanchorEditor()
-      scheduleRender()
+      // Setting canvas.width CLEARS it, and a ResizeObserver runs after this
+      // frame's animation callbacks: a redraw merely scheduled lands a frame
+      // late, so every frame of the sidebar's slide used to paint an empty
+      // board — a flicker on the projector each time the sidebar moved. Draw
+      // now, in the same frame as the clear.
+      draw()
+      if (changed) stageResizeRef.current?.()
     }
 
     resize()
@@ -950,7 +968,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       if (rafRef.current) cancelAnimationFrame(rafRef.current)
       rafRef.current = 0
     }
-  }, [reanchorEditor, scheduleRender, vpRef])
+  }, [reanchorEditor, draw, vpRef])
 
   // --------------------------------------------------------- coarse pointers
   //

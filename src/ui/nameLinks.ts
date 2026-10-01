@@ -604,6 +604,13 @@ export function dependencyKeys(
   curves: readonly FittedCurve[],
   names: Names,
   calls: Calls,
+  /**
+   * The identity of a called curve's FORMULA (App: specSerial of its model).
+   * A retyped line can keep its model id and params and still be a different
+   * function; with this, the key of every line that calls it moves too — so a
+   * value-keyed cache never has to fall back to "anything in `models` changed".
+   */
+  specOf?: (c: FittedCurve) => string | number,
 ): Record<string, string> {
   const owner = new Map<string, FittedCurve>()
   for (const c of curves) {
@@ -625,7 +632,9 @@ export function dependencyKeys(
       }
       if (seen.has(c.id)) continue
       seen.add(c.id)
-      parts.push(`${L}=${c.modelId}:${c.params.join(',')}:${c.domain ? c.domain.join(',') : ''}`)
+      parts.push(
+        `${L}=${c.modelId}${specOf ? `#${specOf(c)}` : ''}:${c.params.join(',')}:${c.domain ? c.domain.join(',') : ''}`,
+      )
       for (const u of calls[c.id] ?? []) stack.push(u)
     }
     out[id] = parts.join('|')

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 import type {
   BoardKind,
   CurveEnds,
@@ -22,6 +23,15 @@ import type { SolveResult } from './core/solveInequality'
 import { fitRange, graphSources, inputTex, solveCached, solveErrorText, solveXs } from './ui/nlSolve'
 import { applyFeatureEdit, snapParams } from './core/fit/edit'
 import { analyzeCurve } from './core/analyze'
+import { curveSpecSerial, curveValueKey, sameRecordOr } from './ui/valueKeys'
+import { keepStable, keepStableEntries } from './ui/stableProps'
+import {
+  ANALYSIS_THROTTLE,
+  CROSSINGS_THROTTLE,
+  GestureThrottle,
+  timed,
+  useGestureKey,
+} from './ui/gestureThrottle'
 import {
   accumulationModel,
   curveIntersections,
@@ -533,6 +543,9 @@ import {
 } from './ui/implicitLinks'
 import type { Box as ImplicitBox } from './ui/implicitLinks'
 import type { WheelPref } from './ui/gestures'
+
+/** The shared "no alternative fits" list (see candidatesFor). */
+const NO_CANDIDATES: FitResult[] = []
 
 /**
  * The canvas is MODELESS — Space or a middle-drag or two fingers pan, a tap
@@ -1436,6 +1449,12 @@ export default function App() {
   const undoRef = useRef<Snapshot[]>([])
   const redoRef = useRef<Snapshot[]>([])
   const preEditRef = useRef<Snapshot | null>(null)
+  /**
+   * A live edit (slider drag, handle drag, held arrow key) is in progress:
+   * the bracket editStart … editEnd. State, not just the ref, so the dear
+   * derived values throttled during it get their final pass on release.
+   */
+  const [gesturing, setGesturing] = useState(false)
   const candidatesRef = useRef<Map<string, FitResult[]>>(new Map())
   const exprCounterRef = useRef(0)
   const altRef = useRef(false)
@@ -1632,8 +1651,12 @@ export default function App() {
    * does — g does — so every memo that caches a curve by its params appends
    * this.
    */
+  const depKeysPrevRef = useRef<Record<string, string> | null>(null)
   const depKeys = useMemo(() => {
-    const keys = dependencyKeys(curves, names, calls)
+    // A called curve's formula identity is part of its callers' keys, so no
+    // value-keyed cache has to be keyed on the whole `models` map (see
+    // src/ui/valueKeys.ts).
+    const keys = dependencyKeys(curves, names, calls, (c) => curveSpecSerial(c, models))
     // A curve a link DRIVES has no params of its own to change: a Taylor
     // polynomial's shape is its link's a and n, an accumulation function's
     // its a and C. Every value-keyed cache (analysis, crossings) reads
@@ -1647,33 +1670,46 @@ export default function App() {
         : `L${l.x}`
       keys[l.curveId] = keys[l.curveId] ? `${keys[l.curveId]};${sig}` : sig
     }
-    return keys
-  }, [curves, names, calls, calcLinks])
+    // Same entries, same object: `models` is a dependency only for the spec
+    // identities, and a re-registered model nobody calls changes nothing here.
+    const out = sameRecordOr(depKeysPrevRef.current, keys)
+    depKeysPrevRef.current = out
+    return out
+  }, [curves, names, calls, calcLinks, models])
   const depKeysRef = useRef(depKeys)
   depKeysRef.current = depKeys
 
   // Value-based key: re-analyze only when the curve's shape actually changes,
   // so unrelated re-renders (hover, save state, toasts) never pay the cost.
+  // The model's IDENTITY is in the key (curveValueKey), not the `models` map:
+  // that map is rebuilt whenever any model is re-registered — a Taylor
+  // polynomial's on every frame its parent's slider moves.
   const analysisKey = selectedCurve
-    ? `${selectedCurve.id}|${selectedCurve.modelId}|${selectedCurve.params.join(',')}|${
-        selectedCurve.domain ? selectedCurve.domain.join(',') : ''
-      }|${depKeys[selectedCurve.id] ?? ''}`
+    ? curveValueKey(selectedCurve, models, depKeys[selectedCurve.id])
     : ''
+  // While a slider or a handle is being dragged the analysis runs at most as
+  // often as its own cost allows, and exactly once more on release (see
+  // src/ui/gestureThrottle.ts). The ref keeps it per-board, not per-render.
+  const analysisThrottle = useRef(new GestureThrottle(ANALYSIS_THROTTLE)).current
+  const analysisKeyNow = useGestureKey(analysisKey, gesturing, analysisThrottle)
 
   const analysisRef = useRef<SpecialPoint[]>([])
 
   const analysis = useMemo<SpecialPoint[]>(() => {
     if (!selectedCurve) return []
-    try {
-      const pts = analyzeCurve(selectedCurve, models)
-      return Array.isArray(pts) ? pts : []
-    } catch {
-      // An un-analyzable family must never take the board down.
-      return []
-    }
-    // selectedCurve is intentionally tracked through analysisKey, not identity.
+    return timed(analysisThrottle, () => {
+      try {
+        const pts = analyzeCurve(selectedCurve, models)
+        return Array.isArray(pts) ? pts : []
+      } catch {
+        // An un-analyzable family must never take the board down.
+        return []
+      }
+    })
+    // selectedCurve and models are intentionally tracked through the key, not
+    // identity: the key carries the curve's values and its own model's identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [analysisKey, models])
+  }, [analysisKeyNow])
   analysisRef.current = analysis
 
   // ------------------------------------------- analysis for the OTHER curves
@@ -1682,17 +1718,17 @@ export default function App() {
   // and then deselecting left a lit button over an empty board. The toggle now
   // means every visible curve, and the cost is kept off the hot path by a memo
   // per curve keyed on the only three things that can move a special point.
+  //
+  // The cache is NOT emptied when `models` changes: each entry's key carries
+  // its own curve's model identity (curveValueKey), so a re-registered Taylor
+  // model re-analyses the Taylor polynomial and nothing else. Emptying it used
+  // to re-analyse every curve on the board on every frame of a slider drag.
   const analysisCacheRef = useRef(new Map<string, SpecialPoint[]>())
   const analysisModelsRef = useRef(models)
-  if (analysisModelsRef.current !== models) {
-    analysisModelsRef.current = models
-    analysisCacheRef.current = new Map()
-  }
+  analysisModelsRef.current = models
 
   const analysisFor = useCallback((curve: FittedCurve): SpecialPoint[] => {
-    const key = `${curve.id}|${curve.modelId}|${curve.params.join(',')}|${
-      curve.domain ? curve.domain.join(',') : ''
-    }|${depKeysRef.current[curve.id] ?? ''}`
+    const key = curveValueKey(curve, analysisModelsRef.current, depKeysRef.current[curve.id])
     const hit = analysisCacheRef.current.get(key)
     if (hit) return hit
     let pts: SpecialPoint[] = []
@@ -2072,7 +2108,10 @@ export default function App() {
   const editStart = useCallback(
     (label?: unknown): void => {
       const name = typeof label === 'string' && label.trim() !== '' ? label : 'edit curve'
-      if (!preEditRef.current) preEditRef.current = takeSnapshot(name)
+      if (!preEditRef.current) {
+        preEditRef.current = takeSnapshot(name)
+        setGesturing(true)
+      }
     },
     [takeSnapshot],
   )
@@ -2080,6 +2119,7 @@ export default function App() {
   const editEnd = useCallback((): void => {
     const pre = preEditRef.current
     preEditRef.current = null
+    setGesturing(false)
     if (
       pre &&
       (pre.curves !== curvesRef.current ||
@@ -2117,6 +2157,7 @@ export default function App() {
   const editCancel = useCallback((): void => {
     const pre = preEditRef.current
     preEditRef.current = null
+    setGesturing(false)
     if (pre) applyState(pre)
   }, [applyState])
 
@@ -2468,6 +2509,7 @@ export default function App() {
     undoRef.current = []
     redoRef.current = []
     preEditRef.current = null
+    setGesturing(false)
     skipAutosaveRef.current = true
 
     setCurves(board.curves)
@@ -3421,7 +3463,8 @@ export default function App() {
   )
 
   const candidatesFor = useCallback(
-    (id: string): FitResult[] => candidatesRef.current.get(id) ?? [],
+    // One shared empty list: a fresh [] per call made every card's memo miss.
+    (id: string): FitResult[] => candidatesRef.current.get(id) ?? NO_CANDIDATES,
     [],
   )
 
@@ -8618,7 +8661,12 @@ export default function App() {
     refreshHltEdge(true)
   }, [lens, refreshHltEdge])
 
-  const viewportChanged = useCallback((): void => {
+  /**
+   * Everything that rides the view, redrawn or re-ranged — without saving: the
+   * stage calls this alone when it changes SIZE (sidebar, rotation, present),
+   * which moves no centre and no scale.
+   */
+  const viewRefresh = useCallback((): void => {
     overlayRef.current?.redraw()
     refreshHltEdge()
     // Where the curves cross is hunted over the window, so panning can bring a
@@ -8642,8 +8690,12 @@ export default function App() {
     // settings panel's segment has to follow. Same value = no render.
     setAxesMode(axesModeOf(vpRef.current))
     viewSubsRef.current.forEach((fn) => fn())
+  }, [refreshCrossSpan, refreshImplicitBox, refreshSolveSpan, refreshPartnerSpan, refreshGhostFrame, refreshMotionFrame, refreshHltEdge])
+
+  const viewportChanged = useCallback((): void => {
+    viewRefresh()
     scheduleSave()
-  }, [refreshCrossSpan, refreshImplicitBox, refreshSolveSpan, refreshPartnerSpan, refreshGhostFrame, refreshMotionFrame, refreshHltEdge, scheduleSave])
+  }, [viewRefresh, scheduleSave])
 
   /** The view was changed from outside the stage: redraw everything that rides it. */
   const viewMoved = useCallback((): void => {
@@ -9748,6 +9800,7 @@ export default function App() {
   const signSpan = useMemo<[number, number]>(() => [signLo, signHi], [signLo, signHi])
 
   /** Everything the cards say about calculus, computed once for all of them. */
+  const calcCardsPrevRef = useRef<Record<string, CardCalc> | null>(null)
   const calcCards = useMemo<Record<string, CardCalc>>(() => {
     if (kind !== 'cartesian') return {}
     // The board's own letters, so an accumulation reads "g(x) = ∫₀ˣ f(t) dt"
@@ -9831,7 +9884,11 @@ export default function App() {
     )
     // Undo/redo's epoch: the Taylor ▶ demo is keyed on it (see playEpoch).
     if (playEpoch !== 0) for (const card of Object.values(out)) card.epoch = playEpoch
-    return out
+    // A card whose rows came out the same keeps the same object, so its
+    // memoised card skips the render (src/ui/stableProps.ts).
+    const stable = keepStableEntries(calcCardsPrevRef.current, out)
+    calcCardsPrevRef.current = stable
+    return stable
   }, [
     playEpoch,
     depKeys,
@@ -9863,13 +9920,13 @@ export default function App() {
    * second curve to point at (the menu item's whole condition), and whether
    * this curve is the far side of a region some other card owns.
    */
-  const betweenCards = useMemo<Record<string, BetweenInfo>>(
-    () =>
-      kind === 'cartesian'
-        ? betweenCardInfo(curves, models, calcLinks, curveLabel)
-        : {},
-    [kind, curves, models, calcLinks, curveLabel],
-  )
+  const betweenPrevRef = useRef<Record<string, BetweenInfo> | null>(null)
+  const betweenCards = useMemo<Record<string, BetweenInfo>>(() => {
+    const out = kind === 'cartesian' ? betweenCardInfo(curves, models, calcLinks, curveLabel) : {}
+    const stable = keepStableEntries(betweenPrevRef.current, out)
+    betweenPrevRef.current = stable
+    return stable
+  }, [kind, curves, models, calcLinks, curveLabel])
 
   const betweenFor = useCallback(
     (id: string): BetweenInfo | undefined => betweenCards[id],
@@ -11069,6 +11126,11 @@ export default function App() {
     }
   }, [kind, hasSignCharts, calcLinks, curves, models, cardNames, boardCurveNames, depKeys, signSpan])
   const signFiguresRef = useRef<SignChartFigure[]>(signFigures)
+  /** CSS px the sign-chart band takes along the bottom of the board (0: none). */
+  const signBandPx = useMemo(
+    () => (kind === 'cartesian' ? signBandHeight(signFigures, presentMode ? presentScale(presentType) : null) : 0),
+    [kind, signFigures, presentMode, presentType],
+  )
   signFiguresRef.current = signFigures
 
   // ------------------------------------------------ the selected card's Domain rows
@@ -11248,19 +11310,32 @@ export default function App() {
    * curve array, which a slider drag rebuilds on every frame with the same
    * numbers in it.
    */
-  const crossKey = crossingsOn ? intersectionKey(curves, crossSpan, depKeys) : ''
+  //
+  // Each curve's model IDENTITY is in the key (not the `models` map, which is
+  // rebuilt whenever any model is re-registered), and while a gesture is in
+  // progress the key is throttled by the solve's own cost — see
+  // src/ui/gestureThrottle.ts. On release the live key goes straight through.
+  const crossKeyLive = crossingsOn
+    ? intersectionKey(curves, crossSpan, depKeys, (c) => curveSpecSerial(c, models))
+    : ''
+  const crossThrottle = useRef(new GestureThrottle(CROSSINGS_THROTTLE)).current
+  const crossKey = useGestureKey(crossKeyLive, gesturing, crossThrottle)
   // a curve and its own Taylor polynomial are never solved as a pair
   const crossApart = useMemo(() => taylorApart(calcLinks), [calcLinks])
   const curvesForCross = useRef(curves)
   curvesForCross.current = curves
+  const modelsForCross = useRef(models)
+  modelsForCross.current = models
 
   const crossings = useMemo<BoardIntersection[]>(() => {
     if (!crossingsOn) return EMPTY_CROSSINGS
-    const found = boardIntersections(curvesForCross.current, models, crossSpan, crossApart)
+    const found = timed(crossThrottle, () =>
+      boardIntersections(curvesForCross.current, modelsForCross.current, crossSpan, crossApart),
+    )
     return found.length > 0 ? found : EMPTY_CROSSINGS
-    // The curve list is tracked through crossKey, not through its identity.
+    // The curve list and the models are tracked through crossKey, not identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [crossingsOn, crossKey, models, crossSpan, crossApart])
+  }, [crossingsOn, crossKey, crossSpan, crossApart])
   const crossingsRef = useRef(crossings)
   crossingsRef.current = crossings
 
@@ -11449,6 +11524,8 @@ export default function App() {
     onPositions: toggleRevealPositions,
   }
 
+  /** Per card, the last list handed out — reused while its contents are the same. */
+  const crossingsForCacheRef = useRef(new Map<string, readonly CurveIntersections[]>())
   const crossingsFor = useCallback(
     (id: string): readonly CurveIntersections[] | undefined => {
       if (crossings.length === 0) return undefined
@@ -11461,7 +11538,11 @@ export default function App() {
         },
         curvesRef.current.map((c) => c.id),
       )
-      return got.length > 0 ? got : undefined
+      if (got.length === 0) return undefined
+      const cache = crossingsForCacheRef.current
+      const stable = keepStable(cache.get(id), got)
+      cache.set(id, stable)
+      return stable
     },
     [crossings, boardCurveNames, curveLabel],
   )
@@ -12150,8 +12231,14 @@ export default function App() {
     () => (kind === 'cartesian' ? suggestPolarRuling(curves) : false),
     [kind, curves],
   )
+  const viewOnlyNow = shared?.viewOnly === true
   useEffect(() => {
     if (!wantsPolar || polarOfferedRef.current) return
+    // A view-only share is a student's: the offer's one tap re-rules the
+    // board, which is an edit — and on a phone it sat over the graph for nine
+    // seconds as six lines of text. Not offered, and not used up: a copy the
+    // student makes is theirs to be asked about.
+    if (viewOnlyNow) return
     if (boardGridRef.current === 'polar') {
       polarOfferedRef.current = true
       return
@@ -12161,7 +12248,7 @@ export default function App() {
       ms: 9000,
       action: { label: 'Polar ruling', run: () => setRuling('polar') },
     })
-  }, [wantsPolar, showToast, setRuling])
+  }, [wantsPolar, viewOnlyNow, showToast, setRuling])
 
   /**
    * Shift+P: the x-axis, round the three states, with the answer said out loud.
@@ -13011,7 +13098,11 @@ export default function App() {
       )}
 
       <main
-        className="canvas-area"
+        className={signBandPx > 0 ? 'canvas-area has-sign-band' : 'canvas-area'}
+        // The sign chart's band along the bottom of the board: the zoom stack
+        // and the bottom notices sit ABOVE it rather than over its right end
+        // (a projector at 1024 px showed the f″ row's last sign under them).
+        style={signBandPx > 0 ? ({ '--sign-band': `${Math.round(signBandPx)}px` } as CSSProperties) : undefined}
         onDragOver={(e) => {
           if (e.dataTransfer.types.includes('Files')) {
             e.preventDefault()
@@ -13074,6 +13165,7 @@ export default function App() {
           onCurveEditEnd={commitWithSnap}
           onCurveEditCancel={editCancel}
           onViewportChange={viewportChanged}
+          onStageResize={viewRefresh}
           onNotice={showNotice}
           analysis={boardAnalysis}
           analysisHighlight={markersOn ? highlight : null}
@@ -13154,7 +13246,7 @@ export default function App() {
         )}
 
         {kind === 'cartesian' && contextShown.length > 0 && (
-          <AnalysisOverlay ref={overlayRef} marked={contextShown} theme={boardTheme} vpRef={vpRef} />
+          <AnalysisOverlay ref={overlayRef} marked={contextShown} theme={boardTheme} vpRef={vpRef} bottomInset={signBandPx} />
         )}
 
         {presentMode ? (

@@ -1647,6 +1647,56 @@ export interface CurvePaintOpts {
 export const HALO_ALPHA_DARK = 0.25
 export const HALO_ALPHA_LIGHT = 0.42
 
+// ---------------------------------------------------------------------------
+// The sampled path, kept between frames.
+//
+// A curve's path depends on nothing but its formula, its numbers and the
+// window. On a slider drag only the dragged curve (and whatever is linked to
+// it) changes; the other curves on a heavy board — the folium's marching
+// squares, the rose, the piecewise — used to be re-sampled every frame anyway.
+// Now a frame whose key matches the last one for that curve, on that context,
+// strokes the path it already has. A pan or a zoom changes the window, so it
+// misses and re-samples exactly as before.
+//
+// Only a context that builds native paths caches (the vector recorder's paths
+// are a record of one export, and an export is one frame).
+// ---------------------------------------------------------------------------
+
+interface CachedPath {
+  key: string
+  path: Path2D
+  drawn: boolean
+  /** The jumps this pass appended to opts.jumps, replayed on a hit. */
+  jumps: CurveJump[] | null
+}
+
+const PATH_CACHE = new WeakMap<object, Map<string, CachedPath>>()
+/** More curves than this on one context and the map is simply started again. */
+const PATH_CACHE_MAX = 256
+const MODEL_SERIALS = new WeakMap<object, number>()
+let modelSerialNext = 1
+
+function modelSerial(model: ModelSpec): number {
+  let n = MODEL_SERIALS.get(model)
+  if (n === undefined) {
+    n = modelSerialNext++
+    MODEL_SERIALS.set(model, n)
+  }
+  return n
+}
+
+/** Everything a curve's sampled path is a function of. */
+export function curvePathKey(curve: FittedCurve, model: ModelSpec, vp: Viewport, wantJumps: boolean): string {
+  return `${curve.kind}|${curve.modelId}#${modelSerial(model)}|${curve.params.join(',')}|${
+    curve.domain ? curve.domain.join(',') : ''
+  }|${vp.center.x},${vp.center.y},${ppuX(vp)},${ppuY(vp)},${vp.widthPx},${vp.heightPx}|${wantJumps ? 'J' : ''}`
+}
+
+/** Drop every cached path for this context (tests; a context being retired). */
+export function clearCurvePathCache(ctx: object): void {
+  PATH_CACHE.delete(ctx)
+}
+
 export function drawCurve(
   ctx: CanvasRenderingContext2D,
   curve: FittedCurve,
@@ -1660,23 +1710,52 @@ export function drawCurve(
   if (!model) return
   if (vp.widthPx <= 0 || vp.heightPx <= 0 || !(ppuX(vp) > 0) || !(ppuY(vp) > 0)) return
 
-  // A real canvas gets a native Path2D; the vector recorder (./vectorCtx.ts)
-  // gets one it can read back. See newPath2D.
-  const path = newPath2D(ctx)
+  const jumpsOut = opts?.jumps ?? null
+  const cacheable =
+    typeof (ctx as unknown as { createVectorPath?: unknown }).createVectorPath !== 'function'
+  let cache: Map<string, CachedPath> | undefined
+  let key = ''
+  let hit: CachedPath | undefined
+  if (cacheable) {
+    cache = PATH_CACHE.get(ctx)
+    if (!cache) {
+      cache = new Map()
+      PATH_CACHE.set(ctx, cache)
+    }
+    key = curvePathKey(curve, model, vp, jumpsOut !== null)
+    const prev = cache.get(curve.id)
+    if (prev && prev.key === key) hit = prev
+  }
+
+  let path: Path2D
   let drawn = false
-  switch (curve.kind) {
-    case 'explicit':
-      drawn = buildExplicit(path, model, curve, vp, opts?.jumps ?? null)
-      break
-    case 'parametric':
-      drawn = buildParametric(path, model, curve, vp)
-      break
-    case 'polar':
-      drawn = buildPolar(path, model, curve, vp)
-      break
-    case 'implicit':
-      drawn = buildImplicit(path, model, curve, vp)
-      break
+  if (hit) {
+    path = hit.path
+    drawn = hit.drawn
+    if (jumpsOut && hit.jumps) for (const j of hit.jumps) jumpsOut.push(j)
+  } else {
+    // A real canvas gets a native Path2D; the vector recorder (./vectorCtx.ts)
+    // gets one it can read back. See newPath2D.
+    path = newPath2D(ctx)
+    const before = jumpsOut ? jumpsOut.length : 0
+    switch (curve.kind) {
+      case 'explicit':
+        drawn = buildExplicit(path, model, curve, vp, jumpsOut)
+        break
+      case 'parametric':
+        drawn = buildParametric(path, model, curve, vp)
+        break
+      case 'polar':
+        drawn = buildPolar(path, model, curve, vp)
+        break
+      case 'implicit':
+        drawn = buildImplicit(path, model, curve, vp)
+        break
+    }
+    if (cache) {
+      if (cache.size >= PATH_CACHE_MAX && !cache.has(curve.id)) cache.clear()
+      cache.set(curve.id, { key, path, drawn, jumps: jumpsOut ? jumpsOut.slice(before) : null })
+    }
   }
   if (!drawn) return
 
