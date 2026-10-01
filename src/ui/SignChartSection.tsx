@@ -11,6 +11,8 @@
 // ============================================================================
 
 import { useEffect, useRef, useState } from 'react'
+import { Answer } from './RevealAnswer'
+import { calcKey } from './reveal'
 import { CardSection, SectionDrop } from './CardSection'
 import { parseNumeric } from './numeric'
 import type { CalcChange } from './calcLinks'
@@ -143,6 +145,7 @@ export function SignChartSection({ row, onCalcChange, onRemove }: Props) {
       actions={<SectionDrop what="sign chart" onRemove={onRemove} />}
       className="calc-row signchart-row"
       data={{ link: linkId }}
+      answerKey={calcKey(linkId)}
     >
       <div className="calc-controls signchart-as" role="group" aria-label="What this graph is">
         <span className="calc-field-label">graph is</span>
@@ -208,6 +211,7 @@ export function SignChartSection({ row, onCalcChange, onRemove }: Props) {
       {row.problem && <div className="calc-why">{`Nothing is drawn: ${row.problem}.`}</div>}
 
       {row.chart.length > 0 && (
+        <Answer k={calcKey(linkId)} block what="the sign chart">
         <div className="signchart-mini" aria-label="The sign chart">
           {row.chart.map((r, i) => (
             <div key={`${r.level}-${i}`} className="signchart-line">
@@ -236,6 +240,7 @@ export function SignChartSection({ row, onCalcChange, onRemove }: Props) {
             </div>
           ))}
         </div>
+        </Answer>
       )}
 
       {row.conclusions.length > 0 && (
@@ -251,6 +256,7 @@ export function SignChartSection({ row, onCalcChange, onRemove }: Props) {
               {copied ? 'Copied' : 'Copy'}
             </button>
           </div>
+          <Answer k={calcKey(linkId)} block quiet={row.chart.length > 0} what="the conclusions">
           <ul className="calc-facts signchart-facts">
             {row.conclusions.map((c, i) => (
               <li key={i} className={`calc-fact signchart-fact signchart-${c.kind}`}>
@@ -258,6 +264,7 @@ export function SignChartSection({ row, onCalcChange, onRemove }: Props) {
               </li>
             ))}
           </ul>
+          </Answer>
         </div>
       )}
 

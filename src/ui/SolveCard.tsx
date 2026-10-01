@@ -22,6 +22,8 @@ import type { NLSolveItem, NLSolveShow } from '../core/types'
 import type { CurveStyle } from '../core/persist'
 import { NL_BAR_WIDTH, NL_MAX_BAR_WIDTH, NL_MIN_BAR_WIDTH } from '../render/numberline'
 import { Latex } from './Latex'
+import { Answer } from './RevealAnswer'
+import { solveKey } from './reveal'
 import { CardSection } from './CardSection'
 import {
   builderTex,
@@ -304,12 +306,16 @@ export function SolveCard({
         <div className="solve-answer" data-testid="solve-answer">
           <div className="solve-row">
             <span className="solve-tag">Solution</span>
-            <Latex tex={result.solution.tex} className="solve-tex" />
+            <Answer k={solveKey(item.id)} what="the solution set">
+              <Latex tex={result.solution.tex} className="solve-tex" />
+            </Answer>
           </div>
-          <div className="solve-row" title={builderText(result.solution, result.variable || 'x')}>
-            <span className="solve-tag">Set-builder</span>
-            <Latex tex={builderTex(result.solution, result.variable || 'x')} className="solve-tex" />
-          </div>
+          <Answer k={solveKey(item.id)} block quiet>
+            <div className="solve-row" title={builderText(result.solution, result.variable || 'x')}>
+              <span className="solve-tag">Set-builder</span>
+              <Latex tex={builderTex(result.solution, result.variable || 'x')} className="solve-tex" />
+            </div>
+          </Answer>
         </div>
       )}
 
@@ -342,6 +348,7 @@ export function SolveCard({
             titleHint="The number-line method: h(x), its domain, the critical values, a test point in each interval, the conclusion"
             summary={result.solution.text}
             defaultOpen={false}
+            answerKey={solveKey(item.id)}
             testId="solve-working"
             openActions={
               <button type="button" className="calc-chip" data-testid="solve-copy-text" onClick={copyWorking}>
@@ -349,6 +356,7 @@ export function SolveCard({
               </button>
             }
           >
+            <Answer k={solveKey(item.id)} block what="the working">
             <ol className="solve-steps">
               {steps.map((s, i) => {
                 if (s.kind === 'heading')
@@ -404,6 +412,7 @@ export function SolveCard({
                 )
               })}
             </ol>
+            </Answer>
           </CardSection>
         </div>
       )}

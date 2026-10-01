@@ -16,6 +16,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { Latex } from './Latex'
+import { Answer } from './RevealAnswer'
+import { calcKey } from './reveal'
 import { CardSection, SectionDrop } from './CardSection'
 import { parseNumeric } from './numeric'
 import type { CalcChange, VolumeRow } from './calcLinks'
@@ -141,6 +143,7 @@ export function VolumeSection({ row, onCalcChange, onRemove, onEditStart, onEdit
       actions={<SectionDrop what="solid" onRemove={onRemove} />}
       className="calc-row volume-row"
       data={{ link: linkId }}
+      answerKey={calcKey(linkId)}
     >
       <div className="calc-line">
         <span className="calc-read volume-head">{row.head}</span>
@@ -251,6 +254,8 @@ export function VolumeSection({ row, onCalcChange, onRemove, onEditStart, onEdit
 
       {row.problem && <div className="calc-why">{`Nothing is measured: ${row.problem}.`}</div>}
 
+      {(row.integral || row.parts.length > 0 || row.valueTex) && (
+      <Answer k={calcKey(linkId)} block what="the volume">
       {row.integral && (
         <div className="secant-tex volume-tex" title={row.integral.text} aria-label={row.integral.text}>
           <Latex tex={`V = ${row.integral.tex}`} />
@@ -269,6 +274,8 @@ export function VolumeSection({ row, onCalcChange, onRemove, onEditStart, onEdit
         <div className="secant-tex volume-value" title={row.value ?? ''} aria-label={row.value ?? ''}>
           <Latex tex={row.valueTex} />
         </div>
+      )}
+      </Answer>
       )}
 
       {row.warning && <div className="calc-why volume-warning">{row.warning}</div>}

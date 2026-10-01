@@ -22,6 +22,8 @@ import { useEffect, useState } from 'react'
 import type { BoardIneqSystem } from '../core/persist'
 import type { SystemCardData } from './systemLinks'
 import { Latex } from './Latex'
+import { Answer } from './RevealAnswer'
+import { SYSTEM_KEY } from './reveal'
 import { CardSection } from './CardSection'
 
 interface Props {
@@ -110,7 +112,10 @@ export function SystemCard({ data, system, hidden, onSolution, onTest, onObjecti
             </div>
             {lp.region.vertices.length > 0 && (
               <div className="ineq-corners" data-testid="ineq-corners">
-                Corners: {lp.region.vertices.map((v) => v.label).join('  ')}
+                Corners:{' '}
+                <Answer k={SYSTEM_KEY} what="the corners">
+                  {lp.region.vertices.map((v) => v.label).join('  ')}
+                </Answer>
                 {lp.region.vertices.some((v) => v.onStrict) && (
                   <span className="field-hint"> (hollow: on a dashed boundary, not included)</span>
                 )}
@@ -171,6 +176,7 @@ export function SystemCard({ data, system, hidden, onSolution, onTest, onObjecti
             {(err || obj?.error) && <div className="expr-error">{err ?? obj?.error}</div>}
             {obj?.result && (
               <>
+                <Answer k={SYSTEM_KEY} block what="the optimum">
                 {obj.result.rows.length > 0 && obj.obj && (
                   <div className="seq-table-wrap">
                     <table className="seq-table ineq-lp-table" data-testid="ineq-lp-table">
@@ -196,6 +202,7 @@ export function SystemCard({ data, system, hidden, onSolution, onTest, onObjecti
                 <div className={`ineq-lp-answer ${obj.result.status === 'optimal' ? 'ineq-ok' : 'ineq-no'}`} data-testid="ineq-lp-answer">
                   {obj.result.sentence}
                 </div>
+                </Answer>
                 {obj.result.status === 'optimal' && (
                   <label className="te-check" title="The line P = optimum through the best corner">
                     <input type="checkbox" data-testid="ineq-iso" checked={system?.iso === true} onChange={() => onIso(system?.iso !== true)} />

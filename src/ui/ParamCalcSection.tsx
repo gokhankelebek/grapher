@@ -17,6 +17,8 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { Latex } from './Latex'
+import { Answer, AnswerTex } from './RevealAnswer'
+import { calcKey } from './reveal'
 import { CardSection, SectionDrop } from './CardSection'
 import { parseNumeric } from './numeric'
 import type { CalcChange } from './calcLinks'
@@ -106,10 +108,13 @@ function NumField({
   )
 }
 
-function Readout({ label, value, k }: { label: string; value: string; k: string }) {
+function Readout({ label, value, k, ak }: { label: string; value: string; k: string; ak: string }) {
   return (
     <div className="mo-readout" data-readout={k}>
-      <span className="mo-r-label">{label}</span> <span className="mo-r-value">{value}</span>
+      <span className="mo-r-label">{label}</span>{' '}
+      <Answer k={ak} what={label.replace(/\s*=$/, '')}>
+        <span className="mo-r-value">{value}</span>
+      </Answer>
     </div>
   )
 }
@@ -136,6 +141,8 @@ export function ParamCalcSection({ row, onCalcChange, onRemove }: Props) {
   const d = polar ? 'dθ' : 'dt'
   const tl = row.tangents
   const arc = row.arc
+  /** Reveal mode: everything this section computes is one answer. */
+  const ak = calcKey(linkId)
 
   return (
     <CardSection
@@ -147,12 +154,13 @@ export function ParamCalcSection({ row, onCalcChange, onRemove }: Props) {
       className="calc-row pcalc-row"
       testId="pcalc-section"
       data={{ link: linkId, kind: row.kind }}
+      answerKey={ak}
     >
       {row.lines.length > 0 ? (
         <div className="pcalc-lines" data-testid="pcalc-lines">
           {row.lines.map((l, i) => (
             <div key={i} className="secant-tex pcalc-tex" title={l.text} aria-label={l.text}>
-              <Latex tex={l.tex} />
+              <AnswerTex k={ak} tex={l.tex} />
             </div>
           ))}
         </div>
@@ -176,31 +184,35 @@ export function ParamCalcSection({ row, onCalcChange, onRemove }: Props) {
 
       {at && (
         <div className="mo-readouts pcalc-at" data-testid="pcalc-at">
-          <Readout k="point" label="(x, y) =" value={at.point.text} />
-          {polar && at.r && <Readout k="r" label="r =" value={at.r.text} />}
-          {polar && at.dr && <Readout k="dr" label="dr/dθ =" value={at.dr.text} />}
-          <Readout k="dx" label={`dx/d${v} =`} value={at.dx.text} />
-          <Readout k="dy" label={`dy/d${v} =`} value={at.dy.text} />
+          <Readout ak={ak} k="point" label="(x, y) =" value={at.point.text} />
+          {polar && at.r && <Readout ak={ak} k="r" label="r =" value={at.r.text} />}
+          {polar && at.dr && <Readout ak={ak} k="dr" label="dr/dθ =" value={at.dr.text} />}
+          <Readout ak={ak} k="dx" label={`dx/d${v} =`} value={at.dx.text} />
+          <Readout ak={ak} k="dy" label={`dy/d${v} =`} value={at.dy.text} />
           <Readout
+            ak={ak}
             k="slope"
             label="dy/dx ="
             value={at.slope ? at.slope.text : at.vertical ? 'undefined (vertical tangent)' : 'undetermined (0/0)'}
           />
-          {at.second && <Readout k="second" label="d²y/dx² =" value={at.second.text} />}
-          <Readout k="speed" label="speed =" value={at.speed.text} />
-          <Readout k="velocity" label="velocity" value={`⟨${at.velocity[0].text}, ${at.velocity[1].text}⟩`} />
+          {at.second && <Readout ak={ak} k="second" label="d²y/dx² =" value={at.second.text} />}
+          <Readout ak={ak} k="speed" label="speed =" value={at.speed.text} />
+          <Readout ak={ak} k="velocity" label="velocity" value={`⟨${at.velocity[0].text}, ${at.velocity[1].text}⟩`} />
           {at.acceleration && (
-            <Readout k="accel" label="acceleration" value={`⟨${at.acceleration[0].text}, ${at.acceleration[1].text}⟩`} />
+            <Readout ak={ak} k="accel" label="acceleration" value={`⟨${at.acceleration[0].text}, ${at.acceleration[1].text}⟩`} />
           )}
         </div>
       )}
       {at?.tangent && (
         <div className="secant-line pcalc-tangent" title="The tangent line at this point" data-testid="pcalc-tangent">
           <span className="secant-line-label">tangent line</span>
-          <Latex tex={at.tangent.tex} />
+          <Answer k={ak} what="the tangent line">
+            <Latex tex={at.tangent.tex} />
+          </Answer>
         </div>
       )}
       {at && (at.drSentence || at.notes.length > 0) && (
+        <Answer k={ak} block quiet>
         <ul className="calc-facts pcalc-notes">
           {at.drSentence && <li className="calc-fact calc-fact-lead">{at.drSentence}</li>}
           {at.notes.map((n, i) => (
@@ -209,6 +221,7 @@ export function ParamCalcSection({ row, onCalcChange, onRemove }: Props) {
             </li>
           ))}
         </ul>
+        </Answer>
       )}
 
       <div className="secant-block pcalc-block" data-testid="pcalc-tangents">
@@ -227,6 +240,7 @@ export function ParamCalcSection({ row, onCalcChange, onRemove }: Props) {
             mark
           </button>
         </div>
+        <Answer k={ak} block what="the tangents">
         <ul className="calc-facts">
           <li className="calc-fact">
             {tl.horizontal.length > 0
@@ -244,6 +258,7 @@ export function ParamCalcSection({ row, onCalcChange, onRemove }: Props) {
             </li>
           ))}
         </ul>
+        </Answer>
       </div>
 
       <div className="secant-block pcalc-block" data-testid="pcalc-arc">
@@ -280,9 +295,10 @@ export function ParamCalcSection({ row, onCalcChange, onRemove }: Props) {
         {arc ? (
           <>
             <div className="secant-tex pcalc-tex" title={arc.integral.text} aria-label={arc.integral.text}>
-              <Latex tex={arc.integral.tex} />
+              <AnswerTex k={ak} tex={arc.integral.tex} what="the arc length" />
             </div>
             {arc.displacement && (
+              <Answer k={ak} block quiet>
               <ul className="calc-facts">
                 <li className="calc-fact">
                   {`Displacement ⟨Δx, Δy⟩ = ⟨${arc.displacement.dx.text}, ${arc.displacement.dy.text}⟩, length ${arc.displacement.length.text}`}
@@ -290,6 +306,7 @@ export function ParamCalcSection({ row, onCalcChange, onRemove }: Props) {
                 <li className="calc-fact">{`Distance travelled = ∫ speed ${d} = L ${arc.length.exact ? '=' : '≈'} ${arc.length.text}`}</li>
                 {arc.compare && <li className="calc-fact calc-fact-lead">{arc.compare}</li>}
               </ul>
+              </Answer>
             )}
           </>
         ) : (
@@ -323,6 +340,7 @@ export function PolarBetweenSection({ row, onCalcChange, onRemove }: BetweenProp
       className="calc-row pbetween-row"
       testId="pbetween-section"
       data={{ link: linkId }}
+      answerKey={calcKey(linkId)}
     >
       <div className="calc-line">
         <span className="calc-read calc-between" data-testid="pbetween-which">
@@ -360,12 +378,14 @@ export function PolarBetweenSection({ row, onCalcChange, onRemove }: BetweenProp
         </button>
       </div>
       {row.meetings.length > 0 && (
+        <Answer k={calcKey(linkId)} block what="where they meet">
         <ul className="calc-facts" data-testid="pbetween-meetings">
           <li className="calc-fact">
             {`${row.outerLabel} = ${row.innerLabel} at θ = ${row.meetings.map((m) => m.text).join(', ')}`}
           </li>
           {row.poleNote && <li className="calc-fact">{row.poleNote}</li>}
         </ul>
+        </Answer>
       )}
       {row.aText !== null && row.bText !== null && (
         <div className="calc-controls">
@@ -398,10 +418,11 @@ export function PolarBetweenSection({ row, onCalcChange, onRemove }: BetweenProp
       )}
       {res && (
         <div className="secant-tex pcalc-tex" title={res.integral.text} aria-label={res.integral.text} data-testid="pbetween-integral">
-          <Latex tex={res.integral.tex} />
+          <AnswerTex k={calcKey(linkId)} tex={res.integral.tex} what="the area" />
         </div>
       )}
       {res && res.notes.length > 0 && (
+        <Answer k={calcKey(linkId)} block quiet>
         <ul className="calc-facts">
           {res.notes.map((n, i) => (
             <li key={i} className="calc-fact">
@@ -409,6 +430,7 @@ export function PolarBetweenSection({ row, onCalcChange, onRemove }: BetweenProp
             </li>
           ))}
         </ul>
+        </Answer>
       )}
       {row.problem && <div className="calc-why">{`Nothing is shaded: ${row.problem}.`}</div>}
     </CardSection>

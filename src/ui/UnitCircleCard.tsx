@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
+import { Answer, AnswerText, RevealPill, useReveal } from './RevealAnswer'
+import { ucKey } from './reveal'
 import { CardSection } from './CardSection'
 import type { BoardUnitCircle, UnitCircleCardData, UnitCircleShow, PlaySpeed } from './unitCircleLinks'
 import { PLAY_SPEEDS, invValueText } from './unitCircleLinks'
@@ -69,6 +71,9 @@ export function UnitCircleCard({
   onPlay,
   onSpeed,
 }: Props) {
+  /** Reveal mode: this circle's exact values are one answer (src/ui/reveal.ts). */
+  const revealApi = useReveal()
+  const ak = ucKey(uc.id)
   const deg = uc.deg === true
   const visible = uc.hidden !== true
 
@@ -228,7 +233,14 @@ export function UnitCircleCard({
       </div>
 
       <div className="uc-summary" data-testid="uc-summary">
-        {card.summary}
+        {revealApi.hidden(ak) && card.summary.includes(' · ') ? (
+          <>
+            {`${card.summary.split(' · ')[0]} · `}
+            <RevealPill k={ak} what="the exact values" />
+          </>
+        ) : (
+          <Answer k={ak}>{card.summary}</Answer>
+        )}
       </div>
 
       {selected && (
@@ -317,6 +329,7 @@ export function UnitCircleCard({
                 ))}
               </div>
             </div>
+            <Answer k={ak} block quiet>
             <div className="uc-facts" data-testid="uc-facts">
               <div>
                 <span className="uc-k">{card.thetaText}</span> = {card.thetaAlt}
@@ -335,23 +348,25 @@ export function UnitCircleCard({
                 )}
               </div>
             </div>
+            </Answer>
           </CardSection>
 
           <CardSection
             kind="uc-values"
             title="Values"
             summary={card.lines.map((l) => l.text).join(' · ')}
+            answerKey={ak}
           >
             <div className="uc-values" data-testid="uc-values">
               {card.lines.map((l) => (
                 <div key={l.fn} className={`uc-value uc-v-${l.fn}`}>
-                  {l.text}
+                  <AnswerText k={ak} text={l.text} what={l.fn} />
                 </div>
               ))}
               {uc.show.recip &&
                 card.recip.map((l) => (
                   <div key={l.fn} className="uc-value uc-v-recip">
-                    {l.text}
+                    <AnswerText k={ak} text={l.text} what={l.fn} />
                   </div>
                 ))}
             </div>
@@ -393,6 +408,7 @@ export function UnitCircleCard({
             title="Inverse"
             defaultOpen={false}
             summary={card.inv && card.inv.ok ? `${card.inv.question} = ${card.inv.answer}` : null}
+            answerKey={ak}
             actions={
               uc.inv ? (
                 <button
@@ -470,10 +486,17 @@ export function UnitCircleCard({
             {card.inv && card.inv.ok && (
               <div className="uc-facts" data-testid="uc-inv-answer">
                 <div className="uc-answer">
-                  {card.inv.question} = <span className="uc-k">{card.inv.answer}</span>
+                  {card.inv.question} ={' '}
+                  <Answer k={ak} what="the inverse">
+                    <span className="uc-k">{card.inv.answer}</span>
+                  </Answer>
                 </div>
                 <div className="uc-dim">{card.inv.range}</div>
-                {card.inv.other && <div className="uc-dim">{card.inv.other}</div>}
+                {card.inv.other && (
+                  <Answer k={ak} quiet>
+                    <div className="uc-dim">{card.inv.other}</div>
+                  </Answer>
+                )}
                 <div className="uc-toggles">
                   {check('other', 'show the other solution (greyed)', 'The other angle in one turn with the same value')}
                 </div>

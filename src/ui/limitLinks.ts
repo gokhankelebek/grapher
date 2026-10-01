@@ -43,6 +43,7 @@ import type {
   LimitTable,
 } from '../core/limits'
 import { decimal, isExactText, numText } from './secantLinks'
+import { calcKey } from './reveal'
 
 export type { LimitLink }
 
@@ -784,6 +785,7 @@ export function limitOverlays(
           at: { x: x1, y: L - eps },
           text: `δ ≈ ${fourSig(d.delta)}`,
           dir: { x: 1, y: 1 },
+          answer: calcKey(link.id),
         })
         chips.push({
           kind: 'label',

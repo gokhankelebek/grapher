@@ -23,6 +23,7 @@ import { inequalityOf } from '../render/inequalities'
 import { pointLabel, testSentence } from '../core/inequality2d'
 import { feasibleRegion, optimize, parseObjective } from '../core/linprog'
 import type { FeasibleRegion, LinConstraint, LpResult, Objective } from '../core/linprog'
+import { SYSTEM_KEY } from './reveal'
 
 /** Corner marks, the optimum and the test point, in palette colours (print-mapped on paper). */
 export const CORNER_COLOR = '#f9a825'
@@ -200,7 +201,7 @@ export function systemOverlays(card: SystemCardData | null, system: BoardIneqSys
         isBest && result?.status === 'optimal' && lp.objective?.obj
           ? `${v.label}  ${lp.objective.goal} ${lp.objective.obj.name} = ${result.valueText}`
           : v.label
-      out.push({ kind: 'label', at: { x: v.x, y: v.y }, text, dir: { x: dx, y: -dy }, color })
+      out.push({ kind: 'label', at: { x: v.x, y: v.y }, text, dir: { x: dx, y: -dy }, color, answer: SYSTEM_KEY })
     }
   }
   if (card.test) {

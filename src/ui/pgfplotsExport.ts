@@ -1075,6 +1075,14 @@ export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): strin
   const shown = new Set(scene.curves.filter((c) => c.visible).map((c) => c.id))
   const crossings = (scene.intersections ?? []).filter((m) => shown.has(m.curveId) && shown.has(m.point.withId ?? ''))
   if (crossings.length > 0) pointMarks(crossings.map((m) => m.point), theme.axis, true)
+  // Reveal mode: a hidden answer's place, as the board marks it — a small
+  // hollow disc with a "?" (src/ui/reveal.ts).
+  for (const m of scene.revealMarks ?? []) {
+    if (m.ghost || m.nl || !Number.isFinite(m.pos.x) || !Number.isFinite(m.pos.y)) continue
+    if (m.pos.x < xmin || m.pos.x > xmax || m.pos.y < ymin || m.pos.y > ymax) continue
+    const col = colour(ink(m.color))
+    add(`\\node[circle, draw=${col}, fill=white, inner sep=0.6pt, minimum size=9pt, font=\\scriptsize\\bfseries, text=${col}] at (axis cs:${pgfNum(round(m.pos.x))},${pgfNum(round(m.pos.y))}) {?};`)
+  }
 
   // ---- axis ------------------------------------------------------------------
   const st = fig ?? null

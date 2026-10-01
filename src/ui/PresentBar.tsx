@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { MAX_PRESENT_SCALE, MIN_PRESENT_SCALE } from './storage'
 import { TOOLBAR_IDLE_MS } from './present'
+import { RevealControls } from './RevealControls'
+import type { RevealControlsProps } from './RevealControls'
 
 interface Props {
   scale: number
@@ -8,6 +10,8 @@ interface Props {
   onScale(next: number): void
   onUndo(): void
   onExit(): void
+  /** Reveal mode's switch and steps, sized for a clicker (src/ui/RevealControls.tsx). */
+  reveal?: RevealControlsProps
 }
 
 const STEP = 0.5
@@ -26,7 +30,7 @@ const STEP = 0.5
  * It is never removed from the DOM while the mode is on, so keyboard focus and
  * the accessibility tree keep working when the pixels are transparent.
  */
-export function PresentBar({ scale, canUndo, onScale, onUndo, onExit }: Props) {
+export function PresentBar({ scale, canUndo, onScale, onUndo, onExit, reveal }: Props) {
   const [awake, setAwake] = useState(true)
   const timerRef = useRef(0)
   /** Focus inside the cluster pins it up: a control being used must not fade. */
@@ -79,6 +83,8 @@ export function PresentBar({ scale, canUndo, onScale, onUndo, onExit }: Props) {
           />
         </svg>
       </button>
+
+      {reveal && <RevealControls {...reveal} present />}
 
       <div className="present-size" role="group" aria-label="Presentation size">
         <button

@@ -28,7 +28,9 @@ import {
   oversketch,
   nearestOnCurve,
 } from '../core/fit/edit'
-import { handleHitRadius, hasMarkerGlyph, renderBoard } from './renderBoard'
+import { REVEAL_MARK_R, handleHitRadius, hasMarkerGlyph, renderBoard, revealMarkPx } from './renderBoard'
+import type { RevealMark, SceneReveal } from './reveal'
+import { applyReveal, markAt } from './reveal'
 import type {
   AxisUnits,
   BoardIntersection,
@@ -281,6 +283,13 @@ interface Props {
    * already showing the solver's reason.
    */
   onFeatureEdit(curveId: string, point: SpecialPoint, to: { x?: number; y?: number }): boolean
+  /**
+   * Reveal mode (src/ui/reveal.ts): what hides and the "?" that stands in for
+   * it. The stage filters the scene it hands renderBoard through applyReveal —
+   * the same filter the export uses — and a press on a "?" reveals it.
+   */
+  reveal?: SceneReveal | null
+  onRevealMark?(key: string): void
 }
 
 const FADE_MS = 250
@@ -543,6 +552,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     curveNames,
     extraHandles,
     pointPick,
+    reveal,
+    onRevealMark,
   },
   handle,
 ) {
@@ -583,6 +594,13 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   const curveNamesRef = useRef<Props['curveNames']>(curveNames)
   const extraHandlesRef = useRef<readonly ExtraHandle[]>(extraHandles ?? [])
   const pointPickRef = useRef<Props['pointPick']>(pointPick)
+  const revealRef = useRef<SceneReveal | null | undefined>(reveal)
+  const onRevealMarkRef = useRef(onRevealMark)
+  onRevealMarkRef.current = onRevealMark
+  /** The "?" marks of the last frame drawn: what a press can hit. */
+  const revealMarksRef = useRef<readonly RevealMark[]>([])
+  /** A reveal's ring is animating: keep drawing frames until it is done. */
+  const revealAnimRef = useRef(false)
 
   const pointersRef = useRef<Map<number, PointerEntry>>(new Map())
   const gestureRef = useRef<Gesture | null>(null)
@@ -725,7 +743,8 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       ? curvesRef.current.find((c) => c.id === oversketchForRef.current)
       : undefined
 
-    renderBoard(ctx, {
+    const revealNow = revealRef.current
+    const scene = applyReveal({
       vp,
       theme: themeRef.current,
       present: presentRef.current ? paintScale(presentRef.current) : undefined,
@@ -777,7 +796,10 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
             : null,
         curveAlpha: fade ? { id: fade.curveId, alpha: fadeT } : null,
       },
-    })
+    }, revealNow ? { ...revealNow, now } : null)
+    revealMarksRef.current = scene.revealMarks ?? []
+    revealAnimRef.current = (scene.revealPulses?.length ?? 0) > 0
+    renderBoard(ctx, scene)
 
     // renderBoard paints chrome.handles only for the selected curve. When the
     // selected object is not a curve at all — a slope field — its points have
@@ -800,7 +822,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   const frame = useCallback((): void => {
     rafRef.current = 0
     draw()
-    if (fadeRef.current && !rafRef.current) {
+    if ((fadeRef.current || revealAnimRef.current) && !rafRef.current) {
       rafRef.current = requestAnimationFrame(frame)
     }
   }, [draw])
@@ -838,6 +860,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     curveNamesRef.current = curveNames
     extraHandlesRef.current = extraHandles ?? []
     pointPickRef.current = pointPick
+    revealRef.current = reveal
     hitRef.current = hitRadii(coarseRef.current, present)
     analysisRef.current = analysis
     intersectionsRef.current = intersections
@@ -866,6 +889,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     curveNames,
     extraHandles,
     pointPick,
+    reveal,
     selectedId,
     mode,
     inkColor,
@@ -1161,6 +1185,10 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
         // there is nothing for the feature editor to open. Both questions are
         // the same question, and hasMarkerGlyph is where it is answered.
         if (!hasMarkerGlyph(p.kind)) continue
+        // A hidden answer is a "?" in reveal mode, never an editable marker.
+        const rv = revealRef.current
+        const rk = rv ? rv.pointKey(sel.id, p) : null
+        if (rv && rk !== null && rv.hidden(rk)) continue
         const sp = toScreen(p.pos, vp)
         const d = Math.hypot(sp.x - pos.x, sp.y - pos.y)
         if (d > bestD) continue
@@ -1592,6 +1620,23 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     if (handleEditRef.current) {
       cancelHandleEditor()
       return
+    }
+    // Reveal mode: a press on a "?" reveals that answer, and is nothing else.
+    if (
+      e.button === 0 &&
+      !spaceRef.current &&
+      gestureRef.current === null &&
+      onRevealMarkRef.current &&
+      revealMarksRef.current.length > 0
+    ) {
+      const vp = vpRef.current
+      const r = Math.max(hitRef.current.marker, REVEAL_MARK_R * paintScale(presentRef.current).stroke + 6)
+      const hit = markAt(revealMarksRef.current, getPos(e), (m) => revealMarkPx(m, vp), r)
+      if (hit) {
+        e.preventDefault()
+        onRevealMarkRef.current(hit.key)
+        return
+      }
     }
     const canvas = e.currentTarget
     const kind = pointerKind(e.pointerType)

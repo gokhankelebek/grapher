@@ -5,6 +5,7 @@ import { ParamRow } from './CurveCard'
 import { parseNumeric } from './numeric'
 import { SPACING_CHOICES, coord } from './fieldLinks'
 import type { BoardField, FieldCardData } from './fieldLinks'
+import { eulerKey } from './reveal'
 import { EulerSection } from './EulerSection'
 import { CardSection } from './CardSection'
 import type { RunPatch } from './eulerLinks'
@@ -464,6 +465,7 @@ export function FieldCard({
           </CardSection>
 
           <EulerSection
+            answerKey={eulerKey(field.id)}
             runs={data.eulers}
             onAdd={onEulerAdd}
             onPatch={onEulerPatch}

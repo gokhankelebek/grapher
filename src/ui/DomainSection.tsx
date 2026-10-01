@@ -16,6 +16,8 @@
 // restriction being typed.
 // ============================================================================
 
+import { Answer } from './RevealAnswer'
+import { domainKey, inverseKey, oneToOneKey, rangeKey } from './reveal'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { Latex } from './Latex'
@@ -47,23 +49,35 @@ function Row({
   why,
   children,
   testId,
+  answerKey,
 }: {
   label: string
   value: string | null
   why: string
   children?: ReactNode
   testId: string
+  /** Reveal mode: this row's value is an answer (src/ui/reveal.ts). */
+  answerKey?: string
 }) {
+  const valueNode = (
+    <span
+      className={`an-value an-value-static dr-value${value === null ? ' dr-unknown' : ''}`}
+      title={value === null ? why : undefined}
+    >
+      {value ?? DASH}
+    </span>
+  )
   return (
     <div className="an-row dr-row" data-testid={testId}>
       <span className="an-label">{label}</span>
       <span className="an-values dr-values">
-        <span
-          className={`an-value an-value-static dr-value${value === null ? ' dr-unknown' : ''}`}
-          title={value === null ? why : undefined}
-        >
-          {value ?? DASH}
-        </span>
+        {answerKey && value !== null ? (
+          <Answer k={answerKey} what={label.toLowerCase()}>
+            {valueNode}
+          </Answer>
+        ) : (
+          valueNode
+        )}
         {children}
       </span>
     </div>
@@ -187,6 +201,7 @@ export function DomainSection({ panel, actions, notation }: Props) {
         value={domainText}
         why={WHY_NO_DOMAIN}
         testId="domain-row"
+        answerKey={domainKey(id)}
       >
         {restrictButton}
         <button
@@ -232,6 +247,7 @@ export function DomainSection({ panel, actions, notation }: Props) {
         value={rangeText}
         why={WHY_NO_RANGE}
         testId="range-row"
+        answerKey={rangeKey(id)}
       />
       {isFn && (
         <Row
@@ -239,6 +255,7 @@ export function DomainSection({ panel, actions, notation }: Props) {
           value={oneToOneText(panel.oneToOne)}
           why={WHY_NO_ONE_TO_ONE}
           testId="one-to-one-row"
+          answerKey={oneToOneKey(id)}
         />
       )}
       {isFn && panel.chips.length > 0 && restrict.kind !== 'none' && (
@@ -304,9 +321,11 @@ export function DomainSection({ panel, actions, notation }: Props) {
             <span className="an-label">Inverse</span>
             <span className="an-values dr-values">
               {inv.latex ? (
-                <span className="dr-formula" title={inv.text ?? undefined} data-testid="inverse-formula">
-                  <Latex tex={inv.latex} />
-                </span>
+                <Answer k={inverseKey(id)} what="the inverse">
+                  <span className="dr-formula" title={inv.text ?? undefined} data-testid="inverse-formula">
+                    <Latex tex={inv.latex} />
+                  </span>
+                </Answer>
               ) : (
                 <span className="dr-why" data-testid="inverse-why">
                   {inv.why}

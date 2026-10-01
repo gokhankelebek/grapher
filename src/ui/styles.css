@@ -7755,3 +7755,153 @@ button.calc-field-btn {
   color: var(--muted);
   font-size: var(--fs-xs);
 }
+
+/* ===========================================================================
+   Reveal mode (src/ui/reveal.ts, src/ui/RevealAnswer.tsx): a computed answer
+   on a card stands as a "Reveal" pill until it is revealed, then fades in.
+   =========================================================================== */
+.reveal-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  height: 20px;
+  padding: 0 var(--sp-2);
+  margin: 0 2px;
+  border: 1px dashed var(--accent);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--font);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  vertical-align: middle;
+  cursor: pointer;
+}
+.reveal-pill::before {
+  content: '?';
+  font-weight: 700;
+}
+.reveal-pill:hover {
+  border-style: solid;
+}
+.reveal-pill:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.reveal-pill-row {
+  padding: 2px 0;
+}
+.reveal-tex {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+.reveal-in {
+  animation: reveal-in 0.45s var(--ease) both;
+}
+@keyframes reveal-in {
+  from {
+    opacity: 0;
+    filter: blur(3px);
+  }
+  to {
+    opacity: 1;
+    filter: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .reveal-in {
+    animation: none;
+  }
+}
+
+/* The board's own controls while reveal mode is on (outside presentation). */
+.reveal-bar {
+  position: absolute;
+  inset-block-end: var(--sp-3);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(19, 23, 34, 0.92);
+  box-shadow: var(--shadow);
+  font-family: var(--font);
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+.reveal-bar-count {
+  padding: 0 var(--sp-2);
+  font-variant-numeric: tabular-nums;
+}
+.reveal-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-1);
+  min-width: 30px;
+  height: 30px;
+  padding: 0 var(--sp-3);
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+.reveal-btn:hover:not(:disabled) {
+  background: var(--panel-3);
+  color: var(--text);
+}
+.reveal-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.reveal-btn-primary {
+  background: var(--accent);
+  color: #fff;
+}
+.reveal-btn-primary:hover:not(:disabled) {
+  background: var(--accent);
+  color: #fff;
+  filter: brightness(1.1);
+}
+.reveal-btn-on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.tb-toggle.reveal-toggle-on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* In presentation: the same controls, sized for a clicker and a room. */
+.present-reveal {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 2px;
+  border-inline-end: 1px solid var(--border-soft);
+}
+.present-reveal .reveal-btn {
+  min-width: 44px;
+  height: 44px;
+  font-size: var(--fs-lg);
+}
+.present-reveal .reveal-bar-count {
+  font-size: var(--fs-lg);
+}
+.reveal-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}

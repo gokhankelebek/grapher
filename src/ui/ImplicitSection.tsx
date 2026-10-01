@@ -17,6 +17,8 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { Latex } from './Latex'
+import { Answer, AnswerTex } from './RevealAnswer'
+import { calcKey } from './reveal'
 import { CardSection, SectionDrop } from './CardSection'
 import { parseNumeric } from './numeric'
 import type { CalcChange, ImplicitRow } from './calcLinks'
@@ -59,6 +61,9 @@ export function ImplicitSection({ row, onCalcChange, onRemove }: Props) {
     ? 'no tangent'
     : `${row.dydx ? `dy/dx = ${row.dydx.text} · ` : ''}at ${row.pointText}: ${row.slopeText}`
 
+  /** Reveal mode: everything this section computes is one answer. */
+  const ak = calcKey(linkId)
+
   const list = (label: string, pts: string[], cls: string): JSX.Element => (
     <li className={`calc-fact ${cls}`}>
       <span className="impl-label">{label}</span>{' '}
@@ -75,24 +80,30 @@ export function ImplicitSection({ row, onCalcChange, onRemove }: Props) {
       actions={<SectionDrop what="tangent line" onRemove={onRemove} />}
       className="calc-row impl-row"
       data={{ link: linkId }}
+      answerKey={ak}
     >
       <div
         className="secant-tex impl-dydx"
         data-testid="impl-dydx"
         title={row.dydx ? `dy/dx = ${row.dydx.text}` : 'dy/dx = −F_x / F_y'}
       >
-        <Latex
-          tex={
-            row.dydx
-              ? `\\frac{dy}{dx} = -\\frac{F_x}{F_y} = ${row.dydx.tex}`
-              : `\\frac{dy}{dx} = -\\frac{F_x}{F_y}`
-          }
-        />
+        {row.dydx ? (
+          <AnswerTex
+            k={ak}
+            tex={`\\frac{dy}{dx} = -\\frac{F_x}{F_y} = ${row.dydx.tex}`}
+            question={`\\frac{dy}{dx} = -\\frac{F_x}{F_y}`}
+            what="dy/dx"
+          />
+        ) : (
+          <Latex tex={`\\frac{dy}{dx} = -\\frac{F_x}{F_y}`} />
+        )}
       </div>
       {row.fx && row.fy && (
-        <div className="impl-partials" title="The partial derivatives: y held constant, then x held constant">
-          <Latex tex={`F_x = ${row.fx.tex},\\quad F_y = ${row.fy.tex}`} />
-        </div>
+        <Answer k={ak} quiet>
+          <div className="impl-partials" title="The partial derivatives: y held constant, then x held constant">
+            <Latex tex={`F_x = ${row.fx.tex},\\quad F_y = ${row.fy.tex}`} />
+          </div>
+        </Answer>
       )}
 
       <div className="calc-controls impl-point">
@@ -139,7 +150,9 @@ export function ImplicitSection({ row, onCalcChange, onRemove }: Props) {
       ) : (
         <>
           <div className="secant-tex impl-value" data-testid="impl-value" title={`dy/dx at ${row.pointText} ${row.slopeText.startsWith('≈') ? row.slopeText : `= ${row.slopeText}`}`}>
-            <Latex
+            <AnswerTex
+              k={ak}
+              what="the slope"
               tex={`\\left.\\frac{dy}{dx}\\right|_{${row.pointTex}} ${
                 row.slopeTex === null
                   ? '\\text{ is undefined (vertical tangent)}'
@@ -152,12 +165,15 @@ export function ImplicitSection({ row, onCalcChange, onRemove }: Props) {
           {row.line && (
             <div className="secant-line" data-testid="impl-line" title={`The tangent line at ${row.pointText}, point-slope form`}>
               <span className="secant-line-label">tangent line</span>
-              <Latex tex={row.line.tex} />
+              <Answer k={ak} what="the tangent line">
+                <Latex tex={row.line.tex} />
+              </Answer>
             </div>
           )}
         </>
       )}
 
+      <Answer k={ak} block quiet>
       <ul className="calc-facts impl-hv" data-testid="impl-hv">
         {list('horizontal tangents (F_x = 0):', row.horizontal, 'impl-h')}
         {list('vertical tangents (F_y = 0):', row.vertical, 'impl-v')}
@@ -167,6 +183,7 @@ export function ImplicitSection({ row, onCalcChange, onRemove }: Props) {
           </li>
         )}
       </ul>
+      </Answer>
       <div className="calc-controls">
         <button
           type="button"
@@ -192,6 +209,7 @@ export function ImplicitSection({ row, onCalcChange, onRemove }: Props) {
         )}
       </div>
       {showD2 && row.d2 && (
+        <Answer k={ak} block what="d²y/dx²">
         <div className="secant-block" data-testid="impl-d2">
           <div className="secant-tex">
             <Latex
@@ -205,6 +223,7 @@ export function ImplicitSection({ row, onCalcChange, onRemove }: Props) {
             </div>
           )}
         </div>
+        </Answer>
       )}
     </CardSection>
   )

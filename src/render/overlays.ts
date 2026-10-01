@@ -178,6 +178,12 @@ export type Overlay =
        */
       across?: { slope: number; below: boolean }
       color?: string
+      /**
+       * The reveal-mode answer key this chip states (src/ui/reveal.ts), when
+       * it states an answer rather than names a thing ("c = 2√3/3", not "R").
+       * The renderer ignores it; reveal mode swaps the chip for a "?".
+       */
+      answer?: string
     }
   | {
       kind: 'dot'

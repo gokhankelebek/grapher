@@ -77,6 +77,8 @@ import { drawSolveFigure } from '../render/nlSolve'
 import { solveBlocks } from './nlSolve'
 import type { NLPart } from '../render/numberline'
 import { pointText } from './numeric'
+import type { RevealMark, RevealPulse } from './reveal'
+import { nlToScreenX, numberLineAxisY } from '../render/numberline'
 import { readSinusoid } from '../core/sinusoidal'
 import { evalAst, parseAst } from '../core/parse'
 
@@ -457,6 +459,22 @@ export interface BoardScene {
    * PNG (chrome: null) exactly as the caption does.
    */
   curveNames?: Readonly<Record<string, string>>
+  /**
+   * REVEAL MODE (src/ui/reveal.ts): where a hidden answer sits, a small
+   * hollow "?" — the class sees WHERE a zero or a crossing is, not WHAT it
+   * is. The answers themselves have already been taken out of the scene by
+   * applyReveal; this layer only marks their places. FIGURE, not chrome: an
+   * export taken in reveal mode is the student copy, "?" marks included.
+   * Absent draws exactly what the board drew before this field existed.
+   */
+  revealMarks?: readonly RevealMark[]
+  /** Answers revealed a moment ago: a ring opening and fading where each is. Screen only. */
+  revealPulses?: readonly RevealPulse[]
+  /**
+   * Number line, reveal mode: these solve items draw no set and no working —
+   * the bare line and ticks, as a student copy does — until revealed.
+   */
+  nlHidden?: ReadonlySet<string>
   /** Editing chrome. Null = the figure alone. */
   chrome?: BoardChrome | null
 }
@@ -2582,6 +2600,9 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
     }
   }
 
+  // Reveal mode: a "?" where each hidden answer sits, on top of every marker.
+  drawRevealMarks(ctx, scene, theme, ink, scale, fig?.font ?? null)
+
   // The sign-chart strips: on their own backing along the bottom, above the
   // caption band, after every other figure layer.
   if (signs && signOpts) {
@@ -2617,6 +2638,75 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
         /* ignore */
       }
     }
+  }
+}
+
+/** The "?" mark's radius and ring weight, CSS px before the presentation scale. */
+export const REVEAL_MARK_R = 8
+const REVEAL_MARK_W = 1.6
+
+/** Where a reveal mark sits on screen: on the axis for a number line. */
+export function revealMarkPx(m: { pos: Vec2; nl?: boolean }, vp: Viewport): Vec2 {
+  return m.nl ? { x: nlToScreenX(m.pos.x, vp), y: numberLineAxisY(vp) } : toScreen(m.pos, vp)
+}
+
+/**
+ * Reveal mode's "?" marks and the rings of answers just revealed.
+ *
+ * A hollow disc in the answer's own ink with a "?" in it: the marker
+ * vocabulary's "something is here" without the glyph that would say which kind
+ * (a ring is a zero, a dot a turning point — that is already an answer).
+ */
+function drawRevealMarks(
+  ctx: CanvasRenderingContext2D,
+  scene: BoardScene,
+  theme: Theme,
+  ink: (c: string) => string,
+  scale: { type: number; stroke: number },
+  font: 'sans' | 'serif' | null,
+): void {
+  const marks = scene.revealMarks
+  const pulses = scene.revealPulses
+  if ((!marks || marks.length === 0) && (!pulses || pulses.length === 0)) return
+  const { vp } = scene
+  const r = REVEAL_MARK_R * scale.stroke
+  ctx.save()
+  try {
+    for (const p of pulses ?? []) {
+      const at = revealMarkPx(p, vp)
+      if (!Number.isFinite(at.x) || !Number.isFinite(at.y)) continue
+      const t = Math.max(0, Math.min(1, p.age))
+      ctx.globalAlpha = 1 - t
+      ctx.beginPath()
+      ctx.arc(at.x, at.y, r * (1 + 1.4 * t), 0, TWO_PI)
+      ctx.lineWidth = 2 * scale.stroke
+      ctx.strokeStyle = ink(p.color)
+      ctx.stroke()
+    }
+    ctx.globalAlpha = 1
+    const px = Math.round(12 * scale.type)
+    ctx.font = `bold ${px}px ${font === 'serif' ? '"Times New Roman", Times, serif' : '"Helvetica Neue", Helvetica, Arial, sans-serif'}`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    const pad = r + 2
+    for (const m of marks ?? []) {
+      if (m.ghost) continue
+      const at = revealMarkPx(m, vp)
+      if (!Number.isFinite(at.x) || !Number.isFinite(at.y)) continue
+      if (at.x < -pad || at.y < -pad || at.x > vp.widthPx + pad || at.y > vp.heightPx + pad) continue
+      const c = ink(m.color)
+      ctx.beginPath()
+      ctx.arc(at.x, at.y, r, 0, TWO_PI)
+      ctx.fillStyle = theme.bg
+      ctx.fill()
+      ctx.lineWidth = REVEAL_MARK_W * scale.stroke
+      ctx.strokeStyle = c
+      ctx.stroke()
+      ctx.fillStyle = c
+      ctx.fillText('?', at.x, at.y + 0.5 * scale.stroke)
+    }
+  } finally {
+    ctx.restore()
   }
 }
 
@@ -2657,6 +2747,7 @@ function renderNumberLine(
     lift = solved.lift
     if (scene.nlStudent !== true) {
       for (const b of solved.blocks) {
+        if (scene.nlHidden?.has(b.item.id)) continue
         const style = scene.styles[b.item.id]
         try {
           drawSolveFigure(ctx, b.spec, b.layout, {
@@ -2702,6 +2793,8 @@ function renderNumberLine(
       /* one bad item must not take the board down */
     }
   }
+
+  drawRevealMarks(ctx, scene, theme, paint, scale, font)
 
   // Chrome: the interval being dragged out right now, drawn on the top lane so
   // it never hides behind what is already there.

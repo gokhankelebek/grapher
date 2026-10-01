@@ -12,7 +12,8 @@
 
 import { useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
-import { Latex } from './Latex'
+import { Answer, AnswerTex, AnswerText } from './RevealAnswer'
+import { calcKey } from './reveal'
 import { CardSection, SectionDrop } from './CardSection'
 import { parseNumeric } from './numeric'
 import type { CalcChange, TaylorRow } from './calcLinks'
@@ -157,18 +158,25 @@ export function TaylorSection({ row, onCalcChange, onRemove, onEditStart, onEdit
       actions={<SectionDrop what="Taylor polynomial" onRemove={onRemove} />}
       className="calc-row taylor-row"
       data={{ link: linkId }}
+      answerKey={calcKey(linkId)}
     >
       <div className="calc-line">
         {/* What it is, in words; the polynomial itself is the KaTeX line below
             (or, when KaTeX has nothing to show, this line says it in text). */}
         <span className="calc-read taylor-name" title={row.text || undefined}>
-          {row.tex ? `${row.name} about a = ${row.aText}` : row.text || `${row.name}(x) = —`}
+          {row.tex ? (
+            `${row.name} about a = ${row.aText}`
+          ) : row.text ? (
+            <AnswerText k={calcKey(linkId)} text={row.text} what="the polynomial" />
+          ) : (
+            `${row.name}(x) = —`
+          )}
         </span>
       </div>
 
       {row.tex && (
         <div className="taylor-tex" title={row.text}>
-          <Latex tex={row.tex} />
+          <AnswerTex k={calcKey(linkId)} tex={row.tex} what="the polynomial" />
         </div>
       )}
 
@@ -283,6 +291,7 @@ export function TaylorSection({ row, onCalcChange, onRemove, onEditStart, onEdit
       {row.problem && <div className="calc-why">{`Nothing is drawn: ${row.problem}.`}</div>}
 
       {row.probe && (
+        <Answer k={calcKey(linkId)} block what="the error">
         <ul className="calc-facts taylor-probe">
           <li className="calc-fact calc-fact-lead">{row.probe.p}</li>
           <li className="calc-fact calc-fact-lead">{row.probe.f}</li>
@@ -290,11 +299,18 @@ export function TaylorSection({ row, onCalcChange, onRemove, onEditStart, onEdit
           {row.probe.lagrange && <li className="calc-fact">{row.probe.lagrange}</li>}
           {row.probe.alternating && <li className="calc-fact">{row.probe.alternating}</li>}
         </ul>
+        </Answer>
       )}
 
       <div className="taylor-ioc">
-        <span className="calc-read calc-accum-read">{row.iocText}</span>
-        {row.iocNote && <span className="calc-note taylor-ioc-note">{row.iocNote}</span>}
+        <span className="calc-read calc-accum-read">
+          <AnswerText k={calcKey(linkId)} text={row.iocText} what="the interval of convergence" />
+        </span>
+        {row.iocNote && (
+          <Answer k={calcKey(linkId)} quiet>
+            <span className="calc-note taylor-ioc-note">{row.iocNote}</span>
+          </Answer>
+        )}
       </div>
     </CardSection>
   )

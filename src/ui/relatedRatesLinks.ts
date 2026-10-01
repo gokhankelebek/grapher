@@ -210,6 +210,7 @@ export function relatedRatesFigure(rr: BoardRelatedRates, opts: FigureOpts = {})
     prims,
     graph,
     title: { at: { x: (sb.x0 + sb.x1) / 2, y: sb.y1 }, text: `t = ${dec(s.t, 2)} ${def.timeUnit} · ${unknown}` },
+    answers: def.extra ? [def.unknown.label, def.extra.label] : [def.unknown.label],
   }
 }
 

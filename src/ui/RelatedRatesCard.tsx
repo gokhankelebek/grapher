@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
+import { Answer, AnswerTex, RevealPill, useReveal } from './RevealAnswer'
+import { maskAnswerText, rrKey } from './reveal'
 import { CardSection } from './CardSection'
 import { Latex } from './Latex'
 import { parseNumeric } from './numeric'
@@ -58,6 +60,10 @@ const SHORT: Record<RRScenario, string> = {
 export function RelatedRatesCard(props: Props) {
   const { rr, card, selected, playing, speed } = props
   const def = card.def
+  /** Reveal mode: the unknown rate (and any rate derived from it) is one answer. */
+  const revealApi = useReveal()
+  const ak = rrKey(rr.id)
+  const answerLabels = def.extra ? [def.unknown.label, def.extra.label] : [def.unknown.label]
   const visible = rr.hidden !== true
   const stop = (e: { stopPropagation(): void }): void => e.stopPropagation()
 
@@ -215,7 +221,13 @@ export function RelatedRatesCard(props: Props) {
       </div>
 
       <div className="uc-summary" data-testid="rr-summary">
-        {card.summary}
+        {revealApi.hidden(ak) ? (
+          <>
+            {maskAnswerText(card.summary, answerLabels)} <RevealPill k={ak} what={def.unknown.label} />
+          </>
+        ) : (
+          <Answer k={ak}>{card.summary}</Answer>
+        )}
       </div>
 
       {selected && (
@@ -452,26 +464,46 @@ export function RelatedRatesCard(props: Props) {
             </div>
           </CardSection>
 
-          <CardSection kind="rr-answer" title="Answer" summary={card.unknown ? `${card.unknown.label} = ${card.unknown.text}` : '—'}>
+          <CardSection
+            kind="rr-answer"
+            title="Answer"
+            summary={card.unknown ? `${card.unknown.label} = ${card.unknown.text}` : '—'}
+            answerKey={ak}
+          >
             {card.unknown ? (
               <>
                 {card.substituted && (
                   <div className="rr-tex" title={card.substituted.text}>
-                    <Latex tex={`${card.substituted.tex} = ${card.unknown.tex}`} />
+                    <AnswerTex
+                      k={ak}
+                      tex={`${card.substituted.tex} = ${card.unknown.tex}`}
+                      question={card.substituted.tex}
+                      what={def.unknown.label}
+                    />
                   </div>
                 )}
                 <div className="rr-answer" data-testid="rr-answer">
-                  {card.unknown.label} = <span className="uc-k">{card.unknown.text}</span> {card.unknown.unit}
-                  {card.unknown.exact && card.unknown.text !== card.unknown.decimal && (
-                    <span className="uc-dim"> ≈ {card.unknown.decimal}</span>
-                  )}
+                  {card.unknown.label} ={' '}
+                  <Answer k={ak} what={card.unknown.label}>
+                    <span className="uc-k">{card.unknown.text}</span> {card.unknown.unit}
+                    {card.unknown.exact && card.unknown.text !== card.unknown.decimal && (
+                      <span className="uc-dim"> ≈ {card.unknown.decimal}</span>
+                    )}
+                  </Answer>
                 </div>
                 {card.extra && (
                   <div className="rr-answer rr-answer-2" data-testid="rr-extra">
-                    {card.extra.label} = <span className="uc-k">{card.extra.text}</span> {card.extra.unit}
+                    {card.extra.label} ={' '}
+                    <Answer k={ak} what={card.extra.label}>
+                      <span className="uc-k">{card.extra.text}</span> {card.extra.unit}
+                    </Answer>
                   </div>
                 )}
-                {card.answer && <div className="field-hint rr-sentence">{card.answer}</div>}
+                {card.answer && (
+                  <Answer k={ak} block quiet>
+                    <div className="field-hint rr-sentence">{card.answer}</div>
+                  </Answer>
+                )}
               </>
             ) : (
               <div className="expr-error">The model has no value at this instant.</div>

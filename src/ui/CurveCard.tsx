@@ -56,6 +56,8 @@ import { ImplicitSection } from './ImplicitSection'
 import { CardSection } from './CardSection'
 import { InequalitySection } from './InequalitySection'
 import { setRowText } from './domainLinks'
+import { Answer, AnswerTex, AnswerText, RevealPill, useReveal } from './RevealAnswer'
+import { asymKey, calcKey, domainKey, rangeKey } from './reveal'
 import type { DomainActions, DomainPanel, SetNotation } from './domainLinks'
 
 interface Props {
@@ -833,6 +835,11 @@ export function CurveCard({
 }: Props) {
   const spec: ModelSpec | undefined = models[curve.modelId]
   const isExpression = curve.modelId.startsWith('expr_')
+  /** Reveal mode: which computed answers on this card stand as pills (src/ui/reveal.ts). */
+  const revealApi = useReveal()
+  /** A derived curve (tangent, f′, Pₙ, accumulation): its equation is computed — an answer. */
+  const derivedKey = calc?.origin ? calcKey(calc.origin.linkId) : null
+  const derivedHidden = derivedKey !== null && revealApi.hidden(derivedKey)
   /**
    * A typed curve whose model couldn't be rebuilt: shown, but inert. A line
    * that CALLS another curve (it has a depKey) is treated the same way by the
@@ -1284,8 +1291,9 @@ export function CurveCard({
     if (domainPanel && domainActions) {
       const d = setRowText(domainPanel.domain, setNotation ?? 'interval')
       const r = setRowText(domainPanel.range, setNotation ?? 'interval')
-      if (d) parts.push(`domain ${d}`)
-      if (r) parts.push(`range ${r}`)
+      const id = domainPanel.ownerId
+      if (d) parts.push(`domain ${revealApi.hidden(domainKey(id)) ? '?' : d}`)
+      if (r) parts.push(`range ${revealApi.hidden(rangeKey(id)) ? '?' : r}`)
     }
     for (const g of analysisGroups.slice(0, 3)) {
       const n = g.seq.length
@@ -1293,7 +1301,7 @@ export function CurveCard({
       parts.push(n > 1 ? `${n} ${name}` : name)
     }
     return parts.join(' · ')
-  }, [domainPanel, domainActions, setNotation, analysisGroups])
+  }, [domainPanel, domainActions, setNotation, analysisGroups, revealApi])
 
   /**
    * The asymptotes of this curve, already in words.
@@ -1751,6 +1759,7 @@ export function CurveCard({
             actions={dropBtn(a.linkId, 'shaded area')}
             className="calc-row"
             data={{ link: a.linkId }}
+            answerKey={calcKey(a.linkId)}
           >
             {/* Between curves the first line says WHICH two, so the number
                 gets a line of its own rather than being squeezed in beside a
@@ -1763,8 +1772,10 @@ export function CurveCard({
               </div>
             )}
             <div className={other ? 'calc-line calc-line-read' : 'calc-line'}>
-              <span className="calc-read">{a.text}</span>
-              {samples}
+              <span className="calc-read">
+                <AnswerText k={calcKey(a.linkId)} text={a.text} what="the integral" />
+              </span>
+              {revealApi.hidden(calcKey(a.linkId)) ? null : samples}
             </div>
                     <div className="calc-controls">
                       {boundFields(a.linkId, a.from, a.to)}
@@ -1788,7 +1799,11 @@ export function CurveCard({
                         {other ? (a.abs ? '|f − g|' : 'signed') : '|area|'}
                       </button>
                     </div>
-            {a.problem && <div className="calc-why">{a.problem}</div>}
+            {a.problem && (
+              <Answer k={calcKey(a.linkId)} block>
+                <div className="calc-why">{a.problem}</div>
+              </Answer>
+            )}
           </CardSection>
         ),
       })
@@ -1804,6 +1819,7 @@ export function CurveCard({
             actions={dropBtn(g.linkId, 'accumulation function')}
             className="calc-row"
             data={{ link: g.linkId }}
+            answerKey={g.text ? calcKey(g.linkId) : undefined}
           >
             <div className="calc-line">
               <span className="calc-read">{g.head}</span>
@@ -1838,7 +1854,9 @@ export function CurveCard({
                     </div>
                     {g.text && (
                       <div className="calc-line calc-line-read">
-                        <span className="calc-read calc-accum-read">{g.text}</span>
+                        <span className="calc-read calc-accum-read">
+                          <AnswerText k={calcKey(g.linkId)} text={g.text} what="the value" />
+                        </span>
                       </div>
                     )}
             {g.problem && <div className="calc-why">{g.problem}</div>}
@@ -1931,9 +1949,12 @@ export function CurveCard({
             actions={dropBtn(r.linkId, 'Riemann sum')}
             className="calc-row"
             data={{ link: r.linkId }}
+            answerKey={calcKey(r.linkId)}
           >
             <div className="calc-line">
-              <span className="calc-read">{r.text}</span>
+              <span className="calc-read">
+                <AnswerText k={calcKey(r.linkId)} text={r.text} what="the sum" />
+              </span>
             </div>
                     <div className="calc-controls">
                       {boundFields(r.linkId, r.from, r.to)}
@@ -2318,6 +2339,8 @@ export function CurveCard({
         </div>
       </div>
 
+      {/* Reveal mode: a derived curve's equation (a tangent line, f′, Pₙ,
+          an accumulation function) IS the answer, so it stands as a pill. */}
       {/* Line 2: the product's own output, on a line of its own, wrapping
           rather than clipping. It was a 149px box holding up to 302px of
           content behind a gradient mask. */}
@@ -2348,12 +2371,20 @@ export function CurveCard({
             }}
             onBlur={() => setEqEdit(null)}
           />
-        ) : equationSeed === null ? (
+        ) : equationSeed === null || derivedHidden ? (
           <div
             className="card-formula card-eq"
-            title={`${/^[aeiou]/i.test(modelName) ? 'An' : 'A'} ${modelName.toLowerCase()} has no equation form to type — drag its handles or pick another reading`}
+            title={
+              derivedHidden
+                ? 'Reveal mode: this equation is an answer'
+                : `${/^[aeiou]/i.test(modelName) ? 'An' : 'A'} ${modelName.toLowerCase()} has no equation form to type — drag its handles or pick another reading`
+            }
           >
-            <Latex tex={latexStr} className="card-latex" />
+            {derivedKey ? (
+              <AnswerTex k={derivedKey} tex={latexStr} className="card-latex" what="this equation" />
+            ) : (
+              <Latex tex={latexStr} className="card-latex" />
+            )}
           </div>
         ) : (
           <button
@@ -2392,7 +2423,7 @@ export function CurveCard({
                   calc.origin.kind === 'accumulation' ? ' calc-origin-of' : ''
                 }`}
               >
-                {calc.origin.tail}
+                <Answer k={calcKey(calc.origin.linkId)}>{calc.origin.tail}</Answer>
               </span>
             )}
           </div>
@@ -2405,6 +2436,7 @@ export function CurveCard({
               about g, read off f's own analysis. Only on the open card: six
               sentences under every accumulation curve would bury the list. */}
           {selected && calc.origin.facts && calc.origin.facts.length > 0 && (
+            <Answer k={calcKey(calc.origin.linkId)} block what="what follows">
             <ul className="calc-facts">
               {calc.origin.facts.map((fact, i) => (
                 <li key={i} className={i === 0 ? 'calc-fact calc-fact-lead' : 'calc-fact'}>
@@ -2412,6 +2444,7 @@ export function CurveCard({
                 </li>
               ))}
             </ul>
+            </Answer>
           )}
         </div>
       )}
@@ -2646,16 +2679,19 @@ export function CurveCard({
                         // one value an editor could move.
                         if (entry.span) {
                           return (
-                            <span
-                              className="an-value an-value-static"
-                              key={`span:${entry.span.lo}`}
-                              data-testid="zero-interval"
-                            >
-                              {n === g.seq.length - 1 ? entry.span.text : `${entry.span.text},`}
-                            </span>
+                            <Answer k={`curve:${curve.id}:zero:span${n}`} key={`span:${entry.span.lo}`} what="this zero">
+                              <span className="an-value an-value-static" data-testid="zero-interval">
+                                {n === g.seq.length - 1 ? entry.span.text : `${entry.span.text},`}
+                              </span>
+                            </Answer>
                           )
                         }
                         const { point, index } = entry
+                        // Reveal mode: a hidden value is a pill, and nothing to edit.
+                        const answerKey = revealApi.pointKey(curve.id, point)
+                        if (revealApi.hidden(answerKey)) {
+                          return <RevealPill key={index} k={answerKey} what={`this ${point.label}`} />
+                        }
                         const keys = axisKeys(featureAxes(point.kind))
                         const pair = keys.length > 1
                         const last = n === g.seq.length - 1
@@ -2694,13 +2730,14 @@ export function CurveCard({
                         // editor to move. No button, no hover, no hint.
                         if (g.readOnly) {
                           return (
-                            <span
-                              className="an-value an-value-static"
-                              key={index}
-                              data-value={parts.exact === null ? undefined : text}
-                            >
-                              {valueNode}
-                            </span>
+                            <Answer k={answerKey} key={index}>
+                              <span
+                                className="an-value an-value-static"
+                                data-value={parts.exact === null ? undefined : text}
+                              >
+                                {valueNode}
+                              </span>
+                            </Answer>
                           )
                         }
                         if (featureEdit?.index === index) {
@@ -2762,8 +2799,8 @@ export function CurveCard({
                           )
                         }
                         return (
+                          <Answer k={answerKey} key={index}>
                           <button
-                            key={index}
                             className="an-value"
                             data-value={parts.exact === null ? undefined : text}
                             title={
@@ -2780,6 +2817,7 @@ export function CurveCard({
                             {valueNode}
                             {point.tangent && <span className="an-note">touches</span>}
                           </button>
+                          </Answer>
                         )
                       })}
                     </span>
@@ -2795,9 +2833,11 @@ export function CurveCard({
                     </span>
                     <span className="an-values">
                       {asymptotes.map((text, n) => (
-                        <span className="an-value an-value-static" key={`${text}-${n}`}>
-                          {n === asymptotes.length - 1 ? text : `${text},`}
-                        </span>
+                        <Answer k={asymKey(curve.id, n)} key={`${text}-${n}`} what="this asymptote">
+                          <span className="an-value an-value-static">
+                            {n === asymptotes.length - 1 ? text : `${text},`}
+                          </span>
+                        </Answer>
                       ))}
                     </span>
                   </div>
@@ -2852,9 +2892,9 @@ export function CurveCard({
                       const parts = pointParts(point, { scale, xScale })
                       const comma = n === g.points.length - 1 ? '' : ','
                       return (
+                        <Answer k={revealApi.crossKey(curve.id, g.id, point)} key={`${g.id}-${n}`} what="this intersection">
                         <span
                           className="an-value an-value-static"
-                          key={`${g.id}-${n}`}
                           data-value={parts.exact === null ? undefined : parts.text}
                         >
                           {parts.exact === null ? (
@@ -2868,6 +2908,7 @@ export function CurveCard({
                             </>
                           )}
                         </span>
+                        </Answer>
                       )
                     })}
                   </span>

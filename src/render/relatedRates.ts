@@ -70,6 +70,11 @@ export interface RelatedRatesFigure {
   graph: RRGraph | null
   /** A title chip over the scene: "x = 6 ft · dy/dt = −3/2 ft/s". */
   title: { at: Vec2; text: string } | null
+  /**
+   * The names of the rates this picture ANSWERS ("dy/dt"), so reveal mode can
+   * say "dy/dt = ?" on every chip that states one. The renderer ignores it.
+   */
+  answers?: readonly string[]
 }
 
 export interface RRPaintOpts {

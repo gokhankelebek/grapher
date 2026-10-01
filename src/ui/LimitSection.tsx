@@ -13,11 +13,12 @@
 
 import { useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
-import { Latex } from './Latex'
 import { CardSection, SectionDrop } from './CardSection'
 import { parseNumeric } from './numeric'
 import type { CalcChange, LimitRow } from './calcLinks'
 import { EPS_MAX, EPS_MIN, EPS_STEP } from './limitLinks'
+import { Answer, AnswerTex } from './RevealAnswer'
+import { calcKey } from './reveal'
 
 interface Props {
   row: LimitRow
@@ -109,6 +110,8 @@ export function LimitSection({ row, onCalcChange, onRemove, onEditStart, onEditE
     )
 
   const where = row.infinity === 1 ? 'inf' : row.infinity === -1 ? '-inf' : 'a'
+  /** Reveal mode: everything this section computes is one answer. */
+  const ak = calcKey(linkId)
 
   return (
     <CardSection
@@ -119,10 +122,11 @@ export function LimitSection({ row, onCalcChange, onRemove, onEditStart, onEditE
       actions={<SectionDrop what="limit" onRemove={onRemove} />}
       className="calc-row limit-row"
       data={{ link: linkId }}
+      answerKey={ak}
     >
 
       <div className="limit-tex" title={row.head.text} aria-label={row.head.text}>
-        <Latex tex={row.head.tex} />
+        <AnswerTex k={ak} tex={row.head.tex} what="the limit" />
       </div>
       {/* The two one-sided limits, one per line: side by side they wrap
           mid-formula in a 272px card. */}
@@ -130,7 +134,7 @@ export function LimitSection({ row, onCalcChange, onRemove, onEditStart, onEditE
         <div className="limit-tex limit-sides" title={row.sides.text} aria-label={row.sides.text}>
           {row.sides.tex.split(/,\s*\\qquad\s*/).map((tex, i) => (
             <div key={i}>
-              <Latex tex={tex} />
+              <AnswerTex k={ak} tex={tex} what="the one-sided limit" />
             </div>
           ))}
         </div>
@@ -197,16 +201,19 @@ export function LimitSection({ row, onCalcChange, onRemove, onEditStart, onEditE
       {row.problem && <div className="calc-why">{`Nothing is drawn: ${row.problem}.`}</div>}
 
       {(row.why || row.fa || row.klass) && (
+        <Answer k={ak} block what="the facts">
         <ul className="calc-facts limit-facts">
           {row.why && <li className="calc-fact">{row.why}</li>}
           {row.fa && <li className="calc-fact calc-fact-lead">{row.fa}</li>}
           {row.klass && <li className="calc-fact calc-fact-lead">{row.klass}</li>}
         </ul>
+        </Answer>
       )}
 
       {row.checklist && (
         <div className="secant-block">
           <div className="secant-block-title">{`Continuity at x = ${row.aText}`}</div>
+          <Answer k={ak} block what="the checklist">
           <ol className="calc-facts secant-hyps limit-checks">
             {row.checklist.map((c, i) => (
               <li key={i} className={`calc-fact secant-hyp ${c.ok ? 'secant-hyp-ok' : 'secant-hyp-bad'}`}>
@@ -220,6 +227,7 @@ export function LimitSection({ row, onCalcChange, onRemove, onEditStart, onEditE
               <li className={`calc-fact ${row.verdictOk ? 'calc-fact-lead' : 'secant-verdict-bad'}`}>{row.verdict}</li>
             )}
           </ol>
+          </Answer>
         </div>
       )}
 
@@ -276,7 +284,11 @@ export function LimitSection({ row, onCalcChange, onRemove, onEditStart, onEditE
               <span className="calc-n-value limit-eps-value">{row.eps.toFixed(2)}</span>
             </div>
           )}
-          {row.delta && <div className="calc-read calc-accum-read limit-delta">{row.delta.text}</div>}
+          {row.delta && (
+            <Answer k={ak} block what="δ">
+              <div className="calc-read calc-accum-read limit-delta">{row.delta.text}</div>
+            </Answer>
+          )}
         </div>
       )}
     </CardSection>

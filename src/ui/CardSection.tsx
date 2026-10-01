@@ -22,6 +22,7 @@
 import { useId, useState } from 'react'
 import type { ReactNode } from 'react'
 import { readPrefs, updatePrefs } from './storage'
+import { useMaskedSummary } from './RevealAnswer'
 
 /** The remembered choices, read once per page and kept in step with every write. */
 let remembered: Record<string, boolean> | null = null
@@ -77,6 +78,12 @@ interface Props {
   testId?: string
   /** Extra attributes a test or a stylesheet reads (data-kind, data-link …). */
   data?: Record<string, string | undefined>
+  /**
+   * The reveal-mode answer key this section states (src/ui/reveal.ts). While it
+   * is hidden the collapsed header's summary keeps its question and says "?"
+   * for the answer. The body's own values are wrapped where they are printed.
+   */
+  answerKey?: string
   children?: ReactNode
 }
 
@@ -91,9 +98,11 @@ export function CardSection({
   className,
   testId,
   data,
+  answerKey,
   children,
 }: Props) {
   const [open, setOpen] = useState(() => sectionOpen(kind, defaultOpen))
+  const shownSummary = useMaskedSummary(answerKey, summary)
   const bodyId = useId()
   const dataAttrs: Record<string, string> = {}
   if (data) for (const [k, v] of Object.entries(data)) if (v !== undefined) dataAttrs[`data-${k}`] = v
@@ -109,7 +118,7 @@ export function CardSection({
         <button
           type="button"
           className="cs-toggle"
-          title={titleHint}
+          title={answerKey && shownSummary !== summary ? undefined : titleHint}
           aria-expanded={open}
           aria-controls={open ? bodyId : undefined}
           onClick={(e) => {
@@ -123,7 +132,7 @@ export function CardSection({
             <path d="M3.5 1.5 7 5 3.5 8.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
           <span className="cs-title">{title}</span>
-          {!open && summary ? <span className="cs-summary">{summary}</span> : null}
+          {!open && shownSummary ? <span className="cs-summary">{shownSummary}</span> : null}
         </button>
         {open && openActions ? <div className="cs-actions">{openActions}</div> : null}
         {actions ? <div className="cs-actions">{actions}</div> : null}

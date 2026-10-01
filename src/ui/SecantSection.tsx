@@ -13,6 +13,8 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { Latex } from './Latex'
+import { Answer, AnswerTex, AnswerText } from './RevealAnswer'
+import { calcKey } from './reveal'
 import { CardSection, SectionDrop } from './CardSection'
 import { parseNumeric } from './numeric'
 import type { CalcChange, SecantRow } from './calcLinks'
@@ -95,6 +97,8 @@ export function SecantSection({ row, onCalcChange, onRemove }: Props) {
 
   const thm = row.theorem
   const avg = row.average
+  /** Reveal mode: everything this section computes is one answer. */
+  const ak = calcKey(linkId)
 
   return (
     <CardSection
@@ -107,27 +111,36 @@ export function SecantSection({ row, onCalcChange, onRemove }: Props) {
       actions={<SectionDrop what="secant line" onRemove={onRemove} />}
       className="calc-row secant-row"
       data={{ link: linkId }}
+      answerKey={ak}
     >
       {/* The sentence, when there is no difference quotient to show it. */}
       {!row.quotient && (
       <div className="calc-line">
         <span className="calc-read secant-head">
-          {row.value === null
-            ? row.head
-            : `${row.head} ${row.value.startsWith('≈') ? row.value : `= ${row.value}`}`}
+          {row.value === null ? (
+            row.head
+          ) : (
+            <AnswerText
+              k={ak}
+              text={`${row.head} ${row.value.startsWith('≈') ? row.value : `= ${row.value}`}`}
+              what="the average rate of change"
+            />
+          )}
         </span>
       </div>
       )}
 
       {row.quotient && (
         <div className="secant-tex" title={row.quotient.text} aria-label={row.quotient.text}>
-          <Latex tex={row.quotient.tex} />
+          <AnswerTex k={ak} tex={row.quotient.tex} what="the average rate of change" />
         </div>
       )}
       {row.line && (
         <div className="secant-line" title="The secant line through (a, f(a)) and (b, f(b)), in point-slope form">
           <span className="secant-line-label">secant line</span>
-          <Latex tex={row.line.tex} />
+          <Answer k={ak} what="the secant line">
+            <Latex tex={row.line.tex} />
+          </Answer>
         </div>
       )}
 
@@ -159,6 +172,7 @@ export function SecantSection({ row, onCalcChange, onRemove }: Props) {
       {thm && (
         <div className="secant-block">
           <div className="secant-block-title">{thm.title}</div>
+          <Answer k={ak} block what="the Mean Value Theorem">
           <ul className="calc-facts secant-hyps">
             {thm.hyps.map((h, i) => (
               <li key={i} className={`calc-fact secant-hyp ${h.ok ? 'secant-hyp-ok' : 'secant-hyp-bad'}`}>
@@ -171,12 +185,14 @@ export function SecantSection({ row, onCalcChange, onRemove }: Props) {
             <li className={`calc-fact ${thm.ok ? 'calc-fact-lead' : 'secant-verdict-bad'}`}>{thm.verdict}</li>
             {thm.points && <li className="calc-fact calc-fact-lead">{thm.points}</li>}
           </ul>
+          </Answer>
         </div>
       )}
 
       {avg && (
         <div className="secant-block">
           <div className="secant-block-title">Average value</div>
+          <Answer k={ak} block what="the average value">
           {avg.problem ? (
             <div className="calc-why">{avg.problem}.</div>
           ) : (
@@ -190,6 +206,7 @@ export function SecantSection({ row, onCalcChange, onRemove }: Props) {
               </ul>
             </>
           )}
+          </Answer>
         </div>
       )}
     </CardSection>

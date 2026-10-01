@@ -64,6 +64,7 @@ import { exactForm } from '../core/exact'
 import type { ScatterSet } from '../render/scatter'
 import { carryParams, fieldParamMeta } from './fieldLinks'
 import type { LegendEntry } from './present'
+import { seriesKey } from './reveal'
 
 export type { BoardSequence, SeqClass, SeqSeriesView, SequenceDef, SeriesInfo }
 export { SEQ_COUNT_DEFAULT, SEQ_COUNT_MAX, SEQ_COUNT_MIN, clampSeqCount, clampSeqN0, carryParams }
@@ -1209,6 +1210,7 @@ export function seriesOverlays(
         at: { x: lastN + 1, y: S },
         text: `S = ${A.sum && A.sum.exact ? A.sum.text : approxText(S, 5)}`,
         dir: { x: 0.4, y: -1 },
+        answer: seriesKey(q.id),
         color,
       })
     }

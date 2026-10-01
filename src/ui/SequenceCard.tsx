@@ -3,6 +3,7 @@ import type { CSSProperties } from 'react'
 import { Latex } from './Latex'
 import { ParamRow } from './CurveCard'
 import { coord } from './fieldLinks'
+import { seriesKey } from './reveal'
 import { SeriesSection } from './SeriesSection'
 import { seriesColor, subscript } from './seqLinks'
 import type { BoardSequence, SeqSeriesView, SequenceCardData } from './seqLinks'
@@ -481,6 +482,7 @@ export function SequenceCard({
           )}
           {card.sigma && (
             <SeriesSection
+              answerKey={seriesKey(seq.id)}
               data={card.sigma}
               color={seriesColor(seq.color)}
               onChange={onSeriesChange}

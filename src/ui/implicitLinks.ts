@@ -43,6 +43,7 @@ import {
   tangentAt,
 } from '../core/implicitDiff'
 import type { Box, Formula, ImplicitDiff, ImplicitFn, ImplicitTangent } from '../core/implicitDiff'
+import { calcKey } from './reveal'
 
 export type { Box }
 
@@ -473,12 +474,12 @@ export function implicitOverlays(
     for (const q of sp.horizontal) {
       out.push({ kind: 'segment', from: { x: q.x - len, y: q.y }, to: { x: q.x + len, y: q.y }, color: HV_INK.h, width: 2.5 })
       out.push({ kind: 'dot', at: q, color: HV_INK.h })
-      out.push({ kind: 'label', at: q, text: pointText(q).text, color: HV_INK.h, dir: { x: 0, y: q.y >= 0 ? -1 : 1 } })
+      out.push({ kind: 'label', at: q, text: pointText(q).text, color: HV_INK.h, dir: { x: 0, y: q.y >= 0 ? -1 : 1 }, answer: calcKey(link.id) })
     }
     for (const q of sp.vertical) {
       out.push({ kind: 'segment', from: { x: q.x, y: q.y - len }, to: { x: q.x, y: q.y + len }, color: HV_INK.v, width: 2.5 })
       out.push({ kind: 'dot', at: q, color: HV_INK.v })
-      out.push({ kind: 'label', at: q, text: pointText(q).text, color: HV_INK.v, dir: { x: q.x >= 0 ? 1 : -1, y: 0 } })
+      out.push({ kind: 'label', at: q, text: pointText(q).text, color: HV_INK.v, dir: { x: q.x >= 0 ? 1 : -1, y: 0 }, answer: calcKey(link.id) })
     }
     for (const q of sp.singular) {
       out.push({ kind: 'dot', at: q, hollow: true, color: parent.color })

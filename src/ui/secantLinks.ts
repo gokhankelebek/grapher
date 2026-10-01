@@ -45,6 +45,7 @@ import type {
   SmoothnessFailure,
   Solution,
 } from '../core/mvt'
+import { calcKey } from './reveal'
 
 export type { SecantLink }
 
@@ -728,6 +729,7 @@ export function secantOverlays(
             curveId: id,
             at,
             text: solutionText(p),
+            answer: calcKey(link.id),
             ...(Number.isFinite(slope) ? { across: { slope, below: true } } : { dir: { x: 1, y: 1 } }),
           })
         }
@@ -750,7 +752,7 @@ export function secantOverlays(
         dots.push({ kind: 'dot', curveId: id, at, hollow: true })
         // Below a corner that opens upward (|x|), above one that opens down.
         const opensUp = d.left !== undefined && d.right !== undefined ? d.left < d.right : true
-        chips.push({ kind: 'label', curveId: id, at, text: 'not differentiable', dir: { x: 0, y: opensUp ? 1 : -1 } })
+        chips.push({ kind: 'label', curveId: id, at, text: 'not differentiable', dir: { x: 0, y: opensUp ? 1 : -1 }, answer: calcKey(link.id) })
       }
     }
 
@@ -768,7 +770,7 @@ export function secantOverlays(
           // Concave up: the curve bends away ABOVE its tangent, so the chip
           // steps off the tangent on the side below it; concave down, above.
           const below = bend(src.f, p.x, h) >= 0
-          chips.push({ kind: 'label', curveId: id, at, text: solutionText(p), across: { slope: sec.m, below } })
+          chips.push({ kind: 'label', curveId: id, at, text: solutionText(p), across: { slope: sec.m, below }, answer: calcKey(link.id) })
         }
       }
     }

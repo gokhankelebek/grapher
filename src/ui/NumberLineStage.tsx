@@ -9,7 +9,9 @@ import {
   numberLineAxisY,
 } from '../render/numberline'
 import type { NLPart } from '../render/numberline'
-import { renderBoard } from './renderBoard'
+import { REVEAL_MARK_R, renderBoard, revealMarkPx } from './renderBoard'
+import type { RevealMark, SceneReveal } from './reveal'
+import { applyReveal, markAt } from './reveal'
 import { solveBlocks, solveHit } from './nlSolve'
 import { paintScale } from '../render/grid'
 import type { PaintScale } from '../render/grid'
@@ -62,6 +64,9 @@ interface Props {
   onEditEnd(): void
   onEditCancel(): void
   onViewportChange?(): void
+  /** Reveal mode: a solved inequality's set hides until revealed (src/ui/reveal.ts). */
+  reveal?: SceneReveal | null
+  onRevealMark?(key: string): void
 }
 
 const MIN_PPU = 0.001
@@ -119,6 +124,8 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
       onEditEnd,
       onEditCancel,
       onViewportChange,
+      reveal,
+      onRevealMark,
     },
     handle,
   ) {
@@ -144,6 +151,11 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
     const lastPenAtRef = useRef(-Infinity)
     const spaceRef = useRef(false)
     const rafRef = useRef(0)
+    const revealRef = useRef<SceneReveal | null | undefined>(reveal)
+    const onRevealMarkRef = useRef(onRevealMark)
+    onRevealMarkRef.current = onRevealMark
+    const revealMarksRef = useRef<readonly RevealMark[]>([])
+    const revealAnimRef = useRef(false)
     const viewportChangeRef = useRef(onViewportChange)
     viewportChangeRef.current = onViewportChange
 
@@ -187,7 +199,8 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
       if (!canvas || !ctx) return
       const dpr = window.devicePixelRatio || 1
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-      renderBoard(ctx, {
+      const rv = revealRef.current
+      const scene = applyReveal({
         vp: vpRef.current,
         theme: themeRef.current,
         kind: 'number-line',
@@ -207,12 +220,16 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
           activePart: activePartRef.current,
           pending: pendingRef.current,
         },
-      })
+      }, rv ? { ...rv, now: performance.now() } : null)
+      revealMarksRef.current = scene.revealMarks ?? []
+      revealAnimRef.current = (scene.revealPulses?.length ?? 0) > 0
+      renderBoard(ctx, scene)
     }, [vpRef])
 
     const frame = useCallback((): void => {
       rafRef.current = 0
       draw()
+      if (revealAnimRef.current && !rafRef.current) rafRef.current = requestAnimationFrame(frame)
     }, [draw])
 
     const scheduleRender = useCallback((): void => {
@@ -230,8 +247,9 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
       inkColorRef.current = inkColor
       presentRef.current = present
       figureRef.current = figure
+      revealRef.current = reveal
       scheduleRender()
-    }, [items, styles, theme, selectedId, mode, inkColor, present, figure, scheduleRender])
+    }, [items, styles, theme, selectedId, mode, inkColor, present, figure, reveal, scheduleRender])
 
     useEffect(() => () => window.clearTimeout(tipTimerRef.current), [])
 
@@ -393,6 +411,17 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
     const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>): void => {
       const canvas = e.currentTarget
       const pos = getPos(e)
+      // Reveal mode: a press on a "?" reveals that solution set, and is nothing else.
+      if (e.button === 0 && !spaceRef.current && gestureRef.current === null && onRevealMarkRef.current) {
+        const vp = vpRef.current
+        const r = REVEAL_MARK_R * paintScale(presentRef.current).stroke + 6
+        const hit = markAt(revealMarksRef.current.filter((m) => !m.ghost), pos, (m) => revealMarkPx(m, vp), r)
+        if (hit) {
+          e.preventDefault()
+          onRevealMarkRef.current(hit.key)
+          return
+        }
+      }
       const kind = pointerKind(e.pointerType)
       if (kind === 'pen') lastPenAtRef.current = performance.now()
       if (gestureRef.current === null) {

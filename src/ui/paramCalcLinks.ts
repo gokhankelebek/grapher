@@ -47,6 +47,7 @@ import {
 import type { ArcResult, AtParam, BetweenResult, Formula, Meeting, ParamSym, TangentLists } from '../core/paramCalc'
 import { motionInterval, motionKindOf, nearestT, posAt } from './motionLinks'
 import type { MotionKind } from './motionLinks'
+import { calcKey } from './reveal'
 
 export type { ParamCalcLink, PolarBetweenLink }
 
@@ -448,7 +449,7 @@ export function paramCalcOverlays(
       for (const s of lists.singular) {
         marks.push({ kind: 'dot', curveId: id, at: s.pos, hollow: true })
         const cusp = (s.notes ?? []).some((n) => n.includes('cusp'))
-        marks.push({ kind: 'label', curveId: id, at: s.pos, text: cusp ? 'cusp' : 'dx/dt = dy/dt = 0', dir: { x: -1, y: 1 } })
+        marks.push({ kind: 'label', curveId: id, at: s.pos, text: cusp ? 'cusp' : 'dx/dt = dy/dt = 0', dir: { x: -1, y: 1 }, answer: calcKey(l.id) })
       }
     }
   }
@@ -658,6 +659,7 @@ export function polarBetweenOverlays(
         at: p,
         text: `θ = ${boundOf(th).text}`,
         dir: { x: Math.cos(th), y: -Math.sin(th) },
+        answer: calcKey(l.id),
       })
     }
   }

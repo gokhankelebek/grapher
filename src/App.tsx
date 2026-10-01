@@ -19,7 +19,7 @@ import { MODELS } from './core/fit/models'
 import { parseExpression } from './core/parse'
 import { parseInequality } from './core/parse/inequality'
 import type { SolveResult } from './core/solveInequality'
-import { fitRange, graphSources, solveCached, solveErrorText, solveXs } from './ui/nlSolve'
+import { fitRange, graphSources, inputTex, solveCached, solveErrorText, solveXs } from './ui/nlSolve'
 import { applyFeatureEdit, snapParams } from './core/fit/edit'
 import { analyzeCurve } from './core/analyze'
 import {
@@ -437,6 +437,7 @@ import type { NLPart } from './render/numberline'
 import { Toolbar } from './ui/Toolbar'
 import { Sidebar } from './ui/Sidebar'
 import type { BetweenInfo } from './ui/CurveCard'
+import { asymptoteTexts } from './ui/CurveCard'
 import { DocMenu } from './ui/DocMenu'
 import type { SaveState } from './ui/DocMenu'
 import { ExportMenu } from './ui/ExportMenu'
@@ -543,11 +544,38 @@ const MODE: Mode = 'draw'
 /** Per-curve style extras FittedCurve doesn't carry (kept in a parallel map). */
 export type { CurveStyle, StyleMap } from './core/persist'
 import type { CurveStyle, StyleMap } from './core/persist'
+import type { RevealInventory, RevealState, SceneReveal } from './ui/reveal'
+import {
+  REVEAL_OFF,
+  SYSTEM_KEY,
+  applyReveal,
+  buildInventory,
+  calcKey,
+  eulerKey,
+  hideAll,
+  hideLast,
+  isHidden,
+  maskTex,
+  revealAll,
+  revealCount,
+  revealKeyAction,
+  revealNext,
+  revealOne,
+  rrKey,
+  seriesKey,
+  solveKey,
+  ucKey,
+} from './ui/reveal'
+import type { RevealApi } from './ui/RevealAnswer'
+import { REVEAL_API_OFF, RevealContext } from './ui/RevealAnswer'
+import { RevealControls } from './ui/RevealControls'
+import type { RevealControlsProps } from './ui/RevealControls'
 
 /** How long the board sits idle before it is written to storage. */
 const AUTOSAVE_MS = 400
 
 /** Stable identity — avoids re-rendering the canvas when markers are hidden. */
+const EMPTY_CONTEXT: { curve: FittedCurve; points: SpecialPoint[] }[] = []
 const EMPTY_ANALYSIS: SpecialPoint[] = []
 /** One array, so a board with nothing crossing re-renders no more than before. */
 const EMPTY_CROSSINGS: BoardIntersection[] = []
@@ -1238,6 +1266,24 @@ export default function App() {
   // ---- curve analysis (zeros, extrema, inflections)
   const [showAnalysis, setShowAnalysis] = useState<boolean>(() => readPrefs().showAnalysis)
   /**
+   * Reveal mode (src/ui/reveal.ts): the board's computed answers hidden until
+   * revealed one by one. SESSION-ONLY — one state per open document, kept in
+   * memory while the tab lives and never written to the document or to prefs.
+   */
+  const [reveal, setReveal] = useState<RevealState>(REVEAL_OFF)
+  const revealRef = useRef(reveal)
+  revealRef.current = reveal
+  /** Each document's reveal state this session, so switching back finds it as it was. */
+  const revealByDocRef = useRef(new Map<string, RevealState>())
+  /** key → when it was revealed: the board's ring and nothing else. */
+  const revealFreshRef = useRef(new Map<string, number>())
+  /**
+   * Markers on the board: the teacher's Analysis switch, or reveal mode —
+   * which is ABOUT the markers, so it shows their places whatever the switch
+   * says. The switch's own pref is untouched.
+   */
+  const markersOn = showAnalysis || reveal.on
+  /**
    * Ground the ON-SCREEN canvas is drawn on. Dark by default — the export has
    * its own, independent setting, because the two are answering different
    * questions ("what do I want to look at" vs "what goes on the paper").
@@ -1611,7 +1657,7 @@ export default function App() {
 
   /** The visible, unselected curves and their markers. Empty when off. */
   const contextAnalysis = useMemo(() => {
-    if (!showAnalysis || kind !== 'cartesian') return []
+    if (!markersOn || kind !== 'cartesian') return []
     return curves
       .filter((c) => c.visible && c.id !== selectedId)
       .map((curve) => ({ curve, points: analysisFor(curve) }))
@@ -1621,7 +1667,7 @@ export default function App() {
     // is registered a render later (models, which also empties the cache).
     // analysisFor reads both through refs, so they are named here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showAnalysis, kind, curves, selectedId, analysisFor, depKeys, models])
+  }, [markersOn, kind, curves, selectedId, analysisFor, depKeys, models])
 
   // -------------------------------------------------------------- axis units
   //
@@ -9329,12 +9375,11 @@ export default function App() {
   exportFormatRef.current = exportFormat
   const latexWidthRef = useRef<number>(latexWidthCm)
   latexWidthRef.current = latexWidthCm
-  const showAnalysisRef = useRef(showAnalysis)
-  showAnalysisRef.current = showAnalysis
+  const showAnalysisRef = useRef(markersOn)
+  showAnalysisRef.current = markersOn
   const canvasThemeRef = useRef(canvasTheme)
   canvasThemeRef.current = canvasTheme
   const contextAnalysisRef = useRef(contextAnalysis)
-  contextAnalysisRef.current = contextAnalysis
 
   // ------------------------------------------------- what the board draws
   //
@@ -10592,14 +10637,14 @@ export default function App() {
 
   /** What the board marks for the selected curve. */
   const boardAnalysis = useMemo<SpecialPoint[]>(() => {
-    const base = showAnalysis ? analysis : EMPTY_ANALYSIS
+    const base = markersOn ? analysis : EMPTY_ANALYSIS
     const withSin = sinMarks.length > 0 ? withKeyMarks(base, sinMarks) : base
     const withConic = conicMarks.length > 0 ? withKeyMarks(withSin, conicMarks) : withSin
     const withMotion = motionFeatureMarks.length > 0 ? withKeyMarks(withConic, motionFeatureMarks) : withConic
     const withLogistic =
-      logisticMarksNow.length > 0 && showAnalysis ? withLogisticMarks(withMotion, logisticMarksNow) : withMotion
+      logisticMarksNow.length > 0 && markersOn ? withLogisticMarks(withMotion, logisticMarksNow) : withMotion
     return transformMarks.length > 0 ? withKeyMarks(withLogistic, transformMarks) : withLogistic
-  }, [showAnalysis, analysis, sinMarks, conicMarks, motionFeatureMarks, transformMarks, logisticMarksNow])
+  }, [markersOn, analysis, sinMarks, conicMarks, motionFeatureMarks, transformMarks, logisticMarksNow])
 
   /**
    * The on-screen polylines: the fields' solutions, a sinusoid's midline, and
@@ -11013,10 +11058,10 @@ export default function App() {
    * one chip — see crossingsClearOf. The cards still read `crossings`.
    */
   const boardCrossings = useMemo<readonly BoardIntersection[]>(() => {
-    if (!(showAnalysis || markedBoard)) return EMPTY_CROSSINGS
+    if (!(markersOn || markedBoard)) return EMPTY_CROSSINGS
     const marks = selectedCurve && selectedCurve.visible ? boardAnalysis : EMPTY_ANALYSIS
     return crossingsClearOf(crossings, marks, crossSpan)
-  }, [showAnalysis, markedBoard, selectedCurve, boardAnalysis, crossings, crossSpan])
+  }, [markersOn, markedBoard, selectedCurve, boardAnalysis, crossings, crossSpan])
 
   /**
    * What each card lists, named the way the caption names the curves: the
@@ -11024,6 +11069,172 @@ export default function App() {
    * card's own label, which is what a curve is called in every other sentence
    * this app writes about it.
    */
+  // ------------------------------------------------------------ reveal mode
+  //
+  // Every answer the board and the cards state, keyed and in teaching order
+  // (src/ui/reveal.ts). Built only while reveal mode is on: off, the board
+  // pays nothing for it and every scene is the one it always was.
+  const revealInv = useMemo<RevealInventory | null>(() => {
+    if (!reveal.on) return null
+    if (kind === 'number-line') {
+      return buildInventory({
+        curves: [],
+        crossings: [],
+        after: items.filter((it) => it.kind === 'solve').map((it) => solveKey(it.id)),
+      })
+    }
+    const shown = curves.filter((c) => c.visible)
+    const after: string[] = []
+    for (const q of sequences) if (q.series && q.visible) after.push(seriesKey(q.id))
+    for (const f of fields) if (f.eulers && f.eulers.length > 0) after.push(eulerKey(f.id))
+    for (const u of unitCircles) if (u.hidden !== true) after.push(ucKey(u.id))
+    for (const r of relatedRates) if (r.hidden !== true) after.push(rrKey(r.id))
+    if (sysCard?.lp) after.push(SYSTEM_KEY)
+    return buildInventory({
+      curves: shown.map((c) => {
+        let asymptotes = 0
+        if (c.id === selectedId) {
+          try {
+            asymptotes = asymptoteTexts(c, models).length
+          } catch {
+            asymptotes = 0
+          }
+        }
+        return {
+          id: c.id,
+          // The analyzer's points are the answers; the selected curve's extra
+          // construction marks (a transformation's image points …) are not.
+          points: c.id === selectedId ? analysis : analysisFor(c),
+          asymptotes,
+          domain: c.id === selectedId && domainPanel !== undefined,
+          inverse: domainPanel?.role === 'function',
+          calc: calcLinks.filter((l) => l.parentId === c.id).map((l) => l.id),
+        }
+      }),
+      crossings,
+      after,
+    })
+    // depKeys: a curve that calls another moves when it does.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reveal.on, kind, items, curves, selectedId, models, analysis, analysisFor, domainPanel, calcLinks, crossings, sequences, fields, unitCircles, relatedRates, sysCard, depKeys])
+  const revealInvRef = useRef(revealInv)
+  revealInvRef.current = revealInv
+
+  /** Reveal one answer: its "?" and its pills go, and the board rings it. */
+  const revealKey = useCallback((key: string): void => {
+    const now = performance.now()
+    const fresh = revealFreshRef.current
+    for (const [k, t] of fresh) if (now - t > 2000) fresh.delete(k)
+    fresh.set(key, now)
+    setReveal((s) => revealOne(s, key))
+  }, [])
+  const revealStep = useCallback(
+    (dir: 'next' | 'back'): void => {
+      const s = revealRef.current
+      if (!s.on) return
+      if (dir === 'back') {
+        setReveal(hideLast(s))
+        return
+      }
+      const r = revealNext(s, revealInvRef.current?.order ?? [])
+      if (r.key === null) {
+        showNotice('Every answer is showing')
+        return
+      }
+      revealKey(r.key)
+    },
+    // showNotice is stable; named for the linter
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [revealKey],
+  )
+  const revealEverything = useCallback((): void => {
+    setReveal((s) => revealAll(s, revealInvRef.current?.order ?? []))
+  }, [])
+  const hideEverything = useCallback((): void => {
+    revealFreshRef.current.clear()
+    setReveal((s) => hideAll(s))
+  }, [])
+  const toggleReveal = useCallback((): void => {
+    setReveal((s) => (s.on ? { ...s, on: false } : { ...hideAll(s), on: true }))
+  }, [])
+  const toggleRevealPositions = useCallback((): void => {
+    setReveal((s) => ({ ...s, positions: !s.positions }))
+  }, [])
+
+  // One reveal state per document, for the session: switching documents puts
+  // this one's away and brings the other's back as it was left.
+  const revealDocIdRef = useRef(docMeta.id)
+  useEffect(() => {
+    const prev = revealDocIdRef.current
+    if (prev === docMeta.id) return
+    revealByDocRef.current.set(prev, revealRef.current)
+    revealDocIdRef.current = docMeta.id
+    revealFreshRef.current.clear()
+    setReveal(revealByDocRef.current.get(docMeta.id) ?? REVEAL_OFF)
+  }, [docMeta.id])
+
+  /** The board's filter: what hides, and the "?" that stands in for it. */
+  const sceneReveal = useMemo<SceneReveal | null>(() => {
+    if (!reveal.on || !revealInv) return null
+    return {
+      hidden: (k: string) => isHidden(reveal, k),
+      positions: reveal.positions,
+      pointKey: revealInv.answerKey,
+      crossKey: revealInv.crossKey,
+      context: contextAnalysis,
+      fresh: revealFreshRef.current,
+      nlMarks: (id: string) => {
+        const it = items.find((i) => i.id === id)
+        if (!it || it.kind !== 'solve') return []
+        const res = solveCached(it.src)
+        return res.ok ? solveXs(res) : []
+      },
+    }
+  }, [reveal, revealInv, contextAnalysis, items])
+  const sceneRevealRef = useRef(sceneReveal)
+  sceneRevealRef.current = sceneReveal
+
+  /**
+   * The other curves' markers on their own layer — none in reveal mode, where
+   * the scene draws them itself, labelled, with "?" for the hidden ones
+   * (applyReveal), so a revealed answer says what it is.
+   */
+  const contextShown = sceneReveal ? EMPTY_CONTEXT : contextAnalysis
+
+  /** What the cards read: the same state, through one context. */
+  const revealApi = useMemo<RevealApi>(
+    () =>
+      reveal.on && revealInv
+        ? {
+            on: true,
+            hidden: (k: string) => isHidden(reveal, k),
+            reveal: revealKey,
+            pointKey: revealInv.pointKey,
+            crossKey: revealInv.crossKey,
+          }
+        : REVEAL_API_OFF,
+    [reveal, revealInv, revealKey],
+  )
+  // The export draws the other curves' markers as the board does: in reveal
+  // mode, without the hidden ones (their "?" are in the scene).
+  contextAnalysisRef.current = contextShown
+
+  const revealCounts = useMemo(
+    () => (revealInv ? revealCount(reveal, revealInv.order) : { hidden: 0, total: 0 }),
+    [reveal, revealInv],
+  )
+  const revealControls: RevealControlsProps = {
+    on: reveal.on,
+    hidden: revealCounts.hidden,
+    total: revealCounts.total,
+    positions: reveal.positions,
+    onToggle: toggleReveal,
+    onNext: () => revealStep('next'),
+    onAll: revealEverything,
+    onReset: hideEverything,
+    onPositions: toggleRevealPositions,
+  }
+
   const crossingsFor = useCallback(
     (id: string): readonly CurveIntersections[] | undefined => {
       if (crossings.length === 0) return undefined
@@ -11138,7 +11349,7 @@ export default function App() {
       analysisRef.current.length > 0
         ? { curve: sel, points: analysisRef.current }
         : null
-    return {
+    const scene: BoardScene = {
       vp: evp,
       // A figure style owns the ground; the Background control is disabled and
       // says so while one is on. Without a style this is exactly what it was.
@@ -11245,6 +11456,11 @@ export default function App() {
       ...(figure ? { curveNames: boardCurveNamesRef.current } : {}),
       chrome: null,
     }
+    // Reveal mode: the file is what the screen shows — hidden answers stay
+    // hidden and their "?" marks are drawn — which makes a student copy in
+    // one click. No rings: a file has no "a moment ago".
+    const r = sceneRevealRef.current
+    return r ? applyReveal(scene, { ...r, fresh: undefined, now: undefined }) : scene
     },
     [exportContent],
   )
@@ -11815,6 +12031,16 @@ export default function App() {
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
       const meta = e.metaKey || e.ctrlKey
       const key = e.key.toLowerCase()
+      // Reveal mode first: R, and — while it is on — → / PageDown (next) and
+      // ← / PageUp (back), which is what a presentation clicker sends. See
+      // revealKeyAction for why these keys and not others.
+      const ra = revealKeyAction(e, revealRef.current.on)
+      if (ra) {
+        e.preventDefault()
+        if (ra === 'toggle') toggleReveal()
+        else revealStep(ra)
+        return
+      }
       if (meta && key === 'z') {
         e.preventDefault()
         if (e.shiftKey) redo()
@@ -11898,6 +12124,8 @@ export default function App() {
     nudgeSelected,
     commitWithSnap,
     cycleAxisUnitX,
+    toggleReveal,
+    revealStep,
   ])
 
   // ------------------------------------------------------------------ render
@@ -11958,6 +12186,26 @@ export default function App() {
     ],
   )
 
+  /**
+   * The legend in reveal mode: a chip whose equation IS a computed answer — a
+   * Taylor polynomial, a tangent line, f′, a solved inequality's set — says
+   * "= ?" until that answer is revealed. Typed equations are never touched.
+   */
+  const legendShown = useMemo(() => {
+    if (!reveal.on || legend.length === 0) return legend
+    const hide = (k: string): boolean => isHidden(reveal, k)
+    return legend.map((e) => {
+      if (kind === 'number-line') {
+        const it = items.find((i) => i.id === e.id)
+        if (it?.kind !== 'solve' || !hide(solveKey(it.id))) return e
+        const res = solveCached(it.src)
+        return res.ok ? { ...e, tex: `${inputTex(res)}\\quad\\Longrightarrow\\quad ?` } : e
+      }
+      const link = calcLinks.find((l) => isCurveLink(l) && l.curveId === e.id)
+      return link && hide(calcKey(link.id)) ? { ...e, tex: maskTex(e.tex) } : e
+    })
+  }, [reveal, legend, kind, items, calcLinks])
+
   const changePresentType = useCallback((next: number): void => {
     const clean = clampPresentScale(next)
     setPresentType(clean)
@@ -11983,6 +12231,7 @@ export default function App() {
       }`}
       data-present={presentMode ? 'on' : 'off'}
     >
+      <RevealContext.Provider value={revealApi}>
       <AnswerContext.Provider value={answerBoard}>
       <Sidebar
         open={sidebarOpen && !presentMode}
@@ -12356,6 +12605,8 @@ export default function App() {
             inkColor={pickColor()}
             vpRef={vpRef}
             onSelect={selectObject}
+            reveal={sceneReveal}
+            onRevealMark={revealKey}
             onPlacePoint={placePoint}
             onCreateInterval={createInterval}
             onMoveEndpoint={moveEndpoint}
@@ -12389,7 +12640,7 @@ export default function App() {
           onViewportChange={viewportChanged}
           onNotice={showNotice}
           analysis={boardAnalysis}
-          analysisHighlight={showAnalysis ? highlight : null}
+          analysisHighlight={markersOn ? highlight : null}
           intersections={boardCrossings}
           onFeatureEdit={applyFeature}
           theme={boardTheme}
@@ -12412,6 +12663,8 @@ export default function App() {
           curveNames={boardCurveNames}
           extraHandles={boardHandles}
           pointPick={pointPick}
+          reveal={sceneReveal}
+          onRevealMark={revealKey}
         />
         )}
 
@@ -12436,8 +12689,16 @@ export default function App() {
           </button>
         )}
 
-        {kind === 'cartesian' && contextAnalysis.length > 0 && (
-          <AnalysisOverlay ref={overlayRef} marked={contextAnalysis} theme={boardTheme} vpRef={vpRef} />
+        {/* Reveal mode's controls on the board (in presentation they ride in
+            the PresentBar instead). DOM, so they never reach an export. */}
+        {reveal.on && !presentMode && (
+          <div className="reveal-bar" data-testid="reveal-bar">
+            <RevealControls {...revealControls} />
+          </div>
+        )}
+
+        {kind === 'cartesian' && contextShown.length > 0 && (
+          <AnalysisOverlay ref={overlayRef} marked={contextShown} theme={boardTheme} vpRef={vpRef} />
         )}
 
         {presentMode ? (
@@ -12447,6 +12708,7 @@ export default function App() {
             onScale={changePresentType}
             onUndo={undo}
             onExit={() => setPresentMode(false)}
+            reveal={revealControls}
           />
         ) : (
         <Toolbar
@@ -12482,6 +12744,29 @@ export default function App() {
                   are "the board leaves this window": one to paper, one to a
                   wall. The Toolbar component itself is untouched — it takes
                   this slot as a node. */}
+              <button
+                className={`tb-btn tb-toggle${reveal.on ? ' reveal-toggle-on' : ''}`}
+                onClick={toggleReveal}
+                data-testid="reveal-enter"
+                aria-pressed={reveal.on}
+                title={
+                  reveal.on
+                    ? 'Leave reveal mode — every answer shows again (R)'
+                    : 'Reveal mode (R) — hide the answers, then reveal them one at a time'
+                }
+              >
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <circle cx="8" cy="8" r="6.2" stroke="currentColor" strokeWidth="1.4" />
+                  <path
+                    d="M6.2 6.3a1.9 1.9 0 1 1 2.6 1.75c-.5.22-.8.6-.8 1.15v.4"
+                    stroke="currentColor"
+                    strokeWidth="1.4"
+                    strokeLinecap="round"
+                  />
+                  <circle cx="8" cy="11.6" r="0.85" fill="currentColor" />
+                </svg>
+                Reveal
+              </button>
               <button
                 className="tb-btn tb-icon"
                 onClick={() => setPresentMode(true)}
@@ -12553,7 +12838,7 @@ export default function App() {
 
         {presentMode && (
           <PresentLegend
-            entries={legend}
+            entries={legendShown}
             type={presentType}
             corner={legendCorner}
             onCycleCorner={() =>
@@ -12834,6 +13119,7 @@ export default function App() {
           </button>
         </div>
       </main>
+      </RevealContext.Provider>
     </div>
   )
 }

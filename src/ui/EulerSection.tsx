@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Answer } from './RevealAnswer'
 import { CardSection } from './CardSection'
 import { Latex } from './Latex'
 import { parseNumeric } from './numeric'
@@ -24,6 +25,8 @@ interface Props {
   onAdd(): void
   onPatch(runId: string, patch: RunPatch): void
   onRemove(runId: string): void
+  /** Reveal mode's key for this field's runs (src/ui/reveal.ts eulerKey). */
+  answerKey?: string
 }
 
 type Which = 'x0' | 'y0' | 'h' | 'n'
@@ -68,10 +71,12 @@ function RunBlock({
   run,
   onPatch,
   onRemove,
+  ak,
 }: {
   run: EulerRunCard
   onPatch(patch: RunPatch): void
   onRemove(): void
+  ak: string
 }): JSX.Element {
   const [edit, setEdit] = useState<{ which: Which; text: string; bad: boolean } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -203,6 +208,7 @@ function RunBlock({
       </div>
 
       {run.rows.length > 0 && (
+        <Answer k={ak} block what="the table">
         <div className="euler-table-wrap">
           <table className="euler-table">
             <thead>
@@ -231,11 +237,13 @@ function RunBlock({
             </tbody>
           </table>
         </div>
+        </Answer>
       )}
 
       {run.stopped && <div className="calc-why">{run.stopped}</div>}
 
       {run.approx && (
+        <Answer k={ak} block quiet={run.rows.length > 0} what="the approximation">
         <ul className="calc-facts euler-facts">
           <li className="calc-fact calc-fact-lead euler-approx">
             {run.approx.lhs} ≈ {run.approx.value.text}
@@ -262,6 +270,7 @@ function RunBlock({
           {v && <li className="calc-fact euler-reason">{v.reason}</li>}
           {v?.caution && <li className="calc-fact euler-caution">{v.caution}</li>}
         </ul>
+        </Answer>
       )}
 
       <div className="calc-controls">
@@ -288,7 +297,8 @@ function RunBlock({
   )
 }
 
-export function EulerSection({ runs, onAdd, onPatch, onRemove }: Props): JSX.Element {
+export function EulerSection({ runs, onAdd, onPatch, onRemove, answerKey }: Props): JSX.Element {
+  const ak = answerKey ?? 'euler:value'
   return (
     <CardSection
       kind="euler"
@@ -308,6 +318,7 @@ export function EulerSection({ runs, onAdd, onPatch, onRemove }: Props): JSX.Ele
               run={run}
               onPatch={(patch) => onPatch(run.id, patch)}
               onRemove={() => onRemove(run.id)}
+              ak={ak}
             />
           ))}
         </div>

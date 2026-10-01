@@ -19,6 +19,7 @@ import { useState } from 'react'
 import type { CSSProperties } from 'react'
 import { Latex } from './Latex'
 import { CardSection, SectionDrop } from './CardSection'
+import { Answer } from './RevealAnswer'
 import type { SeqSeriesView, SeriesCardData } from './seqLinks'
 
 interface Props {
@@ -31,6 +32,8 @@ interface Props {
   /** One undo bracket around a slider drag. */
   onEditStart(): void
   onEditEnd(): void
+  /** Reveal mode's key for this series (src/ui/reveal.ts seriesKey). */
+  answerKey?: string
 }
 
 function fillStyle(value: number, min: number, max: number): CSSProperties {
@@ -39,7 +42,9 @@ function fillStyle(value: number, min: number, max: number): CSSProperties {
   return { '--fill': `${pct}%` } as CSSProperties
 }
 
-export function SeriesSection({ data, color, onChange, onRemove, onEditStart, onEditEnd }: Props) {
+export function SeriesSection({ data, color, onChange, onRemove, onEditStart, onEditEnd, answerKey }: Props) {
+  /** Reveal mode: the sums, the verdict and the tests are one answer. */
+  const ak = answerKey ?? 'series:value'
   const [allOpen, setAllOpen] = useState(false)
   const setN = (n: number): void => {
     const v = Math.max(data.Nmin, Math.min(data.Nmax, Math.round(n)))
@@ -56,6 +61,7 @@ export function SeriesSection({ data, color, onChange, onRemove, onEditStart, on
       className="calc-row series-row"
       testId="series-section"
       data={{ verdict: data.verdict }}
+      answerKey={ak}
     >
       <div className="taylor-tex series-tex">
         <Latex tex={data.tex} />
@@ -107,6 +113,7 @@ export function SeriesSection({ data, color, onChange, onRemove, onEditStart, on
             <span />
           </div>
 
+          <Answer k={ak} block what="the sum and the verdict">
           <ul className="calc-facts series-facts" data-testid="series-facts">
             <li className="calc-fact calc-fact-lead">
               <span className="series-swatch" style={{ background: color }} aria-hidden="true" />
@@ -133,6 +140,7 @@ export function SeriesSection({ data, color, onChange, onRemove, onEditStart, on
             {data.justification}
           </div>
           {data.sumNote && <div className="series-note">{data.sumNote}</div>}
+          </Answer>
 
           <div className="calc-controls">
             <button
@@ -168,6 +176,7 @@ export function SeriesSection({ data, color, onChange, onRemove, onEditStart, on
           </div>
 
           {allOpen && (
+            <Answer k={ak} block quiet>
             <ol className="series-tests" data-testid="series-tests">
               {data.tests.map((t) => (
                 <li key={t.id} className={`series-test series-test-${t.outcome}`}>
@@ -179,6 +188,7 @@ export function SeriesSection({ data, color, onChange, onRemove, onEditStart, on
                 </li>
               ))}
             </ol>
+            </Answer>
           )}
         </>
       )}
