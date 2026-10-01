@@ -1141,6 +1141,12 @@ export const SERIES_BAR_FILL = 0.3
 export function seriesOverlays(
   qs: readonly BoardSequence[],
   compiled: ReadonlyMap<string, CompiledSequence>,
+  /**
+   * answers: false — a STUDENT copy (worksheets): the series' sum, the dashed
+   * y = S and its "S = …" chip, is the question, so it is left out. Absent:
+   * everything, as the board draws it.
+   */
+  opts: { answers?: boolean } = {},
 ): Overlay[] {
   const under: Overlay[] = []
   const marks: Overlay[] = []
@@ -1202,7 +1208,7 @@ export function seriesOverlays(
       const pts = s.ns.map((n, i) => ({ x: n, y: s.sums[i] })).filter((p) => Number.isFinite(p.y))
       marks.push({ kind: 'path', points: pts, color, width: 1.5, alpha: 0.9 })
     }
-    if (S !== null) {
+    if (S !== null && opts.answers !== false) {
       marks.push({ kind: 'hline', y: S, color, dashed: true })
       const lastN = Math.max(s.N, c.ns.length ? c.ns[c.ns.length - 1] : s.N)
       marks.push({
@@ -1216,4 +1222,41 @@ export function seriesOverlays(
     }
   }
   return [...under, ...marks]
+}
+
+// ---------------------------------------------------------------------------
+// A stored document's sequences as figure content (worksheets)
+// ---------------------------------------------------------------------------
+
+/** Everything a board's sequences put into an exported figure. */
+export interface SequenceFigure {
+  compiled: Map<string, CompiledSequence>
+  /** Dots (n, aₙ), rings (n, Sₙ), a series' squares: BoardScene.scatter. */
+  scatter: ScatterSet[]
+  /** A series' bars, joined sums, band and y = S: BoardScene.overlays. */
+  overlays: Overlay[]
+  /** What a fitted export frames: one box per visible sequence. */
+  boxes: (Box | null)[]
+}
+
+/**
+ * The sequences' figure, as the App builds it for its own export (its
+ * scatterScene, seriesMarks and exportContent): the same helpers in the same
+ * order. The dashed partners depend on the export frame, so they are asked
+ * for separately (partnerPolylines over the frame's span).
+ */
+export function sequenceFigure(qs: readonly BoardSequence[], opts: { answers?: boolean } = {}): SequenceFigure {
+  const compiled = compileSequences(qs)
+  const boxes: (Box | null)[] = []
+  for (const q of qs) {
+    if (!q.visible) continue
+    const c = compiled.get(q.id)
+    boxes.push(c ? sequenceBox(q, c) : null)
+  }
+  return {
+    compiled,
+    scatter: qs.length > 0 ? sequenceScatter(qs, compiled) : [],
+    overlays: qs.some((q) => q.series) ? seriesOverlays(qs, compiled, opts) : [],
+    boxes,
+  }
 }

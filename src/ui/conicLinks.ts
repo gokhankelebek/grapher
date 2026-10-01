@@ -36,7 +36,7 @@
 // Every result is an ordinary typed (implicit) curve. Nothing downstream knows.
 // ============================================================================
 
-import type { Polyline, Shape, SpecialPoint, Vec2 } from '../core/types'
+import type { FittedCurve, Polyline, Shape, SpecialPoint, Vec2 } from '../core/types'
 import {
   classify,
   conicFeatures,
@@ -1182,4 +1182,64 @@ export function fittedEllipse(params: readonly number[]): FittedConic | null {
   const cls = safeClassify(src)
   if (!cls || cls.kind !== 'ellipse') return null
   return { src, note: `${prettyConic(src.replace(/\*/g, ''))} · ${cls.sentence}` }
+}
+
+// ---------------------------------------------------------------------------
+// The constructions that are figure content (exports, worksheets)
+// ---------------------------------------------------------------------------
+
+/** A conic whose card says "show construction". */
+export interface ConstructionConic {
+  spec: ConicSpec
+  color: string
+  id: string
+}
+
+/**
+ * The conics whose construction is on — figure content, on screen and in
+ * the export: a visible typed equation (calling no other curve) that reads
+ * as a conic, with "show construction" set for it.
+ */
+export function constructionConicsOf(
+  curves: readonly FittedCurve[],
+  construction: Readonly<Record<string, boolean>>,
+  exprSources: Readonly<Record<string, string>>,
+  calls: Readonly<Record<string, readonly string[]>>,
+): ConstructionConic[] {
+  const out: ConstructionConic[] = []
+  for (const c of curves) {
+    if (!construction[c.id] || !c.visible || c.kind !== 'implicit' || !c.modelId.startsWith('expr_')) continue
+    if (calls[c.id]?.length) continue
+    const spec = safeReadConic(exprSources[c.id])
+    if (spec) out.push({ spec, color: c.color, id: c.id })
+  }
+  return out
+}
+
+/**
+ * The constructions as scene content — the directrix, asymptotes and box as
+ * polylines, the foci, centre and vertices as points — and the box each
+ * occupies, for a fitted export to frame.
+ */
+export function constructionFigure(conics: readonly ConstructionConic[]): {
+  polylines: Polyline[]
+  shapes: Shape[]
+  boxes: ({ min: Vec2; max: Vec2 } | null)[]
+} {
+  const polylines: Polyline[] = []
+  const shapes: Shape[] = []
+  const boxes: ({ min: Vec2; max: Vec2 } | null)[] = []
+  for (const c of conics) {
+    polylines.push(...constructionPolylines(c.spec, c.color, `construction:${c.id}`))
+    shapes.push(...constructionShapes(c.spec, c.color, `construction:${c.id}`, true))
+    const pts = constructionPoints(c.spec)
+    if (pts.length === 0) {
+      boxes.push(null)
+      continue
+    }
+    const xs = pts.map((p) => p.x)
+    const ys = pts.map((p) => p.y)
+    boxes.push({ min: { x: Math.min(...xs), y: Math.min(...ys) }, max: { x: Math.max(...xs), y: Math.max(...ys) } })
+  }
+  return { polylines, shapes, boxes }
 }

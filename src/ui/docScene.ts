@@ -21,13 +21,31 @@
 //   4. the export framing: the document's own export settings (fit, aspect,
 //      margin), laid out at the PHYSICAL width it will have on paper.
 //
-// SCOPE. Some objects only the App can build, because they depend on state
-// the document does not hold or on long per-card pipelines: sequences and
-// series, related-rates diagrams, the inequality system's solution region and
-// corners, conic constructions, particle motion, transformation ghosts and
-// the domain/range shading views. A figure leaves those out and says so in
+//   5. what the per-card pipelines add to the App's export, each through the
+//      pure helper the card's module owns: sequences and series (dots,
+//      partial sums, bars, band, y = S, the dashed partner — seqLinks),
+//      related-rates pictures (relatedRatesLinks), the inequality system's
+//      solution region, test point, corners and objective (systemLinks), the
+//      conic constructions that are switched on (conicLinks), a polar area
+//      and the selected curve's particle when "show particle in export" is on
+//      (motionLinks), the Domain section's ghost, horizontal line test and
+//      reflected point (domainLinks), and implicit tangents' horizontal /
+//      vertical tangent marks (implicitLinks).
+//
+// SCOPE. What the App's single-figure export leaves out, a sheet leaves out
+// too: a transformation's parent ghost and arrows, a selected conic's
+// construction while its switch is off, a sinusoid's midline and a
+// logistic's asymptotes are screen-only aids, never figure content. Anything
+// a sheet cannot draw that the document's own Download would is listed in
 // `omitted`, which the sheet editor prints under the figure's row — never a
-// silent difference between the sheet and the document.
+// silent difference between the sheet and the document. Today it is empty.
+//
+// THE STUDENT COPY (answers: false) follows reveal mode's idea of an answer:
+// every chip that carries an answer key (an LP corner's coordinates and the
+// optimum, a series' "S = …", a calculus tool's value) is dropped; a series'
+// dashed y = S, the optimum's colour and the iso-profit line through it go
+// with them; a related-rates picture says "?" for the unknown rate and
+// drops its rate-vs-time graph (reveal.ts maskRelatedRates).
 //
 // THE BOARD SIZE. A document stores its centre and zoom, not the size of the
 // window it was framed in. The caller passes the size of the live board (the
@@ -35,7 +53,7 @@
 // ============================================================================
 
 import type { BoardKind, FigureStyleId, FittedCurve, ModelSpec, SpecialPoint, Viewport } from '../core/types'
-import { DARK_THEME, ppuX } from '../core/types'
+import { DARK_THEME, ppuX, ppuY } from '../core/types'
 import { MODELS } from '../core/fit/models'
 import type { CalcLink, HydratedBoard, SignChartLink } from '../core/persist'
 import { TAYLOR_MODEL_PREFIX, deserializeDoc, resolveAxisUnits } from '../core/persist'
@@ -61,6 +79,18 @@ import { signChartFigures, signRange } from './signChartLinks'
 import { signBandHeight } from '../render/signChart'
 import { unionBoxes } from './curveState'
 import { physicalViewport, recordScene } from './vectorExport'
+import type { Overlay } from '../render/overlays'
+import { viewStatesFrom } from './curveViews'
+import { partnerPolylines, sequenceFigure } from './seqLinks'
+import { relatedRatesBox, relatedRatesFigure } from './relatedRatesLinks'
+import { maskRelatedRates } from './reveal'
+import { systemCard, systemOverlays, systemSolutionShown } from './systemLinks'
+import { constructionConicsOf, constructionFigure } from './conicLinks'
+import { exportParticle, polarAreaOverlays } from './motionLinks'
+import { domainLensOverlays, ghostFunction } from './domainLinks'
+import { implicitSearchBox, implicitTangentSources } from './implicitLinks'
+import { createResolver, createSingularityResolver, lineEnv } from './nameLinks'
+import { typedName } from '../render/curveNames'
 import { drawContextMarkers } from './AnalysisOverlay'
 import { asymptoteText } from './CurveCard'
 import { findAsymptotes } from '../core/holes'
@@ -86,7 +116,9 @@ export interface DocModel {
   curveNames: Record<string, string>
   /** exprSources over displaySources: what pgfplots writes for each curve. */
   sources: Record<string, string>
-  /** Objects on the document a sheet cannot draw yet, as short phrases. */
+  /** curveId -> its letter, as the board stores it (what a typed line calls). */
+  names: Record<string, string>
+  /** Objects on the document a sheet cannot draw, as short phrases (none today). */
   omitted: string[]
   /** What the loader had to repair or drop. */
   problems: string[]
@@ -98,8 +130,6 @@ export interface DocModelOptions {
   /** The document's own export settings; the app defaults when absent. */
   settings?: FitExportSettings
 }
-
-const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`
 
 /** Hydrate a stored document into a DocModel. Null when nothing could be read. */
 export function docModelFromJSON(json: string, opts: DocModelOptions = {}): DocModel | null {
@@ -160,11 +190,8 @@ export function docModelFromJSON(json: string, opts: DocModelOptions = {}): DocM
   }
   if (board.viewport.pxPerUnitY !== undefined && board.grid !== 'polar') vp.pxPerUnitY = board.viewport.pxPerUnitY
 
+  // Everything the document's own export draws, a sheet draws (see SCOPE).
   const omitted: string[] = []
-  if (board.sequences.length > 0) omitted.push(plural(board.sequences.length, 'sequence'))
-  if (board.relatedRates.length > 0) omitted.push('the related-rates diagram')
-  if (board.system) omitted.push('the inequality system’s solution region')
-  if (Object.keys(board.curveViews).length > 0) omitted.push('per-curve views (constructions, particles, shading)')
 
   return {
     id: res.meta.id,
@@ -176,6 +203,7 @@ export function docModelFromJSON(json: string, opts: DocModelOptions = {}): DocM
     settings: clampFitSettings(opts.settings ?? { ...DEFAULT_EXPORT, ...defaultFit(kind) }),
     curveNames: shown,
     sources,
+    names,
     omitted,
     problems: res.problems,
   }
@@ -249,7 +277,45 @@ export function docFigure(m: DocModel, o: FigureOptions): DocFigure {
     : []
   const unitCircles = cartesian ? board.unitCircles.map((u) => unitCircleFigure(u)) : []
   const curveIds = new Set(curves.map((c) => c.id))
-  const scatter = cartesian ? safe(() => scatterSets(board.data, curveIds), []) : []
+  const tables = cartesian ? safe(() => scatterSets(board.data, curveIds), []) : []
+
+  // ---- the per-card pipelines (the App's memos, through the same helpers)
+  const views = viewStatesFrom(board.curveViews, curves)
+  const seq = cartesian && board.sequences.length > 0
+    ? safe(() => sequenceFigure(board.sequences, { answers: o.answers }), null)
+    : null
+  const scatter = seq ? [...tables, ...seq.scatter] : tables
+  const rrShown = cartesian ? board.relatedRates.filter((r) => r.hidden !== true) : []
+  const relatedRates = cartesian
+    ? board.relatedRates.flatMap((r) => {
+        const f = safe(() => relatedRatesFigure(r), null)
+        return f ? [o.answers ? f : maskRelatedRates(f)] : []
+      })
+    : []
+  const sysCard = cartesian ? safe(() => systemCard(curves, models, board.system), null) : null
+  const sysOverlays = safe(() => systemOverlays(sysCard, board.system, { answers: o.answers }), [])
+  const inequalitySolution = systemSolutionShown(sysCard, board.system)
+  const construction = cartesian
+    ? safe(
+        () => constructionFigure(constructionConicsOf(curves, views.construction, board.exprSources, board.calls)),
+        null,
+      )
+    : null
+  // The particle rides with the SELECTED curve only, sized against the board
+  // the teacher framed it on (the App's motion frame is the live screen's).
+  const selected = curves.find((c) => c.id === board.selectedId) ?? null
+  const particle = cartesian && selected
+    ? safe(
+        () =>
+          exportParticle(selected, models, views.motion[selected.id], {
+            ppx: ppuX(m.vp),
+            ppy: ppuY(m.vp),
+            widthPx: m.vp.widthPx,
+            heightPx: m.vp.heightPx,
+          }),
+        null,
+      )
+    : null
 
   // ---- framing (exportContent + buildExportScene in the App)
   let content = null
@@ -259,7 +325,10 @@ export function docFigure(m: DocModel, o: FigureOptions): DocFigure {
       ? unionBoxes([
           box,
           ...board.data.filter((d) => d.visible).map((d) => safe(() => dataBox(d), null)),
+          ...(construction?.boxes ?? []),
+          ...(seq?.boxes ?? []),
           ...board.unitCircles.filter((u) => u.hidden !== true).map((u) => unitCircleBox(u)),
+          ...rrShown.map((r) => safe(() => relatedRatesBox(r), null)),
         ])
       : box
   }
@@ -275,13 +344,41 @@ export function docFigure(m: DocModel, o: FigureOptions): DocFigure {
 
   const fieldsCompiled = cartesian ? compileFields(board.fields) : new Map()
   const euler = cartesian ? safe(() => eulerScene(board.fields, fieldsCompiled, solve), null) : null
+  // A sequence's dashed partner is sampled across THIS frame, as the App's is.
+  const partners = seq ? safe(() => partnerPolylines(board.sequences, seq.compiled, solve), []) : []
   const polylines = cartesian
-    ? [...safe(() => solutionPolylines(board.fields, fieldsCompiled, solve), []), ...(euler?.polylines ?? [])]
+    ? [
+        ...safe(() => solutionPolylines(board.fields, fieldsCompiled, solve), []),
+        ...(euler?.polylines ?? []),
+        ...(construction?.polylines ?? []),
+        ...(particle?.polylines ?? []),
+        ...partners,
+      ]
     : []
-  const overlays = cartesian
-    ? safe(() => overlaysFor(board.calc, curves, models, board.calc.some(isBand) ? span : null), [])
+  // The calculus links' overlays, with implicit tangents' marks searched in
+  // the framed window (the App's implicitBox is the live screen's).
+  const implicit = cartesian
+    ? {
+        sources: safe(() => implicitTangentSources(board.calc, curves, models, board.exprSources, board.calls), {}),
+        box: implicitSearchBox(m.vp.center, m.vp.widthPx / 2 / ppuX(m.vp), m.vp.heightPx / 2 / ppuY(m.vp)),
+      }
+    : null
+  const base = cartesian
+    ? safe(() => overlaysFor(board.calc, curves, models, board.calc.some(isBand) ? span : null, implicit), [])
     : []
-  const shapes = cartesian ? safe(() => sceneShapes(board.shapes, compileShapes(board.shapes)), []) : []
+  const domain = cartesian ? safe(() => domainOverlaysOf(m, span, views.lens), []) : []
+  const polarAreas = cartesian ? safe(() => polarAreaOverlays(curves, models, views.motion), []) : []
+  // The ghost goes first (under everything else), as the App orders them.
+  const allOverlays: Overlay[] = [...domain, ...base, ...polarAreas, ...sysOverlays, ...(seq?.overlays ?? [])]
+  // A student copy keeps no chip that states an answer (reveal mode's keys).
+  const overlays = o.answers ? allOverlays : allOverlays.filter((ov) => !(ov.kind === 'label' && ov.answer))
+  const shapes = cartesian
+    ? [
+        ...safe(() => sceneShapes(board.shapes, compileShapes(board.shapes)), []),
+        ...(construction?.shapes ?? []),
+        ...(particle?.shapes ?? []),
+      ]
+    : []
 
   // ---- the answers: the selected curve's markers with their labels, every
   // other visible curve's markers, and where the curves cross.
@@ -329,7 +426,9 @@ export function docFigure(m: DocModel, o: FigureOptions): DocFigure {
     shapes,
     ...(scatter.length > 0 ? { scatter } : {}),
     ...(unitCircles.length > 0 ? { unitCircles } : {}),
+    ...(relatedRates.length > 0 ? { relatedRates } : {}),
     ...(signs.length > 0 ? { signCharts: signs } : {}),
+    ...(inequalitySolution ? { inequalitySolution: true } : {}),
     grid: board.grid,
     ...(figure ? { figure } : {}),
     ...(caption !== '' ? { caption } : {}),
@@ -363,6 +462,26 @@ export function docFigure(m: DocModel, o: FigureOptions): DocFigure {
 }
 
 const isBand = (l: CalcLink): boolean => l.kind === 'taylor' && l.band === true
+
+/**
+ * The Domain section's switches as overlays: a restricted line's ghost is
+ * its body parsed against the board's function env (what it calls), as the
+ * App's ghostFunctionOf parses it.
+ */
+function domainOverlaysOf(m: DocModel, span: [number, number], lens: Parameters<typeof domainLensOverlays>[2]): Overlay[] {
+  if (Object.keys(lens).length === 0) return []
+  const board = m.board
+  const view = { curves: board.curves, names: m.names, models: m.models, calls: board.calls }
+  const resolve = createResolver(() => view)
+  const singular = createSingularityResolver(() => view)
+  return domainLensOverlays(board.curves, m.models, lens, span, (c) =>
+    ghostFunction(c, m.models, board.exprSources[c.id], (base) => {
+      const calls = board.calls[c.id] ?? []
+      const head = typedName(base)
+      return calls.length > 0 || head ? lineEnv(resolve, calls, head, singular) : undefined
+    }),
+  )
+}
 
 function safe<T>(fn: () => T, fallback: T): T {
   try {

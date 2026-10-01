@@ -24,7 +24,9 @@
 
 import type { FittedCurve, ModelSpec, Vec2 } from '../core/types'
 import type { Overlay } from '../render/overlays'
-import type { TangentLink } from '../core/persist'
+import type { CalcLink, TangentLink } from '../core/persist'
+import { splitTyped } from './domainLinks'
+import { curveEquationText } from './equationText'
 import { parseAst } from '../core/parse'
 import {
   astParams,
@@ -488,3 +490,42 @@ export function implicitOverlays(
   return out
 }
 
+
+// ---------------------------------------------------------------------------
+// The equations a figure's implicit tangents differentiate (exports, worksheets)
+// ---------------------------------------------------------------------------
+
+/**
+ * curveId -> the equation each implicit curve carrying a tangent is
+ * differentiated from: the typed line without its restriction, or the
+ * equation its family prints. A line that calls another curve is left out
+ * (its partials are not symbolic). What overlaysFor's `implicit.sources` reads.
+ */
+export function implicitTangentSources(
+  links: readonly CalcLink[],
+  curves: readonly FittedCurve[],
+  models: Record<string, ModelSpec>,
+  exprSources: Readonly<Record<string, string>>,
+  calls: Readonly<Record<string, readonly string[]>>,
+): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const l of links) {
+    if (l.kind !== 'tangent' || out[l.parentId] !== undefined) continue
+    const c = curves.find((cc) => cc.id === l.parentId)
+    if (!c || !isImplicitCurve(c, models) || (calls[c.id]?.length ?? 0) > 0) continue
+    let src: string | null = null
+    const typed = exprSources[c.id]
+    if (c.modelId.startsWith('expr_') && typed) {
+      const split = splitTyped(typed)
+      src = split && split !== 'piecewise' ? split.base : null
+    } else {
+      try {
+        src = curveEquationText(c, models[c.modelId])
+      } catch {
+        src = null
+      }
+    }
+    if (src) out[c.id] = src
+  }
+  return out
+}

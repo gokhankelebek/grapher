@@ -26,7 +26,13 @@
 import type { FittedCurve, ModelSpec, Vec2 } from '../core/types'
 import type { IntervalPart, OneToOne, RealSet } from '../core/domainRange'
 import { describeSet } from '../core/domainRange'
-import { piecewiseParts } from '../core/parse'
+import { parseExpression, piecewiseParts } from '../core/parse'
+import type { FunctionEnv } from '../core/functionEnv'
+import { MODELS } from '../core/fit/models'
+import { levelCrossings } from '../core/domainRange'
+import type { Overlay } from '../render/overlays'
+import type { DomainLens } from './curveViews'
+import { inverseColor } from './logLinks'
 import { exactForm } from '../core/exact'
 import { parseNumeric } from './numeric'
 
@@ -571,4 +577,110 @@ export interface DomainActions {
   onShowInverse(id: string): void
   onAddInverse(id: string): void
   onNotation(n: SetNotation): void
+}
+
+// ---------------------------------------------------------------------------
+// The Domain section on the board, as figure content (exports, worksheets)
+// ---------------------------------------------------------------------------
+
+/**
+ * A typed RESTRICTED line's model without its restriction ("y = x^2" for
+ * "y = x^2 {x >= 0}"): what the ghost of the cut-off part draws. Null for a
+ * line with no restriction, a piecewise, a sketch, or a body that does not
+ * parse. `env` is the board's function env for the base line (its calls).
+ */
+export function restrictedBaseModel(
+  curve: FittedCurve,
+  src: string | undefined,
+  env?: (base: string) => FunctionEnv | undefined,
+): ModelSpec | null {
+  if (curve.kind !== 'explicit' || !curve.modelId.startsWith('expr_')) return null
+  const split = splitTyped(src)
+  if (!split || split === 'piecewise' || split.cond === null) return null
+  try {
+    const o = parseExpression(split.base, env ? env(split.base) : undefined)
+    return o.ok && o.plot.kind === 'explicit' ? o.plot.makeModel(`base_${curve.id}`) : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * What the ghost of the cut-off part draws: a typed line's body (its
+ * unrestricted model, at the curve's params), or a sketched family
+ * everywhere. Null when there is nothing cut off to show.
+ */
+export function ghostFunction(
+  curve: FittedCurve,
+  models: Record<string, ModelSpec>,
+  src: string | undefined,
+  env?: (base: string) => FunctionEnv | undefined,
+): ((x: number) => number) | null {
+  if (curve.kind !== 'explicit') return null
+  if (curve.modelId.startsWith('expr_') && src) {
+    const spec = restrictedBaseModel(curve, src, env)
+    const ev = spec?.evalExplicit
+    if (!spec || !ev) return null
+    const params = curve.params.slice()
+    return (x: number): number => {
+      try {
+        const v = ev.call(spec, params, x)
+        return typeof v === 'number' ? v : Number.NaN
+      } catch {
+        return Number.NaN
+      }
+    }
+  }
+  if (MODELS[curve.modelId] && curve.domain) return familyF(curve, models)
+  return null
+}
+
+/**
+ * The Domain section's board switches as overlays — figure content, on the
+ * board and in the export:
+ *   ghost    the restricted function's whole graph, faint and dashed, behind it
+ *   hlt      the horizontal line test: the line, and a dot at every crossing
+ *            in `span`, warning-coloured at two or more
+ *   reflect  (a, f(a)), its mirror (f(a), a), and the segment across y = x
+ * The ghosts come first (they sit under everything), then the marks.
+ */
+export function domainLensOverlays(
+  curves: readonly FittedCurve[],
+  models: Record<string, ModelSpec>,
+  lens: Readonly<Record<string, DomainLens>>,
+  span: [number, number],
+  ghostOf: (curve: FittedCurve) => ((x: number) => number) | null,
+): Overlay[] {
+  if (Object.keys(lens).length === 0) return []
+  const out: Overlay[] = []
+  const marks: Overlay[] = []
+  for (const c of curves) {
+    const l = lens[c.id]
+    if (!l || !c.visible || c.kind !== 'explicit') continue
+    if (l.ghost) {
+      const g = ghostOf(c)
+      if (g) out.push({ kind: 'ghost', curveId: c.id, f: g })
+    }
+    if (l.hlt !== undefined) {
+      let xs: number[] = []
+      try {
+        xs = levelCrossings(c, models, l.hlt, span)
+      } catch {
+        xs = []
+      }
+      const v = hltVerdict(xs)
+      marks.push({ kind: 'hline', curveId: c.id, y: l.hlt, color: v.color })
+      for (const x of xs) marks.push({ kind: 'dot', curveId: c.id, at: { x, y: l.hlt }, color: v.color })
+    }
+    if (l.reflect !== undefined) {
+      const f = explicitF(c, models)
+      const pr = f ? reflectProbe(f, l.reflect) : null
+      if (pr) {
+        marks.push({ kind: 'segment', curveId: c.id, from: pr.p, to: pr.q, dashed: true })
+        marks.push({ kind: 'dot', curveId: c.id, at: pr.p })
+        marks.push({ kind: 'dot', curveId: c.id, at: pr.q, color: inverseColor(c.color), hollow: false })
+      }
+    }
+  }
+  return out.length + marks.length === 0 ? [] : [...out, ...marks]
 }

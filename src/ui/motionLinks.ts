@@ -40,6 +40,7 @@ import { exactForm } from '../core/exact'
 import { evalText } from './factorLinks'
 import { formatCoord } from './numeric'
 import { INV_MODEL_PREFIX } from '../core/persist'
+import type { Overlay } from '../render/overlays'
 
 const TWO_PI = Math.PI * 2
 
@@ -1027,4 +1028,64 @@ export function areaOverlayFor(
   if ('error' in r) return null
   const boundary = polarRegion(curve, models, r.a, r.b)
   return boundary.length > 0 ? { boundary, a: r.a, b: r.b } : null
+}
+
+// ---------------------------------------------------------------------------
+// What a curve's Motion settings put into an exported figure (worksheets)
+// ---------------------------------------------------------------------------
+
+/**
+ * Every visible polar curve's "shade area from θ = a to b", as the region
+ * overlay the board and its export draw (figure content, selected or not).
+ */
+export function polarAreaOverlays(
+  curves: readonly FittedCurve[],
+  models: Record<string, ModelSpec>,
+  motion: Readonly<Record<string, MotionPlayState>>,
+): Overlay[] {
+  const out: Overlay[] = []
+  for (const c of curves) {
+    const p = motion[c.id]
+    if (!p?.area?.on || !c.visible || motionKindOf(c, models) !== 'polar') continue
+    const r = areaOverlayFor(c, models, p.area)
+    if (r) out.push({ kind: 'region', boundary: r.boundary, color: c.color, alpha: 0.28 })
+  }
+  return out
+}
+
+/**
+ * The particle as figure content: the dot at t, its velocity (and, when
+ * asked, acceleration) vector at the scales `fr` gives, and a polar curve's
+ * dashed ray from the pole — exactly what the board draws for the SELECTED
+ * curve, and what its export carries while "show particle in export" is on.
+ * Null when the curve does not move (not parametric / polar), is hidden, or
+ * the switch is off.
+ */
+export function exportParticle(
+  curve: FittedCurve,
+  models: Record<string, ModelSpec>,
+  play: MotionPlayState | undefined,
+  fr: PxFrame,
+): { shapes: Shape[]; polylines: Polyline[] } | null {
+  if (!curve.visible) return null
+  const mk = motionKindOf(curve, models)
+  if (!mk) return null
+  const interval = motionInterval(curve)
+  const p = play ?? defaultPlay(interval)
+  if (!p.exportParticle) return null
+  const s = safeState(curve, models, clampT(p.t, interval))
+  if (!s) return null
+  const shapes = particleShapes(s, {
+    color: curve.color,
+    idBase: `motion:${curve.id}`,
+    fr,
+    scales: motionScales(curve, models, interval, fr),
+    accel: p.accel,
+  })
+  const polylines: Polyline[] = []
+  if (mk === 'polar') {
+    const ray = poleRay(s, curve.color, `motion:${curve.id}:ray`)
+    if (ray) polylines.push(ray)
+  }
+  return { shapes, polylines }
 }

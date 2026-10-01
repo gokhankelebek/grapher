@@ -156,8 +156,19 @@ export function cornersShown(system: BoardIneqSystem | null): boolean {
 }
 
 /** What the board marks for the system. */
-export function systemOverlays(card: SystemCardData | null, system: BoardIneqSystem | null): Overlay[] {
+export function systemOverlays(
+  card: SystemCardData | null,
+  system: BoardIneqSystem | null,
+  /**
+   * answers: false — a STUDENT copy (worksheets): the corners stay as dots,
+   * but their coordinates, the optimum (its colour, its "max P = …" chip)
+   * and the iso-profit line through it are the questions, so they go.
+   * Absent: everything, as the board draws it.
+   */
+  opts: { answers?: boolean } = {},
+): Overlay[] {
   if (!card || !system) return []
+  const answers = opts.answers !== false
   const out: Overlay[] = []
   const lp = card.lp
   if (lp && lp.region.vertices.length > 0 && cornersShown(system)) {
@@ -175,8 +186,8 @@ export function systemOverlays(card: SystemCardData | null, system: BoardIneqSys
       cy += r.y
     }
     const result = lp.objective?.result ?? null
-    const best = new Set(result?.status === 'optimal' ? (result.at ?? []) : [])
-    const iso = system.iso === true && result?.status === 'optimal' && result.at && result.at.length > 0 && lp.objective?.obj
+    const best = new Set(answers && result?.status === 'optimal' ? (result.at ?? []) : [])
+    const iso = answers && system.iso === true && result?.status === 'optimal' && result.at && result.at.length > 0 && lp.objective?.obj
     if (iso && lp.objective?.obj && result?.at) {
       const o = lp.objective.obj
       const at = result.at[0]
@@ -201,7 +212,7 @@ export function systemOverlays(card: SystemCardData | null, system: BoardIneqSys
         isBest && result?.status === 'optimal' && lp.objective?.obj
           ? `${v.label}  ${lp.objective.goal} ${lp.objective.obj.name} = ${result.valueText}`
           : v.label
-      out.push({ kind: 'label', at: { x: v.x, y: v.y }, text, dir: { x: dx, y: -dy }, color, answer: SYSTEM_KEY })
+      if (answers) out.push({ kind: 'label', at: { x: v.x, y: v.y }, text, dir: { x: dx, y: -dy }, color, answer: SYSTEM_KEY })
     }
   }
   if (card.test) {
@@ -216,4 +227,13 @@ export function systemOverlays(card: SystemCardData | null, system: BoardIneqSys
     })
   }
   return out
+}
+
+/**
+ * The solution region is drawn only while there is a system to intersect:
+ * "show solution region" on, and two or more inequalities on the board
+ * (BoardScene.inequalitySolution).
+ */
+export function systemSolutionShown(card: SystemCardData | null, system: BoardIneqSystem | null): boolean {
+  return system?.solution === true && (card?.members.length ?? 0) >= 2
 }

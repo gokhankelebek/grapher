@@ -37,6 +37,7 @@ import { toPdfPagesString } from '../src/render/vectorPdf'
 import type { DisplayList, TextItem } from '../src/render/vectorCtx'
 import { placeList, emptyPage } from '../src/render/vectorPage'
 import { listWorksheets, removeWorksheet, writeDoc, writeWorksheet } from '../src/ui/storage'
+import { newRelatedRates } from '../src/ui/relatedRatesLinks'
 
 // ---------------------------------------------------------------------------
 // fixtures
@@ -805,5 +806,83 @@ describe('the key states asymptotes and holes', () => {
     const json = docJSON('dSlant', 'Slant', input({ curves: [c], exprSources: { e1: 'y = (x^2 + 1)/x' }, selectedId: 'e1' }))
     const key = docFigure(docModelFromJSON(json)!, { style: 'textbook', answers: true, widthCm: 8 })
     expect(key.asymptotes).toEqual(['x = 0', 'y = x'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// every kind of document reaches the sheet (the per-card pipelines)
+// ---------------------------------------------------------------------------
+
+describe('series, related rates and an LP system on one sheet', () => {
+  const SERIES = (): string =>
+    docJSON(
+      'dSeries',
+      'Series',
+      input({
+        sequences: [
+          {
+            id: 'g',
+            src: 'a_n = (1/2)^(n - 1)',
+            color: '#4f9cf9',
+            visible: true,
+            n0: 1,
+            count: 8,
+            showPartner: false,
+            showSums: false,
+            params: [],
+            series: { N: 8, connect: true, bars: true },
+          },
+        ],
+      }),
+    )
+  const RATES = (): string => docJSON('dRates', 'Ladder', input({ relatedRates: [newRelatedRates('R1')] }))
+  const LP = (): string => {
+    const srcs: Record<string, string> = { i1: 'y <= -x + 4', i2: 'x >= 0', i3: 'y >= 0' }
+    const curves = Object.entries(srcs).map(([id, src], i) => typed(id, src, `expr_${i + 1}`))
+    return docJSON(
+      'dLP',
+      'LP',
+      input({ curves, exprSources: srcs, system: { solution: true, objective: { src: 'P = 3x + 2y', goal: 'max' } } }),
+    )
+  }
+  const lookup = (): ((id: string) => DocModel | null) => {
+    const ms = new Map<string, DocModel>()
+    for (const json of [SERIES(), RATES(), LP()]) {
+      const m = docModelFromJSON(json)!
+      ms.set(m.id, m)
+    }
+    return (id) => ms.get(id) ?? null
+  }
+  const sheet = (): Worksheet =>
+    sheetOf({ items: [{ docId: 'dSeries' }, { docId: 'dRates' }, { docId: 'dLP' }], style: 'textbook' })
+
+  it('none of them lists anything as "Not included"', () => {
+    const look = lookup()
+    for (const id of ['dSeries', 'dRates', 'dLP']) expect(look(id)!.omitted).toEqual([])
+  })
+
+  it('the key states the sum, the rate and the optimum; the student sheet states none of them', () => {
+    const key = texts(buildSheet(sheet(), lookup(), true).pages[0]).join(' | ')
+    const student = texts(buildSheet(sheet(), lookup(), false).pages[0]).join(' | ')
+    expect(key).toContain('S = 2')
+    expect(key).toMatch(/dy\/dt = −?\d/)
+    expect(key).toContain('max P = 12')
+    expect(student).not.toContain('S = 2')
+    expect(student).not.toMatch(/dy\/dt = −?\d/)
+    expect(student).toContain('dy/dt = ?')
+    expect(student).not.toContain('max P')
+    expect(student).not.toContain('(0, 4)')
+  })
+
+  it('the figures are drawn, not placeholders, in the PDF and the LaTeX', () => {
+    const built = buildSheet(sheet(), lookup(), false)
+    for (const f of built.figures) {
+      expect(f.figure).not.toBeNull()
+      expect(f.list!.items.length).toBeGreaterThan(20)
+    }
+    const tex = sheetLatex(sheet(), built.figures, false)
+    expect((tex.match(/\\begin\{tikzpicture\}/g) ?? []).length).toBe(3)
+    const pdf = Array.from(sheetPdf(sheet(), lookup(), true), (b) => String.fromCharCode(b)).join('')
+    expect(pdf.startsWith('%PDF')).toBe(true)
   })
 })
