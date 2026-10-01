@@ -177,7 +177,8 @@ describe('pgfplots figure', () => {
   it('writes typed curves as their formulas', () => {
     expect(out).toMatch(/\\addplot\[black, thick, <->, domain=-?[\d.]+:[\d.]+, samples=\d+, restrict y to domain=[-\d.:]+\] \{x\^2 - 3\}/)
     expect(out).toMatch(/\\addplot\[black, thick, <->, domain=-8:8, samples=\d+, [^\]]+\] \{sin\(x\)\}/)
-    expect(out).toContain('node[pos=0.92, anchor=south east, font=\\footnotesize] {$f$}')
+    // the curve's name where the board put it
+    expect(out).toMatch(/\\node\[anchor=base[^\]]*\] at \(axis cs:[-\d.]+,[-\d.]+\) \{\$f\$\};/)
   })
 
   it('writes π ticks as xtick + xticklabels', () => {
@@ -253,7 +254,18 @@ describe('pgfplots figure', () => {
       }),
       { widthCm: 8 },
     )
-    expect(tex).toContain('% not exported: the slope field')
     expect(tex).toContain('% not exported: the caption')
+  })
+
+  it('draws a slope field as the board’s own lattice of short segments', () => {
+    const tex = toPgfplots(
+      scene({ fields: [{ id: 's', f: (x: number) => x, latex: 'dy/dx = x', color: '#000', visible: true }] }),
+      { widthCm: 8 },
+    )
+    expect(tex).not.toContain('not exported: the slope field')
+    expect(tex).toContain('% slope field: dy/dx = x')
+    const at = tex.indexOf('line width=0.4pt')
+    const draw = tex.slice(at, tex.indexOf(';', at))
+    expect(draw.match(/--/g)!.length).toBeGreaterThan(20)
   })
 })

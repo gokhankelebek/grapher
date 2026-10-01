@@ -320,7 +320,8 @@ describe('TikZ', () => {
     expect(tikz).toMatch(/\\fill\[fill=gr\d+, fill opacity=0\.5\] \(84,37\.5\) arc\[start angle=0, end angle=-360, radius=9\]/)
     expect(tikz).toContain('\\begin{scope}')
     expect(tikz).toContain('\\clip ')
-    expect(tikz).toMatch(/\\node\[anchor=base, text=gr\d+, font=\\fontsize\{8\.3\}\{9\.9\}\\selectfont\\sffamily\] at \([\d.]+,[\d.]+\) \{\$-\\frac\{\\pi\}\{2\}\$\};/)
+    // 8.25 pt is set at CM's 8 pt (no font substitution), never wider than measured
+    expect(tikz).toMatch(/\\node\[anchor=base, text=gr\d+, font=\\fontsize\{8\}\{9\.6\}\\selectfont\\sffamily\] at \([\d.]+,[\d.]+\) \{\\grapherfit\{[\d.]+\}\{\$-\\frac\{\\pi\}\{2\}\$\}\};/)
     expect(tikz.trim().endsWith('\\end{tikzpicture}')).toBe(true)
   })
 })
@@ -351,6 +352,8 @@ function balanced(tex: string): boolean {
 function specialsEscaped(tex: string): boolean {
   for (const line of tex.split('\n')) {
     if (/^\s*%/.test(line)) continue
+    // The picture's own macro definition is the one place a # belongs.
+    if (/^\s*\\def\\grapherfit#1#2\{/.test(line)) continue
     if (/(^|[^\\])[#&]/.test(line)) return false
     if (/(^|[^\\])%/.test(line)) return false
   }

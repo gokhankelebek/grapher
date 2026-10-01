@@ -552,8 +552,8 @@ describe('solve items — the distance bracket', () => {
     expect(g.labelX).toBe(g.xc)
     expect(g.labelY).toBeLessThan(g.y)
     expect(g.halves).toEqual([
-      { x: (g.x0 + g.xc) / 2, y: 194 },
-      { x: (g.xc + g.x1) / 2, y: 194 },
+      { x: (g.x0 + g.xc) / 2, y: 200 },
+      { x: (g.xc + g.x1) / 2, y: 200 },
     ])
   })
 

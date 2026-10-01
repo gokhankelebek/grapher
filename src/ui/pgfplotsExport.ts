@@ -34,10 +34,12 @@ import type { ExprNode } from '../core/parse'
 import { parseAst, piecewiseParts } from '../core/parse'
 import { findAsymptotes, findHoles } from '../core/holes'
 import type { BoardScene } from './renderBoard'
-import { MONO_FILL_ALPHA, captionHeight } from './renderBoard'
+import { MONO_FILL_ALPHA, captionHeight, keyLineTokens, renderBoard } from './renderBoard'
 import { drawCurve } from '../render/curves'
 import { curveEndPoints, resolveEnds } from '../render/endCaps'
 import { holeRange } from '../render/holes'
+import { FIELD_ALPHA, drawSlopeFields } from '../render/fields'
+import { signBandHeight } from '../render/signChart'
 import { pieceMarks } from '../render/pieceDots'
 import { OVERLAY_FILL_ALPHA } from '../render/overlays'
 import type { InequalityInfo } from '../core/types'
@@ -65,6 +67,8 @@ import {
 import { VectorCtx } from '../render/vectorCtx'
 import { parseColor } from '../render/vectorCtx'
 import { cssHex, num } from '../render/vectorSvg'
+import type { Box } from '../render/vectorTikz'
+import { clipPolygon, clipSegment } from '../render/vectorTikz'
 import { texEscapeText, texLabel } from '../render/texText'
 import { textWidthEstimate } from '../render/fontMetrics'
 import { pointText } from './numeric'
@@ -489,11 +493,16 @@ function simplify(pts: Vec2[], tol: number): Vec2[] {
     const b = pts[j]
     const dx = b.x - a.x
     const dy = b.y - a.y
-    const len = Math.hypot(dx, dy) || 1
+    const len = Math.hypot(dx, dy)
+    // A closed loop starts and ends at the same point: there is no chord to
+    // measure from, so measure from that point (or the whole loop collapsed).
+    const closed = !(len > 1e-9)
     let far = -1
     let best = tol
     for (let k = i + 1; k < j; k++) {
-      const d = Math.abs((pts[k].x - a.x) * dy - (pts[k].y - a.y) * dx) / len
+      const d = closed
+        ? Math.hypot(pts[k].x - a.x, pts[k].y - a.y)
+        : Math.abs((pts[k].x - a.x) * dy - (pts[k].y - a.y) * dx) / len
       if (d > best) {
         best = d
         far = k
@@ -536,6 +545,67 @@ function chain(runs: Vec2[][]): Vec2[][] {
   return out
 }
 
+/** What the board itself draws: its texts (with their boxes) and the vertices of its lines, in plot px. */
+interface BoardInk {
+  texts: Array<{ text: string; x: number; y: number; anchor: 'start' | 'middle' | 'end'; box: { x0: number; y0: number; x1: number; y1: number } }>
+  ink: Vec2[]
+  /** An answer key's points the board found no room to label. */
+  unlabelled: SpecialPoint[]
+  /** The board was drawn (false: every label is placed here, every tick numbered). */
+  ok: boolean
+}
+
+function safeBand(f: () => number): number {
+  try {
+    const v = f()
+    return Number.isFinite(v) && v > 0 ? v : 0
+  } catch {
+    return 0
+  }
+}
+
+function recordBoard(scene: BoardScene, bottom: number): BoardInk {
+  const out: BoardInk = { texts: [], ink: [], unlabelled: [], ok: false }
+  try {
+    const rec = new VectorCtx(scene.vp.widthPx, scene.vp.heightPx)
+    // A copy of the key's bookkeeping: drawing must not add to the scene's own.
+    const copy: BoardScene = scene.answerKey ? { ...scene, answerKey: { ...scene.answerKey, unlabelled: [] } } : scene
+    renderBoard(rec as unknown as CanvasRenderingContext2D, copy)
+    if (copy.answerKey) out.unlabelled = copy.answerKey.unlabelled
+    out.ok = true
+    for (const it of rec.list().items) {
+      if (it.t === 'text') {
+        if (it.y - it.font.size * 0.8 >= bottom) continue
+        const size = it.font.size
+        const x0 = it.anchor === 'middle' ? it.x - it.width / 2 : it.anchor === 'end' ? it.x - it.width : it.x
+        out.texts.push({
+          text: it.text.replace(/\s+/g, ' ').trim(),
+          x: it.x,
+          y: it.y,
+          anchor: it.anchor,
+          box: { x0, y0: it.y - size * 0.8, x1: x0 + it.width, y1: it.y + size * 0.25 },
+        })
+      } else if (it.stroke) {
+        // Densify straight runs a little, so a long line still counts.
+        let prev: Vec2 | null = null
+        for (const sg of it.segs) {
+          if (sg.k === 'Z') continue
+          const p = { x: sg.x, y: sg.y }
+          if (prev && sg.k === 'L') {
+            const n = Math.min(40, Math.floor(Math.hypot(p.x - prev.x, p.y - prev.y) / 6))
+            for (let i = 1; i < n; i++) out.ink.push({ x: prev.x + ((p.x - prev.x) * i) / n, y: prev.y + ((p.y - prev.y) * i) / n })
+          }
+          out.ink.push(p)
+          prev = p
+        }
+      }
+    }
+  } catch {
+    /* no board: every label is placed on its own */
+  }
+  return out
+}
+
 /**
  * The curve as the board draws it, in math coordinates: one run per pen-down
  * stretch, so a pole or a jump is a new \addplot.
@@ -551,8 +621,27 @@ export function sampledRuns(curve: FittedCurve, models: Record<string, ModelSpec
       if (s.k === 'M') {
         if (cur.length > 1) runs.push(cur)
         cur = [{ x: s.x, y: s.y }]
-      } else if (s.k === 'L' || s.k === 'C' || s.k === 'A') {
+      } else if (s.k === 'C') {
+        // A Bézier is followed, not cut to its chord.
+        const p0 = cur[cur.length - 1] ?? { x: s.x, y: s.y }
+        for (let i = 1; i <= 8; i++) {
+          const t = i / 8
+          const u = 1 - t
+          cur.push({
+            x: u * u * u * p0.x + 3 * u * u * t * s.x1 + 3 * u * t * t * s.x2 + t * t * t * s.x,
+            y: u * u * u * p0.y + 3 * u * u * t * s.y1 + 3 * u * t * t * s.y2 + t * t * t * s.y,
+          })
+        }
+      } else if (s.k === 'A') {
+        const n = Math.max(2, Math.ceil(Math.abs(s.sweep) / (Math.PI / 24)))
+        for (let i = 1; i <= n; i++) {
+          const a = s.a0 + (s.sweep * i) / n
+          cur.push({ x: s.cx + s.r * Math.cos(a), y: s.cy + s.r * Math.sin(a) })
+        }
+      } else if (s.k === 'L') {
         cur.push({ x: s.x, y: s.y })
+      } else if (s.k === 'Z' && cur.length > 1) {
+        cur.push({ ...cur[0] })
       }
     }
     if (cur.length > 1) runs.push(cur)
@@ -576,6 +665,11 @@ export interface PgfplotsOptions {
   title?: string
 }
 
+/** What every pgfplots export needs in the preamble (it loads tikz and xcolor). */
+export const PGFPLOTS_PREAMBLE: readonly string[] = ['\\usepackage{pgfplots}', '\\pgfplotsset{compat=1.18}']
+/** …and a figure with a shaded area (\addplot fill between) needs this too. */
+export const PGFPLOTS_FILLBETWEEN = '\\usepgfplotslibrary{fillbetween}'
+
 /** Coordinates per line in a coordinates {…} block. */
 const PER_LINE = 6
 
@@ -587,7 +681,12 @@ export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): strin
   const xmin = vp.center.x - vp.widthPx / 2 / ppx
   const xmax = vp.center.x + vp.widthPx / 2 / ppx
   const captioned = typeof scene.caption === 'string' && scene.caption.trim() !== ''
-  const band = captioned ? captionHeight(scene.present, scene.caption, vp.widthPx) : 0
+  // The caption's band is cut from the bottom of the plot, as on the board —
+  // unless it would leave the axis (almost) no height: the caption is not
+  // drawn here anyway (it belongs in \caption{…}), and pgfplots cannot make
+  // an axis of zero or negative height.
+  const capBand = captioned ? captionHeight(scene.present, scene.caption, vp.widthPx) : 0
+  const band = capBand <= vp.heightPx * 0.5 ? capBand : 0
   const ymin = vp.center.y - (vp.heightPx / 2 - band) / ppy
   const ymax = vp.center.y + vp.heightPx / 2 / ppy
   const spanY = ymax - ymin
@@ -630,12 +729,71 @@ export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): strin
     for (let i = 0; i < cs.length; i += PER_LINE) out.push(cs.slice(i, i + PER_LINE).join(' '))
     return out.join('\n    ')
   }
+
+  // ---- NO DIMENSION TOO LARGE ---------------------------------------------
+  // pgfplots turns every coordinate into a TeX length on the way to the page,
+  // and a far-off one (an ε band drawn to ±10¹², a solution curve that runs
+  // to 10⁶, an axis of revolution) stops pdflatex with "Dimension too large"
+  // or "Number too big". The axis clips to its window, so every path is first
+  // cut to the window padded by its own size on each side — exactly (Liang–
+  // Barsky for lines, Sutherland–Hodgman for fills); what is visible is
+  // unchanged.
+  const spanX = xmax - xmin
+  const far: Box = { x0: xmin - spanX, x1: xmax + spanX, y0: ymin - spanY, y1: ymax + spanY }
+  const inFar = (p: Vec2): boolean => p.x >= far.x0 && p.x <= far.x1 && p.y >= far.y0 && p.y <= far.y1
+  /** An open polyline cut to the padded window: the runs that remain. */
+  const clipRuns = (pts: readonly Vec2[]): Vec2[][] => {
+    const out: Vec2[][] = []
+    let run: Vec2[] = []
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const c = clipSegment(far, pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y)
+      if (!c) {
+        if (run.length > 1) out.push(run)
+        run = []
+        continue
+      }
+      const last = run[run.length - 1]
+      if (!last || last.x !== c[0] || last.y !== c[1]) {
+        if (run.length > 1) out.push(run)
+        run = [{ x: c[0], y: c[1] }]
+      }
+      run.push({ x: c[2], y: c[3] })
+    }
+    if (run.length > 1) out.push(run)
+    if (out.length === 0 && pts.length === 1 && inFar(pts[0])) out.push([pts[0]])
+    return out
+  }
+  /** A closed polygon cut to the padded window, as "(x,y) -- … -- cycle", or null. */
+  const polyPath = (pts: readonly Vec2[]): string | null => {
+    const cut = pts.every(inFar) ? pts.map((p): [number, number] => [p.x, p.y]) : clipPolygon(far, pts.map((p): [number, number] => [p.x, p.y]))
+    if (cut.length < 3) return null
+    const parts = cut.map(([x, y]) => P(x, y))
+    const rows: string[] = []
+    for (let i = 0; i < parts.length; i += PER_LINE) rows.push(parts.slice(i, i + PER_LINE).join(' -- '))
+    return `${rows.join(' --\n    ')} -- cycle`
+  }
+  /** An open path as "(x,y) -- (x,y) …", one per run that survives the cut. */
+  const linePaths = (pts: readonly Vec2[]): string[] =>
+    clipRuns(pts)
+      .filter((r) => r.length > 1)
+      .map((r) => {
+        const parts = r.map((p) => P(p.x, p.y))
+        const rows: string[] = []
+        for (let i = 0; i < parts.length; i += PER_LINE) rows.push(parts.slice(i, i + PER_LINE).join(' -- '))
+        return rows.join(' --\n    ')
+      })
+  const clampX = (v: number): number => Math.max(far.x0, Math.min(far.x1, v))
+  const clampY = (v: number): number => Math.max(far.y0, Math.min(far.y1, v))
   // One mark per point and style, one label per point and text: the analysis
   // list can name a point twice (a vertex that is also the y-intercept).
   const markSeen = new Set<string>()
   const labelSeen = new Set<string>()
-  const marks = (pts: readonly Vec2[], col: string, hollow: boolean | 'diamond', size = 1.8): void => {
-    const m = hollow === 'diamond' ? 'mark=diamond*' : hollow ? `mark=o, mark options={fill=white}` : 'mark=*'
+  const marks = (pts: readonly Vec2[], col: string, hollow: boolean | 'diamond' | 'square' | 'cross', size = 1.8): void => {
+    const m =
+      hollow === 'diamond' ? 'mark=diamond*'
+        : hollow === 'square' ? 'mark=square*'
+          : hollow === 'cross' ? 'mark=x'
+            : hollow ? `mark=o, mark options={fill=white}` : 'mark=*'
     const style = `only marks, ${m}, mark size=${hollow === 'diamond' ? size + 0.4 : size}pt, color=${colour(col)}`
     const inside = pts.filter((p) => {
       if (!(p.x >= xmin && p.x <= xmax && p.y >= ymin && p.y <= ymax)) return false
@@ -647,13 +805,129 @@ export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): strin
     if (inside.length === 0) return
     add(`\\addplot[${style}, forget plot] coordinates {${coords(inside)}};`)
   }
-  const label = (at: Vec2, text: string, col: string, anchor = 'south west'): void => {
-    const body = texLabel(text)
+  // ---- WHERE A LABEL GOES ---------------------------------------------------
+  // The board has already decided where every chip, curve name and tag
+  // goes — clear of the curves, the markers and each other (renderBoard's
+  // placer). So the scene is drawn once more into a recording, and a label
+  // whose words the board drew near the same point is put exactly there. A
+  // label the board found no room for (an answer key states those under the
+  // figure) is placed here instead: the first of eight spots around its point
+  // that stays inside the axis and off every text and line already drawn.
+  // (Only what the board drew over the GRAPH: the sign-chart strips and the
+  // caption under it have row names and words of their own.)
+  const graphBottom = vp.heightPx - capBand - safeBand(() => signBandHeight(scene.signCharts ?? [], scene.present))
+  const board = recordBoard(scene, graphBottom)
+  const toAxis = (px: number, py: number): Vec2 => toMath({ x: px, y: py }, vp)
+  const fromAxis = (p: Vec2): Vec2 => ({ x: (p.x - xmin) * ppx, y: (ymax - p.y) * ppy })
+  const used = new Set<number>()
+  /** A board text a LATER chip's plate covers: one the board's figure does not show. */
+  const covered = (i: number): boolean => {
+    const b = board.texts[i].box
+    return board.texts.some(
+      (u, j) =>
+        j > i &&
+        Math.min(b.x1, u.box.x1 + 3) > Math.max(b.x0, u.box.x0 - 3) &&
+        Math.min(b.y1, u.box.y1 + 3) > Math.max(b.y0, u.box.y0 - 3),
+    )
+  }
+  const boxes: Array<{ x0: number; y0: number; x1: number; y1: number }> = board.texts.map((t) => t.box)
+  const LABEL_PX = 8 / 0.75 // \footnotesize, in CSS px
+  const placeFree = (pt: Vec2, text: string): { anchor: string; box: { x0: number; y0: number; x1: number; y1: number } } => {
+    // CM is a little wider than the board's sans: allow for it.
+    const w = textWidthEstimate(text, 'sans-serif') * LABEL_PX * 1.12
+    const h = LABEL_PX * 1.15
+    const g = 2 / 0.75 + 1 // inner sep 2pt, and a pixel
+    const spots: Array<[string, number, number]> = [
+      ['south west', g, -g - h], ['south east', -g - w, -g - h], ['north west', g, g], ['north east', -g - w, g],
+      ['south', -w / 2, -g - h], ['north', -w / 2, g], ['west', g, -h / 2], ['east', -g - w, -h / 2],
+    ]
+    let best: { anchor: string; box: { x0: number; y0: number; x1: number; y1: number } } | null = null
+    let bestCost = Infinity
+    for (const [anchor, dx, dy] of spots) {
+      const box = { x0: pt.x + dx, y0: pt.y + dy, x1: pt.x + dx + w, y1: pt.y + dy + h }
+      let cost = 0
+      if (box.x0 < 0 || box.y0 < 0 || box.x1 > vp.widthPx || box.y1 > vp.heightPx - band) cost += 1000
+      for (const b of boxes) {
+        const ox = Math.min(box.x1, b.x1) - Math.max(box.x0, b.x0)
+        const oy = Math.min(box.y1, b.y1) - Math.max(box.y0, b.y0)
+        if (ox > 0 && oy > 0) cost += 20 + (ox * oy) / 4
+      }
+      for (const v of board.ink) if (v.x > box.x0 && v.x < box.x1 && v.y > box.y0 && v.y < box.y1) cost += 3
+      if (cost < bestCost) {
+        bestCost = cost
+        best = { anchor, box }
+      }
+    }
+    return best!
+  }
+  /**
+   * Put `body` where the board drew `words` (near `pt`, when given): true when
+   * the board did draw them, false to place the label some other way.
+   */
+  const boardLabel = (words: string, pt: Vec2 | null, body: string, col: string): boolean => {
+    let spot = -1
+    let near = pt ? 90 : Infinity
+    board.texts.forEach((t, i) => {
+      if (used.has(i) || t.text !== words) return
+      const d = pt
+        ? Math.hypot(Math.max(t.box.x0, Math.min(t.box.x1, pt.x)) - pt.x, Math.max(t.box.y0, Math.min(t.box.y1, pt.y)) - pt.y)
+        : 0
+      if (d < near) {
+        near = d
+        spot = i
+      }
+    })
+    if (spot < 0) return false
+    used.add(spot)
+    const t = board.texts[spot]
+    // Pinned on the side that faces the point, so type a little wider than
+    // the board's grows AWAY from the marker it labels.
+    let ax = t.anchor === 'middle' ? (t.box.x0 + t.box.x1) / 2 : t.anchor === 'end' ? t.box.x1 : t.box.x0
+    let base = t.anchor === 'middle' ? 'base' : t.anchor === 'end' ? 'base east' : 'base west'
+    if (pt && pt.x >= t.box.x1) {
+      ax = t.box.x1
+      base = 'base east'
+    } else if (pt && pt.x <= t.box.x0) {
+      ax = t.box.x0
+      base = 'base west'
+    } else if (pt) {
+      ax = (t.box.x0 + t.box.x1) / 2
+      base = 'base'
+    }
+    const a = toAxis(ax, t.y)
+    if (!(a.x >= xmin && a.x <= xmax && a.y >= ymin && a.y <= ymax)) return false
+    if (pt) {
+      // A chip the board set well away from its point gets the board's thin
+      // leader line, from the point to the nearest edge of the words.
+      const ex = Math.max(t.box.x0, Math.min(t.box.x1, pt.x))
+      const ey = Math.max(t.box.y0, Math.min(t.box.y1, pt.y))
+      if (Math.hypot(ex - pt.x, ey - pt.y) > 14) {
+        const e = toAxis(ex, ey)
+        add(`\\draw[${colour(theme.label)}, very thin] (axis cs:${pgfNum(round(toAxis(pt.x, pt.y).x))},${pgfNum(round(toAxis(pt.x, pt.y).y))}) -- (axis cs:${pgfNum(round(e.x))},${pgfNum(round(e.y))});`)
+      }
+    }
+    // A point's chip sits on a plate, as on the board: the grid and an axis
+    // passing under it stay out of the numbers.
+    const plate = pt ? ', fill=white, fill opacity=0.9, text opacity=1, inner sep=0.8pt' : ', inner sep=0pt'
+    add(`\\node[anchor=${base}${plate}, font=\\footnotesize, text=${colour(col)}] at (axis cs:${pgfNum(round(a.x))},${pgfNum(round(a.y))}) {${body}};`)
+    return true
+  }
+  const label = (at: Vec2, text: string, col: string, anchor = 'south west', boardOnly = false): void => {
+    const body = texLabel(text, { slash: true })
     if (body === '' || at.x < xmin || at.x > xmax || at.y < ymin || at.y > ymax) return
     const where = `${pgfNum(round(at.x))},${pgfNum(round(at.y))}`
     if (labelSeen.has(`${where}|${body}`)) return
     labelSeen.add(`${where}|${body}`)
-    add(`\\node[anchor=${anchor}, inner sep=2pt, font=\\footnotesize, text=${colour(col)}] at (axis cs:${where}) {${body}};`)
+    const pt = fromAxis(at)
+    const words = text.replace(/\s+/g, ' ').trim()
+    if (boardLabel(words, pt, body, col)) return
+    // A key's chip the board chose not to draw (a point it already names in
+    // another chip) is not drawn here either.
+    if (boardOnly) return
+    // A unit circle's point says which side it wants; everything else is placed.
+    const free = anchor === 'south west' ? placeFree(pt, words) : null
+    if (free) boxes.push(free.box)
+    add(`\\node[anchor=${free ? free.anchor : anchor}, inner sep=2pt, font=\\footnotesize, text=${colour(col)}] at (axis cs:${where}) {${body}};`)
   }
 
   const usesFillBetween = { on: false }
@@ -734,30 +1008,39 @@ export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): strin
         const col = colour(ink(ov.color ?? c?.color ?? '#000000'))
         add('% Riemann rectangles')
         for (const r of ov.rects) {
-          add(`\\draw[fill=${col}, fill opacity=${num(fillAlpha(), 3)}, draw=${col}] ${P(r.x0, 0)} rectangle ${P(r.x1, r.height)};`)
+          if (![r.x0, r.x1, r.height].every(Number.isFinite)) continue
+          add(`\\draw[fill=${col}, fill opacity=${num(fillAlpha(), 3)}, draw=${col}] ${P(clampX(r.x0), clampY(0))} rectangle ${P(clampX(r.x1), clampY(r.height))};`)
         }
         break
       }
       case 'region': {
         const col = colour(ink(ov.color ?? '#000000'))
-        add(`\\fill[${col}, fill opacity=${num(fillAlpha(ov.alpha), 3)}] ${ov.boundary.map((p) => P(p.x, p.y)).join(' -- ')} -- cycle;`)
+        const path = polyPath(ov.boundary)
+        if (path) add(`\\fill[${col}, fill opacity=${num(fillAlpha(ov.alpha), 3)}] ${path};`)
         break
       }
       case 'segment': {
         const c = ov.curveId ? curveById.get(ov.curveId) : undefined
         const col = colour(ink(ov.color ?? c?.color ?? '#000000'))
-        add(`\\draw[${col}${ov.dashed ? ', dashed' : ''}] ${P(ov.from.x, ov.from.y)} -- ${P(ov.to.x, ov.to.y)};`)
+        for (const path of linePaths([ov.from, ov.to])) add(`\\draw[${col}${ov.dashed ? ', dashed' : ''}] ${path};`)
         break
       }
       case 'line': {
         const c = ov.curveId ? curveById.get(ov.curveId) : undefined
         const col = colour(ink(ov.color ?? c?.color ?? '#000000'))
-        add(`\\addplot[${col}${ov.dashed ? ', dashed' : ''}, domain=${pgfNum(round(xmin))}:${pgfNum(round(xmax))}, samples=2, forget plot] {${pgfNum(ov.at.y)} + ${pgfNum(ov.slope)}*(x - ${pgfNum(ov.at.x)})};`)
+        // The formula stays editable; its domain is the stretch of the window
+        // where the line is near enough to be drawn (a steep tangent's y
+        // would otherwise run past what TeX can hold).
+        const yAt = (x: number): number => ov.at.y + ov.slope * (x - ov.at.x)
+        const cut = clipSegment(far, xmin, yAt(xmin), xmax, yAt(xmax))
+        if (!cut || !(cut[2] > cut[0])) break
+        add(`\\addplot[${col}${ov.dashed ? ', dashed' : ''}, domain=${pgfNum(round(cut[0]))}:${pgfNum(round(cut[2]))}, samples=2, forget plot] {${pgfNum(ov.at.y)} + ${pgfNum(ov.slope)}*(x - ${pgfNum(ov.at.x)})};`)
         break
       }
       case 'hline': {
         const c = ov.curveId ? curveById.get(ov.curveId) : undefined
         const col = colour(ink(ov.color ?? c?.color ?? '#000000'))
+        if (!(ov.y >= far.y0 && ov.y <= far.y1)) break
         add(`\\addplot[${col}${ov.dashed ? ', dashed' : ''}, forget plot] coordinates {${P(xmin, ov.y)} ${P(xmax, ov.y)}};`)
         break
       }
@@ -771,13 +1054,92 @@ export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): strin
         label(ov.at, ov.text, ink(ov.color ?? c?.color ?? theme.label))
         break
       }
+      case 'band': {
+        // The Lagrange error band: Pₙ ± R(x), one filled strip per run of x
+        // where both edges are defined.
+        const c = curveById.get(ov.curveId)
+        const col = colour(ink(ov.color ?? c?.color ?? '#000000'))
+        const n = Math.min(ov.xs.length, ov.lo.length, ov.hi.length)
+        let top: Vec2[] = []
+        let bot: Vec2[] = []
+        const flush = (): void => {
+          if (top.length >= 2) {
+            const path = polyPath([...top, ...bot.reverse()])
+            if (path) add(`\\fill[${col}, fill opacity=${num(fillAlpha(ov.alpha), 3)}] ${path};`)
+          }
+          top = []
+          bot = []
+        }
+        for (let i = 0; i < n; i++) {
+          const x = ov.xs[i]
+          const a = ov.lo[i]
+          const b = ov.hi[i]
+          if (!Number.isFinite(x) || !Number.isFinite(a) || !Number.isFinite(b) || x < far.x0 || x > far.x1) {
+            flush()
+            continue
+          }
+          top.push({ x, y: clampY(Math.max(a, b)) })
+          bot.push({ x, y: clampY(Math.min(a, b)) })
+        }
+        flush()
+        break
+      }
+      case 'axisStrip': {
+        // The interval of convergence ON the x-axis: a thick bar, ● / ○ at
+        // its finite ends, running off the axis where an end is infinite.
+        const c = curveById.get(ov.curveId)
+        const css = ink(ov.color ?? c?.color ?? '#000000')
+        const lo = Math.max(xmin, Math.min(ov.from, ov.to))
+        const hi = Math.min(xmax, Math.max(ov.from, ov.to))
+        if (!(hi >= lo) || !(ymin <= 0 && ymax >= 0)) break
+        add(`\\draw[${colour(css)}, line width=3pt, opacity=${num(Math.max(0.35, fillAlpha(ov.alpha)), 3)}] ${P(lo, 0)} -- ${P(hi, 0)};`)
+        if (Number.isFinite(ov.from) && Number.isFinite(ov.to)) {
+          const ends: Array<[number, typeof ov.left]> = [[Math.min(ov.from, ov.to), ov.from <= ov.to ? ov.left : ov.right], [Math.max(ov.from, ov.to), ov.from <= ov.to ? ov.right : ov.left]]
+          for (const [x, end] of ends) if (end !== 'none') marks([{ x, y: 0 }], css, end === 'open', 2.2)
+        } else {
+          if (Number.isFinite(Math.min(ov.from, ov.to)) && ov.left !== 'none') marks([{ x: Math.min(ov.from, ov.to), y: 0 }], css, ov.left === 'open', 2.2)
+          if (Number.isFinite(Math.max(ov.from, ov.to)) && ov.right !== 'none') marks([{ x: Math.max(ov.from, ov.to), y: 0 }], css, ov.right === 'open', 2.2)
+        }
+        break
+      }
+      case 'ghost': {
+        // A restricted line's whole graph, faint and dashed, sampled.
+        const c = ov.curveId ? curveById.get(ov.curveId) : undefined
+        const col = colour(ink(ov.color ?? c?.color ?? '#000000'))
+        const runs: Vec2[][] = []
+        let run: Vec2[] = []
+        for (let i = 0; i <= 240; i++) {
+          const x = xmin + ((xmax - xmin) * i) / 240
+          let y = Number.NaN
+          try {
+            y = ov.f(x)
+          } catch {
+            y = Number.NaN
+          }
+          if (Number.isFinite(y)) run.push({ x, y })
+          else {
+            if (run.length > 1) runs.push(run)
+            run = []
+          }
+        }
+        if (run.length > 1) runs.push(run)
+        for (const r of runs.flatMap(clipRuns)) {
+          add(`\\addplot[${col}, dashed, opacity=${num(Math.min(0.6, ov.alpha ?? 0.45), 3)}, forget plot] coordinates {${coords(r)}};`)
+        }
+        break
+      }
       case 'path': {
         const c = ov.curveId ? curveById.get(ov.curveId) : undefined
         const col = colour(ink(ov.color ?? c?.color ?? '#000000'))
         const o = [col]
         if (ov.dashed) o.push('dashed')
         if (ov.fill !== undefined) o.push(`fill=${col}`, `fill opacity=${num(fillAlpha(ov.alpha), 3)}`)
-        add(`\\draw[${o.join(', ')}] ${ov.points.map((p) => P(p.x, p.y)).join(' -- ')}${ov.closed ? ' -- cycle' : ''};`)
+        if (ov.closed) {
+          const path = polyPath(ov.points)
+          if (path) add(`\\draw[${o.join(', ')}] ${path};`)
+        } else {
+          for (const path of linePaths(ov.points)) add(`\\draw[${o.join(', ')}] ${path};`)
+        }
         break
       }
       default:
@@ -785,11 +1147,41 @@ export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): strin
     }
   }
 
-  if ((scene.fields ?? []).some((f) => f.visible)) notExported.push('the slope field (the TikZ export draws it)')
+  // ---- slope fields: the board's own lattice, as short segments ------------
+  for (const field of scene.fields ?? []) {
+    if (!field?.visible) continue
+    try {
+      const rec = new VectorCtx(vp.widthPx, vp.heightPx)
+      drawSlopeFields(rec as unknown as CanvasRenderingContext2D, [field], { vp, scale: scene.present ?? null })
+      const parts: string[] = []
+      for (const it of rec.list().items) {
+        if (it.t !== 'path') continue
+        let from: Vec2 | null = null
+        for (const sg of it.segs) {
+          if (sg.k === 'M') from = toMath({ x: sg.x, y: sg.y }, vp)
+          else if (sg.k === 'L' && from) {
+            const to = toMath({ x: sg.x, y: sg.y }, vp)
+            parts.push(`${P(from.x, from.y)} -- ${P(to.x, to.y)}`)
+            from = null
+          }
+        }
+      }
+      if (parts.length === 0) continue
+      add(`% slope field: ${texCommentSafe(field.latex ?? '')}`)
+      const rows: string[] = []
+      for (let i = 0; i < parts.length; i += 4) rows.push(parts.slice(i, i + 4).join(' '))
+      add(`\\draw[${colour(ink(field.color))}, line width=0.4pt, opacity=${num(FIELD_ALPHA, 3)}, line cap=round] ${rows.join('\n    ')};`)
+    } catch {
+      notExported.push('a slope field that could not be drawn')
+    }
+  }
+  if ((scene.signCharts ?? []).length > 0) notExported.push('the sign-chart strips under the graph (the TikZ export draws them)')
 
   for (const pl of scene.polylines ?? []) {
     if (pl.pts.length < 2) continue
-    add(`\\addplot[${colour(ink(pl.color))}${pl.dash && pl.dash.length > 0 ? ', dashed' : ''}, forget plot] coordinates {${coords(pl.pts)}};`)
+    for (const r of clipRuns(pl.pts)) {
+      add(`\\addplot[${colour(ink(pl.color))}${pl.dash && pl.dash.length > 0 ? ', dashed' : ''}, forget plot] coordinates {${coords(r)}};`)
+    }
   }
 
   // ---- two-variable inequalities: the shaded regions -----------------------
@@ -809,7 +1201,8 @@ export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): strin
     const fillPolys = (polys: Vec2[][], col: string, alpha: number): void => {
       for (const poly of polys) {
         if (poly.length < 3) continue
-        add(`\\fill[${col}, fill opacity=${num(alpha, 3)}] ${poly.map((p) => P(p.x, p.y)).join(' -- ')} -- cycle;`)
+        const path = polyPath(poly)
+        if (path) add(`\\fill[${col}, fill opacity=${num(alpha, 3)}] ${path};`)
       }
     }
     const ropts = { cols: 160, rows: 120 }
@@ -916,14 +1309,15 @@ export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): strin
     } else {
       add(`% sampled from the board: ${t.reason}`)
       const runs = sampledRuns(c, scene.models, vp)
-      for (const run of runs) {
+      for (const run of runs.flatMap(clipRuns)) {
         if (run.length < 2) continue
         add(`\\addplot[${o.join(', ')}] coordinates {${coords(run)}};`)
         lastPlot = lines.length - 1
       }
       if (caps && (caps.start === 'arrow' || caps.end === 'arrow')) notExported.push('arrowheads on sampled curves')
     }
-    if (name && lastPlot >= 0) {
+    // The curve's name where the board put it; failing that, near its end.
+    if (name && lastPlot >= 0 && !boardLabel(name, null, texLabel(name), ink(c.color))) {
       lines[lastPlot] = lines[lastPlot].replace(/;$/, ` node[pos=0.92, anchor=south east, font=\\footnotesize] {${texLabel(name)}};`)
     }
 
@@ -965,7 +1359,9 @@ export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): strin
             } else if (Math.abs(a.dir.x) > 1e-12) {
               const m = a.dir.y / a.dir.x
               const yAt = (x: number): number => a.a.y + m * (x - a.a.x)
-              add(`\\addplot[${col}, dashed, thin, forget plot] coordinates {${P(xmin, yAt(xmin))} ${P(xmax, yAt(xmax))}};`)
+              for (const r of clipRuns([{ x: xmin, y: yAt(xmin) }, { x: xmax, y: yAt(xmax) }])) {
+                add(`\\addplot[${col}, dashed, thin, forget plot] coordinates {${coords(r)}};`)
+              }
             } else {
               add(`\\addplot[${col}, dashed, thin, forget plot] coordinates {${P(a.a.x, ymin)} ${P(a.a.x, ymax)}};`)
             }
@@ -982,11 +1378,13 @@ export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): strin
     if (!s.visible) continue
     const pts: Vec2[] = []
     for (let i = 0; i < Math.min(s.xs.length, s.ys.length); i++) pts.push({ x: s.xs[i], y: s.ys[i] })
-    marks(pts, ink(s.color), s.marker === 'ring', 1.5)
+    marks(pts, ink(s.color), s.marker === 'square' ? 'square' : s.marker === 'cross' ? 'cross' : s.marker === 'ring', 1.5)
   }
   for (const e of scene.eulers ?? []) {
     if (e.pts.length === 0) continue
-    add(`\\addplot[${colour(ink(e.color))}${e.dash && e.dash.length > 0 ? ', dashed' : ''}, mark=*, mark size=1.3pt, forget plot] coordinates {${coords(e.pts)}};`)
+    for (const r of clipRuns(e.pts)) {
+      add(`\\addplot[${colour(ink(e.color))}${e.dash && e.dash.length > 0 ? ', dashed' : ''}, mark=*, mark size=1.3pt, forget plot] coordinates {${coords(r)}};`)
+    }
     if (e.tag) label(e.pts[e.pts.length - 1], e.tag, ink(e.color))
   }
   for (const sh of scene.shapes ?? []) {
@@ -998,15 +1396,21 @@ export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): strin
         if (sh.label) label(sh.at, sh.label, ink(sh.color))
         break
       case 'segment':
-        add(`\\draw[${col}, thick] ${P(sh.a.x, sh.a.y)} -- ${P(sh.b.x, sh.b.y)};`)
+        for (const path of linePaths([sh.a, sh.b])) add(`\\draw[${col}, thick] ${path};`)
+        // Its endpoints dotted and named, as the board draws them.
+        marks([sh.a, sh.b], ink(sh.color), false, 1.5)
+        if (sh.labels?.[0]) label(sh.a, sh.labels[0], ink(sh.color))
+        if (sh.labels?.[1]) label(sh.b, sh.labels[1], ink(sh.color))
         break
       case 'vector':
-        add(`\\draw[${col}, thick, ->] ${P(sh.tail.x, sh.tail.y)} -- ${P(sh.tail.x + sh.v.x, sh.tail.y + sh.v.y)};`)
+        for (const path of linePaths([sh.tail, { x: sh.tail.x + sh.v.x, y: sh.tail.y + sh.v.y }])) add(`\\draw[${col}, thick, ->] ${path};`)
         if (sh.label) label({ x: sh.tail.x + sh.v.x / 2, y: sh.tail.y + sh.v.y / 2 }, sh.label, ink(sh.color))
         break
       case 'polygon': {
         const fill = sh.fill ? `, fill=${col}, fill opacity=${num(fillAlpha(), 3)}` : ''
-        add(`\\draw[${col}, thick${fill}] ${sh.pts.map((p) => P(p.x, p.y)).join(' -- ')} -- cycle;`)
+        const path = polyPath(sh.pts)
+        if (path) add(`\\draw[${col}, thick${fill}] ${path};`)
+        marks(sh.pts, ink(sh.color), false, 1.5)
         sh.labels?.forEach((l, i) => {
           if (l && sh.pts[i]) label(sh.pts[i], l, ink(sh.color))
         })
@@ -1023,6 +1427,7 @@ export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): strin
   // the TikZ export's, and the header says so.
   for (const f of scene.unitCircles ?? []) {
     if (!f?.visible || ![f.center.x, f.center.y, f.theta].every(Number.isFinite)) continue
+    if (!inFar(f.center)) continue
     const col = colour(ink(f.color))
     const { x: cx, y: cy } = f.center
     const ring: Vec2[] = []
@@ -1052,6 +1457,7 @@ export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): strin
   for (const d of dotsAll) marks([d.at], d.col, !d.closed)
 
   const filled = fig?.pointStyle === 'filled'
+  const key = scene.answerKey ?? null
   const pointMarks = (points: readonly SpecialPoint[], col: string, labels: boolean): void => {
     for (const p of points) {
       if (!p?.pos || !Number.isFinite(p.pos.x) || !Number.isFinite(p.pos.y)) continue
@@ -1062,15 +1468,26 @@ export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): strin
         else marks([p.pos], col, false)
       }
       if (labels) {
+        // An answer key states what the board found no room for under the
+        // figure, as the board's own key does — never a pile of chips.
+        // (The board states a place once: a vertex that is also the
+        // y-intercept is one answer, so a point where an unlabelled one sits
+        // is not labelled either.)
+        if (key) {
+          const same = (u: SpecialPoint): boolean => u === p || (Math.abs(u.pos.x - p.pos.x) * ppx < 1 && Math.abs(u.pos.y - p.pos.y) * ppy < 1)
+          if (board.unlabelled.some((u) => u === p)) continue
+          if (board.unlabelled.some(same)) continue
+        }
         const text = pointText(p, { decimal: false }) + (p.kind === 'zero' && p.tangent ? ' (touches)' : '')
-        label(p.pos, text, theme.label)
+        label(p.pos, text, theme.label, 'south west', key !== null && board.ok)
       }
     }
   }
   const an = scene.analysis
   if (an && an.curve.visible) pointMarks(an.points, ink(an.curve.color), true)
   for (const m of opts.extraMarkers ?? []) {
-    if (m.curve.visible) pointMarks(m.points, ink(m.curve.color), false)
+    // The key labels every visible curve's points; otherwise only the selected curve's.
+    if (m.curve.visible) pointMarks(m.points, ink(m.curve.color), key !== null)
   }
   const shown = new Set(scene.curves.filter((c) => c.visible).map((c) => c.id))
   const crossings = (scene.intersections ?? []).filter((m) => shown.has(m.curveId) && shown.has(m.point.withId ?? ''))
@@ -1130,6 +1547,19 @@ export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): strin
   }
   const xs = ticksFor(stepFor(units.x, ppx), xmin, xmax, ppx, true)
   const ys = ticksFor(stepFor(units.y, ppy), ymin, ymax, ppy, false)
+  // A number the board left out — under a chip, a curve name, the origin's
+  // 0 — is left out here too (the tick stays, its label is blank), so a
+  // label placed where the board put it never lands on a tick number.
+  if (board.ok) {
+    const drawn = (text: string, at: number, horizontal: boolean): boolean =>
+      board.texts.some((t, i) => {
+        if (t.text !== text) return false
+        const c = horizontal ? (t.box.x0 + t.box.x1) / 2 : (t.box.y0 + t.box.y1) / 2
+        return Math.abs(c - at) < 14 && !covered(i)
+      })
+    for (const t of xs.major) if (!drawn(t.text, (t.v - xmin) * ppx, true)) t.text = ''
+    for (const t of ys.major) if (!drawn(t.text, (ymax - t.v) * ppy, false)) t.text = ''
+  }
   const list = (vs: readonly number[]): string => vs.map((v) => pgfNum(round(v))).join(', ')
 
   const arrows = st?.arrows ?? 'four'
@@ -1171,8 +1601,22 @@ export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): strin
   if (st?.font === 'serif') axisOpts.push('font=\\rmfamily')
 
   // The origin: O in the exam style, 0 otherwise — once, below-left.
+  // Like every tick number, it follows the board: where the board drew it, and
+  // not at all when the board left it out or a chip covers (or took) it.
   if (xmin < 0 && xmax > 0 && ymin < 0 && ymax > 0) {
-    add(`\\node[anchor=north east, inner sep=2pt, font=\\footnotesize, text=${colour(theme.label)}] at (axis cs:0,0) {${st?.originLabel ? '$O$' : '$0$'}};`)
+    const body = st?.originLabel ? '$O$' : '$0$'
+    const o = fromAxis({ x: 0, y: 0 })
+    const i = board.texts.findIndex(
+      (t) => (t.text === '0' || t.text === 'O') && Math.hypot((t.box.x0 + t.box.x1) / 2 - o.x, (t.box.y0 + t.box.y1) / 2 - o.y) < 24,
+    )
+    if (!board.ok) {
+      add(`\\node[anchor=north east, inner sep=2pt, font=\\footnotesize, text=${colour(theme.label)}] at (axis cs:0,0) {${body}};`)
+    } else if (i >= 0 && !used.has(i) && !covered(i)) {
+      const t = board.texts[i]
+      const a = toAxis(t.x, t.y)
+      const base = t.anchor === 'middle' ? 'base' : t.anchor === 'end' ? 'base east' : 'base west'
+      add(`\\node[anchor=${base}, inner sep=0pt, font=\\footnotesize, text=${colour(theme.label)}] at (axis cs:${pgfNum(round(a.x))},${pgfNum(round(a.y))}) {${body}};`)
+    }
   }
 
   if (captioned) notExported.push(`the caption, which belongs in \\caption{…}: "${scene.caption}"`)
@@ -1182,10 +1626,9 @@ export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): strin
   const head: string[] = [
     `% Grapher figure${opts.title ? ` "${texCommentSafe(opts.title)}"` : ''} as pgfplots, ${num(widthCm, 1)} cm wide.`,
     '% Preamble:',
-    '%   \\usepackage{pgfplots}',
-    '%   \\pgfplotsset{compat=1.18}',
+    ...PGFPLOTS_PREAMBLE.map((l) => `%   ${l}`),
   ]
-  if (usesFillBetween.on) head.push('%   \\usepgfplotslibrary{fillbetween}')
+  if (usesFillBetween.on) head.push(`%   ${PGFPLOTS_FILLBETWEEN}`)
   head.push('% Compiles with pdflatex. Edit the \\addplot lines freely: typed equations are written as formulas.')
   for (const n of [...new Set(notExported)]) head.push(`% not exported: ${texCommentSafe(n)}`)
   head.push('\\begin{tikzpicture}')
@@ -1193,7 +1636,26 @@ export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): strin
   head.push('\\begin{axis}[')
   head.push(axisOpts.map((o) => `  ${o}`).join(',\n'))
   head.push(']')
-  return [...head, ...lines, '\\end{axis}', '\\end{tikzpicture}', ''].join('\n')
+  const tail: string[] = ['\\end{axis}']
+  // The key's text line: exactly the board's own (keyLineTokens) — its
+  // asymptotes, then what it found no room to label, in its order.
+  const keyLine = key ? keyLineTokens(key.asymptotes ?? [], board.unlabelled) : []
+  if (keyLine.length > 0) {
+    tail.push(`% answer key line: ${texCommentSafe(keyLine.join(' | '))}`)
+    // One unbreakable piece per value, so a line breaks between answers.
+    // (A line may also break after a kind's name: "meets:" | "(−1.957, −1.624),".)
+    const pieces = keyLine.flatMap((t) => {
+      const m = /^([^:()]+:) (.+)$/.exec(t)
+      return m ? [m[1], m[2]] : [t]
+    })
+    const said = pieces.map((t) => `\\mbox{${texLabel(t, { slash: true })}}`).join(' ')
+    const narrow = vp.widthPx / PX_PER_CM < 5
+    tail.push(
+      `\\node[anchor=north, align=center, text width=${num(vp.widthPx / PX_PER_CM, 2)}cm, inner sep=0pt, font=${narrow ? '\\scriptsize' : '\\footnotesize'}${st?.font === 'serif' ? '\\rmfamily' : ''}] ` +
+        `at ([yshift=-3pt]current axis.below south) {${said}};`,
+    )
+  }
+  return [...head, ...lines, ...tail, '\\end{tikzpicture}', ''].join('\n')
 }
 
 /** A comment line cannot end early; strip line breaks (and every other control character). */

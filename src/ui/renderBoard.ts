@@ -236,6 +236,12 @@ export interface BoardScene {
     more?: readonly { curve: FittedCurve; points: readonly SpecialPoint[] }[]
     /** OUT: every point that got no chip, in the order they were tried. */
     unlabelled: SpecialPoint[]
+    /**
+     * The asymptotes the key states in words ("x = 2", "y = 1"), first on its
+     * text line (src/ui/docScene.ts). Every writer of that line — the
+     * figure's own band and the pgfplots export — reads it from here.
+     */
+    asymptotes?: readonly string[]
   }
   /**
    * Where the curves MEET each other — the one analysis point that does not
@@ -598,6 +604,66 @@ function textColor(theme: Theme): string {
 /** The words a point's chip says — also what an answer key's text line states. */
 export function answerLabel(p: SpecialPoint): string {
   return labelFor(p)
+}
+
+/** How a key's text line names each kind of point. */
+const KIND_WORDS: Partial<Record<SpecialPoint['kind'], string>> = {
+  zero: 'zeros',
+  maximum: 'max',
+  minimum: 'min',
+  inflection: 'inflection',
+  'y-intercept': 'y-int',
+  intersection: 'meets',
+  hole: 'hole',
+}
+
+/**
+ * The answers a key could not put in a chip, as one sentence:
+ * "zeros: −√3, √3 · max: (π/2, 1)". Points are grouped by kind, in the order
+ * the kinds first appear, each value exactly as its chip would have said it.
+ */
+export function unplacedAnswers(points: readonly SpecialPoint[]): string {
+  return answerTokens(points).join(' ')
+}
+
+/**
+ * The same sentence as unbreakable pieces: "zeros: −√3," "√3 ·" "max:" … A
+ * line may break between pieces, never inside a coordinate pair.
+ */
+/**
+ * THE answer key's text line, as unbreakable pieces: the asymptotes, then
+ * every answer the board found no room to label, in the order it tried them.
+ * The one source of truth for the band under a figure (docScene's
+ * recordFigure) and the line under a pgfplots axis.
+ */
+export function keyLineTokens(asymptotes: readonly string[], unlabelled: readonly SpecialPoint[]): string[] {
+  const tokens = [
+    ...asymptotes.map((a, i) => `${i === 0 ? 'asymptotes: ' : ''}${a}${i < asymptotes.length - 1 ? ',' : ''}`),
+    ...answerTokens(unlabelled),
+  ]
+  if (asymptotes.length > 0 && tokens.length > asymptotes.length) tokens[asymptotes.length - 1] += ' ·'
+  return tokens
+}
+
+export function answerTokens(points: readonly SpecialPoint[]): string[] {
+  const groups = new Map<string, string[]>()
+  for (const p of points) {
+    const word = KIND_WORDS[p.kind] ?? p.label ?? p.kind
+    const list = groups.get(word) ?? []
+    const text = answerLabel(p)
+    if (!list.includes(text)) list.push(text)
+    groups.set(word, list)
+  }
+  const out: string[] = []
+  const entries = [...groups.entries()]
+  entries.forEach(([word, values], g) => {
+    values.forEach((v, i) => {
+      const head = i === 0 ? `${word}: ` : ''
+      const tail = i < values.length - 1 ? ',' : g < entries.length - 1 ? ' ·' : ''
+      out.push(`${head}${v}${tail}`)
+    })
+  })
+  return out
 }
 
 function labelFor(p: SpecialPoint): string {
@@ -2498,6 +2564,13 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
   // One budget of plates for the whole board: the crossings' chips step around
   // the selected curve's, because they are labels on the same picture.
   const plates: LabelBox[] = overlayPlates
+  // The caption's band and the sign-chart strips are drawn over the bottom of
+  // the plot: a chip placed there would be hidden (and a key's answer lost),
+  // so the band is a plate every chip steps around — the chip moves, or the
+  // key states the answer in its text line.
+  if (capInset + signBand > 0) {
+    plates.push({ x: -1e4, y: vp.heightPx - capInset - signBand, w: vp.widthPx + 2e4, h: capInset + signBand + 1e4 })
+  }
 
   // An answer key labels every curve's points against one set of plates and
   // one list of markers, so no chip covers another answer's dot.

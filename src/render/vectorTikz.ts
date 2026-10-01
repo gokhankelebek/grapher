@@ -91,7 +91,7 @@ export function clipSegment(
 }
 
 /** A closed polygon cut to the box (Sutherland–Hodgman). */
-function clipPolygon(b: Box, pts: readonly [number, number][]): [number, number][] {
+export function clipPolygon(b: Box, pts: readonly [number, number][]): [number, number][] {
   let out = pts.filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y))
   const sides: Array<[(p: [number, number]) => boolean, (p: [number, number], q: [number, number]) => [number, number]]> = [
     [(p) => p[0] >= b.x0, (p, q) => [b.x0, p[1] + ((q[1] - p[1]) * (b.x0 - p[0])) / (q[0] - p[0])]],
@@ -198,6 +198,26 @@ export function fitSegs(segs: readonly Seg[], box: Box, filled: boolean): readon
   return out
 }
 
+/**
+ * The point sizes Computer Modern — LaTeX's default fonts, text AND math —
+ * comes in. A label set at any other size (the renderer's 11 px is 8.25 pt)
+ * makes pdflatex substitute the nearest design size, with a "Font shape …
+ * not available" warning for the text and for each math size derived from it
+ * (8.25 pt text asks for 4.1 pt script-script). So a label is set at the
+ * nearest of these, never below 6 pt: no substitution in a plain document,
+ * and nothing smaller than a footnote's superscript on paper. A document
+ * that loads scalable fonts (lmodern, newtx …) is equally happy.
+ */
+export const TEX_FONT_SIZES: readonly number[] = [6, 7, 8, 9, 10, 10.95, 12, 14.4, 17.28, 20.74, 24.88]
+
+/** The CM size nearest to `pt` (ties go up: the larger is the legible one). */
+export function texFontSize(pt: number): number {
+  if (!Number.isFinite(pt)) return 8
+  let best = TEX_FONT_SIZES[0]
+  for (const s of TEX_FONT_SIZES) if (Math.abs(s - pt) <= Math.abs(best - pt)) best = s
+  return best
+}
+
 /** Coordinates per output line: keeps every TeX input line short. */
 const COORDS_PER_LINE = 6
 
@@ -299,16 +319,27 @@ export function toTikz(list: DisplayList, opts: TikzOptions = {}): string {
     const body = texLabel(it.text)
     if (body === '' || !inBox(box, it.x, it.y)) return ''
     const f = it.font
-    const size = f.size * k
-    const face = f.generic === 'serif' ? '\\rmfamily' : f.generic === 'monospace' ? '\\ttfamily' : '\\sffamily'
+    const size = texFontSize(f.size * k)
+    const mono = f.generic === 'monospace'
+    const sans = f.generic !== 'serif' && !mono
+    const face = f.generic === 'serif' ? '\\rmfamily' : mono ? '\\ttfamily' : '\\sffamily'
+    // Computer Modern has no italic sans (it is the slanted one) and no bold
+    // typewriter: ask for what exists, so no substitution is ever made.
     const font =
-      `\\fontsize{${num(size, 1)}}{${num(size * 1.2, 1)}}\\selectfont${face}` +
-      (f.italic ? '\\itshape' : '') +
-      (f.bold ? '\\bfseries' : '')
+      `\\fontsize{${num(size, 2)}}{${num(size * 1.2, 1)}}\\selectfont${face}` +
+      (f.italic ? (sans ? '\\slshape' : '\\itshape') : '') +
+      (f.bold && !mono ? '\\bfseries' : '')
     const anchor = it.anchor === 'middle' ? 'base' : it.anchor === 'end' ? 'base east' : 'base west'
     const o = [`anchor=${anchor}`, `text=${colour(it.color)}`, `font=${font}`]
     if (it.color.a < 1) o.push(`text opacity=${num(it.color.a, 3)}`)
-    return `\\node[${o.join(', ')}] at ${P(it.x, it.y)} {${body}};`
+    // Never wider than the renderer measured it: its chip, its gap between
+    // ticks, its place beside a curve were laid out for that width, and TeX's
+    // fonts (Computer Modern, or whatever the document loads) set the same
+    // words a little wider than the screen's Helvetica.
+    // (A letter or two — a curve's name, a tick's digit — is left as it is:
+    // it has room around it, and a math italic f is twice a sans one.)
+    const fit = Number.isFinite(it.width) && it.width > 0 && [...it.text.trim()].length > 2 ? `\\grapherfit{${num(it.width * k, 2)}}{${body}}` : body
+    return `\\node[${o.join(', ')}] at ${P(it.x, it.y)} {${fit}};`
   }
 
   // ---- body, along each item's clip chain -----------------------------------
@@ -341,11 +372,18 @@ export function toTikz(list: DisplayList, opts: TikzOptions = {}): string {
     // eslint-disable-next-line no-control-regex
     `% Grapher figure${opts.title ? ` "${opts.title.replace(/[\u0000-\u001f\u007f]+/g, ' ')}"` : ''} as TikZ, ` +
       `${cm(list.width * k)} cm x ${cm(Hpt)} cm.`,
-    '% Needs only \\usepackage{tikz} (it loads xcolor). Compiles with plain pdflatex.',
+    '% Preamble:',
+    '%   \\usepackage{tikz}   % it loads xcolor',
+    '% Compiles with plain pdflatex.',
     '% Use it with \\input{<this file>}, or paste it inside a figure environment.',
     '\\begin{tikzpicture}[x=1pt, y=1pt, inner sep=0pt, outer sep=0pt]',
     // The figure is the page: nothing drawn past its edge grows the picture.
     `  \\useasboundingbox (0,0) rectangle (${num(list.width * k)},${num(Hpt)});`,
+    // \grapherfit{w}{text}: the text, shrunk to w pt if it comes out wider
+    // (\resizebox is graphicx's, which TikZ loads). Local to this picture.
+    '  \\def\\grapherfit#1#2{\\setbox0=\\hbox{#2}\\ifdim\\wd0>\\dimexpr#1pt+0.5pt\\relax' +
+      '\\dimen0=\\dimexpr\\wd0*85/100\\relax\\ifdim\\dimen0<#1pt\\dimen0=#1pt\\fi' +
+      '\\resizebox{\\dimen0}{!}{#2}\\else\\box0\\fi}',
   ]
   for (const [hex, name] of colours) head.push(`  \\definecolor{${name}}{HTML}{${hex}}`)
   return [...head, ...body, '\\end{tikzpicture}', ''].join('\n')

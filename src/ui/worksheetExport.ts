@@ -27,13 +27,13 @@ import type { DisplayList } from '../render/vectorCtx'
 import { toPdfPages } from '../render/vectorPdf'
 import { toSvg } from '../render/vectorSvg'
 import { toTikz } from '../render/vectorTikz'
-import { texEscapeText } from '../render/texText'
+import { texEscapeText, texLabel } from '../render/texText'
 import { GREY, addClip, addLine, addRect, addText, emptyPage, measure, placeList, wrapText } from '../render/vectorPage'
 import type { DocFigure, DocModel } from './docScene'
 import { docFigure, recordFigure } from './docScene'
 import type { SheetLayout } from './worksheetLayout'
 import { GUTTER_PT, TITLE_SIZE_PT, fitInBox, itemLabel, layoutSheet, pageSize } from './worksheetLayout'
-import { toPgfplots } from './pgfplotsExport'
+import { PGFPLOTS_FILLBETWEEN, PGFPLOTS_PREAMBLE, toPgfplots } from './pgfplotsExport'
 import { PX_PER_CM } from './vectorExport'
 
 /** CSS px → pt. */
@@ -252,6 +252,16 @@ export function sheetLatex(
   const gutter = GUTTER_PT
   const width = cols === 1 ? '\\linewidth' : `\\dimexpr(\\linewidth-${(cols - 1) * gutter}pt)/${cols}\\relax`
   const { w, h } = pageSize(sheet.page, sheet.orientation)
+  // Each figure's picture first: the preamble is what they need, together.
+  const sources = figures.map((f) =>
+    f.figure && f.list
+      ? opts.pgfplots && f.figure.scene.kind !== 'number-line'
+        ? toPgfplots(f.figure.scene, { widthCm: f.widthCm, sources: f.figure.sources, extraMarkers: f.figure.context })
+        : toTikz(f.list)
+      : null,
+  )
+  // (A number line has no pgfplots form: its TikZ picture goes in instead.)
+  const fillBetween = sources.some((src) => src !== null && src.includes(`%   ${PGFPLOTS_FILLBETWEEN}`))
   const out: string[] = []
   const rule = `% ${'-'.repeat(72)}`
   out.push(rule)
@@ -263,10 +273,16 @@ export function sheetLatex(
   out.push('% Preamble (once, in your document):')
   out.push('%   \\usepackage{tikz}       % the figures (it loads xcolor)')
   out.push('%   \\usepackage{graphicx}   % \\resizebox: a figure wider than its column shrinks to fit')
-  if (opts.pgfplots) out.push('%   \\usepackage{pgfplots}\\pgfplotsset{compat=1.17}')
+  if (opts.pgfplots) {
+    for (const l of PGFPLOTS_PREAMBLE) out.push(`%   ${l}`)
+    if (fillBetween) out.push(`%   ${PGFPLOTS_FILLBETWEEN}`)
+  }
   out.push(
-    `% Laid out for \\usepackage[margin=0.75in]{geometry} on ${PAGE_NAMES[sheet.page]} ` +
-      `(${(w / 72).toFixed(2)} x ${(h / 72).toFixed(2)} in); each column is a share of \\linewidth.`,
+    `% Laid out for ${PAGE_NAMES[sheet.page]} ${sheet.orientation} (${(w / 72).toFixed(2)} x ${(h / 72).toFixed(2)} in), ` +
+      `each column a share of \\linewidth, with`,
+  )
+  out.push(
+    `%   \\usepackage[${sheet.page === 'a4' ? 'a4paper' : 'letterpaper'}${sheet.orientation === 'landscape' ? ',landscape' : ''},margin=0.75in]{geometry}`,
   )
   out.push(rule)
 
@@ -287,16 +303,9 @@ export function sheetLatex(
     out.push(`\\begin{minipage}[t]{${width}}%`)
     if (f.label) out.push(`  {\\bfseries ${texText(f.label)}}\\par\\nobreak\\vspace{2pt}%`)
     out.push('  \\centering')
-    if (f.figure && f.list) {
-      const body = opts.pgfplots
-        ? pictureBody(
-            toPgfplots(f.figure.scene, {
-              widthCm: f.widthCm,
-              sources: f.figure.sources,
-              extraMarkers: f.figure.context,
-            }),
-          )
-        : pictureBody(toTikz(f.list))
+    const src = sources[i]
+    if (src !== null) {
+      const body = pictureBody(src)
       out.push('  \\resizebox{\\ifdim\\width>\\linewidth\\linewidth\\else\\width\\fi}{!}{%')
       out.push(body)
       out.push('  }%')
@@ -304,7 +313,9 @@ export function sheetLatex(
       out.push(`  \\fbox{\\parbox{0.9\\linewidth}{\\centering\\itshape ${texText(f.missing ?? 'Missing figure')}}}%`)
     }
     const cap = f.item.caption?.trim()
-    if (cap) out.push(`  \\par\\vspace{2pt}{\\small ${texText(cap)}}%`)
+    // A caption is a board label like any other: "y = x³ − 3" is set as
+    // mathematics, prose stays prose (src/render/texText.ts).
+    if (cap) out.push(`  \\par\\vspace{2pt}{\\small ${texLabel(cap.replace(CONTROL, ' '))}}%`)
     out.push('\\end{minipage}%')
     const lastInRow = col === cols - 1 || i === figures.length - 1
     if (lastInRow) out.push('\\par\\bigskip')

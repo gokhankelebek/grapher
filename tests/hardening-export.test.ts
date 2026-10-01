@@ -162,15 +162,15 @@ describe('2. pgfplots does not silently drop the unit circle or related rates', 
 
 describe('3. ✓ and ✗ are glyphs, not "?"', () => {
   it('TeX: \\surd and \\times — kernel symbols, no amssymb', () => {
-    expect(texLabel('(1, 2) ✓')).toBe('$(1, 2) \\surd$')
-    expect(texLabel('(1, 2) ✗')).toBe('$(1, 2) \\times$')
+    expect(texLabel('(1, 2) ✓')).toBe('$(1, 2)\\ \\surd$')
+    expect(texLabel('(1, 2) ✗')).toBe('$(1, 2)\\ \\times$')
     expect(texLabel('is a solution ✓')).not.toContain('?')
     const tex = toPgfplots(kitchenSink(), { sources: { c1: 'y < x^2 - 4', c2: 'y >= 2x + 1' } })
-    expect(tex).toContain('$(1, 2) \\surd$')
+    expect(tex).toContain('$(1, 2)\\ \\surd$')
     expect(tex).not.toContain('amssymb')
     const tikz = toTikz(recordScene(kitchenSink(), 16))
-    expect(tikz).toContain('$(1, 2) \\surd$')
-    expect(tikz).toContain('$(0, 0) \\times$')
+    expect(tikz).toContain('$(1, 2)\\ \\surd$')
+    expect(tikz).toContain('$(0, 0)\\ \\times$')
   })
 
   it('PDF: from ZapfDingbats (a19 = 0x33, a23 = 0x37), declared without WinAnsi', () => {

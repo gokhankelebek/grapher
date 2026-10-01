@@ -573,7 +573,7 @@ describe('worksheet LaTeX', () => {
     expect(tex).toContain('\\usepackage{tikz}')
     expect(tex).toContain('Student version')
     // the title is escaped prose
-    expect(tex).toContain('\\{f\\} \\& \\$g\\$ 100\\% \\#1 x\\_1')
+    expect(tex).toContain('$\\{$f$\\}$ \\& \\$g\\$ 100\\% \\#1 x\\_1')
     // two columns: a gutter between (a) and (b), a row break after (b)
     expect(tex).toContain('\\dimexpr(\\linewidth-18pt)/2\\relax')
     // captions under their figures

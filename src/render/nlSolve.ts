@@ -140,8 +140,11 @@ export function distanceBracket(
   const halves =
     halfW >= halfLabelPx + 10 * type
       ? [
-          { x: (x0 + xc) / 2, y: bracketY - 6 * type },
-          { x: (xc + x1) / 2, y: bracketY - 6 * type },
+          // ON the line, its plate breaking it like a dimension line: just
+          // above it, the radius ran into the plate of the label over the
+          // centre and lost its top half.
+          { x: (x0 + xc) / 2, y: bracketY },
+          { x: (xc + x1) / 2, y: bracketY },
         ]
       : null
   return { x0, xc, x1, y: bracketY, tickY, labelX: xc, labelY: bracketY - SOLVE_BAND.bracketLabel * type, halves }

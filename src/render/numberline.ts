@@ -84,7 +84,11 @@ const DARK_TEXT = '#e6eaf5'
  * off its own board.
  */
 export function numberLineAxisY(vp: Viewport): number {
-  return Math.round(vp.heightPx / 2)
+  // The middle of the canvas — on the board, always (its y is always 0). An
+  // export framed to a solved inequality's stack moves it down (center.y > 0
+  // looks "up"), so the stack above it is not cut and no half is left empty.
+  const shift = Number.isFinite(vp.center.y) ? vp.center.y * vp.pxPerUnit : 0
+  return Math.round(vp.heightPx / 2 + shift)
 }
 
 /** Math x -> screen x. */

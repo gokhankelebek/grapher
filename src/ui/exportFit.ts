@@ -58,6 +58,8 @@ const RATIOS: Record<Exclude<AspectKey, 'auto'>, number> = {
  * tallest side twice over, or the lanes climb out of the top of the frame.
  */
 export const NL_STRIP_PAD = 26
+/** Room under a number line's axis for its numbers and a solved set's critical values. */
+export const NL_BELOW = 50
 export const MIN_NL_STRIP_H = 96
 
 export function numberLineStripHeight(lanes: number, widthPx: number, tall = false): number {
@@ -204,11 +206,20 @@ export function fitViewport(
   lanes = 1,
   /** The lanes include a solved inequality's stack: let the strip grow past 3:1. */
   tall = false,
+  /**
+   * A solved inequality's stack, measured: how far its ink (and the plain
+   * items above it) reaches above the axis, in px. When given, the strip is
+   * exactly that tall above the axis plus NL_BELOW under it, with the axis
+   * moved down to suit (see numberLineAxisY) — never cropped, never half air.
+   */
+  stackAbove?: number,
 ): Viewport {
   const ratio = aspectRatio(aspect, vp)
   const widthPx = Math.max(1, Math.round(vp.widthPx))
-  const heightPx =
-    kind === 'number-line' && aspect === 'strip'
+  const measured = kind === 'number-line' && aspect === 'strip' && stackAbove !== undefined && stackAbove > 0
+  const heightPx = measured
+    ? Math.max(MIN_NL_STRIP_H, Math.round(stackAbove + NL_BELOW))
+    : kind === 'number-line' && aspect === 'strip'
       ? numberLineStripHeight(lanes, widthPx, tall)
       : Math.max(1, Math.round(widthPx / ratio))
 
@@ -245,6 +256,10 @@ export function fitViewport(
   const ppu = clampPpu(
     kind === 'number-line' ? usableW / w : Math.min(usableW / w, usableH / h),
   )
+
+  // The axis sits under the stack, not at the middle: a number line's
+  // centre y says where (numberLineAxisY), 0 being the middle.
+  if (measured) center.y = (Math.min(heightPx - NL_BELOW, Math.max(stackAbove!, heightPx - NL_BELOW)) - heightPx / 2) / ppu
 
   return {
     center,
@@ -291,6 +306,7 @@ export function exportViewport(
   // depends only on the width — so a first pass at the width alone answers it.
   let lanes = 1
   let tall = false
+  let stackAbove: number | undefined
   if (kind === 'number-line' && items.length > 0) {
     const probe = fitViewport(vp, content, kind, settings.aspect, 1)
     try {
@@ -301,12 +317,17 @@ export function exportViewport(
       const solveLanes = lift > 0 ? Math.ceil(lift / NL_LANE_H) : 0
       tall = solveLanes > 0
       lanes = Math.max(lanes, solveLanes + 1)
-      for (const l of nlLanes(items, probe, lift)) lanes = Math.max(lanes, l.lane + 1 + solveLanes)
+      let plain = 0
+      for (const l of nlLanes(items, probe, lift)) {
+        lanes = Math.max(lanes, l.lane + 1 + solveLanes)
+        plain = Math.max(plain, l.lane + 1)
+      }
+      if (tall) stackAbove = lift + plain * NL_LANE_H + (plain > 0 ? NL_STRIP_PAD : 0)
     } catch {
       lanes = 1
     }
   }
-  const fitted = fitViewport(vp, content, kind, settings.aspect, lanes, tall)
+  const fitted = fitViewport(vp, content, kind, settings.aspect, lanes, tall, stackAbove)
   if (captionPx <= 0 || kind === 'number-line') return fitted
   // Two passes: the first says what a unit is worth, which is the only way to
   // state a band measured in pixels as the math room the frame has to give it.

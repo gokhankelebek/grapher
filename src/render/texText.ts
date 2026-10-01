@@ -131,15 +131,21 @@ export function texEscapeText(s: string): string {
   let out = ''
   for (const ch of s) {
     switch (ch) {
-      case '\\': out += '\\textbackslash{}'; break
-      case '{': case '}': case '$': case '&': case '#': case '%': case '_':
+      // The symbols OT1 has no glyph for — \{ \} < > | \ — are set in math:
+      // their text forms come from the OMS/OML fonts, which have no bold or
+      // sans shape, so in a bold title (\bfseries) pdflatex would substitute.
+      case '\\': out += '$\\backslash$'; break
+      case '{': out += '$\\{$'; break
+      case '}': out += '$\\}$'; break
+      case '$': case '&': case '#': case '%': case '_':
         out += '\\' + ch
         break
       case '~': out += '\\textasciitilde{}'; break
       case '^': out += '\\textasciicircum{}'; break
-      case '<': out += '\\textless{}'; break
-      case '>': out += '\\textgreater{}'; break
-      case '|': out += '\\textbar{}'; break
+      case '<': out += '$<$'; break
+      case '>': out += '$>$'; break
+      case '|': out += '$|$'; break
+      case '√': out += '$\\surd$'; break
       default: {
         const code = ch.codePointAt(0) ?? 63
         if (code >= 32 && code <= 126) out += ch
@@ -156,16 +162,32 @@ export function texEscapeText(s: string): string {
   return out
 }
 
+export interface TexOptions {
+  /**
+   * Keep a/b on one line, as the board writes it, instead of \frac{a}{b}: for
+   * a chip placed where the board's one-line chip went, which a stacked
+   * fraction would make taller than the room it was given.
+   */
+  slash?: boolean
+}
+
 /** A fraction's numerator or denominator as the renderer writes them. */
 const ATOM = String.raw`(?:\d+(?:\.\d+)?)?(?:√\d+)?π?`
 const FRAC_RE = new RegExp(`(${ATOM})/(${ATOM})`, 'g')
 
+/** What may end / start an operand: a space between two of them is kept in math. */
+const OPERAND_END = /[A-Za-z0-9.)\]#&%πθ∞'′″⁰¹²³⁴⁵⁶⁷⁸⁹₀₁₂₃₄₅₆₇₈₉ₙₓᵢₖₐ✓✔✗✘\u0003\u0005]/
+const OPERAND_START = /[A-Za-z0-9(#&%πθ√∞✓✔✗✘\u0001\u0004]/
+
 /** Convert a run that is known to be mathematics (no $ around it). */
-export function texMath(src: string): string {
+export function texMath(src: string, opts: TexOptions = {}): string {
   // 1. Fractions the board writes: π/2, 3π/2, 2√3/3, 1/2 (sign stays outside).
-  let s = src.replace(FRAC_RE, (m, a: string, b: string) =>
-    a === '' || b === '' ? m : `\u0001${a}\u0002${b}\u0003`,
-  )
+  // Inline (opts.slash) they stay as the board writes them, a/b on one line.
+  let s = opts.slash
+    ? src
+    : src.replace(FRAC_RE, (m, a: string, b: string) =>
+        a === '' || b === '' ? m : `\u0001${a}\u0002${b}\u0003`,
+      )
   // 2. Function names typed as words: sin(x) → \sin(x).
   s = s.replace(FN_RE, (_m, f: string) => `\u0004${f}\u0005`)
 
@@ -194,7 +216,7 @@ export function texMath(src: string): string {
           else if (chars[j] === ')') { depth--; if (depth === 0) break }
         }
         if (j < chars.length) {
-          out += `\\sqrt{${texMath(chars.slice(i + 2, j).join(''))}}`
+          out += `\\sqrt{${texMath(chars.slice(i + 2, j).join(''), opts)}}`
           i = j
           continue
         }
@@ -206,11 +228,20 @@ export function texMath(src: string): string {
         j++
       }
       if (j > i + 1) {
-        out += `\\sqrt{${texMath(chars.slice(i + 1, j).join(''))}}`
+        out += `\\sqrt{${texMath(chars.slice(i + 1, j).join(''), opts)}}`
         i = j - 1
       } else {
         out += '\\surd\u0006'
       }
+      continue
+    }
+    if (ch === ' ') {
+      // TeX drops spaces in mathematics. Between two operands ("#3 & x_1",
+      // "(1, 1) ✓", "max P") the board's space is a real gap: keep it.
+      // Around an operator or after punctuation TeX spaces it already.
+      const prev = chars[i - 1] ?? ''
+      const next = chars[i + 1] ?? ''
+      out += OPERAND_END.test(prev) && OPERAND_START.test(next) ? '\\ ' : ' '
       continue
     }
     if (SUPERS[ch] !== undefined || SUBS[ch] !== undefined) {
@@ -246,7 +277,7 @@ export function texMath(src: string): string {
           if (j === i + 1 && j < chars.length && /[A-Za-zπθ]/.test(chars[j])) j++
           body = chars.slice(i + 1, j).join('')
         }
-        out += body === '' ? '\\hat{}' : `^{${texMath(body)}}`
+        out += body === '' ? '\\hat{}' : `^{${texMath(body, opts)}}`
         i = j - 1
         continue
       }
@@ -293,17 +324,17 @@ function hasMathSignal(run: string): boolean {
  * The LaTeX for one board label: math in $…$, prose escaped. Empty for an
  * empty or blank label.
  */
-export function texLabel(label: string): string {
+export function texLabel(label: string, opts: TexOptions = {}): string {
   const s = label.replace(/\s+/g, ' ').trim()
   if (s === '') return ''
   const tokens = s.split(' ')
-  if (!tokens.some(isProse)) return `$${texMath(s)}$`
+  if (!tokens.some(isProse)) return `$${texMath(s, opts)}$`
   const out: string[] = []
   let run: string[] = []
   const flush = (): void => {
     if (run.length === 0) return
     const text = run.join(' ')
-    out.push(hasMathSignal(text) ? `$${texMath(text)}$` : texEscapeText(text))
+    out.push(hasMathSignal(text) ? `$${texMath(text, opts)}$` : texEscapeText(text))
     run = []
   }
   for (const t of tokens) {

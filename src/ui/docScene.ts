@@ -59,7 +59,7 @@ import type { CalcLink, HydratedBoard, SignChartLink } from '../core/persist'
 import { TAYLOR_MODEL_PREFIX, deserializeDoc, resolveAxisUnits } from '../core/persist'
 import { analyzeCurve } from '../core/analyze'
 import type { BoardScene } from './renderBoard'
-import { answerLabel, captionHeight, exportTheme, sceneInk, suggestAxisUnits } from './renderBoard'
+import { captionHeight, keyLineTokens, exportTheme, sceneInk, suggestAxisUnits, unplacedAnswers } from './renderBoard'
 import type { FitExportSettings } from './exportFit'
 import { clampFitSettings, contentBounds, defaultFit, exportViewport } from './exportFit'
 import { DEFAULT_EXPORT } from './renderBoard'
@@ -458,6 +458,7 @@ export function docFigure(m: DocModel, o: FigureOptions): DocFigure {
       }
     }
   }
+  if (scene.answerKey) scene.answerKey.asymptotes = asymptotes
   return { scene, context, margin: settings.margin, sources: board.exprSources, asymptotes }
 }
 
@@ -498,53 +499,13 @@ export function paintContext(ctx: CanvasRenderingContext2D, f: DocFigure): void 
   for (const m of f.context) drawContextMarkers(ctx, f.scene.vp, m.points, ink(m.curve.color), f.scene.theme.bg)
 }
 
-/** How a key's text line names each kind of point. */
-const KIND_WORDS: Partial<Record<SpecialPoint['kind'], string>> = {
-  zero: 'zeros',
-  maximum: 'max',
-  minimum: 'min',
-  inflection: 'inflection',
-  'y-intercept': 'y-int',
-  intersection: 'meets',
-  hole: 'hole',
-}
-
-/**
- * The answers a key could not put in a chip, as one sentence:
- * "zeros: −√3, √3 · max: (π/2, 1)". Points are grouped by kind, in the order
- * the kinds first appear, each value exactly as its chip would have said it.
- */
-export function unplacedAnswers(points: readonly SpecialPoint[]): string {
-  return answerTokens(points).join(' ')
-}
-
-/**
- * The same sentence as unbreakable pieces: "zeros: −√3," "√3 ·" "max:" … A
- * line may break between pieces, never inside a coordinate pair.
- */
-function answerTokens(points: readonly SpecialPoint[]): string[] {
-  const groups = new Map<string, string[]>()
-  for (const p of points) {
-    const word = KIND_WORDS[p.kind] ?? p.label ?? p.kind
-    const list = groups.get(word) ?? []
-    const text = answerLabel(p)
-    if (!list.includes(text)) list.push(text)
-    groups.set(word, list)
-  }
-  const out: string[] = []
-  const entries = [...groups.entries()]
-  entries.forEach(([word, values], g) => {
-    values.forEach((v, i) => {
-      const head = i === 0 ? `${word}: ` : ''
-      const tail = i < values.length - 1 ? ',' : g < entries.length - 1 ? ' ·' : ''
-      out.push(`${head}${v}${tail}`)
-    })
-  })
-  return out
-}
+export { unplacedAnswers }
 
 /** Lines of the key's answer text under a figure, at most this many. */
 const ANSWER_LINES_MAX = 6
+/** …or this many on a narrow figure (a worksheet cell, a 3 cm figure), rather than lines wider than the figure. */
+const ANSWER_LINES_NARROW = 10
+const NARROW_PX = 260
 const ANSWER_PX = 10
 
 /** The figure as a display list in CSS px — what SVG, PDF and TikZ are written from. */
@@ -552,14 +513,8 @@ export function recordFigure(f: DocFigure): DisplayList {
   const key = f.scene.answerKey
   if (key) key.unlabelled.length = 0
   const list: DisplayList = recordScene(f.scene, f.margin, (ctx) => paintContext(ctx, f))
-  const tokens = [
-    ...f.asymptotes.map((a, i) => `${i === 0 ? 'asymptotes: ' : ''}${a}${i < f.asymptotes.length - 1 ? ',' : ''}`),
-    ...(key ? answerTokens(key.unlabelled) : []),
-  ]
+  const tokens = key ? keyLineTokens(key.asymptotes ?? f.asymptotes, key.unlabelled) : []
   if (!key || tokens.length === 0) return list
-  if (f.asymptotes.length > 0 && tokens.length > f.asymptotes.length) {
-    tokens[f.asymptotes.length - 1] += ' ·'
-  }
   // A key never leaves an answer unstated: what found no room for a chip is
   // written under the figure, in a band added to its bottom.
   const generic = f.scene.figure?.font === 'serif' ? 'serif' : 'sans-serif'
@@ -583,16 +538,21 @@ export function recordFigure(f: DocFigure): DisplayList {
     clip: 0,
   })
   const family = generic === 'serif' ? 'Times New Roman, Times, serif' : 'Helvetica, Arial, sans-serif'
+  const room = list.width - 2 * Math.max(4, f.margin)
   lines.forEach((line, i) => {
+    // A single answer wider than a narrow figure ("(−1.957, −1.624)," at
+    // 3 cm) is set smaller rather than run off both edges of the figure.
+    const natural = measure(line, o)
+    const size = natural > room && natural > 0 ? Math.max(7, (ANSWER_PX * room) / natural) : ANSWER_PX
     list.items.push({
       t: 'text',
       text: line,
       x: list.width / 2,
       y: top + lead * (i + 1) - 2,
       anchor: 'middle',
-      font: { family, generic, size: ANSWER_PX, italic: false, bold: false },
+      font: { family, generic, size, italic: false, bold: false },
       color: { r: 0, g: 0, b: 0, a: 1 },
-      width: measure(line, o),
+      width: size === ANSWER_PX ? natural : measure(line, { ...o, size }),
       clip: 0,
     })
   })
@@ -615,7 +575,10 @@ function wrapAll(tokens: readonly string[], width: number, o: TextOpts): string[
     return lines
   }
   let lines = fill(width)
-  // Too long for the band at this width: longer lines rather than lost answers.
-  for (let w = width * 1.5; lines.length > ANSWER_LINES_MAX; w *= 1.5) lines = fill(w)
+  // Too long for the band at this width: longer lines rather than lost answers
+  // (set smaller to fit the figure — recordFigure — so allow a narrow figure
+  // more lines first: its type would otherwise go unreadably small).
+  const most = width < NARROW_PX ? ANSWER_LINES_NARROW : ANSWER_LINES_MAX
+  for (let w = width * 1.25; lines.length > most; w *= 1.25) lines = fill(w)
   return lines
 }
