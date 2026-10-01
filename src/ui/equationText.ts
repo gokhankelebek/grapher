@@ -616,6 +616,7 @@ function boundText(v: number | null, end: 'lo' | 'hi'): string {
  */
 export function itemEquationText(item: NLItem): string {
   if (item.kind === 'point') return `{${numText(item.x)}}`
+  if (item.kind === 'solve') return item.src
   const l = item.lo === null ? '(' : item.loClosed ? '[' : '('
   const r = item.hi === null ? ')' : item.hiClosed ? ']' : ')'
   return `${l}${boundText(item.lo, 'lo')}, ${boundText(item.hi, 'hi')}${r}`

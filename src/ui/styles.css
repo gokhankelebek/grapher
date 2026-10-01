@@ -7610,3 +7610,148 @@ button.calc-field-btn {
   .ws-side { width: auto; max-width: none; max-height: 50vh; border-right: 0; border-bottom: 1px solid var(--border); }
   .ws-page, .ws-page img { width: 100% !important; height: auto; }
 }
+
+/* ------------------------------------------------------------- Solve card */
+/*
+ * A solved inequality (src/ui/SolveCard.tsx): the answer in two notations,
+ * the display switches, and the working in a collapsible section whose test
+ * table borrows the limit table's vocabulary.
+ */
+.solve-answer {
+  display: grid;
+  gap: 2px;
+  margin-top: var(--sp-1);
+}
+
+.solve-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.solve-tag {
+  flex: none;
+  min-width: 78px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.solve-tex {
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.solve-raw {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+.solve-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-top: var(--sp-2);
+}
+
+.solve-graph {
+  margin-left: auto;
+}
+
+.solve-error .expr-error {
+  margin-top: var(--sp-1);
+}
+
+.solve-src {
+  display: inline-block;
+  margin-top: var(--sp-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  white-space: pre;
+}
+
+.solve-src-at {
+  background: color-mix(in srgb, var(--danger) 30%, transparent);
+  color: var(--text);
+  border-bottom: 2px solid var(--danger);
+  border-radius: 2px;
+}
+
+.solve-steps {
+  margin: 0;
+  padding-left: 1.4em;
+  list-style: none;
+  counter-reset: solve-step;
+  display: grid;
+  gap: var(--sp-1);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  line-height: 1.45;
+}
+
+.solve-step {
+  counter-increment: solve-step;
+}
+
+.solve-step::before {
+  content: counter(solve-step) '.';
+  display: inline-block;
+  min-width: 1.4em;
+  margin-left: -1.4em;
+  color: var(--muted);
+}
+
+/* each clause numbers its own steps from 1 */
+.solve-step-head {
+  counter-reset: solve-step;
+  list-style: none;
+  margin-left: -1.4em;
+  margin-top: var(--sp-1);
+  font-weight: 600;
+}
+
+.solve-table-intro {
+  display: inline;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.solve-table {
+  margin-top: 2px;
+}
+
+.solve-table td:first-child,
+.solve-table th:first-child {
+  text-align: left;
+}
+
+.solve-table .solve-yes td:last-child {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.solve-table .solve-no td {
+  color: var(--muted);
+}
+
+.solve-conclusion {
+  list-style: none;
+  margin-left: -1.4em;
+  margin-top: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  border-radius: 4px;
+}
+
+.solve-note {
+  list-style: none;
+  margin-left: -1.4em;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}

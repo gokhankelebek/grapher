@@ -23,6 +23,7 @@ import { clampExportSettings } from './renderBoard'
 import type { Box } from './curveState'
 import { curveBounds, unionBoxes } from './curveState'
 import { NL_LANE_H, nlLanes } from '../render/numberline'
+import { fitRange, solveBlocks, solveCached, solveXs } from './nlSolve'
 
 /** Aspect presets. 'auto' keeps the shape of the board on screen. */
 export const ASPECTS = ['auto', 'square', '4:3', 'wide', 'strip'] as const
@@ -59,9 +60,11 @@ const RATIOS: Record<Exclude<AspectKey, 'auto'>, number> = {
 export const NL_STRIP_PAD = 26
 export const MIN_NL_STRIP_H = 96
 
-export function numberLineStripHeight(lanes: number, widthPx: number): number {
+export function numberLineStripHeight(lanes: number, widthPx: number, tall = false): number {
   const need = 2 * (Math.max(0, lanes - 1) * NL_LANE_H + NL_STRIP_PAD + NL_LANE_H)
-  return Math.round(Math.min(Math.max(MIN_NL_STRIP_H, need), Math.max(1, widthPx / 3)))
+  // A solved inequality's stack (clauses, sign rows, a distance bracket) may
+  // need more than a third of the width; it is never cropped to stay a strip.
+  return Math.round(Math.min(Math.max(MIN_NL_STRIP_H, need), Math.max(1, tall ? widthPx : widthPx / 3)))
 }
 
 /**
@@ -151,6 +154,11 @@ export function contentBounds(input: {
     for (const it of input.items) {
       if (it.kind === 'point') {
         if (Number.isFinite(it.x)) xs.push(it.x)
+      } else if (it.kind === 'solve') {
+        // a solved inequality frames its critical values, with margin
+        const r = solveCached(it.src)
+        const span = r.ok ? fitRange(solveXs(r)) : null
+        if (span) xs.push(span.min, span.max)
       } else {
         if (it.lo !== null && Number.isFinite(it.lo)) xs.push(it.lo)
         if (it.hi !== null && Number.isFinite(it.hi)) xs.push(it.hi)
@@ -194,12 +202,14 @@ export function fitViewport(
   aspect: AspectKey,
   /** Lanes the number line's items occupy. Ignored for a graph. */
   lanes = 1,
+  /** The lanes include a solved inequality's stack: let the strip grow past 3:1. */
+  tall = false,
 ): Viewport {
   const ratio = aspectRatio(aspect, vp)
   const widthPx = Math.max(1, Math.round(vp.widthPx))
   const heightPx =
     kind === 'number-line' && aspect === 'strip'
-      ? numberLineStripHeight(lanes, widthPx)
+      ? numberLineStripHeight(lanes, widthPx, tall)
       : Math.max(1, Math.round(widthPx / ratio))
 
   const w = Math.max(box.max.x - box.min.x, 1e-6)
@@ -280,15 +290,23 @@ export function exportViewport(
   // The lane layout depends on the horizontal scale, which for a number line
   // depends only on the width — so a first pass at the width alone answers it.
   let lanes = 1
+  let tall = false
   if (kind === 'number-line' && items.length > 0) {
     const probe = fitViewport(vp, content, kind, settings.aspect, 1)
     try {
-      for (const l of nlLanes(items, probe)) lanes = Math.max(lanes, l.lane + 1)
+      // Solved inequalities stack their lines above the axis; the plain items
+      // sit above those. Both are counted in lanes, which is what the strip
+      // height is measured in.
+      const { lift } = solveBlocks(items, probe)
+      const solveLanes = lift > 0 ? Math.ceil(lift / NL_LANE_H) : 0
+      tall = solveLanes > 0
+      lanes = Math.max(lanes, solveLanes + 1)
+      for (const l of nlLanes(items, probe, lift)) lanes = Math.max(lanes, l.lane + 1 + solveLanes)
     } catch {
       lanes = 1
     }
   }
-  const fitted = fitViewport(vp, content, kind, settings.aspect, lanes)
+  const fitted = fitViewport(vp, content, kind, settings.aspect, lanes, tall)
   if (captionPx <= 0 || kind === 'number-line') return fitted
   // Two passes: the first says what a unit is worth, which is the only way to
   // state a band measured in pixels as the math room the frame has to give it.
@@ -299,5 +317,6 @@ export function exportViewport(
     kind,
     settings.aspect,
     lanes,
+    tall,
   )
 }

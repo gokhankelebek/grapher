@@ -392,13 +392,18 @@ describe('a figure style is for the OUTPUT, not for the board', () => {
     }
   })
 
-  it('a number line has no figure style at all, on screen or in the PNG', () => {
+  // Changed with the number-line solver (2026-09-30): a solved inequality's
+  // figure goes on worksheets and needs the SAT / AP mono ink there. The
+  // number line takes the style's ground, ink and face — never a caption.
+  it('a number line takes the style (ground, ink, face) but never a caption', () => {
     const look = board({ style: 'ap', preview: true, cartesian: false })
-    expect(look.figure).toBeUndefined()
-    expect(look.theme).toBe(DARK_THEME)
+    expect(look.figure).toBe(FIGURE_STYLES.ap)
+    expect(look.caption).toBe('')
+    expect(board({ style: 'ap', preview: false, cartesian: false }).figure).toBeUndefined()
     const out = exportLook({ style: 'ap', caption: 'Graph of f', cartesian: false })
-    expect(out.figure).toBeUndefined()
+    expect(out.figure).toBe(FIGURE_STYLES.ap)
     expect(out.caption).toBe('')
+    expect(exportLook({ style: 'screen', caption: '', cartesian: false }).figure).toBeUndefined()
   })
 
   it('the locked-background note says it is the EXPORT that is on white', () => {

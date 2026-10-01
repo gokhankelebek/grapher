@@ -72,6 +72,7 @@ export interface DocCounts {
   curves: number
   points: number
   intervals: number
+  solved?: number
 }
 
 const plural = (n: number, noun: string): string => `${n} ${noun}${n === 1 ? '' : 's'}`
@@ -86,6 +87,11 @@ const plural = (n: number, noun: string): string => `${n} ${noun}${n === 1 ? '' 
 export function describeCounts(kind: BoardKind, c: DocCounts): string {
   if (kind === 'number-line') {
     const { points, intervals } = c
+    const solved = c.solved ?? 0
+    if (solved > 0) {
+      if (points === 0 && intervals === 0) return solved === 1 ? '1 inequality' : `${solved} inequalities`
+      return plural(points + intervals + solved, 'item')
+    }
     if (points === 0 && intervals === 0) return 'empty'
     if (points === 0) return plural(intervals, 'interval')
     if (intervals === 0) return plural(points, 'point')

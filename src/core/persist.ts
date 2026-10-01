@@ -19,6 +19,7 @@ import type {
   FittedCurve,
   ModelSpec,
   NLItem,
+  NLSolveShow,
   CurveEnds,
   EndCap,
   Vec2,
@@ -1787,6 +1788,8 @@ export interface DocCounts {
   curves: number
   points: number
   intervals: number
+  /** solved inequalities on a number line; absent when there are none */
+  solved?: number
 }
 
 export interface DocMeta {
@@ -1809,14 +1812,17 @@ export function countBoard(board: StoredBoard): DocCounts {
   const items = Array.isArray(board.items) ? board.items : []
   let points = 0
   let intervals = 0
+  let solved = 0
   for (const it of items) {
     if (it && it.kind === 'point') points++
     else if (it && it.kind === 'interval') intervals++
+    else if (it && it.kind === 'solve') solved++
   }
   return {
     curves: Array.isArray(board.curves) ? board.curves.length : 0,
     points,
     intervals,
+    ...(solved > 0 ? { solved } : {}),
   }
 }
 
@@ -3042,6 +3048,19 @@ function itemToStored(it: NLItem, style: CurveStyle | undefined): StoredNLItem {
       ...(it.label !== undefined ? { label: it.label } : {}),
     }
   }
+  if (it.kind === 'solve') {
+    // Only what was TYPED and how to show it: the solution, the critical
+    // values and the working are recomputed from `src` on load.
+    return {
+      ...styled,
+      kind: 'solve',
+      id: it.id,
+      src: it.src,
+      color: it.color,
+      ...(it.label !== undefined ? { label: it.label } : {}),
+      show: solveShowToStored(it.show),
+    }
+  }
   return {
     ...styled,
     kind: 'interval',
@@ -3177,6 +3196,19 @@ function storedToCandidates(raw: unknown): FitResult[] {
   return out
 }
 
+/** A solve item's typed line is capped: no inequality a teacher types is longer. */
+const MAX_SOLVE_SRC_CHARS = 400
+
+/** The display flags, own booleans only, in a fixed key order. */
+function solveShowToStored(show: NLSolveShow | undefined): NLSolveShow {
+  const out: NLSolveShow = {}
+  const src = (show ?? {}) as Record<string, unknown>
+  for (const k of ['signs', 'tests', 'distance', 'stacked'] as const) {
+    if (typeof src[k] === 'boolean') out[k] = src[k] as boolean
+  }
+  return out
+}
+
 /**
  * One stored item, validated. Returns null when it is not salvageable — an
  * interval with no finite ends at all, say, which would draw as the whole line
@@ -3199,6 +3231,19 @@ function storedToItem(raw: unknown): NLItem | null {
       closed: raw.closed !== false,
       color,
       ...(label !== undefined ? { label } : {}),
+    }
+  }
+  if (raw.kind === 'solve') {
+    if (!isStr(raw.src)) return null
+    const src = raw.src.slice(0, MAX_SOLVE_SRC_CHARS)
+    if (src.trim() === '') return null
+    return {
+      kind: 'solve',
+      id,
+      src,
+      color,
+      ...(label !== undefined ? { label } : {}),
+      show: solveShowToStored(isObj(raw.show) ? (raw.show as NLSolveShow) : {}),
     }
   }
   if (raw.kind !== 'interval') return null

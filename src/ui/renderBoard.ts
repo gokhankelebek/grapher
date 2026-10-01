@@ -73,6 +73,8 @@ import { drawScatter } from '../render/scatter'
 import type { SignChartFigure } from '../render/signChart'
 import { drawSignGuides, drawSignStrips, signBandHeight } from '../render/signChart'
 import { drawNLItem, drawNumberLineAxis, nlLanes } from '../render/numberline'
+import { drawSolveFigure } from '../render/nlSolve'
+import { solveBlocks } from './nlSolve'
 import type { NLPart } from '../render/numberline'
 import { pointText } from './numeric'
 import { readSinusoid } from '../core/sinusoidal'
@@ -201,6 +203,13 @@ export interface BoardScene {
   grid?: 'cartesian' | 'polar'
   /** Number-line boards draw these instead of curves. */
   items?: readonly NLItem[]
+  /**
+   * Number line, STUDENT copy: solved inequalities draw nothing — no set, no
+   * signs, no working — leaving the bare line with its tick marks to answer
+   * on. The space they would take is still kept, so student and key frame
+   * alike. Absent / false: everything draws (the screen, the key).
+   */
+  nlStudent?: boolean
   /** Markers + labels for one curve. Null/absent when the toggle is off. */
   analysis?: { curve: FittedCurve; points: readonly SpecialPoint[] } | null
   /**
@@ -2045,7 +2054,7 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
   // no grid, no y axis, no models. It goes through this same routine — and so
   // through the same export — precisely so it can never grow a second path.
   if (scene.kind === 'number-line') {
-    renderNumberLine(ctx, scene, theme, chrome, paint, scale)
+    renderNumberLine(ctx, scene, theme, chrome, ink, scale, fig?.font ?? null, mono)
     drawCaption(ctx, scene, theme, fig, scale.type)
     return
   }
@@ -2626,6 +2635,8 @@ function renderNumberLine(
   chrome: BoardChrome | null,
   paint: (c: string) => string,
   scale: { type: number; stroke: number },
+  font: 'sans' | 'serif' | null = null,
+  mono = false,
 ): void {
   const { vp } = scene
   const items = scene.items ?? []
@@ -2636,7 +2647,40 @@ function renderNumberLine(
     /* axis render failed — items still stand */
   }
 
-  const lanes = nlLanes(items, vp)
+  // Solved inequalities: the set ON the axis, their working (sign rows, test
+  // points, distance brackets, stacked clauses) above it. Laid out the same
+  // whether or not they are drawn, so a student copy frames exactly like the
+  // key and the plain items keep their place above the stack.
+  let lift = 0
+  try {
+    const solved = solveBlocks(items, vp, scale.type)
+    lift = solved.lift
+    if (scene.nlStudent !== true) {
+      for (const b of solved.blocks) {
+        const style = scene.styles[b.item.id]
+        try {
+          drawSolveFigure(ctx, b.spec, b.layout, {
+            vp,
+            theme,
+            color: paint(b.item.color),
+            text: mono ? theme.axis : textColor(theme),
+            scale,
+            font,
+            barWidth: style?.width,
+            ...(style?.dash ? { dash: style.dash } : {}),
+            ...(style?.opacity !== undefined ? { opacity: style.opacity } : {}),
+            selected: chrome !== null && b.item.id === chrome.selectedId,
+          })
+        } catch {
+          /* one bad solve must not take the board down */
+        }
+      }
+    }
+  } catch {
+    lift = 0
+  }
+
+  const lanes = nlLanes(items, vp, lift)
   for (const { item, y } of lanes) {
     const style = scene.styles[item.id]
     try {
@@ -2664,7 +2708,7 @@ function renderNumberLine(
   if (chrome?.pending) {
     // Laid out WITH the existing items, so it lands in the lane it will keep
     // when the pointer comes up — the preview doesn't jump on release.
-    const withPending = nlLanes([...items, chrome.pending], vp)
+    const withPending = nlLanes([...items, chrome.pending], vp, lift)
     const spot = withPending[withPending.length - 1]
     try {
       drawNLItem(ctx, chrome.pending, vp, {

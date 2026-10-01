@@ -8,14 +8,18 @@ import type {
   ModelSpec,
   NLItem,
   NLItemDraft,
+  NLSolveItem,
+  NLSolveShow,
   ProcessedStroke,
   Vec2,
   Viewport,
 } from './core/types'
-import { CURVE_COLORS, DARK_THEME, LIGHT_THEME, nextId, toPrintColor } from './core/types'
+import { CURVE_COLORS, DARK_THEME, LIGHT_THEME, NL_SOLVE_DEFAULTS, nextId, toPrintColor } from './core/types'
 import { MODELS } from './core/fit/models'
 import { parseExpression } from './core/parse'
 import { parseInequality } from './core/parse/inequality'
+import type { SolveResult } from './core/solveInequality'
+import { fitRange, graphSources, solveCached, solveErrorText, solveXs } from './ui/nlSolve'
 import { applyFeatureEdit, snapParams } from './core/fit/edit'
 import { analyzeCurve } from './core/analyze'
 import {
@@ -8073,6 +8077,7 @@ export default function App() {
     (id: string, part: NLPart, x: number): void => {
       applyState({
         items: mapItems(id, (it) => {
+          if (it.kind === 'solve') return it
           if (it.kind === 'point') return { ...it, x }
           if (part === 'lo') return { ...it, lo: it.hi !== null ? Math.min(x, it.hi) : x }
           if (part === 'hi') return { ...it, hi: it.lo !== null ? Math.max(x, it.lo) : x }
@@ -8088,6 +8093,7 @@ export default function App() {
     (id: string, part: NLPart): void => {
       commitState({
         items: mapItems(id, (it) => {
+          if (it.kind === 'solve') return it
           if (it.kind === 'point') return { ...it, closed: !it.closed }
           if (part === 'lo') return { ...it, loClosed: !it.loClosed }
           if (part === 'hi') return { ...it, hiClosed: !it.hiClosed }
@@ -8104,6 +8110,7 @@ export default function App() {
     (id: string, part: NLPart, value: number | null): void => {
       commitState({
         items: mapItems(id, (it) => {
+          if (it.kind === 'solve') return it
           if (it.kind === 'point') return value === null ? it : { ...it, x: value }
           if (part === 'lo') {
             // Refusing (-inf, inf) here rather than repairing it later: a set
@@ -8177,22 +8184,66 @@ export default function App() {
    * back items already sorted and merged, so "x < 1 or x < 3" arrives as one
    * ray rather than two stacked on top of each other.
    */
+  /**
+   * Type an inequality: it is SOLVED (src/core/solveInequality.ts) and lands
+   * as one solve item — its set on the line, its working on its card. Only
+   * what the solver does not read (interval notation "[-2, 5)", a point set
+   * "{-1, 2}") goes to the old parser and becomes plain draggable items, as
+   * before. When neither reads it, the solver's complaint is the one shown,
+   * with its position.
+   */
   const addInequality = useCallback(
     (src: string): string | null => {
-      let outcome: ReturnType<typeof parseInequality>
+      const line = src.trim()
+      const solved = solveCached(line)
+      if (solved.ok) {
+        const item: NLSolveItem = {
+          kind: 'solve',
+          id: nextId(),
+          src: line,
+          color: pickColor(),
+          // A chain (−1 ≤ x < 3) is an "and" the teacher did not write out:
+          // it shows as one set; typed "and" / "or" shows its clauses stacked.
+          show: { ...NL_SOLVE_DEFAULTS, stacked: /\b(and|or)\b/i.test(line) },
+        }
+        commitState({ items: [...itemsRef.current, item] }, 'solve inequality')
+        setSelectedId(item.id)
+        frameSolveRef.current(solved)
+        return null
+      }
+      let outcome: ReturnType<typeof parseInequality> | null = null
       try {
         outcome = parseInequality(src)
       } catch {
-        return 'That couldn’t be read as an inequality'
+        outcome = null
       }
-      if (!outcome.ok) return outcome.error
-      if (!Array.isArray(outcome.items) || outcome.items.length === 0) {
-        return 'That describes no numbers at all'
+      if (outcome && outcome.ok && Array.isArray(outcome.items) && outcome.items.length > 0) {
+        addItems(outcome.items)
+        return null
       }
-      addItems(outcome.items)
-      return null
+      if (solved.error === 'not implemented') {
+        if (!outcome) return 'That couldn’t be read as an inequality'
+        return outcome.ok ? 'That describes no numbers at all' : outcome.error
+      }
+      return solveErrorText(line, solved)
     },
-    [addItems],
+    [addItems, commitState, pickColor],
+  )
+
+  /** Where the board frames a newly solved line (set once frameBox exists, below). */
+  const frameSolveRef = useRef<(r: SolveResult) => void>(() => {})
+
+  /** A solved inequality's display flags: one undoable statement each. */
+  const setSolveShow = useCallback(
+    (id: string, patch: NLSolveShow): void => {
+      commitState(
+        {
+          items: mapItems(id, (it) => (it.kind === 'solve' ? { ...it, show: { ...it.show, ...patch } } : it)),
+        },
+        'solve display',
+      )
+    },
+    [commitState, mapItems],
   )
 
   /**
@@ -8206,13 +8257,45 @@ export default function App() {
       const at = itemsRef.current.findIndex((it) => it.id === id)
       if (at < 0) return null
       const old = itemsRef.current[at]
+      const line = src.trim()
+      // A solved line is retyped in place: same id, colour, label and flags.
+      // A plain item retyped as something only the solver reads becomes one.
+      const asSolve = (): string | null => {
+        const solved = solveCached(line)
+        if (!solved.ok) return solveErrorText(line, solved)
+        const next: NLSolveItem =
+          old.kind === 'solve'
+            ? { ...old, src: line }
+            : {
+                kind: 'solve',
+                id: old.id,
+                src: line,
+                color: old.color,
+                ...(old.label ? { label: old.label } : {}),
+                show: { ...NL_SOLVE_DEFAULTS },
+              }
+        let styles = stylesRef.current
+        if (old.kind !== 'solve' && styles[old.id]?.group !== undefined) {
+          const { group: _g, ...rest } = styles[old.id]
+          styles = { ...styles, [old.id]: rest }
+        }
+        commitState({ items: itemsRef.current.map((it) => (it.id === id ? next : it)), styles }, 'solve inequality')
+        setSelectedId(id)
+        frameSolveRef.current(solved)
+        return null
+      }
+      if (old.kind === 'solve') return asSolve()
       let outcome: ReturnType<typeof parseInequality>
       try {
         outcome = parseInequality(src)
       } catch {
-        return 'That couldn’t be read as an inequality'
+        return asSolve() === null ? null : 'That couldn’t be read as an inequality'
       }
-      if (!outcome.ok) return outcome.error
+      if (!outcome.ok) {
+        const solvedErr = solveCached(line)
+        if (solvedErr.ok) return asSolve()
+        return outcome.error
+      }
       if (!Array.isArray(outcome.items) || outcome.items.length === 0) {
         return 'That describes no numbers at all'
       }
@@ -8476,7 +8559,11 @@ export default function App() {
       const xs: number[] = []
       for (const it of itemsRef.current) {
         if (it.kind === 'point') xs.push(it.x)
-        else {
+        else if (it.kind === 'solve') {
+          const r = solveCached(it.src)
+          const span = r.ok ? fitRange(solveXs(r)) : null
+          if (span) xs.push(span.min, span.max)
+        } else {
           if (it.lo !== null) xs.push(it.lo)
           if (it.hi !== null) xs.push(it.hi)
         }
@@ -8552,6 +8639,73 @@ export default function App() {
   }, [frameBox, showToast])
 
   frameBoxRef.current = frameData
+
+  // A newly solved line is framed: its critical values, with margin.
+  frameSolveRef.current = (r: SolveResult): void => {
+    const span = fitRange(solveXs(r))
+    if (!span || kindRef.current !== 'number-line') return
+    frameBox({ min: { x: span.min, y: -0.5 }, max: { x: span.max, y: 0.5 } })
+  }
+
+  /**
+   * "Show on graph": the inequality's picture on the Graph board of the same
+   * document. For L R R the method's own h = L − R is graphed (just L when R
+   * is 0) with a sign chart of h: the solution is where the graph is above or
+   * below the x-axis, and the chart's strip under the graph is exactly the
+   * solution intervals marked along the x-axis. A chain a < E < b graphs E and
+   * the two levels. The board switches to Graph (one click on Number line
+   * switches back — nothing is lost either way); a curve already there is
+   * not added twice.
+   */
+  const graphSolve = useCallback(
+    (id: string): string | null => {
+      const it = itemsRef.current.find((i) => i.id === id)
+      if (!it || it.kind !== 'solve') return null
+      const wanted = graphSources(it.src)
+      if (!wanted) return 'There is no curve to graph for this line'
+      setBoardKind('cartesian')
+      const errors: string[] = []
+      const graphed: string[] = []
+      for (const g of wanted) {
+        const existing = Object.entries(exprSourcesRef.current).find(([, src]) => src.trim() === g.src)
+        let curveId = existing ? existing[0] : null
+        if (!curveId) {
+          const before = new Set(curvesRef.current.map((c) => c.id))
+          const err = addExpression(g.src)
+          if (err) {
+            errors.push(err)
+            continue
+          }
+          curveId = curvesRef.current.find((c) => !before.has(c.id))?.id ?? null
+        }
+        if (!curveId) continue
+        graphed.push(g.src)
+        if (g.signChart && !calcRef.current.some((l) => l.kind === 'signchart' && l.parentId === curveId)) {
+          commitState(
+            {
+              calc: [
+                ...calcRef.current,
+                { kind: 'signchart', id: nextId(), parentId: curveId, rows: ['f'], guides: true },
+              ],
+            },
+            'add sign chart',
+          )
+        }
+        setSelectedId(curveId)
+      }
+      if (graphed.length === 0) {
+        setBoardKind('number-line')
+        return errors[0] ?? 'Those curves could not be graphed'
+      }
+      fitToContent()
+      showToast(
+        `Graphed ${graphed.join(', ')}${wanted.some((g) => g.signChart) ? ' with its sign chart: the solution is where the graph is above / below the x-axis' : ''}. Number line switches back.`,
+        { ms: 6000 },
+      )
+      return null
+    },
+    [addExpression, commitState, fitToContent, setBoardKind, showToast],
+  )
 
   /** "Zoom to data" on a table's menu: frame its points, nothing else. */
   const zoomToData = useCallback(
@@ -11842,6 +11996,8 @@ export default function App() {
         onItemLabel={setItemLabel}
         onItemWidth={setItemWidth}
         onItemEquation={setItemEquation}
+        onSolveShow={setSolveShow}
+        onSolveGraph={graphSolve}
         curves={curves}
         styles={styles}
         models={models}
@@ -12194,6 +12350,7 @@ export default function App() {
             items={items}
             styles={styles}
             theme={boardTheme}
+            {...(boardFigure ? { figure: boardFigure } : {})}
             selectedId={selectedId}
             mode={MODE}
             inkColor={pickColor()}
@@ -12376,7 +12533,7 @@ export default function App() {
                 view={kind === 'cartesian' ? viewSettings : null}
                 wheel={wheelPref}
                 onWheel={setWheelPref}
-                figure={kind === 'cartesian' ? figureStyle : null}
+                figure={figureStyle}
                 screenTheme={screenTheme}
                 caption={captionText}
                 captionAuto={figureCaption === null}
@@ -12572,8 +12729,11 @@ export default function App() {
         {kind === 'number-line' && items.length === 0 && !loadNotice?.fatal && (
           <div className="empty-hint" aria-hidden="true">
             <div className="empty-glyph">⟵•⟶</div>
-            <div className="empty-title">Click the line for a point, drag along it for an interval</div>
-            <div className="empty-sub">Or press + and type “-2 ≤ x &lt; 5”</div>
+            <div className="empty-title">Press + and type an inequality to solve it</div>
+            <div className="empty-sub">
+              “x^2 - 4 &gt; 0”, “|2x - 3| &lt; 5”, “x^2 &gt; 1 and x &lt; 3” — or click the line for a point, drag
+              along it for an interval
+            </div>
           </div>
         )}
 

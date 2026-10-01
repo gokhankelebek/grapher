@@ -27,6 +27,7 @@
 import type { FittedCurve, ModelSpec, NLItem } from '../core/types'
 import { displayEquationLatex } from './equationText'
 import { nlInequality, nlNotation } from './nlText'
+import { inputTex, solveCached } from './nlSolve'
 
 export interface PresentScale {
   type: number
@@ -99,10 +100,22 @@ export function curveLegend(
 /** What the legend says for a number line: the set, and the same set as an
  *  inequality, which is the pair a worksheet asks for. */
 export function itemLegend(items: readonly NLItem[]): LegendEntry[] {
-  return items.map((it) => ({
-    id: it.id,
-    color: it.color,
-    tex: `${nlNotation(it)}\\quad ${nlInequality(it)}`,
-    text: it.label ?? (it.kind === 'point' ? 'point' : 'interval'),
-  }))
+  return items.map((it) => {
+    if (it.kind === 'solve') {
+      // the line as typed, then its solution set — what the class is reading
+      const r = solveCached(it.src)
+      return {
+        id: it.id,
+        color: it.color,
+        tex: r.ok ? `${inputTex(r)}\\quad\\Longrightarrow\\quad ${r.solution.tex}` : `\\text{${it.src.replace(/[\\{}$&#^_%~]/g, '')}}`,
+        text: it.label ?? it.src,
+      }
+    }
+    return {
+      id: it.id,
+      color: it.color,
+      tex: `${nlNotation(it)}\\quad ${nlInequality(it)}`,
+      text: it.label ?? (it.kind === 'point' ? 'point' : 'interval'),
+    }
+  })
 }

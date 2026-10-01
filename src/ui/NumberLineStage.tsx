@@ -1,6 +1,6 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import type { MutableRefObject } from 'react'
-import type { NLItem, Theme, Vec2, Viewport } from '../core/types'
+import type { FigureStyle, NLItem, Theme, Vec2, Viewport } from '../core/types'
 import type { StyleMap } from '../core/persist'
 import {
   nlHitTest,
@@ -10,6 +10,7 @@ import {
 } from '../render/numberline'
 import type { NLPart } from '../render/numberline'
 import { renderBoard } from './renderBoard'
+import { solveBlocks, solveHit } from './nlSolve'
 import { paintScale } from '../render/grid'
 import type { PaintScale } from '../render/grid'
 import {
@@ -43,6 +44,11 @@ interface Props {
    * the axis type, the tick labels, the bars and the endpoint dots together.
    */
   present?: PaintScale | null
+  /**
+   * The figure style, only while "Preview on board" is on (screenLook): the
+   * SAT / AP ink and face. Absent: the screen look.
+   */
+  figure?: FigureStyle
   onSelect(id: string | null): void
   /** A click on the line: place a single point there. */
   onPlacePoint(x: number): void
@@ -103,6 +109,7 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
       inkColor,
       vpRef,
       present,
+      figure,
       onSelect,
       onPlacePoint,
       onCreateInterval,
@@ -126,6 +133,7 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
     const modeRef = useRef<Mode>(mode)
     const inkColorRef = useRef(inkColor)
     const presentRef = useRef<PaintScale | null | undefined>(present)
+    const figureRef = useRef<FigureStyle | undefined>(figure)
     const gestureRef = useRef<Gesture | null>(null)
     const pendingRef = useRef<NLItem | null>(null)
     const activePartRef = useRef<{ itemId: string; part: NLPart } | null>(null)
@@ -152,6 +160,26 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
     const [tip, setTip] = useState<{ x: number; y: number } | null>(null)
     const tipTimerRef = useRef(0)
 
+    /**
+     * What is under the pointer: a plain item's endpoint or bar (lifted above
+     * any solved inequalities' stack, where renderBoard draws them), else a
+     * solved inequality's own set — which selects it.
+     */
+    const hitAt = (pos: { x: number; y: number }): { id: string; part: NLPart } | null => {
+      const vp = vpRef.current
+      const type = paintScale(presentRef.current).type
+      let lift = 0
+      try {
+        lift = solveBlocks(itemsRef.current, vp, type).lift
+      } catch {
+        lift = 0
+      }
+      const hit = nlHitTest(itemsRef.current, vp, pos, lift)
+      if (hit) return hit
+      const id = solveHit(itemsRef.current, vp, pos, type)
+      return id ? { id, part: 'body' } : null
+    }
+
     // ------------------------------------------------------------- rendering
     const draw = useCallback((): void => {
       const canvas = canvasRef.current
@@ -168,6 +196,7 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
         styles: stylesRef.current,
         models: {},
         ...(presentRef.current ? { present: paintScale(presentRef.current) } : {}),
+        ...(figureRef.current ? { figure: figureRef.current } : {}),
         chrome: {
           selectedId: selectedRef.current,
           handles: [],
@@ -200,8 +229,9 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
       modeRef.current = mode
       inkColorRef.current = inkColor
       presentRef.current = present
+      figureRef.current = figure
       scheduleRender()
-    }, [items, styles, theme, selectedId, mode, inkColor, present, scheduleRender])
+    }, [items, styles, theme, selectedId, mode, inkColor, present, figure, scheduleRender])
 
     useEffect(() => () => window.clearTimeout(tipTimerRef.current), [])
 
@@ -343,7 +373,7 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
         return
       }
       if (g.moved < CLICK_SLOP) {
-        const hit = nlHitTest(itemsRef.current, vpRef.current, pos)
+        const hit = hitAt(pos)
         if (hit) onSelect(hit.id)
         else if (Math.abs(pos.y - numberLineAxisY(vpRef.current)) <= LINE_BAND) {
           onPlacePoint(g.startX)
@@ -425,7 +455,7 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
       // once a pen has been on the glass.
       const panning = verdict === 'pan' || modeRef.current === 'pan'
       if (!panning) {
-        const hit = nlHitTest(itemsRef.current, vpRef.current, pos)
+        const hit = hitAt(pos)
         if (hit && hit.part !== 'body') {
           onSelect(hit.id)
           activePartRef.current = { itemId: hit.id, part: hit.part }
@@ -465,7 +495,7 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
 
       if (!g) {
         // Idle hover: say what the pointer would do here.
-        const hit = nlHitTest(itemsRef.current, vp, pos)
+        const hit = hitAt(pos)
         const onLine = Math.abs(pos.y - numberLineAxisY(vp)) <= LINE_BAND
         if (hit && hit.part !== 'body' && takeTip(ENDPOINT_TIP)) {
           setTip({ x: pos.x, y: pos.y })

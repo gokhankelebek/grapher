@@ -22,6 +22,14 @@
 import type { NLItem } from '../core/types'
 import { intervalNotation } from '../core/types'
 import type { CurveStyle, StyleMap } from '../core/persist'
+import { solveCached } from './nlSolve'
+
+/** A solved item's set, or null when its line does not solve. */
+function solvedSet(item: NLItem): { text: string; tex: string; builder: string; builderTex: string } | null {
+  if (item.kind !== 'solve') return null
+  const r = solveCached(item.src)
+  return r.ok ? r.solution : null
+}
 
 /** Six significant digits, trailing zeros trimmed — the number as written. */
 function trimNum(v: number): string {
@@ -36,6 +44,7 @@ const minus = (s: string): string => s.replace(/-/g, '−')
 
 /** What this item says, in the notation the worksheet asks for (KaTeX). */
 export function nlNotation(item: NLItem): string {
+  if (item.kind === 'solve') return solvedSet(item)?.tex ?? '\\text{?}'
   return item.kind === 'point' ? `\\{${trimNum(item.x)}\\}` : intervalNotation(item)
 }
 
@@ -47,6 +56,7 @@ export function nlNotation(item: NLItem): string {
  * variable in one place rather than two.
  */
 export function nlInequality(item: NLItem): string {
+  if (item.kind === 'solve') return solvedSet(item)?.builderTex ?? '\\text{?}'
   if (item.kind === 'point') return `x ${item.closed ? '=' : '\\neq'} ${trimNum(item.x)}`
   const { lo, hi, loClosed, hiClosed } = item
   if (lo !== null && hi !== null) {
@@ -59,6 +69,7 @@ export function nlInequality(item: NLItem): string {
 
 /** Interval notation as text, ready to paste: "[3, ∞)". */
 export function nlNotationText(item: NLItem): string {
+  if (item.kind === 'solve') return solvedSet(item)?.text ?? item.src
   if (item.kind === 'point') return `{${minus(trimNum(item.x))}}`
   const lo = item.lo === null ? '−∞' : minus(trimNum(item.lo))
   const hi = item.hi === null ? '∞' : minus(trimNum(item.hi))
@@ -69,6 +80,7 @@ export function nlNotationText(item: NLItem): string {
 
 /** The inequality as text, ready to paste: "x ≥ 3". */
 export function nlInequalityText(item: NLItem): string {
+  if (item.kind === 'solve') return solvedSet(item)?.builder ?? item.src
   if (item.kind === 'point') return `x ${item.closed ? '=' : '≠'} ${minus(trimNum(item.x))}`
   const { lo, hi, loClosed, hiClosed } = item
   if (lo !== null && hi !== null) {

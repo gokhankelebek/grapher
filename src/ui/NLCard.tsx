@@ -1,6 +1,6 @@
 import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
-import type { NLItem } from '../core/types'
+import type { PlainNLItem } from './nlSolve'
 import type { CurveStyle } from '../core/persist'
 import { NL_BAR_WIDTH, NL_MAX_BAR_WIDTH, NL_MIN_BAR_WIDTH } from '../render/numberline'
 import { Latex } from './Latex'
@@ -22,7 +22,8 @@ import { AnswerContext } from './answerContext'
 export { nlInequality, nlNotation }
 
 interface Props {
-  item: NLItem
+  /** A point or an interval; a solve item has its own card (SolveCard). */
+  item: PlainNLItem
   style: CurveStyle | undefined
   selected: boolean
   onSelect(): void

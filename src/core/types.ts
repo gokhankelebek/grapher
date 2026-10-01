@@ -495,6 +495,43 @@ export type NLItem =
       color: string
       label?: string
     }
+  | NLSolveItem
+
+/**
+ * A typed inequality, SOLVED (src/core/solveInequality.ts). Only the source
+ * line and how to show it are stored: the solution set, the critical values
+ * and the working are recomputed from `src` on every load and every frame
+ * (src/ui/nlSolve.ts caches them), so a better solver improves old documents
+ * and nothing computed can go stale on disk.
+ */
+export interface NLSolveItem {
+  kind: 'solve'
+  id: string
+  /** the inequality as typed: "x^2 - 4 > 0", "|2x - 3| < 5", "x^2 > 1 and x < 3" */
+  src: string
+  color: string
+  label?: string
+  show: NLSolveShow
+}
+
+/** What a solve item draws besides its solution set. Absent flags take NL_SOLVE_DEFAULTS. */
+export interface NLSolveShow {
+  /** the + / − row above the line, with 0 / und at the critical values */
+  signs?: boolean
+  /** the test points as small ticks labelled "t = 0" */
+  tests?: boolean
+  /** |x − a| R b: the centre and a bracket of radius b above the line */
+  distance?: boolean
+  /** a compound: one line per clause (A, B), then A ∩ B / A ∪ B */
+  stacked?: boolean
+}
+
+export const NL_SOLVE_DEFAULTS: Required<NLSolveShow> = {
+  signs: true,
+  tests: false,
+  distance: true,
+  stacked: true,
+}
 
 /** Human-readable interval notation, e.g. "[-2, 5)" or "(-inf, 3]". */
 export function intervalNotation(it: Extract<NLItem, { kind: 'interval' }>): string {

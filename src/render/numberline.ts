@@ -16,7 +16,10 @@
 // All drawing units are CSS pixels; the caller sets the DPR/scale transform.
 // ============================================================================
 
-import type { NLItem, Theme, Viewport } from '../core/types'
+import type { NLItem, NLSolveItem, Theme, Viewport } from '../core/types'
+
+/** A point or an interval — what this module draws. Solve items: ./nlSolve.ts. */
+type PlainItem = Exclude<NLItem, NLSolveItem>
 import type { PaintScale } from './grid'
 import { formatTick, paintScale, pickTickStep } from './grid'
 
@@ -112,7 +115,7 @@ export function nlSnapX(x: number, vp: Viewport): number {
 }
 
 /** The x-extent an item occupies, unbounded ends included. */
-function itemSpan(item: NLItem): { lo: number; hi: number } {
+function itemSpan(item: PlainItem): { lo: number; hi: number } {
   if (item.kind === 'point') return { lo: item.x, hi: item.x }
   return {
     lo: item.lo === null ? -Infinity : item.lo,
@@ -121,7 +124,7 @@ function itemSpan(item: NLItem): { lo: number; hi: number } {
 }
 
 export interface NLLane {
-  item: NLItem
+  item: PlainItem
   /** 0 = drawn on the line itself; each step is NL_LANE_H px above it. */
   lane: number
   y: number
@@ -135,12 +138,16 @@ export interface NLLane {
  * looks exactly like the hand-drawn figure. Only genuinely overlapping items
  * get lifted, and then only as far as they have to.
  */
-export function nlLanes(items: readonly NLItem[], vp: Viewport): NLLane[] {
-  const axisY = numberLineAxisY(vp)
+export function nlLanes(items: readonly NLItem[], vp: Viewport, lift = 0): NLLane[] {
+  // A solved inequality draws its own lines (src/ui/nlSolve.ts) and the plain
+  // items stack ABOVE them: `lift` is how far. 0 — no solve item — is the
+  // layout every board had before solve items existed.
+  const axisY = numberLineAxisY(vp) - (Number.isFinite(lift) && lift > 0 ? lift : 0)
   const pad = 2 * nlDotRadius(NL_BAR_WIDTH) + 6 // px of clearance between items
   const occupied: { lo: number; hi: number }[][] = []
   const out: NLLane[] = []
   for (const item of items) {
+    if (item.kind === 'solve') continue
     const s = itemSpan(item)
     const loPx = s.lo === -Infinity ? -Infinity : nlToScreenX(s.lo, vp) - pad / 2
     const hiPx = s.hi === Infinity ? Infinity : nlToScreenX(s.hi, vp) + pad / 2
@@ -173,8 +180,9 @@ export function nlHitTest(
   items: readonly NLItem[],
   vp: Viewport,
   pos: { x: number; y: number },
+  lift = 0,
 ): { id: string; part: NLPart } | null {
-  const lanes = nlLanes(items, vp)
+  const lanes = nlLanes(items, vp, lift)
   let best: { id: string; part: NLPart; d: number } | null = null
 
   for (let i = lanes.length - 1; i >= 0; i--) {
@@ -369,6 +377,7 @@ export function drawNLItem(
   vp: Viewport,
   o: NLItemPaint,
 ): void {
+  if (item.kind === 'solve') return
   const theme = o.theme
   const y = o.y
   const { type, stroke } = paintScale(o.scale)

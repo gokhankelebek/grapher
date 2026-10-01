@@ -152,8 +152,9 @@ export interface ScreenLook {
  * presentation mode — a presented board is a lit wall, and the point of the
  * preview is to check what a sheet of paper will look like.
  *
- * A number-line board has no figure style at all: the styles are described in
- * grids, axes and ticks, and the picker is not offered on one.
+ * A number-line board takes the style's ground, ink (one black under SAT /
+ * AP) and type face — what a solved inequality's figure needs on paper — but
+ * no caption: a caption names curves, and a number line has none.
  */
 export function screenLook(o: {
   style: FigureStyleId
@@ -163,10 +164,10 @@ export function screenLook(o: {
   present: boolean
   cartesian: boolean
 }): ScreenLook {
-  const figure = o.cartesian && o.preview && !o.present ? figureFor(o.style) : undefined
+  const figure = o.preview && !o.present ? figureFor(o.style) : undefined
   return {
     figure,
-    caption: figure ? o.caption : '',
+    caption: figure && o.cartesian ? o.caption : '',
     theme: figure ? figure.theme : o.screenTheme,
     previewing: figure !== undefined,
   }
@@ -185,7 +186,7 @@ export function exportLook(o: {
   caption: string
   cartesian: boolean
 }): ExportLook {
-  if (!o.cartesian) return { figure: undefined, caption: '' }
+  if (!o.cartesian) return { figure: figureFor(o.style), caption: '' }
   return { figure: figureFor(o.style), caption: o.caption }
 }
 

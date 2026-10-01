@@ -337,6 +337,9 @@ export function docFigure(m: DocModel, o: FigureOptions): DocFigure {
     // The key labels EVERY visible curve's points, near their markers, and
     // reports what it could not place (see BoardScene.answerKey).
     ...(o.answers && cartesian ? { answerKey: { more: context, unlabelled: [] } } : {}),
+    // A number line's STUDENT copy: solved inequalities leave only the bare
+    // line and its ticks to answer on (the key draws the set and its working).
+    ...(!o.answers && !cartesian ? { nlStudent: true } : {}),
     chrome: null,
   }
     // The key states the asymptotes the figure dashes in: the vertical ones

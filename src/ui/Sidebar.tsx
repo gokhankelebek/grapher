@@ -5,6 +5,7 @@ import type {
   FittedCurve,
   ModelSpec,
   NLItem,
+  NLSolveShow,
   SpecialPoint,
   Vec2,
 } from '../core/types'
@@ -32,6 +33,7 @@ import type { DataParse } from '../core/data'
 import type { BoardData, DataCardData, DataMarker, PasteMode, RegressionKind } from './dataLinks'
 import type { BoardShape, ShapeCardData } from './shapeLinks'
 import { NLCard } from './NLCard'
+import { SolveCard } from './SolveCard'
 import { ExprInput } from './ExprInput'
 import { FactorEditor } from './FactorEditor'
 import { ExpEditor } from './ExpEditor'
@@ -67,6 +69,10 @@ interface Props {
   onItemWidth(id: string, width: number): void
   /** Restate a number-line item from its notation. Error message, or null. */
   onItemEquation(id: string, src: string): string | null
+  /** A solved inequality's display flags (sign row, test points, …). */
+  onSolveShow?(id: string, patch: NLSolveShow): void
+  /** "Show on graph": the inequality's picture on the Graph board. Error, or null. */
+  onSolveGraph?(id: string): string | null
   curves: FittedCurve[]
   styles: StyleMap
   models: Record<string, ModelSpec>
@@ -374,6 +380,8 @@ export function Sidebar({
   onItemLabel,
   onItemWidth,
   onItemEquation,
+  onSolveShow,
+  onSolveGraph,
   curves,
   styles,
   models,
@@ -651,13 +659,31 @@ export function Sidebar({
               names={numberLine ? undefined : exprNames}
               placeholder={
                 numberLine
-                  ? '-2 <= x < 5'
+                  ? 'x^2 - 4 > 0   ·   |2x - 3| < 5   ·   -2 <= x < 5'
                   : 'y = 2sin(3x) + 1   ·   dy/dx = x - y   ·   ABC = (0,0) (4,0) (4,3)'
               }
             />
           )}
           {numberLine &&
-            items.map((item) => (
+            items.map((item) =>
+              item.kind === 'solve' ? (
+                <SolveCard
+                  key={item.id}
+                  item={item}
+                  style={styles[item.id]}
+                  selected={item.id === selectedId}
+                  onSelect={() => onSelect(item.id)}
+                  onDelete={() => onItemDelete(item.id)}
+                  onCycleColor={() => onItemCycleColor(item.id)}
+                  onLabel={(label) => onItemLabel(item.id, label)}
+                  onEquationCommit={(src) => onItemEquation(item.id, src)}
+                  onShow={(patch) => onSolveShow?.(item.id, patch)}
+                  onShowOnGraph={() => (onSolveGraph ? onSolveGraph(item.id) : null)}
+                  onWidth={(w) => onItemWidth(item.id, w)}
+                  onStyleEditStart={onParamEditStart}
+                  onStyleEditEnd={onParamEditEnd}
+                />
+              ) : (
               <NLCard
                 key={item.id}
                 item={item}
@@ -676,7 +702,8 @@ export function Sidebar({
                 onStyleEditStart={onParamEditStart}
                 onStyleEditEnd={onParamEditEnd}
               />
-            ))}
+              ),
+            )}
           {!numberLine &&
             curves.map((curve) => (
             <CurveCard

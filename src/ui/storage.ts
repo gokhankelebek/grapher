@@ -128,7 +128,8 @@ const countsOf = (v: unknown): DocCounts | undefined => {
   if (!isObj(v)) return undefined
   const n = (x: unknown): number =>
     typeof x === 'number' && Number.isFinite(x) && x >= 0 ? Math.round(x) : 0
-  return { curves: n(v.curves), points: n(v.points), intervals: n(v.intervals) }
+  const solved = n(v.solved)
+  return { curves: n(v.curves), points: n(v.points), intervals: n(v.intervals), ...(solved > 0 ? { solved } : {}) }
 }
 
 function metaOf(v: unknown): DocMeta | null {
