@@ -24,7 +24,7 @@ import {
   TOUCH_PAN_SLOP,
 } from './gestures'
 import type { PointerKind } from './gestures'
-import type { Mode } from '../App'
+import type { Mode } from '../app/types'
 import { ENDPOINT_TIP, ENDPOINT_TIP_TEXT, TIP_MS, takeTip } from './coach'
 
 export interface NumberLineStageHandle {

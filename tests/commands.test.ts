@@ -7,6 +7,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { appSource } from './appSource'
 import { fileURLToPath } from 'node:url'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -583,7 +584,7 @@ describe('recently used commands float to the top', () => {
 // Keys
 // ---------------------------------------------------------------------------
 
-const APP_SRC = readFileSync(fileURLToPath(new URL('../src/App.tsx', import.meta.url)), 'utf8')
+const APP_SRC = appSource()
 const REVEAL_SRC = readFileSync(fileURLToPath(new URL('../src/ui/reveal.ts', import.meta.url)), 'utf8')
 
 describe('keys: one owner each, no clashes', () => {

@@ -14,6 +14,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { appSource } from './appSource'
 import { createElement } from 'react'
 import type { ReactElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -236,7 +237,7 @@ describe('the keys', () => {
       expect(revealKeyAction(k(key), true)).toBeNull()
     }
     // and no other shortcut in the App is bound to R
-    const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
+    const app = appSource()
     const letters = [...app.matchAll(/key === '([a-z])'/g)].map((m) => m[1])
     expect(letters).not.toContain('r')
     expect(new Set(letters)).toEqual(new Set(['z', 'y', 'a', 'p', 'f']))
@@ -570,7 +571,7 @@ describe('persistence: session-only', () => {
       expect(src(p)).not.toMatch(/from '\.\/(storage|persist)'|from '\.\.\/core\/persist'(?!.*type)/)
     }
     // the App keeps it in React state and a session Map, and never names it to storage
-    const app = src('../src/App.tsx')
+    const app = appSource()
     expect(app).not.toMatch(/updatePrefs\([^)]*reveal/i)
     expect(app).not.toMatch(/serializeDoc\([^)]*reveal/i)
     expect(src('../src/core/persist.ts')).not.toMatch(/reveal/i)

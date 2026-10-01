@@ -11,7 +11,7 @@ import type {
   SpecialPointKind,
   Vec2,
 } from '../core/types'
-import type { CurveStyle } from '../App'
+import type { CurveStyle } from '../core/persist'
 import { useStableHandlers } from './stableProps'
 import { cardModelsKey } from './valueKeys'
 import { RootsSection } from './FactorEditor'

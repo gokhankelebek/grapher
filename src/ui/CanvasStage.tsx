@@ -70,7 +70,8 @@ import { HandleInput } from './HandleInput'
 import type { HandleField } from './HandleInput'
 import { paintScale } from '../render/grid'
 import type { PaintScale } from '../render/grid'
-import type { Mode, StyleMap } from '../App'
+import type { Mode } from '../app/types'
+import type { StyleMap } from '../core/persist'
 import {
   MAX_PPU,
   MIN_PPU,
