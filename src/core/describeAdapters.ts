@@ -1,0 +1,633 @@
+// ============================================================================
+// Build a DescribeInput (src/core/describeGraph.ts) from the board's own
+// analysis — analyzeCurve, findHoles / findAsymptotes, curveDomain /
+// curveRange, intersectionPoints, the calculus helpers and the number-line
+// solver — so the description says exactly what the cards say.
+//
+//   describeInputFromCurves(input: AdapterInput): DescribeInput
+//   describeCurves(input: AdapterInput, opts?): GraphDescription   (both steps)
+//   numberLineFromSolve(result, min, max, step?): DescribeNumberLine
+//   latexToPlain(latex): string                                     (equation text fallback)
+//
+// Everything is filtered to the window: a figure description says what the
+// figure shows, and a zero at x = 40 is not on a [−5, 5] figure.
+//
+// Imports only from src/core/*.
+// ============================================================================
+
+import type { Asymptote, FittedCurve, ModelSpec, SpecialPoint, Vec2 } from './types'
+import { analyzeCurve, intersectionPoints } from './analyze'
+import { findAsymptotes, findHoles } from './holes'
+import { curveDomain, curveRange, type RealSet } from './domainRange'
+import { exactForm } from './exact'
+import { areaBetween, areaUnder, polynomialOf, riemann, tangentAt, type RiemannMethod } from './calculus'
+import { prettyMath } from './ineqText'
+import { piecewiseParts } from './parse'
+import { conicFeatures, readConic } from './conics'
+import type { SolveResult } from './solveInequality'
+import {
+  describeScene,
+  type DescribeAsymptote,
+  type DescribeCurve,
+  type DescribeHole,
+  type DescribeInput,
+  type DescribeJump,
+  type DescribeNumberLine,
+  type DescribeOptions,
+  type DescribePoint,
+  type DescribeRegion,
+  type DescribeRiemann,
+  type DescribeTangent,
+  type DescribeWindow,
+  type DescribeExtra,
+  type DescribeIntersection,
+  type GraphDescription,
+} from './describeGraph'
+
+// ----------------------------------------------------------------------------
+// Input
+// ----------------------------------------------------------------------------
+
+export interface AdapterCurve {
+  curve: FittedCurve
+  /** the name the figure uses ("f", "f′"); default: the typed head, else '' */
+  name?: string
+  /** the line as typed ("f(x) = x^3 - 3x"): the equation text and the conic reading come from it */
+  source?: string
+  /** override the equation text */
+  text?: string
+  /** override the kind in words */
+  kind?: string
+  /** points the figure labels: plain coordinates, or { x, y, label } */
+  labelled?: (Vec2 & { label?: string; exactX?: string; exactY?: string })[]
+  dashed?: boolean
+  shows?: DescribeCurve['shows']
+  /** extra sentences for this curve (answers only) */
+  notes?: string[]
+}
+
+/** A calculus object on the figure, by curve id; the adapter computes its numbers. */
+export type AdapterCalc =
+  | { kind: 'area'; curve: string; other?: string; a: number; b: number; label?: string }
+  | { kind: 'riemann'; curve: string; a: number; b: number; n: number; method: RiemannMethod }
+  | { kind: 'tangent'; curve: string; x: number }
+  | { kind: 'secant'; curve: string; x: number; x2: number }
+
+export interface AdapterInput {
+  window: DescribeWindow
+  curves: AdapterCurve[]
+  models: Record<string, ModelSpec>
+  /** compute pairwise intersections of the visible curves (default true) */
+  intersections?: boolean
+  /** intersection points the figure labels (matched to computed ones by position) */
+  labelledIntersections?: (Vec2 & { label?: string })[]
+  calc?: AdapterCalc[]
+  numberLine?: DescribeNumberLine
+  extras?: (string | DescribeExtra)[]
+  board?: DescribeInput['board']
+}
+
+// ----------------------------------------------------------------------------
+// Text helpers
+// ----------------------------------------------------------------------------
+
+const MINUS = '−'
+
+/** A KaTeX string as plain Unicode — the fallback when no typed source is known. */
+export function latexToPlain(latex: string): string {
+  let s = String(latex ?? '')
+  const SUP: Record<string, string> = {
+    '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹', '-': '⁻',
+  }
+  // innermost-first rewrites of \frac and \sqrt
+  for (let guard = 0; guard < 20; guard++) {
+    const before = s
+    s = s.replace(/\\[dt]?frac\{([^{}]*)\}\{([^{}]*)\}/g, (_m, a: string, b: string) => {
+      const wrap = (t: string) => (/^[\w.√π]+$/.test(t) ? t : `(${t})`)
+      return `${wrap(a)}/${wrap(b)}`
+    })
+    s = s.replace(/\\sqrt\[3\]\{([^{}]*)\}/g, '∛($1)')
+    s = s.replace(/\\sqrt\{([^{}]*)\}/g, (_m, a: string) => (/^[\w.]+$/.test(a) ? `√${a}` : `√(${a})`))
+    s = s.replace(/\^\{([^{}]*)\}/g, (_m, a: string) => {
+      const t = a.replace(/\s+/g, '')
+      return /^-?\d+$/.test(t) ? [...t].map((c) => SUP[c] ?? c).join('') : `^(${a})`
+    })
+    if (s === before) break
+  }
+  s = s
+    .replace(/\\left|\\right|\\displaystyle/g, '')
+    .replace(/\\,|\\;|\\!|\\quad/g, ' ')
+    .replace(/\\operatorname\{([^{}]*)\}/g, '$1')
+    .replace(/\\text\{([^{}]*)\}/g, '$1')
+    .replace(/\\begin\{cases\}/g, '{ ')
+    .replace(/\\end\{cases\}/g, ' }')
+    .replace(/\\\\/g, '; ')
+    .replace(/&/g, ' if ')
+    .replace(/\\cdot|\\times/g, '·')
+    .replace(/\\pi/g, 'π')
+    .replace(/\\theta/g, 'θ')
+    .replace(/\\infty/g, '∞')
+    .replace(/\\leq?|\\le/g, '≤')
+    .replace(/\\geq?|\\ge/g, '≥')
+    .replace(/\\neq?/g, '≠')
+    .replace(/\\in/g, '∈')
+    .replace(/\\cup/g, '∪')
+    .replace(/\\(arcsin|arccos|arctan|sinh|cosh|tanh|sin|cos|tan|sec|csc|cot|ln|log|exp)/g, '$1')
+    .replace(/\^(-?\d)/g, (_m, d: string) => [...d].map((c) => SUP[c] ?? c).join(''))
+    .replace(/[{}]/g, (c) => (c === '{' ? '' : ''))
+    .replace(/\\/g, '')
+    .replace(/-/g, MINUS)
+    .replace(/\s+/g, ' ')
+    .trim()
+  return s
+}
+
+/** The equation text a description prints for a curve. */
+function equationText(c: AdapterCurve, spec: ModelSpec | undefined): string {
+  if (c.text) return c.text
+  if (c.source) {
+    try { return typedText(c.source) } catch { /* fall through */ }
+  }
+  if (spec) {
+    try { return latexToPlain(spec.latex(c.curve.params)) } catch { /* nothing */ }
+  }
+  return ''
+}
+
+/** A typed line as Unicode; a piecewise or restricted line piece by piece. */
+export function typedText(src: string): string {
+  const parts = piecewiseParts(src)
+  if (!parts) return prettyMath(src)
+  const head = parts.head ? `${prettyMath(parts.head)} = ` : ''
+  if (parts.restricted && parts.branches.length === 1) {
+    const b = parts.branches[0]
+    return `${head}${prettyMath(b.expr)} for ${prettyMath(b.cond)}`
+  }
+  const pieces = parts.branches.map((b) =>
+    b.otherwise || !b.cond ? `${prettyMath(b.expr)} otherwise` : `${prettyMath(b.expr)} if ${prettyMath(b.cond)}`)
+  return `${head}{${pieces.join('; ')}}`
+}
+
+/** "f" from "f(x) = …", "r" from "r = …", '' otherwise. */
+function nameFromSource(src: string | undefined): string {
+  if (!src) return ''
+  const m = /^\s*([A-Za-z])\s*(['′]*)\s*\(\s*(?:[A-Za-z]+|θ)\s*\)\s*=/.exec(src)
+  if (m) return m[1] + '′'.repeat(m[2].length)
+  return ''
+}
+
+const POLY_WORDS = ['constant function', 'linear function', 'quadratic function (a parabola)', 'cubic polynomial', 'quartic polynomial', 'quintic polynomial']
+
+function kindOf(c: AdapterCurve, spec: ModelSpec | undefined, models: Record<string, ModelSpec>): string {
+  if (c.kind) return c.kind
+  const curve = c.curve
+  if (curve.kind === 'polar') return 'polar curve'
+  if (curve.kind === 'parametric') return 'parametric curve'
+  if (curve.kind === 'implicit') {
+    const conic = c.source ? safe(() => readConic(c.source!)) : null
+    if (conic) return conic.kind
+    if (curve.modelId === 'circle' || curve.modelId === 'ellipse') return curve.modelId
+    return 'implicit curve'
+  }
+  if (spec?.inequality) return 'inequality boundary'
+  const pieces = spec?.pieces ? safe(() => spec.pieces!(curve.params)) : null
+  if (pieces && pieces.length > 1) return 'piecewise function'
+  const poly = safe(() => polynomialOf(curve, models))
+  if (poly) {
+    let deg = poly.length - 1
+    while (deg > 0 && Math.abs(poly[deg]) < 1e-12) deg--
+    return POLY_WORDS[deg] ?? `polynomial of degree ${deg}`
+  }
+  const sing = spec?.singularities ? safe(() => spec.singularities!(curve.params, [-50, 50])) : null
+  if (sing && sing.length && c.source && /\//.test(c.source) && !/(sin|cos|tan|sec|csc|cot|ln|log|e\^)/.test(c.source)) {
+    return 'rational function'
+  }
+  if (spec?.name && spec.name !== 'Expression' && !/^expr/i.test(spec.name)) return spec.name.toLowerCase()
+  const family = c.source ? familyOf(c.source) : null
+  return family ?? 'function'
+}
+
+/** The family a typed formula belongs to, when it uses exactly one kind of function. */
+function familyOf(src: string): string | null {
+  const rhs = src.slice(src.indexOf('=') + 1)
+  const word = (w: string) => new RegExp(`(?<![A-Za-z])(?:${w})(?![A-Za-z])`)
+  const has = {
+    trig: word('sin|cos|tan|sec|csc|cot').test(rhs),
+    inverseTrig: word('asin|acos|atan|arcsin|arccos|arctan').test(rhs),
+    log: word('ln|log(?:_\\w+)?').test(rhs) || /(?<![A-Za-z])log_/.test(rhs),
+    exp: word('exp').test(rhs) || /(?<![A-Za-z])e\s*\^|\d\s*\^\s*\(?[^)]*x/.test(rhs),
+    root: word('sqrt|cbrt').test(rhs),
+    abs: /\||(?<![A-Za-z])abs(?![A-Za-z])/.test(rhs),
+  }
+  const on = Object.entries(has).filter(([, v]) => v).map(([k]) => k)
+  if (on.length !== 1) return null
+  switch (on[0]) {
+    case 'trig': return 'trigonometric function'
+    case 'inverseTrig': return 'inverse trigonometric function'
+    case 'log': return 'logarithmic function'
+    case 'exp': return /\/\s*\(?\s*\d+\s*\+/.test(rhs) ? 'logistic function' : 'exponential function'
+    case 'root': return 'radical function'
+    case 'abs': return 'absolute value function'
+  }
+  return null
+}
+
+function safe<T>(f: () => T): T | null {
+  try { return f() } catch { return null }
+}
+
+/** Exact text for a computed value, only when it is a confident closed form. */
+function ex(v: number): string | undefined {
+  const f = exactForm(v, { tol: 1e-9 })
+  return f ? f.text : undefined
+}
+
+function inWindow(p: { x: number; y: number }, w: DescribeWindow): boolean {
+  const sx = (w.xMax - w.xMin) * 1e-6
+  const sy = (w.yMax - w.yMin) * 1e-6
+  return p.x >= w.xMin - sx && p.x <= w.xMax + sx && p.y >= w.yMin - sy && p.y <= w.yMax + sy
+}
+
+function setWords(s: RealSet | null): string | undefined {
+  if (!s || s.kind === 'unknown') return undefined
+  return s.builder || s.text
+}
+
+// ----------------------------------------------------------------------------
+// Per-curve
+// ----------------------------------------------------------------------------
+
+function pointOf(p: SpecialPoint): DescribePoint | null {
+  const kind = p.kind
+  if (kind === 'hole' || kind === 'intersection') return null
+  const out: DescribePoint = { kind, x: p.pos.x, y: p.pos.y }
+  if (p.exactX) out.exactX = p.exactX
+  if (p.exactY) out.exactY = p.exactY
+  if (p.tangent) out.tangent = true
+  if (kind === 'extreme') out.label = p.label
+  // a zero's y is 0 and the y-intercept's x is 0 by definition
+  if (kind === 'zero') out.exactY = '0'
+  if (kind === 'y-intercept') out.exactX = '0'
+  return out
+}
+
+function asymptoteOf(a: Asymptote): DescribeAsymptote | null {
+  if (a.kind === 'vertical') {
+    const out: DescribeAsymptote = { kind: 'vertical', x: a.x }
+    const e = ex(a.x)
+    if (e) out.exact = e
+    return out
+  }
+  const { a: p, dir } = a
+  if (Math.abs(dir.x) < 1e-12) {
+    return { kind: 'line', text: `x = ${ex(p.x) ?? fmtN(p.x)}` }
+  }
+  const m = dir.y / dir.x
+  const b = p.y - m * p.x
+  if (Math.abs(m) < 1e-12) {
+    const out: DescribeAsymptote = { kind: 'horizontal', y: b }
+    const e = ex(b)
+    if (e) out.exact = e
+    return out
+  }
+  return { kind: 'slant', m, b }
+}
+
+function fmtN(v: number): string {
+  const r = Number(v.toPrecision(4))
+  return String(r).replace('-', MINUS)
+}
+
+/** Breaks between pieces where the one-sided limits differ, and the restricted ends. */
+function jumpsAndEnds(curve: FittedCurve, spec: ModelSpec | undefined, w: DescribeWindow): { jumps: DescribeJump[]; ends: DescribePoint[] } {
+  const jumps: DescribeJump[] = []
+  const ends: DescribePoint[] = []
+  if (!spec?.evalExplicit || !spec.pieces) return { jumps, ends }
+  const pieces = safe(() => spec.pieces!(curve.params)) ?? []
+  if (pieces.length === 0) return { jumps, ends }
+  const f = (x: number) => spec.evalExplicit!(curve.params, x)
+  const limit = (x: number, side: -1 | 1): number | null => {
+    const vals: number[] = []
+    for (const h of [1e-5, 1e-7, 1e-9]) {
+      const v = f(x + side * h * Math.max(1, Math.abs(x)))
+      if (!Number.isFinite(v)) return null
+      vals.push(v)
+    }
+    // linear extrapolation to h = 0 from the two smallest steps
+    const v = vals[2]
+    const e = exactForm(v, { tol: 1e-6 })
+    return e ? e.value : Number(v.toPrecision(10))
+  }
+  const valueAt = (x: number): number | null => {
+    const v = f(x)
+    return Number.isFinite(v) ? v : null
+  }
+  const ps = [...pieces].sort((p, q) => p.lo - q.lo)
+  const same = (a: number, b: number) => Math.abs(a - b) <= 1e-12 * Math.max(1, Math.abs(a))
+  const endpoint = (x: number, side: -1 | 1, closed: boolean) => {
+    if (x < w.xMin || x > w.xMax) return
+    const inside = limit(x, side)
+    const at = closed ? valueAt(x) : null
+    const y = at ?? inside
+    if (y === null) return
+    const p: DescribePoint = { kind: 'endpoint', x, y, closed }
+    const exX = ex(x); if (exX) p.exactX = exX
+    const ey = ex(y); if (ey) p.exactY = ey
+    if (inWindow(p, w)) ends.push(p)
+  }
+  ps.forEach((p, i) => {
+    const prev = ps[i - 1]
+    const next = ps[i + 1]
+    if (Number.isFinite(p.lo) && !(prev && same(prev.hi, p.lo))) endpoint(p.lo, 1, p.loClosed)
+    if (Number.isFinite(p.hi) && !(next && same(next.lo, p.hi))) endpoint(p.hi, -1, p.hiClosed)
+    if (!next || !Number.isFinite(p.hi) || !same(next.lo, p.hi)) return
+    // a junction between two pieces
+    const x = p.hi
+    if (x < w.xMin || x > w.xMax) return
+    const L = limit(x, -1)
+    const R = limit(x, 1)
+    if (L === null || R === null) return
+    const tol = 1e-6 * Math.max(1, Math.abs(L), Math.abs(R))
+    if (Math.abs(L - R) <= tol) return // continuous, or a hole (findHoles reports that one)
+    const V = p.hiClosed || next.loClosed ? valueAt(x) : null
+    const j: DescribeJump = { x, left: L, right: R, value: V }
+    const exactX = ex(x); if (exactX) j.exactX = exactX
+    const el = ex(L); if (el) j.leftText = el
+    const er = ex(R); if (er) j.rightText = er
+    if (V !== null) { const ev = ex(V); if (ev) j.valueText = ev }
+    jumps.push(j)
+  })
+  return { jumps, ends }
+}
+
+function describeOne(c: AdapterCurve, input: AdapterInput): DescribeCurve {
+  const { models, window: w } = input
+  const curve = c.curve
+  const spec = models[curve.modelId]
+  const range: [number, number] = [w.xMin, w.xMax]
+  const out: DescribeCurve = {
+    name: c.name ?? nameFromSource(c.source),
+    text: equationText(c, spec),
+    kind: kindOf(c, spec, models),
+  }
+  if (c.dashed) out.dashed = true
+  if (c.shows) out.shows = c.shows
+  if (c.notes?.length) out.notes = [...c.notes]
+
+  const analysis = safe(() => analyzeCurve(curve, models)) ?? []
+  const features: DescribePoint[] = []
+  for (const p of analysis) {
+    const d = pointOf(p)
+    if (d && inWindow(d, w)) features.push(d)
+  }
+  // holes: analyzeCurve's carry exact forms; findHoles fills in any it skipped
+  const holes: DescribeHole[] = []
+  for (const p of analysis) {
+    if (p.kind !== 'hole' || !inWindow(p.pos, w)) continue
+    const h: DescribeHole = { x: p.pos.x, y: p.pos.y }
+    if (p.exactX) h.exactX = p.exactX
+    if (p.exactY) h.exactY = p.exactY
+    holes.push(h)
+  }
+  for (const h of safe(() => findHoles(curve, models, range)) ?? []) {
+    if (!inWindow(h, w) || holes.some((k) => Math.abs(k.x - h.x) < 1e-6)) continue
+    const d: DescribeHole = { x: h.x, y: h.y }
+    const exX = ex(h.x); if (exX) d.exactX = exX
+    const exY = ex(h.y); if (exY) d.exactY = exY
+    holes.push(d)
+  }
+  if (holes.length) out.holes = holes.sort((a, b) => a.x - b.x)
+
+  const asym = (safe(() => findAsymptotes(curve, models, range)) ?? [])
+    .map(asymptoteOf)
+    .filter((a): a is DescribeAsymptote => a !== null)
+    .filter((a) => a.kind !== 'vertical' || (a.x >= w.xMin && a.x <= w.xMax))
+  if (asym.length) out.asymptotes = asym
+
+  if (curve.kind === 'explicit') {
+    const { jumps, ends } = jumpsAndEnds(curve, spec, w)
+    if (jumps.length) out.jumps = jumps
+    features.push(...ends)
+    // a jump's own dots are said with the jump, not as stray extrema
+    const d = setWords(safe(() => curveDomain(curve, models)))
+    const r = setWords(safe(() => curveRange(curve, models)))
+    if (d) out.domain = d
+    if (r) out.range = r
+  }
+
+  // a typed conic: its centre, vertices, foci and the rest, in sentences
+  if (curve.kind === 'implicit' && c.source) {
+    const conic = safe(() => readConic(c.source!))
+    if (conic) {
+      const feats = safe(() => conicFeatures(conic))
+      if (feats) {
+        const center = conic.kind === 'parabola' ? 'vertex' : 'center'
+        if (feats.center) features.push({ kind: 'point', x: feats.center.x, y: feats.center.y, exactX: feats.center.xText, exactY: feats.center.yText, label: center })
+        if (conic.kind !== 'circle') {
+          feats.vertices.forEach((v) => features.push({ kind: 'point', x: v.x, y: v.y, exactX: v.xText, exactY: v.yText, label: 'vertex' }))
+          feats.foci.forEach((v) => features.push({ kind: 'point', x: v.x, y: v.y, exactX: v.xText, exactY: v.yText, label: 'focus' }))
+        }
+        const notes: string[] = []
+        if (conic.kind === 'circle') notes.push(`Its radius is ${conic.a.replace(/-/g, MINUS)}`)
+        if (feats.directrix) notes.push(`Its directrix is ${feats.directrix.text}`)
+        if (feats.asymptotes.length) notes.push(`Its asymptotes are ${feats.asymptotes.map((a) => a.text).join(' and ')}`)
+        if (conic.kind === 'ellipse' || conic.kind === 'hyperbola') {
+          const e = ex(feats.eccentricity)
+          if (Number.isFinite(feats.eccentricity)) notes.push(`Its eccentricity is ${e ?? fmtN(feats.eccentricity)}`)
+        }
+        out.notes = [...(out.notes ?? []), ...notes]
+      }
+    }
+  }
+
+  for (const l of c.labelled ?? []) {
+    const hit = features.find((p) => Math.abs(p.x - l.x) < 1e-6 && Math.abs(p.y - l.y) < 1e-6)
+    if (hit) {
+      hit.labelled = true
+      if (l.label) hit.label = l.label
+      continue
+    }
+    const p: DescribePoint = { kind: 'point', x: l.x, y: l.y, labelled: true }
+    if (l.label) p.label = l.label
+    const exX = l.exactX ?? ex(l.x); if (exX) p.exactX = exX
+    const exY = l.exactY ?? ex(l.y); if (exY) p.exactY = exY
+    features.push(p)
+  }
+  if (features.length) out.features = features.sort((a, b) => a.x - b.x)
+  return out
+}
+
+// ----------------------------------------------------------------------------
+// Scene
+// ----------------------------------------------------------------------------
+
+export function describeInputFromCurves(input: AdapterInput): DescribeInput {
+  const w = input.window
+  const visible = input.curves.filter((c) => c.curve.visible !== false)
+  const described = visible.map((c) => describeOne(c, input))
+  // unnamed curves still need a handle for intersections and regions
+  const label = new Map<string, string>()
+  visible.forEach((c, i) => label.set(c.curve.id, described[i].name || `curve ${i + 1}`))
+
+  const out: DescribeInput = { window: w, curves: described }
+  if (input.board) out.board = input.board
+
+  if (input.intersections !== false) {
+    const inters: DescribeIntersection[] = []
+    for (let i = 0; i < visible.length; i++) {
+      for (let j = i + 1; j < visible.length; j++) {
+        const pts = safe(() => intersectionPoints(visible[i].curve, visible[j].curve, input.models, [w.xMin, w.xMax])) ?? []
+        for (const p of pts) {
+          if (!inWindow(p.pos, w)) continue
+          const d: DescribeIntersection = { a: label.get(visible[i].curve.id)!, b: label.get(visible[j].curve.id)!, x: p.pos.x, y: p.pos.y }
+          if (p.exactX) d.exactX = p.exactX
+          if (p.exactY) d.exactY = p.exactY
+          const lab = input.labelledIntersections?.find((q) => Math.abs(q.x - p.pos.x) < 1e-3 && Math.abs(q.y - p.pos.y) < 1e-3)
+          if (lab) {
+            d.labelled = true
+            if (lab.label) d.label = lab.label
+          }
+          inters.push(d)
+        }
+      }
+    }
+    if (inters.length) out.intersections = inters
+  }
+
+  const byId = new Map(input.curves.map((c) => [c.curve.id, c.curve]))
+  const regions: DescribeRegion[] = []
+  const sums: DescribeRiemann[] = []
+  const tangents: DescribeTangent[] = []
+  for (const k of input.calc ?? []) {
+    const curve = byId.get(k.curve)
+    if (!curve) continue
+    const name = label.get(k.curve) ?? 'the curve'
+    if (k.kind === 'area') {
+      const other = k.other ? byId.get(k.other) : undefined
+      const res = other ? safe(() => areaBetween(curve, other, input.models, k.a, k.b, true)) : safe(() => areaUnder(curve, input.models, k.a, k.b))
+      const r: DescribeRegion = { upper: name, a: k.a, b: k.b }
+      if (k.other) {
+        // which one is on top: compare at the midpoint
+        const mid = (k.a + k.b) / 2
+        const f = input.models[curve.modelId]?.evalExplicit
+        const g = other ? input.models[other.modelId]?.evalExplicit : undefined
+        const fv = f ? f(curve.params, mid) : NaN
+        const gv = g && other ? g(other.params, mid) : NaN
+        const otherName = label.get(k.other) ?? 'the other curve'
+        if (Number.isFinite(fv) && Number.isFinite(gv) && gv > fv) {
+          r.upper = otherName
+          r.lower = name
+        } else r.lower = otherName
+      }
+      if (k.label) r.label = k.label
+      const ea = ex(k.a); if (ea) r.exactA = ea
+      const eb = ex(k.b); if (eb) r.exactB = eb
+      if (res) {
+        r.value = k.other ? Math.abs(res.value) : res.value
+        const ev = ex(r.value); if (ev) r.exactValue = ev
+      }
+      regions.push(r)
+    } else if (k.kind === 'riemann') {
+      const res = safe(() => riemann(curve, input.models, k.a, k.b, k.n, k.method))
+      const r: DescribeRiemann = { curve: name, method: k.method, n: k.n, a: k.a, b: k.b }
+      const ea = ex(k.a); if (ea) r.exactA = ea
+      const eb = ex(k.b); if (eb) r.exactB = eb
+      if (res) r.value = res.value
+      sums.push(r)
+    } else if (k.kind === 'tangent') {
+      const t = safe(() => tangentAt(curve, input.models, k.x))
+      const d: DescribeTangent = { curve: name, x: k.x }
+      const exX = ex(k.x); if (exX) d.exactX = exX
+      if (t) {
+        d.slope = t.m
+        const em = ex(t.m); if (em) d.exactSlope = em
+        d.text = `y = ${lineWords(t.m, t.b)}`
+      }
+      tangents.push(d)
+    } else {
+      const spec = input.models[curve.modelId]
+      const f = spec?.evalExplicit
+      const d: DescribeTangent = { curve: name, x: k.x, kind: 'secant', x2: k.x2 }
+      const e1 = ex(k.x); if (e1) d.exactX = e1
+      const e2 = ex(k.x2); if (e2) d.exactX2 = e2
+      if (f && k.x2 !== k.x) {
+        const m = (f(curve.params, k.x2) - f(curve.params, k.x)) / (k.x2 - k.x)
+        if (Number.isFinite(m)) {
+          d.slope = m
+          const em = ex(m); if (em) d.exactSlope = em
+        }
+      }
+      tangents.push(d)
+    }
+  }
+  if (regions.length) out.regions = regions
+  if (sums.length) out.riemann = sums
+  if (tangents.length) out.tangents = tangents
+  if (input.numberLine) out.numberLine = input.numberLine
+  if (input.extras?.length) out.extras = [...input.extras]
+  return out
+}
+
+function lineWords(m: number, b: number): string {
+  const num = (v: number) => ex(v) ?? fmtN(v)
+  const mm = Math.abs(m - 1) < 1e-12 ? 'x' : Math.abs(m + 1) < 1e-12 ? `${MINUS}x` : `${num(m)}x`
+  if (Math.abs(m) < 1e-12) return num(b)
+  if (Math.abs(b) < 1e-12) return mm
+  return `${mm} ${b < 0 ? MINUS : '+'} ${num(Math.abs(b))}`
+}
+
+/** Both steps at once. */
+export function describeCurves(input: AdapterInput, opts?: DescribeOptions): GraphDescription {
+  return describeScene(describeInputFromCurves(input), opts)
+}
+
+// ----------------------------------------------------------------------------
+// Number line
+// ----------------------------------------------------------------------------
+
+/** The number-line board's solver result, as the dots and shading it draws. */
+export function numberLineFromSolve(result: SolveResult, min: number, max: number, step?: number): DescribeNumberLine {
+  const parts = result.solution.parts ?? []
+  const points: DescribeNumberLine['points'] = []
+  const intervals: DescribeNumberLine['intervals'] = []
+  const addPoint = (x: number, closed: boolean, exact: string | null | undefined) => {
+    if (!Number.isFinite(x) || points.some((p) => Math.abs(p.x - x) < 1e-12)) return
+    const p: DescribeNumberLine['points'][number] = { x, closed }
+    if (exact) p.exact = exact
+    points.push(p)
+  }
+  if (result.solution.kind === 'finite') {
+    for (const x of result.solution.points ?? []) addPoint(x, true, ex(x))
+  }
+  for (const p of parts) {
+    const iv: DescribeNumberLine['intervals'][number] = {
+      lo: Number.isFinite(p.lo) ? p.lo : null,
+      hi: Number.isFinite(p.hi) ? p.hi : null,
+    }
+    if (p.loExact) iv.loText = p.loExact.text
+    if (p.hiExact) iv.hiText = p.hiExact.text
+    intervals.push(iv)
+    if (Number.isFinite(p.lo)) addPoint(p.lo, p.loClosed, p.loExact?.text)
+    if (Number.isFinite(p.hi)) addPoint(p.hi, p.hiClosed, p.hiExact?.text)
+  }
+  // excluded critical values inside a shaded stretch (x ≠ 2) are open circles too
+  for (const cl of result.clauses ?? []) {
+    for (const cv of cl.critical) {
+      if (cv.included) continue
+      const inside = parts.some((p) => cv.x > p.lo && cv.x < p.hi)
+      if (inside) addPoint(cv.x, false, cv.exact?.text)
+    }
+  }
+  const statement = result.clauses?.map((c) => c.text).join(result.combine === 'or' ? ' or ' : ' and ')
+  const out: DescribeNumberLine = {
+    min,
+    max,
+    points: points.sort((a, b) => a.x - b.x),
+    intervals: result.solution.kind === 'finite' ? [] : intervals,
+    solution: result.solution.text,
+    builder: result.solution.builder,
+  }
+  if (step !== undefined) out.step = step
+  if (statement) out.statement = prettyMath(statement)
+  return out
+}
