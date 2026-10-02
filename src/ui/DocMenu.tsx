@@ -25,6 +25,8 @@ interface Props {
   onImport(file: File): void
   /** Open the worksheet builder: several documents' figures on one page. */
   onWorksheet?(): void
+  /** Open the examples gallery: ready-made boards, opened as copies. */
+  onExamples?(): void
   /** Open the share dialog: this document as a link (or a QR code). */
   onShare?(): void
   /**
@@ -100,6 +102,7 @@ export function DocMenu({
   onExport,
   onImport,
   onWorksheet,
+  onExamples,
   onShare,
   shared = null,
   onMakeCopy,
@@ -275,6 +278,17 @@ export function DocMenu({
             >
               New number line
             </button>
+            {onExamples && (
+              <button
+                className="doc-item"
+                role="menuitem"
+                title="Ready-to-teach boards for each unit — each opens as a copy in your documents"
+                data-testid="open-examples"
+                onClick={pick(onExamples)}
+              >
+                Examples…
+              </button>
+            )}
             {!shared && (
               <button className="doc-item" role="menuitem" onClick={pick(onDuplicate)}>
                 Duplicate

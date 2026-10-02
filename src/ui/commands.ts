@@ -125,6 +125,8 @@ export interface CommandActions {
   setBoardKind(kind: BoardKind): void
   duplicateDocument(): void
   openWorksheet(): void
+  /** The examples gallery (Document menu → Examples…). */
+  openExamples(): void
   share(): void
   backup(): void
   importFile(): void
@@ -810,6 +812,19 @@ export const COMMANDS: readonly Command[] = [
     path: 'Document menu → Worksheet…',
     when: always,
     run: (ctx) => ctx.actions.openWorksheet(),
+  },
+  {
+    id: 'doc-examples',
+    title: 'Open an example',
+    description: 'Ready-to-teach boards for every unit, each with a teacher note; opens as a copy',
+    keywords: [
+      'example', 'examples', 'gallery', 'sample', 'demo', 'template', 'lesson', 'ready made', 'tour',
+      'what can it do', 'unit', 'ap calculus', 'precalculus', 'math 3',
+    ],
+    group: 'Document',
+    path: 'Document menu → Examples…',
+    when: always,
+    run: (ctx) => ctx.actions.openExamples(),
   },
   {
     id: 'doc-share',
@@ -1601,6 +1616,7 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     { title: 'Size, margin, caption, window', text: 'Width, aspect, framing, the caption under the figure, the TI window', how: 'Download ▾ (caret)' },
   ] },
   { id: 'docs', course: 'Exports & worksheets', title: 'Documents and worksheets', entries: [
+    { id: 'doc-examples' },
     { id: 'doc-worksheet' },
     { id: 'doc-new-graph' },
     { id: 'doc-new-nl' },

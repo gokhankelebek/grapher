@@ -44,6 +44,7 @@ import type { RevealModeApi } from './useRevealMode'
 import type { ExportApi } from './useExport'
 import type { FigureSettingsApi } from './useFigureSettings'
 import type { SidebarEditorsApi } from './useSidebarEditors'
+import type { ExamplesApi } from './useExamples'
 
 /** What useCommands reads from the hooks App calls before it. */
 export interface CommandsDeps {
@@ -71,9 +72,10 @@ export interface CommandsDeps {
   exporter: ExportApi
   figureSettings: FigureSettingsApi
   editors: SidebarEditorsApi
+  examples: ExamplesApi
 }
 
-export function useCommands({ board, docState, session, refs, derived, notices, history, docActions, editing, calc, fieldsApi, typed, tables, domain, numberLine, viewport, unitCircle, rates, overlaysApi, naming, revealMode, exporter, figureSettings, editors }: CommandsDeps) {
+export function useCommands({ board, docState, session, refs, derived, notices, history, docActions, editing, calc, fieldsApi, typed, tables, domain, numberLine, viewport, unitCircle, rates, overlaysApi, naming, revealMode, exporter, figureSettings, editors, examples }: CommandsDeps) {
   const {
     curves, kind, items, selectedId, setSelectedId, sidebarOpen, setSidebarOpen, lens, fields,
     shapes, dataSets, sequences, boardGrid, figureStyle, previewFigure, setPreviewFigure,
@@ -213,6 +215,7 @@ export function useCommands({ board, docState, session, refs, derived, notices, 
     setBoardKind,
     duplicateDocument,
     openWorksheet,
+    openExamples: examples.openGallery,
     share: openShareDialog,
     backup: exportDocument,
     importFile: pickImportFile,

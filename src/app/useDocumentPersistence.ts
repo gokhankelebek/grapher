@@ -10,7 +10,7 @@
 // memo and effect on the board, so a new hook goes where its inputs exist.
 // ============================================================================
 
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { MODELS } from '../core/fit/models'
 import {
   AUTO_AXIS_UNITS,
@@ -89,6 +89,11 @@ export function useDocumentPersistence({ board, docState, session, refs, derived
   } = derived
   const { showToast } = notices
 
+  // The teacher note (an opened example's): part of the document, written
+  // with it, never part of undo. A ref for the serializer, state for the card.
+  const noteRef = useRef<string>('')
+  const [docNote, setDocNote] = useState<string>('')
+
   // ======================================================= documents / saving
   const blankBoard = useCallback(
     (nextKind: BoardKind = 'cartesian'): HydratedBoard => ({
@@ -158,6 +163,7 @@ export function useDocumentPersistence({ board, docState, session, refs, derived
       caption: figureCaptionRef.current ?? '',
       captionAuto: figureCaptionRef.current === null,
       curveViews: collectCurveViews(readViewStates()),
+      ...(noteRef.current !== '' ? { note: noteRef.current } : {}),
       viewport: {
         center: vpRef.current.center,
         pxPerUnit: vpRef.current.pxPerUnit,
@@ -349,6 +355,8 @@ export function useDocumentPersistence({ board, docState, session, refs, derived
     editsRef.current = {}
     selectedRef.current = board.selectedId
     docMetaRef.current = meta
+    noteRef.current = board.note ?? ''
+    setDocNote(noteRef.current)
     exprCounterRef.current = board.exprCounter
     docStoredRef.current = false
     unsavedRef.current = false
@@ -690,7 +698,7 @@ export function useDocumentPersistence({ board, docState, session, refs, derived
 
   return {
     blankBoard, currentBoardInput, saveNow, saveBeforeSwitch, scheduleSave, applyHydrated,
-    reloadCurrentDoc,
+    reloadCurrentDoc, docNote,
   }
 }
 

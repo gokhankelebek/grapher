@@ -17,6 +17,8 @@ import { ShareDialog } from './ui/ShareDialog'
 import { Sidebar } from './ui/Sidebar'
 import { Toolbar } from './ui/Toolbar'
 import { WorksheetEditor } from './ui/WorksheetEditor'
+import { ExampleGallery } from './ui/ExampleGallery'
+import { TeacherNote } from './ui/TeacherNote'
 import { useBoardState } from './app/useBoardState'
 import { useDocumentState } from './app/useDocumentState'
 import { useSessionState } from './app/useSessionState'
@@ -37,6 +39,7 @@ import { useDomainLens } from './app/useDomainLens'
 import { useNumberLine } from './app/useNumberLine'
 import { useViewport } from './app/useViewport'
 import { useUnitCircle } from './app/useUnitCircle'
+import { useExamples } from './app/useExamples'
 import { useRelatedRates } from './app/useRelatedRates'
 import { useInequalitySystem } from './app/useInequalitySystem'
 import { useBoardOverlays } from './app/useBoardOverlays'
@@ -101,6 +104,7 @@ export default function App() {
     board, refs, derived, notices, history, persistence, docActions, calc, fieldsApi, typed, tables,
     numberLine,
   })
+  const examplesApi = useExamples({ docState, refs, derived, notices, persistence, viewport })
   const unitCircle = useUnitCircle({ board, refs, derived, notices, history, calc, viewport })
   const rates = useRelatedRates({ board, refs, notices, history, calc, viewport })
   const system = useInequalitySystem({ board, refs, derived, history })
@@ -136,7 +140,7 @@ export default function App() {
   const commandsApi = useCommands({
     board, docState, session, refs, derived, notices, history, docActions, editing, calc, fieldsApi,
     typed, tables, domain, numberLine, viewport, unitCircle, rates, overlaysApi, naming, revealMode,
-    exporter, figureSettings, editors,
+    exporter, figureSettings, editors, examples: examplesApi,
   })
   useKeyboard({
     board, docState, session, refs, history, editing, calc, revealMode, figureSettings, editors,
@@ -169,7 +173,8 @@ export default function App() {
   } = derived
   const { showToast } = notices
   const { undo, redo, editStart, editEnd, editCancel, commitWithSnap } = history
-  const { saveNow, reloadCurrentDoc } = persistence
+  const { saveNow, reloadCurrentDoc, docNote } = persistence
+  const { galleryOpen, openGallery, closeGallery, openExample, foldedNotes, setNoteFolded } = examplesApi
   const {
     worksheetOpen, setWorksheetOpen, openWorksheet, renameDoc, newDocument, setBoardKind,
     openDocument, saveBoardAsNewDoc, copyName, makeSharedCopy, duplicateDocument, openShareDialog,
@@ -262,6 +267,13 @@ export default function App() {
       <Sidebar
         open={sidebarOpen && !presentMode}
         readOnly={shared?.viewOnly === true}
+        topNote={
+          <TeacherNote
+            note={docNote}
+            folded={foldedNotes.has(docMeta.id)}
+            onFold={(f) => setNoteFolded(docMeta.id, f)}
+          />
+        }
         kind={kind}
         onSetKind={setBoardKind}
         items={items}
@@ -647,6 +659,7 @@ export default function App() {
               onExport={exportDocument}
               onImport={importDocument}
               onWorksheet={openWorksheet}
+              onExamples={openGallery}
               onShare={openShareDialog}
               shared={shared ? (shared.viewOnly ? 'view' : 'edit') : null}
               onMakeCopy={() => makeSharedCopy('asked')}
@@ -985,6 +998,8 @@ export default function App() {
           />
         )}
 
+        {galleryOpen && <ExampleGallery onOpen={openExample} onClose={closeGallery} />}
+
         {shareDialog && (
           <ShareDialog
             name={docMeta.name}
@@ -1068,6 +1083,10 @@ export default function App() {
           onPalette={() => {
             setHelpOpen(false)
             setPalette({ key: Date.now() })
+          }}
+          onExample={(id) => {
+            setHelpOpen(false)
+            openExample(id)
           }}
           onClose={() => setHelpOpen(false)}
         />

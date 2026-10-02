@@ -8786,3 +8786,336 @@ button.calc-field-btn {
   font-family: var(--font-mono);
   color: var(--text);
 }
+
+/* ============================================================
+   Examples gallery — src/ui/ExampleGallery.tsx
+   ============================================================ */
+
+.exg-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 305;
+  display: flex;
+  justify-content: center;
+  align-items: stretch;
+  padding: var(--sp-4);
+  background: rgba(5, 7, 12, 0.6);
+}
+
+.exg {
+  width: min(1240px, 100%);
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  overflow: hidden;
+}
+
+.exg-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.exg-title {
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  margin-right: auto;
+}
+
+.exg-search {
+  flex: 0 1 340px;
+  min-width: 160px;
+  padding: 6px var(--sp-3);
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-md);
+}
+
+.exg-search:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+}
+
+.exg-x {
+  padding: 2px var(--sp-2);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: var(--fs-xl);
+  line-height: 1;
+}
+
+.exg-x:hover,
+.exg-x:focus-visible {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text);
+}
+
+.exg-lede {
+  padding: var(--sp-2) var(--sp-4) 0;
+  color: var(--muted);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+}
+
+.exg-lede strong {
+  color: var(--text);
+}
+
+.exg-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+}
+
+.exg-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 var(--sp-4) var(--sp-6);
+  overscroll-behavior: contain;
+}
+
+.exg-empty {
+  margin-top: var(--sp-4);
+  color: var(--muted);
+}
+
+.exg-course {
+  margin-top: var(--sp-4);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  column-gap: var(--sp-6);
+}
+
+.exg-course-title {
+  flex: 1 0 100%;
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  color: var(--accent);
+  padding-bottom: var(--sp-1);
+  border-bottom: 1px solid var(--border);
+}
+
+.exg-unit {
+  margin-top: var(--sp-3);
+  border-radius: 10px;
+  max-width: 100%;
+}
+
+.exg-unit-focus {
+  outline: 1px solid var(--accent);
+  outline-offset: 6px;
+}
+
+.exg-unit-title {
+  font-size: var(--fs-md);
+  font-weight: 700;
+  margin-bottom: var(--sp-2);
+  /* a unit with one card must not stretch its row with a long title */
+  max-width: 100%;
+}
+
+/* Units flow side by side (most hold one or two boards), cards a fixed width. */
+.exg-grid {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+}
+
+.exg-grid > li {
+  width: 262px;
+  max-width: 100%;
+}
+
+.exg-card {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms var(--ease), background 120ms var(--ease);
+}
+
+.exg-card:hover,
+.exg-card:focus-visible {
+  border-color: var(--accent);
+  background: var(--panel-3);
+}
+
+.exg-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.exg-thumb {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.exg-thumb-wait,
+.exg-thumb-missing {
+  aspect-ratio: 3 / 2;
+}
+
+.exg-thumb-missing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #667;
+  font-size: var(--fs-sm);
+}
+
+.exg-card-top {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+
+.exg-tag {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.exg-card-title {
+  font-size: var(--fs-md);
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.exg-note {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* The help sheet's links from a unit to its examples. */
+.hs-examples {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-1) var(--sp-2);
+  margin: 0 0 var(--sp-1) var(--sp-2);
+  font-size: var(--fs-sm);
+}
+
+.hs-examples-label {
+  color: var(--muted);
+}
+
+.hs-example {
+  padding: 1px var(--sp-2);
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  color: var(--accent);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.hs-example:hover,
+.hs-example:focus-visible {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+@media print {
+  .hs-examples {
+    display: none !important;
+  }
+}
+
+/* ============================================================
+   Teacher note — src/ui/TeacherNote.tsx (top of the sidebar)
+   ============================================================ */
+
+.tnote {
+  margin: var(--sp-3) var(--sp-3) 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: 8px;
+  border: 1px solid rgba(249, 168, 37, 0.45);
+  background: rgba(249, 168, 37, 0.08);
+  color: var(--text);
+}
+
+.tnote-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: #f9a825;
+}
+
+.tnote-title {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  margin-right: auto;
+}
+
+.tnote-x {
+  padding: 0 6px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: var(--fs-lg);
+  line-height: 1.2;
+}
+
+.tnote-x:hover,
+.tnote-x:focus-visible {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text);
+}
+
+.tnote-text {
+  margin-top: var(--sp-1);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.tnote-chip {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: var(--sp-2) var(--sp-3) 0;
+  padding: 2px var(--sp-2);
+  border-radius: 999px;
+  border: 1px solid rgba(249, 168, 37, 0.45);
+  color: #f9a825;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.tnote-chip:hover,
+.tnote-chip:focus-visible {
+  background: rgba(249, 168, 37, 0.12);
+}

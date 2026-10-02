@@ -62,6 +62,8 @@ interface Props {
    * controls that add things are gone. A note says how to get an editable copy.
    */
   readOnly?: boolean
+  /** Shown at the very top of the sidebar: an opened example's teacher note. */
+  topNote?: ReactNode
   /** Which board this is. A number line lists items, not curves. */
   kind: BoardKind
   /** Switch the whole board over. Lossless, and one undo step. */
@@ -380,6 +382,7 @@ const EMPTY_ANALYSIS: SpecialPoint[] = []
 export function Sidebar({
   open,
   readOnly = false,
+  topNote = null,
   kind,
   onSetKind,
   items,
@@ -580,6 +583,7 @@ export function Sidebar({
   return (
     <aside className={`sidebar${open ? '' : ' sidebar-closed'}${readOnly ? ' sidebar-readonly' : ''}`}>
       <div className="sidebar-inner">
+        {topNote}
         <div className="sidebar-head">
           {readOnly ? (
             <div className="sidebar-readonly-note" data-testid="sidebar-readonly-note">

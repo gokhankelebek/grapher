@@ -1601,6 +1601,14 @@ export interface StoredBoard {
    * this existed — so such a board serialises byte-for-byte as it did.
    */
   curveViews?: Record<string, StoredCurveView>
+  /**
+   * A teacher note shown at the top of the sidebar — what to show, what to
+   * ask the class. The examples gallery writes one into every example it
+   * opens; a teacher's own documents never have one. Written ONLY when there
+   * is one, so every other document serialises byte-for-byte as it did
+   * before this existed, and an older reader drops a key it does not know.
+   */
+  note?: string
 }
 
 /**
@@ -1889,6 +1897,8 @@ export interface BoardInput {
   captionAuto?: boolean
   /** curveId -> its view settings. Absent, empty or all-default writes nothing. */
   curveViews?: Readonly<CurveViews>
+  /** The teacher note (see StoredBoard.note). Absent or blank writes nothing at all. */
+  note?: string
   /** pxPerUnitY present = Independent axes (see StoredBoard.viewport.ppuY). */
   viewport: { center: Vec2; pxPerUnit: number; pxPerUnitY?: number }
   selectedId: string | null
@@ -1977,6 +1987,8 @@ export interface HydratedBoard {
    * the board. An entry that could not be read is dropped and REPORTED.
    */
   curveViews: CurveViews
+  /** The teacher note, when the document has one (an opened example). */
+  note?: string
   /** pxPerUnitY present = Independent axes; absent = equal. */
   viewport: { center: Vec2; pxPerUnit: number; pxPerUnitY?: number }
   selectedId: string | null
@@ -2264,7 +2276,21 @@ export function boardToStored(input: BoardInput): StoredBoard {
     if (any) board.curveViews = views
   }
 
+  // And the teacher note, last and only when there is one: every document
+  // that never had one writes exactly the bytes it always wrote.
+  const note = storedNote(input.note)
+  if (note !== '') board.note = note
+
   return board
+}
+
+/** The longest teacher note a document carries. */
+export const MAX_NOTE_CHARS = 1200
+
+/** A note as a document keeps it: a string, trimmed, capped; '' for none. */
+export function storedNote(v: unknown): string {
+  if (typeof v !== 'string') return ''
+  return v.trim().slice(0, MAX_NOTE_CHARS)
 }
 
 /**
@@ -4044,6 +4070,14 @@ export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResu
     }
   }
 
+  // ---- the teacher note. Absent is the default; a note that is there but is
+  // not text is a lost instruction, so it is reported rather than dropped.
+  const note = storedNote(rawBoard.note)
+  if (rawBoard.note !== undefined && !isStr(rawBoard.note)) {
+    problems.push('The document’s teacher note was unreadable and was dropped.')
+    degraded = true
+  }
+
   // ---- axis units. Unreadable or absent is not a repair: it is the default.
   const rawAxis = isObj(rawBoard.axisUnits) ? rawBoard.axisUnits : {}
   const axisUnits: AxisUnitChoices = {
@@ -4096,6 +4130,7 @@ export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResu
       caption,
       captionAuto,
       curveViews,
+      ...(note !== '' ? { note } : {}),
       viewport,
       selectedId,
       mode,
