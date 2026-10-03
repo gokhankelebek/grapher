@@ -50,6 +50,8 @@ const MATH_SYMBOLS: Readonly<Record<string, string>> = {
   'ο': 'o', 'υ': '\\upsilon', 'χ': '\\chi', 'ψ': '\\psi', 'ϕ': '\\phi', 'ϑ': '\\vartheta',
   'Γ': '\\Gamma', 'Θ': '\\Theta', 'Λ': '\\Lambda', 'Ξ': '\\Xi', 'Π': '\\Pi', 'Φ': '\\Phi',
   'Ψ': '\\Psi', 'Υ': '\\Upsilon',
+  // Geometry (shape measurements): △ABC, line ℓ, AB ∦ CD.
+  '△': '\\triangle', 'ℓ': '\\ell', '∦': '\\not\\parallel',
 }
 
 const SUPERS: Readonly<Record<string, string>> = {

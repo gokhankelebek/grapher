@@ -384,6 +384,21 @@ export function corpusDocs(): CorpusDoc[] {
     out.push(doc('shapes', 'Shapes', input({ shapes, viewport: { center: { x: 1, y: 1.5 }, pxPerUnit: 50 } })))
   }
 
+  // ---- measurements on shapes: every chip a measured shape can draw — √
+  // lengths, fractional slopes, degree arcs, △ / ∥ / ⊥ in the summary, a
+  // midpoint's fractions, a point pair and a linked line's equation
+  {
+    const all = ['lengths', 'slopes', 'angles', 'right', 'marks', 'midpoints', 'area', 'classify'] as const
+    const shapes = [
+      { id: 'M1', src: 'ABCD = (0,0) (4,1) (5,4) (1,3)', params: [], color: '#4f9cf9', fill: false, visible: true, measure: { show: [...all] } },
+      { id: 'M2', src: 'EFG = (-6,0) (-6+2sqrt(3),0) (-6+2sqrt(3),2)', params: [], color: '#f97316', fill: false, visible: true, measure: { show: [...all] } },
+      { id: 'M3', src: 'HK = (-5,-4) (-1,-2)', params: [], color: '#22c55e', fill: false, visible: true, measure: { show: ['lengths', 'slopes', 'midpoints', 'equation'] } },
+      { id: 'M4', src: 'P = (2, -3)', params: [], color: '#e879f9', fill: false, visible: true, measure: { show: ['lengths', 'slopes', 'midpoints'], to: 'M1#1' } },
+      { id: 'M5', src: 'perpendicular to AB through P', params: [], color: '#f43f5e', fill: false, visible: true, measure: { show: ['equation', 'slopes'] } },
+    ] as const
+    out.push(doc('measure', 'Measurements: ABCD ∥ & △EFG', input({ shapes: shapes.map((x) => ({ ...x, measure: { ...x.measure, show: [...x.measure.show] } })), viewport: { center: { x: 0, y: 0.5 }, pxPerUnit: 45 } })))
+  }
+
   // ---- implicit curve with tangent marks, and a conic construction
   {
     const { curves, exprSources } = lines({ P: 'x^2 + y^2 = 25', c1: '(x - 1)^2/25 + (y - 2)^2/9 = 1' })
@@ -507,7 +522,7 @@ export function sheetExports(models: Map<string, DocModel>): CorpusTex[] {
       title: 'Warm-up',
       cols: 1,
       style: 'textbook',
-      items: [{ docId: 'data', caption: 'Population, 50% growth?' }, { docId: 'shapes' }],
+      items: [{ docId: 'data', caption: 'Population, 50% growth?' }, { docId: 'shapes' }, { docId: 'measure', caption: 'Classify ABCD; find sin E.' }],
     },
   ]
   const out: CorpusTex[] = []
@@ -558,7 +573,7 @@ export function declaredPreamble(tex: string): string[] {
 /** The graphs whose bank blocks are compiled (every family a stem figure can be). */
 export const BANK_DOCS: readonly string[] = [
   'explicit', 'caption', 'sketch', 'piecewise', 'piaxes', 'areas', 'tangent', 'secant', 'signchart',
-  'slopefield', 'polar', 'param', 'series', 'shapes', 'implicit', 'data', 'lp',
+  'slopefield', 'polar', 'param', 'series', 'shapes', 'measure', 'implicit', 'data', 'lp',
 ]
 
 /** Stems as the bank holds them, graphed by "Graph from item" and copied back. */

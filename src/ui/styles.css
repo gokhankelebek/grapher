@@ -9425,3 +9425,77 @@ button.calc-field-btn {
   color: var(--text);
   user-select: text;
 }
+
+/* ---------------------------------------------------------------------------
+   Measurements on a shape's card (src/ui/ShapeMeasureSection.tsx)
+   --------------------------------------------------------------------------- */
+
+.measure-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-bottom: var(--sp-1);
+}
+
+.measure-toggles-label {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  margin-right: 2px;
+}
+
+.measure-all {
+  font-style: italic;
+}
+
+.measure-side {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--sp-2);
+  align-items: baseline;
+}
+
+.measure-name {
+  min-width: 2.2em;
+  color: var(--muted);
+}
+
+.measure-cell {
+  color: var(--muted);
+}
+
+.measure-cell .reveal-in,
+.measure-cell > :not(.reveal-pill) {
+  color: var(--text);
+}
+
+.measure-val {
+  color: var(--text);
+}
+
+.measure-approx {
+  color: var(--muted);
+}
+
+.measure-angles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--sp-2);
+}
+
+.measure-sentence {
+  color: var(--text);
+}
+
+.measure-trig {
+  font-size: var(--fs-sm);
+  padding-left: var(--sp-2);
+}
+
+[data-testid='shape-right'] {
+  margin-bottom: var(--sp-2);
+}
+
+.measure-pair {
+  margin-bottom: var(--sp-1);
+}

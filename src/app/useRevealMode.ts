@@ -41,6 +41,9 @@ import type { InequalitySystemApi } from './useInequalitySystem'
 import type { BoardOverlaysApi } from './useBoardOverlays'
 import type { DomainPanelApi } from './useDomainPanel'
 import type { BoardLookApi } from './useBoardLook'
+import type { ShapesApi } from './useShapes'
+import { measureAnswerParts } from '../ui/shapeMeasure'
+import { shapeKey } from '../ui/reveal'
 
 /** What useRevealMode reads from the hooks App calls before it. */
 export interface RevealModeDeps {
@@ -53,12 +56,15 @@ export interface RevealModeDeps {
   overlaysApi: BoardOverlaysApi
   panel: DomainPanelApi
   lookApi: BoardLookApi
+  /** The shapes' compiled geometry, for their measurement answers. Optional: tests may omit it. */
+  shapesApi?: ShapesApi
 }
 
-export function useRevealMode({ board, docState, session, derived, editing, system, overlaysApi, panel, lookApi }: RevealModeDeps) {
+export function useRevealMode({ board, docState, session, derived, editing, system, overlaysApi, panel, lookApi, shapesApi }: RevealModeDeps) {
   const {
-    curves, kind, items, selectedId, calcLinks, fields, sequences, unitCircles, relatedRates, stats,
+    curves, kind, items, selectedId, calcLinks, fields, sequences, unitCircles, relatedRates, stats, shapes,
   } = board
+  const shapeCompiled = shapesApi?.shapeCompiled
   const { docMeta } = docState
   const { reveal, setReveal, revealRef, revealByDocRef, revealFreshRef } = session
   const { models, depKeys, analysis, analysisFor, contextAnalysis } = derived
@@ -96,6 +102,12 @@ export function useRevealMode({ board, docState, session, derived, editing, syst
     for (const r of relatedRates) if (r.hidden !== true) after.push(rrKey(r.id))
     for (const st of stats) if (st.hidden !== true) after.push(statKey(st.id))
     if (sysCard?.lp) after.push(SYSTEM_KEY)
+    for (const s of shapes) {
+      if (!s.visible || !s.measure) continue
+      const c = shapeCompiled?.get(s.id)
+      if (!c?.shape) continue
+      for (const part of measureAnswerParts(c.shape.kind, s.measure, c.reports)) after.push(shapeKey(s.id, part))
+    }
     return buildInventory({
       curves: shown.map((c) => {
         let asymptotes = 0
@@ -122,7 +134,7 @@ export function useRevealMode({ board, docState, session, derived, editing, syst
     })
     // depKeys: a curve that calls another moves when it does.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reveal.on, kind, items, curves, selectedId, models, analysis, analysisFor, domainPanel, calcLinks, crossings, sequences, fields, unitCircles, relatedRates, stats, sysCard, depKeys])
+  }, [reveal.on, kind, items, curves, selectedId, models, analysis, analysisFor, domainPanel, calcLinks, crossings, sequences, fields, unitCircles, relatedRates, stats, sysCard, depKeys, shapes, shapeCompiled])
   const revealInvRef = useRef(revealInv)
   revealInvRef.current = revealInv
 

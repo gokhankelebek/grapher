@@ -482,3 +482,15 @@ describe('the board through the recorder', () => {
     expect(p.center).toEqual(vp.center)
   })
 })
+
+describe('parallel signs in the PDF writer', () => {
+  it('∥ and ‖ print as two ASCII bars, never "?"', async () => {
+    const { pdfTextRuns } = await import('../src/render/vectorPdf')
+    for (const t of ['AB ∥ DC', 'AB ‖ DC']) {
+      const runs = pdfTextRuns(t, { family: 'sans', size: 12, weight: 'normal', italic: false } as never)
+      const codes = runs.flatMap((r) => r.codes)
+      expect(codes).not.toContain(63)
+      expect(String.fromCharCode(...codes)).toBe('AB || DC')
+    }
+  })
+})

@@ -118,7 +118,10 @@ export function pdfTextRuns(text: string, f: FontSpec): TextRun[] {
     if (c >= 0xa0 && c <= 0xff) return c
     return null
   }
-  for (const ch of text) {
+  // The parallel signs have no glyph in WinAnsi, Symbol or ZapfDingbats: the
+  // standard fonts print them as two ASCII bars, which is how they are read.
+  const expanded = text.replace(/[\u2225\u2016]/g, '||')
+  for (const ch of expanded) {
     // Scripts first: ² and ³ exist in WinAnsi but ⁴ does not, and x² beside
     // x⁴ must not come out in two different sizes.
     const script = SUP[ch] !== undefined ? SUP[ch] : SUB[ch]

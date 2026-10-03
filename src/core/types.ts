@@ -667,10 +667,25 @@ export type SlopeFieldOutcome =
 // ============================================================================
 
 export type Shape =
-  | { kind: 'point'; id: string; at: Vec2; color: string; visible: boolean; label?: string }
-  | { kind: 'segment'; id: string; a: Vec2; b: Vec2; color: string; visible: boolean; labels?: [string, string] }
+  | { kind: 'point'; id: string; at: Vec2; color: string; visible: boolean; label?: string; measure?: ShapeMeasureDraw }
+  | { kind: 'segment'; id: string; a: Vec2; b: Vec2; color: string; visible: boolean; labels?: [string, string]; measure?: ShapeMeasureDraw }
   | { kind: 'vector'; id: string; tail: Vec2; v: Vec2; color: string; visible: boolean; label?: string }
-  | { kind: 'polygon'; id: string; pts: readonly Vec2[]; color: string; visible: boolean; fill?: boolean; labels?: readonly string[] }
+  | { kind: 'polygon'; id: string; pts: readonly Vec2[]; color: string; visible: boolean; fill?: boolean; labels?: readonly string[]; measure?: ShapeMeasureDraw }
+  /** A whole line through `through` along `dir` — "parallel to AB through P" (a linked line). */
+  | { kind: 'line'; id: string; through: Vec2; dir: Vec2; color: string; visible: boolean; measure?: ShapeMeasureDraw }
+
+/**
+ * A line defined by OTHER shapes: "parallel to AB through P". The parser
+ * reads the words; the board resolves the names against the shapes on it
+ * (src/ui/shapeLinks.ts) on every change, so the line follows A, B and P.
+ */
+export interface ShapeLineLink {
+  rel: 'parallel' | 'perpendicular'
+  /** The two point names of the segment it is measured against: ['A', 'B']. */
+  to: [string, string]
+  /** A point's name, or fixed coordinates. */
+  through: string | Vec2
+}
 
 export type ShapeOutcome =
   | {
@@ -681,8 +696,71 @@ export type ShapeOutcome =
       defaultParams: number[]
       /** Build the shape for a given param vector. */
       makeShape(id: string, params: number[], color: string): Shape
+      /** A linked line's references (kind 'line' only); resolved by the board. */
+      link?: ShapeLineLink
     }
   | { ok: false; error: string; pos?: number }
+
+// ============================================================================
+// Measurements on shapes (NC Math 1 G-GPE.4–6, Math 2 G-SRT.6/8/12).
+//
+//   src/core/geometry.ts     distance, midpoint, slope, ∥/⊥, perimeter, shoelace
+//                            area, angles, classification, right-triangle trig
+//   src/ui/shapeLinks.ts     a shape's display toggles (BoardShape.measure) →
+//                            ShapeMeasureDraw, every text already worked out
+//   render/shapes.ts         draws it: side chips at the midpoints (outside),
+//                            angle arcs with degrees (inside), right-angle
+//                            squares, congruence ticks and arcs, midpoint dots,
+//                            a summary chip under the figure
+//   reveal mode / student copies replace the texts with "?" (src/ui/reveal.ts)
+// ============================================================================
+
+/** What a shape can show on the board. Stored per shape, only when set. */
+export type MeasureFlag =
+  | 'lengths'
+  | 'slopes'
+  | 'angles'
+  | 'right'
+  | 'marks'
+  | 'midpoints'
+  | 'area'
+  | 'classify'
+  | 'equation'
+
+/** The order flags are listed and stored in. */
+export const MEASURE_FLAGS: readonly MeasureFlag[] = [
+  'lengths', 'slopes', 'angles', 'right', 'marks', 'midpoints', 'area', 'classify', 'equation',
+]
+
+/** One line of the summary chip, and which answer it states. */
+export interface MeasureSummaryLine {
+  part: 'area' | 'class'
+  text: string
+}
+
+/** What render/shapes.ts draws for a shape's measurements: texts already worked out. */
+export interface ShapeMeasureDraw {
+  /** Per side (vertex i → i + 1; a segment has one side): the length chip. */
+  lengths?: readonly (string | null)[]
+  /** Per side: "m = 1/2". */
+  slopes?: readonly (string | null)[]
+  /** Per vertex: the degree label of its angle arc. */
+  angles?: readonly (string | null)[]
+  /** Per vertex: a right-angle square. */
+  right?: readonly boolean[]
+  /** Per side: how many congruence ticks (0 none). */
+  ticks?: readonly number[]
+  /** Per vertex: how many congruence arcs (0 none). */
+  arcs?: readonly number[]
+  /** Per side: the midpoint's coordinates; a dot is drawn there. */
+  midpoints?: readonly (string | null)[]
+  /** Lines of the chip under the figure: perimeter and area, the classification. */
+  summary?: readonly MeasureSummaryLine[]
+  /** A point measured to another point: a dashed segment with its readouts. */
+  pair?: { to: Vec2; length: string | null; slope: string | null; midpoint: string | null }
+  /** A line's equation chip. */
+  equation?: string | null
+}
 
 // ============================================================================
 // Figure styles — the LOOK of the whole board, chosen to match where the

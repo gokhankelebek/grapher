@@ -1403,6 +1403,90 @@ export function toPgfplots(sceneIn: BoardScene, opts: PgfplotsOptions = {}): str
     }
     if (e.tag) label(e.pts[e.pts.length - 1], e.tag, ink(e.color))
   }
+  // A shape's measurements: every chip through label() (so it lands where the
+  // board drew it), the marks as short paths in axis units — sized off the
+  // window, since an axis has no pixels.
+  const measureMarks = (sh: Exclude<NonNullable<typeof scene.shapes>[number], { kind: 'vector' }>): void => {
+    const m = sh.measure
+    if (!m) return
+    const col = ink(sh.color)
+    const tk = 0.018 * Math.min(spanX, spanY)
+    const draw = (pts: readonly Vec2[], extra = ''): void => {
+      for (const path of linePaths(pts)) add(`\\draw[${colour(col)}${extra}] ${path};`)
+    }
+    const sideMarks = (a: Vec2, b: Vec2, i: number): void => {
+      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
+      const L = Math.hypot(b.x - a.x, b.y - a.y)
+      if (!(L > 0)) return
+      const u = { x: (b.x - a.x) / L, y: (b.y - a.y) / L }
+      const n = { x: -u.y, y: u.x }
+      const k = m.ticks?.[i] ?? 0
+      for (let j = 0; j < k; j++) {
+        const off = (j - (k - 1) / 2) * tk * 0.45
+        const c = { x: mid.x + u.x * off, y: mid.y + u.y * off }
+        draw([{ x: c.x - n.x * tk * 0.6, y: c.y - n.y * tk * 0.6 }, { x: c.x + n.x * tk * 0.6, y: c.y + n.y * tk * 0.6 }])
+      }
+      if (m.midpoints?.[i]) {
+        marks([mid], col, true, 1.5)
+        label(mid, m.midpoints[i]!, col)
+      }
+      if (m.lengths?.[i]) label(mid, m.lengths[i]!, col)
+      if (m.slopes?.[i]) label(mid, m.slopes[i]!, col)
+    }
+    if (sh.kind === 'polygon') {
+      const n = sh.pts.length
+      sh.pts.forEach((c, i) => {
+        const prev = sh.pts[(i - 1 + n) % n]
+        const next = sh.pts[(i + 1) % n]
+        const lu = Math.hypot(prev.x - c.x, prev.y - c.y)
+        const lw = Math.hypot(next.x - c.x, next.y - c.y)
+        if (!(lu > 0) || !(lw > 0)) return
+        const u = { x: (prev.x - c.x) / lu, y: (prev.y - c.y) / lu }
+        const w = { x: (next.x - c.x) / lw, y: (next.y - c.y) / lw }
+        if (m.right?.[i]) {
+          const q = tk
+          draw([{ x: c.x + u.x * q, y: c.y + u.y * q }, { x: c.x + (u.x + w.x) * q, y: c.y + (u.y + w.y) * q }, { x: c.x + w.x * q, y: c.y + w.y * q }])
+        } else {
+          const rings = Math.max(m.angles?.[i] ? 1 : 0, m.arcs?.[i] ?? 0)
+          if (rings > 0) {
+            // the interior arc: sweep from u toward w the short way unless the vertex is reflex
+            const a0 = Math.atan2(u.y, u.x)
+            let d = Math.atan2(w.y, w.x) - a0
+            while (d <= -Math.PI) d += 2 * Math.PI
+            while (d > Math.PI) d -= 2 * Math.PI
+            const deg = Number.parseFloat((m.angles?.[i] ?? '').replace(/[^0-9.]/g, ''))
+            if (Number.isFinite(deg) && deg > 180) d = d > 0 ? d - 2 * Math.PI : d + 2 * Math.PI
+            for (let j = 0; j < rings; j++) {
+              const r = tk * (1.6 + j * 0.4)
+              const arc: Vec2[] = []
+              for (let t = 0; t <= 16; t++) arc.push({ x: c.x + r * Math.cos(a0 + (d * t) / 16), y: c.y + r * Math.sin(a0 + (d * t) / 16) })
+              draw(arc)
+            }
+          }
+        }
+        if (m.angles?.[i]) label(c, m.angles[i]!, col)
+      })
+      for (let i = 0; i < n; i++) sideMarks(sh.pts[i], sh.pts[(i + 1) % n], i)
+      if (m.summary && m.summary.length > 0) {
+        const low = sh.pts.reduce((a, b) => (b.y < a.y ? b : a), sh.pts[0])
+        const cx = sh.pts.reduce((t, p) => t + p.x, 0) / n
+        for (const l of m.summary) label({ x: cx, y: low.y }, l.text, col)
+      }
+    } else if (sh.kind === 'segment') {
+      sideMarks(sh.a, sh.b, 0)
+      if (m.equation) label({ x: (sh.a.x + sh.b.x) / 2, y: (sh.a.y + sh.b.y) / 2 }, m.equation, col)
+    } else if (sh.kind === 'point' && m.pair) {
+      draw([sh.at, m.pair.to], ', dashed')
+      marks([m.pair.to], col, false, 1.5)
+      const mid = { x: (sh.at.x + m.pair.to.x) / 2, y: (sh.at.y + m.pair.to.y) / 2 }
+      if (m.pair.midpoint) {
+        marks([mid], col, true, 1.5)
+        label(mid, m.pair.midpoint, col)
+      }
+      if (m.pair.length) label(mid, m.pair.length, col)
+      if (m.pair.slope) label(mid, m.pair.slope, col)
+    }
+  }
   for (const sh of scene.shapes ?? []) {
     if (!sh.visible) continue
     const col = colour(ink(sh.color))
@@ -1432,7 +1516,23 @@ export function toPgfplots(sceneIn: BoardScene, opts: PgfplotsOptions = {}): str
         })
         break
       }
+      case 'line': {
+        if (![sh.through.x, sh.through.y, sh.dir.x, sh.dir.y].every(Number.isFinite)) break
+        const L = Math.hypot(sh.dir.x, sh.dir.y)
+        if (!(L > 0)) break
+        const big = 4 * (spanX + spanY) + Math.abs(sh.through.x - (xmin + xmax) / 2) + Math.abs(sh.through.y - (ymin + ymax) / 2)
+        const ux = sh.dir.x / L
+        const uy = sh.dir.y / L
+        const ends = [
+          { x: sh.through.x - ux * big, y: sh.through.y - uy * big },
+          { x: sh.through.x + ux * big, y: sh.through.y + uy * big },
+        ]
+        for (const path of linePaths(ends)) add(`\\draw[${col}, thick] ${path};`)
+        if (sh.measure?.equation) label(sh.through, sh.measure.equation, ink(sh.color))
+        break
+      }
     }
+    if (sh.kind !== 'vector' && sh.measure) measureMarks(sh)
   }
 
   // ---- unit circles and related rates ------------------------------------------

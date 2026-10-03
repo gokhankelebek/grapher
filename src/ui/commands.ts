@@ -786,8 +786,20 @@ export const COMMANDS: readonly Command[] = [
     'linear programming', 'feasible region', 'corner points', 'vertices', 'objective function', 'optimize',
     'half plane',
   ]),
-  seeded('build-shape', 'ABC = ', 'Triangle or polygon', 'Type ABC = (0,0) (4,0) (4,3) for a shape with its sides and angles', [
+  seeded('build-shape', 'ABC = ', 'Triangle or polygon', 'Type ABC = (0,0) (4,0) (4,3) — its card measures sides, slopes, angles, perimeter and area, and classifies it', [
     'triangle', 'polygon', 'shape', 'quadrilateral', 'geometry', 'vertices', 'points', 'right triangle',
+    'perimeter', 'area', 'shoelace', 'angles', 'classify', 'parallelogram', 'rectangle', 'rhombus', 'square',
+    'trapezoid', 'kite', 'isosceles', 'equilateral', 'scalene', 'congruence marks', 'tick marks',
+    'trig ratios', 'sine', 'cosine', 'tangent', 'sohcahtoa', 'pythagorean theorem', '30-60-90', '45-45-90',
+    'special right triangles', 'measurements',
+  ]),
+  seeded('build-segment', 'AB = ', 'Segment: distance, midpoint, slope', 'Type AB = (1,2) (4,6) — its card gives the exact length, midpoint, slope and the line through it', [
+    'segment', 'distance', 'distance formula', 'midpoint', 'midpoint formula', 'endpoint', 'slope', 'rise over run',
+    'line through two points', 'slope-intercept', 'point-slope', 'length',
+  ]),
+  seeded('build-parallel-line', 'parallel to ', 'Line parallel or perpendicular through a point', 'Type parallel to AB through P (or perpendicular to …) — a line that follows A, B and P', [
+    'parallel', 'perpendicular', 'parallel line', 'perpendicular line', 'through a point', 'slope criteria',
+    'negative reciprocal', 'linked line', 'construct',
   ]),
 
   // ======================================================== Document

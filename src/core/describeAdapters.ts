@@ -15,7 +15,8 @@
 // Imports only from src/core/*.
 // ============================================================================
 
-import type { Asymptote, FittedCurve, ModelSpec, SpecialPoint, Vec2 } from './types'
+import type { Asymptote, FittedCurve, ModelSpec, Shape, SpecialPoint, Vec2 } from './types'
+import { pointText as geoPoint, polygonReport, segmentReport, withApprox, distance, slope as geoSlope, midpoint as geoMid } from './geometry'
 import { analyzeCurve, intersectionPoints } from './analyze'
 import { findAsymptotes, findHoles } from './holes'
 import { curveDomain, curveRange, type RealSet } from './domainRange'
@@ -673,6 +674,92 @@ export function describeStats(list: readonly DescribeStat[]): DescribeExtra[] {
         text: `In ${s.extreme} of ${s.reps} re-randomisations the difference was ${dir} the observed one, so the p-value is about ${fixedN(s.p, 3)}.`,
         answer: true,
       })
+    }
+  }
+  return out
+}
+
+// ----------------------------------------------------------------------------
+// Shapes and their measurements
+// ----------------------------------------------------------------------------
+
+/** "A(0, 0), B(4, 0) and C(4, 3)" */
+function vertexList(names: readonly string[], pts: readonly Vec2[]): string {
+  const items = pts.map((p, i) => `${names[i]}${geoPoint(p).text}`)
+  return items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
+}
+
+const POLY_WORD: Record<number, string> = { 3: 'Triangle', 4: 'Quadrilateral', 5: 'Pentagon', 6: 'Hexagon' }
+
+/**
+ * The sentences a segment, polygon, linked line or measured point
+ * contributes: what is drawn (always — the vertices are the question), and
+ * what its measurement readouts state (answers only).
+ */
+export function describeShapes(list: readonly Shape[]): DescribeExtra[] {
+  const out: DescribeExtra[] = []
+  for (const s of list) {
+    if (!s || !s.visible) continue
+    try {
+      if (s.kind === 'polygon') {
+        const r = polygonReport(s.pts, s.labels)
+        if (!r) continue
+        const what = POLY_WORD[s.pts.length] ?? 'Polygon'
+        out.push({ text: `${what} ${r.names.join('')} has vertices ${vertexList(r.names, s.pts)}.` })
+        const m = s.measure
+        if (!m) continue
+        if (m.right?.some((x) => x)) {
+          const at = r.angles.map((a, i) => (a.right ? r.names[i] : '')).filter((x) => x)
+          out.push({ text: `A right angle is marked at ${at.join(' and ')}.` })
+        }
+        if (m.lengths) out.push({ text: `Side lengths: ${r.sides.map((x) => `${x.name} = ${withApprox(x.length)}`).join(', ')}.`, answer: true })
+        if (m.slopes) out.push({ text: `Slopes: ${r.sides.map((x) => `${x.name} ${x.slope.text}`).join(', ')}.`, answer: true })
+        if (m.angles) out.push({ text: `Angles: ${r.angles.map((a, i) => `${r.names[i]} = ${a.text}`).join(', ')}.`, answer: true })
+        if (m.ticks || m.arcs) {
+          const groups = new Map<number, string[]>()
+          r.sideGroups.forEach((g, i) => g > 0 && groups.set(g, [...(groups.get(g) ?? []), r.sides[i].name]))
+          const eq = [...groups.values()].map((g) => g.join(' = '))
+          if (eq.length > 0) out.push({ text: `Tick marks show ${eq.join(' and ')}.`, answer: true })
+        }
+        if (m.midpoints) out.push({ text: `Midpoints: ${r.sides.map((x) => `${x.name} at ${x.midpoint.text}`).join(', ')}.`, answer: true })
+        if (m.summary?.some((l) => l.part === 'area')) {
+          out.push({ text: `The perimeter is ${withApprox(r.perimeter)} and the area is ${withApprox(r.area.area)}.`, answer: true })
+        }
+        if (m.summary?.some((l) => l.part === 'class')) out.push({ text: r.classification.sentence, answer: true })
+      } else if (s.kind === 'segment') {
+        const r = segmentReport(s.a, s.b, s.labels)
+        if (!r) continue
+        const nm = r.names.join('')
+        if (s.labels) out.push({ text: `Segment ${nm} joins ${vertexList(r.names, [s.a, s.b])}.` })
+        else out.push({ text: `A segment joins ${geoPoint(s.a).text} and ${geoPoint(s.b).text}.` })
+        const m = s.measure
+        if (!m) continue
+        const facts: string[] = []
+        if (m.lengths) facts.push(`its length is ${withApprox(r.length)}`)
+        if (m.slopes) facts.push(`its slope is ${r.slope.text}`)
+        if (m.midpoints) facts.push(`its midpoint is ${r.midpoint.text}`)
+        if (m.equation) facts.push(`it lies on ${r.line.slopeIntercept.text}`)
+        if (facts.length > 0) out.push({ text: `${facts.join('; ').replace(/^i/, 'I')}.`, answer: true })
+      } else if (s.kind === 'line') {
+        if (!Number.isFinite(s.through.x) || !Number.isFinite(s.dir.x)) continue
+        out.push({ text: `A line passes through ${geoPoint(s.through).text}.` })
+        if (s.measure?.equation) {
+          const q = { x: s.through.x + s.dir.x, y: s.through.y + s.dir.y }
+          const eq = segmentReport(s.through, q)
+          if (eq) out.push({ text: `The line is ${eq.line.slopeIntercept.text}.`, answer: true })
+        }
+      } else if (s.kind === 'point' && s.measure?.pair) {
+        const p = s.measure.pair
+        const nm = s.label ? `Point ${s.label}` : `The point ${geoPoint(s.at).text}`
+        out.push({ text: `${nm} is joined to ${geoPoint(p.to).text} by a dashed segment.` })
+        const facts: string[] = []
+        if (p.length !== null) facts.push(`the distance is ${withApprox(distance(s.at, p.to))}`)
+        if (p.slope !== null) facts.push(`the slope is ${geoSlope(s.at, p.to).text}`)
+        if (p.midpoint !== null) facts.push(`the midpoint is ${geoMid(s.at, p.to).text}`)
+        if (facts.length > 0) out.push({ text: `${facts.join('; ').replace(/^t/, 'T')}.`, answer: true })
+      }
+    } catch {
+      /* a shape that cannot be described is left out, never the description */
     }
   }
   return out

@@ -132,7 +132,7 @@ export default function App() {
   const panel = useDomainPanel({ board, docState, refs, derived, calc, domain, naming })
   const lookApi = useBoardLook({ board, session, refs, derived, calc, marks, naming })
   const revealMode = useRevealMode({
-    board, docState, session, derived, editing, system, overlaysApi, panel, lookApi,
+    board, docState, session, derived, editing, system, overlaysApi, panel, lookApi, shapesApi,
   })
   const cardCrossings = useCardCrossings({ refs, calc, naming, lookApi })
   const describer = useGraphDescription({
@@ -216,7 +216,7 @@ export default function App() {
   } = fieldsApi
   const {
     setShapeEquation, setShapeParam, setShapeParamExact, toggleShapeVisible, cycleShapeColor,
-    toggleShapeFill, deleteShape, setShapeCoord, shapeCardFor,
+    toggleShapeFill, deleteShape, setShapeCoord, shapeCardFor, setShapeMeasure, addShape,
   } = shapesApi
   const {
     buildSequence, setSequenceSource, setSeqParam, setSeqParamExact, setSeqWindow, toggleSeqVisible,
@@ -489,6 +489,8 @@ export default function App() {
         onShapeParamSetExact={setShapeParamExact}
         onShapeEquation={setShapeEquation}
         onShapeCoord={setShapeCoord}
+        onShapeMeasure={setShapeMeasure}
+        onShapeAdd={addShape}
         onDataAdd={() => {
           showBuilder(null, 'open')
           addDataTable()

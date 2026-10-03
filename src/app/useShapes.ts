@@ -22,6 +22,7 @@ import {
   shapeVertices,
 } from '../ui/shapeLinks'
 import type { BoardShape, CompiledShape, ShapeCardData } from '../ui/shapeLinks'
+import type { ShapeMeasureSettings } from '../core/persist'
 import { snapPlaced } from '../ui/snap'
 import type { BoardStateApi } from './useBoardState'
 import type { BoardRefsApi } from './useBoardRefs'
@@ -222,6 +223,30 @@ export function useShapes({ board, refs, derived, notices, history, editing, cal
   )
 
   /**
+   * A shape's measurement toggles (what its Measurements section draws on the
+   * board) or a point's partner. One commit, one undo entry; written only
+   * while something is on, so a shape measured and un-measured saves exactly
+   * as it did before.
+   */
+  const setShapeMeasure = useCallback(
+    (id: string, next: ShapeMeasureSettings | undefined, label: string): void => {
+      const now = shapesRef.current.find((s) => s.id === id)
+      if (!now) return
+      commitState(
+        {
+          shapes: mapShape(id, (s) => {
+            const { measure: _old, ...rest } = s
+            return next ? { ...rest, measure: next } : rest
+          }),
+        },
+        label,
+      )
+      setSelectedId(id)
+    },
+    [commitState, mapShape],
+  )
+
+  /**
    * Type one exact coordinate.
    *
    * It REPLACES that coordinate's source text, which is the whole point: a
@@ -296,7 +321,7 @@ export function useShapes({ board, refs, derived, notices, history, editing, cal
 
   return {
     addShape, setShapeEquation, setShapeParam, setShapeParamExact, toggleShapeVisible,
-    cycleShapeColor, toggleShapeFill, deleteShape, setShapeCoord, dragShapeVertex, shapeCompiled,
+    cycleShapeColor, toggleShapeFill, deleteShape, setShapeCoord, dragShapeVertex, shapeCompiled, setShapeMeasure,
     shapeScene, shapeSceneRef, shapeCardFor,
   }
 }

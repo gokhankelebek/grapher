@@ -27,8 +27,11 @@
 // meaning of it.
 // ============================================================================
 
-import type { ParamMeta, Shape, ShapeOutcome, Vec2 } from '../core/types'
-import { parseShape } from '../core/parse/shapes'
+import type { ParamMeta, Shape, ShapeLineLink, ShapeOutcome, Vec2 } from '../core/types'
+import { looksLikeLinkedLine, parseShape } from '../core/parse/shapes'
+import { lineRelativeTo } from '../core/geometry'
+import { measureCard, measureDraw, measureReports } from './shapeMeasure'
+import type { MeasureCardData, MeasureReports } from './shapeMeasure'
 import type { BoardShape } from '../core/persist'
 import { fieldParamMeta } from './fieldLinks'
 import { coord } from './fieldLinks'
@@ -66,7 +69,9 @@ const SHAPE_BRACKET_RE = /^\s*[(<]/
 
 export function looksLikeShape(src: string): boolean {
   if (typeof src !== 'string') return false
-  return SHAPE_WORD_RE.test(src) || SHAPE_NAMED_RE.test(src) || SHAPE_BRACKET_RE.test(src)
+  return (
+    SHAPE_WORD_RE.test(src) || SHAPE_NAMED_RE.test(src) || SHAPE_BRACKET_RE.test(src) || looksLikeLinkedLine(src)
+  )
 }
 
 /**
@@ -103,6 +108,8 @@ export function shapeNoun(kind: Shape['kind']): string {
       return 'Segment'
     case 'vector':
       return 'Vector'
+    case 'line':
+      return 'Line'
     default:
       return 'Polygon'
   }
@@ -124,6 +131,10 @@ export interface CompiledShape {
   latex: string
   paramNames: string[]
   error: string | null
+  /** A linked line's references, as typed ("parallel to AB through P"). */
+  link?: ShapeLineLink
+  /** The geometry the Measurements section states (src/ui/shapeMeasure.ts). */
+  reports?: MeasureReports
 }
 
 /**
@@ -167,9 +178,90 @@ export function compileShapes(shapes: readonly BoardShape[]): Map<string, Compil
       latex: outcome.latex,
       paramNames: outcome.paramNames.slice(),
       error: built ? null : 'the line could not be turned into a figure',
+      ...(outcome.link ? { link: outcome.link } : {}),
     })
   }
+
+  // Linked lines: resolve the names against everything else on the board, so
+  // "parallel to AB through P" follows A, B and P wherever they are dragged.
+  const named = namedPointMap(shapes, out)
+  for (const s of shapes) {
+    const c = out.get(s.id)
+    if (!c || !c.link || !c.shape || c.shape.kind !== 'line') continue
+    const L = c.link
+    const a = named.get(L.to[0])
+    const b = named.get(L.to[1])
+    const p = typeof L.through === 'string' ? named.get(L.through) : L.through
+    const missing = [!a ? L.to[0] : null, !b ? L.to[1] : null, typeof L.through === 'string' && !p ? L.through : null].filter(
+      (x): x is string => x !== null,
+    )
+    if (missing.length > 0) {
+      out.set(s.id, {
+        ...c,
+        shape: null,
+        error: `there is no point named ${missing.join(' or ')} on the board — name a point P = (1, 2) or a vertex ABC = …`,
+      })
+      continue
+    }
+    const res = lineRelativeTo(L.rel, a!, b!, p!)
+    if (!res) {
+      out.set(s.id, { ...c, shape: null, error: `${L.to.join('')} has no direction — ${L.to[0]} and ${L.to[1]} are the same point` })
+      continue
+    }
+    out.set(s.id, { ...c, shape: { ...c.shape, through: res.through, dir: res.dir } })
+  }
+
+  // Measurements: the geometry each card states, and what each shape draws.
+  const pointAt = (ref: string): Vec2 | null => resolvePointRef(ref, out)
+  for (const s of shapes) {
+    const c = out.get(s.id)
+    if (!c || !c.shape) continue
+    const reports = measureReports(c.shape, s.measure, c.link, pointAt, named)
+    const draw = measureDraw(c.shape, s.measure, reports)
+    const shape = draw && c.shape.kind !== 'vector' ? ({ ...c.shape, measure: draw } as Shape) : c.shape
+    out.set(s.id, { ...c, shape, reports })
+  }
   return out
+}
+
+/**
+ * Every NAMED point on the board: a point's own name, and the letters of a
+ * named segment's or polygon's vertices. A point shape wins over a vertex of
+ * the same name; otherwise the first in board order.
+ */
+export function namedPointMap(shapes: readonly { id: string }[], compiled: Map<string, CompiledShape>): Map<string, Vec2> {
+  const out = new Map<string, Vec2>()
+  for (const s of shapes) {
+    const sh = compiled.get(s.id)?.shape
+    if (sh?.kind === 'point' && sh.label && !out.has(sh.label)) out.set(sh.label, sh.at)
+  }
+  for (const s of shapes) {
+    const sh = compiled.get(s.id)?.shape
+    if (!sh) continue
+    if (sh.kind === 'segment' && sh.labels) {
+      if (sh.labels[0] && !out.has(sh.labels[0])) out.set(sh.labels[0], sh.a)
+      if (sh.labels[1] && !out.has(sh.labels[1])) out.set(sh.labels[1], sh.b)
+    } else if (sh.kind === 'polygon' && sh.labels) {
+      sh.labels.forEach((l, i) => {
+        if (l && !out.has(l) && sh.pts[i]) out.set(l, sh.pts[i])
+      })
+    }
+  }
+  return out
+}
+
+/** A point partner reference: "S3" (a point) or "S1#2" (vertex 2 of a shape). */
+export function resolvePointRef(ref: string, compiled: Map<string, CompiledShape>): Vec2 | null {
+  const hash = ref.lastIndexOf('#')
+  const id = hash >= 0 ? ref.slice(0, hash) : ref
+  const k = hash >= 0 ? Number(ref.slice(hash + 1)) : -1
+  const sh = compiled.get(id)?.shape
+  if (!sh) return null
+  if (sh.kind === 'point') return k < 0 ? sh.at : null
+  if (k < 0 || !Number.isInteger(k)) return null
+  if (sh.kind === 'segment') return k === 0 ? sh.a : k === 1 ? sh.b : null
+  if (sh.kind === 'polygon') return sh.pts[k] ?? null
+  return null
 }
 
 /** The shapes the scene draws, in board order. Hidden shapes contribute none. */
@@ -404,6 +496,9 @@ export function shapeVertices(shape: Shape, pairs: readonly CoordPair[]): ShapeV
       if (pairs.length < 2) return []
       return [abs(0, 'tail', shape.tail), abs(1, 'tip', tip)]
     }
+    case 'line':
+      // A linked line has no coordinates of its own: it moves with A, B and P.
+      return []
     default: {
       const out: ShapeVertex[] = []
       for (let i = 0; i < shape.pts.length && i < pairs.length; i++) {
@@ -520,6 +615,8 @@ export interface ShapeCardData {
   /** Polygons only. */
   fillable: boolean
   fill: boolean
+  /** The Measurements section; null for a vector or a shape that cannot be drawn. */
+  measure: MeasureCardData | null
 }
 
 export function shapeCard(
@@ -562,5 +659,25 @@ export function shapeCard(
     vertices,
     fillable: canFill(c?.kind ?? 'point'),
     fill: shape.fill === true,
+    measure: c?.shape
+      ? measureCard({
+          id: shape.id,
+          shape: c.shape,
+          settings: shape.measure,
+          reports: c.reports,
+          board: boardList(compiled),
+          named: namedPointMap(boardList(compiled), compiled),
+        })
+      : null,
   }
+}
+
+/** The compiled shapes in board order (a Map keeps insertion order). */
+const BOARD_LIST = new WeakMap<Map<string, CompiledShape>, { id: string; shape: Shape | null }[]>()
+function boardList(compiled: Map<string, CompiledShape>): { id: string; shape: Shape | null }[] {
+  const hit = BOARD_LIST.get(compiled)
+  if (hit) return hit
+  const list = [...compiled.values()].map((c) => ({ id: c.id, shape: c.shape }))
+  BOARD_LIST.set(compiled, list)
+  return list
 }

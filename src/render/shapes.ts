@@ -33,7 +33,7 @@
 // All drawing units are CSS pixels (ctx is already DPR-scaled by the caller).
 // ============================================================================
 
-import type { Shape, Theme, Vec2, Viewport } from '../core/types'
+import type { Shape, ShapeMeasureDraw, Theme, Vec2, Viewport } from '../core/types'
 import { ppuX, ppuY } from '../core/types'
 import { LABEL_PX, gridFont, labelFont, paintScale, type PaintScale } from './grid'
 
@@ -342,6 +342,13 @@ function drawPoint(
 ): void {
   if (!finite(s.at)) return
   const p = toPx(fr, s.at)
+  if (s.measure?.pair && finite(s.measure.pair.to)) {
+    segmentMeasure(ctx, fr, p, toPx(fr, s.measure.pair.to), {
+      lengths: s.measure.pair.length === null ? undefined : [s.measure.pair.length],
+      slopes: s.measure.pair.slope === null ? undefined : [s.measure.pair.slope],
+      midpoints: s.measure.pair.midpoint === null ? undefined : [s.measure.pair.midpoint],
+    }, st, true)
+  }
   if (!onCanvas(fr, p)) return
   const r = SHAPE_POINT_RADIUS * st.stroke
   const ring = SHAPE_POINT_RING_WIDTH * st.stroke
@@ -383,6 +390,8 @@ function drawSegment(
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
   strokePath(ctx, fr, [a, b], false)
+
+  if (s.measure) segmentMeasure(ctx, fr, a, b, s.measure, st, false)
 
   dot(ctx, fr, a, st)
   dot(ctx, fr, b, st)
@@ -581,7 +590,13 @@ function drawPolygon(
   ctx.lineCap = 'round'
   strokePath(ctx, fr, pts, closed)
 
+  // The measurement marks (arcs, squares, ticks) sit on the figure, under its
+  // vertex dots; their chips come last, over everything the polygon drew.
+  if (s.measure && closed) polygonMarks(ctx, fr, pts, s.measure, st)
+
   for (const p of pts) dot(ctx, fr, p, st)
+
+  if (s.measure && closed) polygonChips(ctx, fr, pts, s.measure, st)
 
   const labels = s.labels
   if (!labels || labels.length === 0) return
@@ -608,6 +623,324 @@ function drawPolygon(
     if (!text) continue
     label(ctx, fr, pts[i].x, pts[i].y, unit(pts[i].x - gx, pts[i].y - gy) ?? UP_RIGHT, r, text, st)
   }
+}
+
+// ---------------------------------------------------------------------------
+// line — "parallel to AB through P", drawn edge to edge
+// ---------------------------------------------------------------------------
+
+function drawLine(
+  ctx: CanvasRenderingContext2D,
+  s: Extract<Shape, { kind: 'line' }>,
+  fr: Frame,
+  st: Style,
+): void {
+  if (!finite(s.through) || !finite(s.dir)) return
+  const p = toPx(fr, s.through)
+  const u = unit(s.dir.x * fr.ppx, -s.dir.y * fr.ppy)
+  if (!u) return
+  const L = 4 * (fr.hw + fr.hh) + Math.abs(p.x - fr.hw) + Math.abs(p.y - fr.hh)
+  ctx.strokeStyle = st.color
+  ctx.lineWidth = SHAPE_SEGMENT_WIDTH * st.stroke
+  ctx.lineCap = 'round'
+  strokePath(ctx, fr, [{ x: p.x - u.x * L, y: p.y - u.y * L }, { x: p.x + u.x * L, y: p.y + u.y * L }], false)
+
+  const eq = s.measure?.equation
+  if (!eq) return
+  // The chip sits beside the stretch of the line nearest the middle of the
+  // board, on its upper side, so it is on screen whenever the line is.
+  // A fixed step from the point it passes through, toward the middle of the
+  // board: near the figure it belongs to, clear of P's own name, and two
+  // lines through the same P (∥ and ⊥) step off in different directions.
+  const toward = (fr.hw - p.x) * u.x + (fr.hh - p.y) * u.y >= 0 ? 1 : -1
+  const step = 130 * st.type
+  let at: Pt = { x: p.x + u.x * toward * step, y: p.y + u.y * toward * step }
+  if (!onCanvas(fr, at) || !onCanvas(fr, p)) {
+    // P is off the board: the stretch nearest the middle instead
+    const t = (fr.hw - p.x) * u.x + (fr.hh - p.y) * u.y
+    at = { x: p.x + u.x * t, y: p.y + u.y * t }
+  }
+  label(ctx, fr, at.x, at.y, upperNormal(u), SHAPE_SEGMENT_WIDTH * st.stroke, eq, st)
+}
+
+// ---------------------------------------------------------------------------
+// Measurements — side chips, angle arcs, right-angle squares, congruence marks
+// ---------------------------------------------------------------------------
+
+/** Radius of an angle arc, CSS px before present.stroke. */
+export const MEASURE_ARC_R = 16
+/** Spacing of the rings of a congruence arc mark. */
+const ARC_RING_GAP = 4
+/** Side of a right-angle square. */
+export const MEASURE_SQUARE = 10
+/** A congruence tick: its length across the side, and the gap between ticks. */
+const TICK_LEN = 10
+const TICK_GAP = 4
+/** Midpoint ring radius. */
+const MID_R = 3.5
+const MARK_WIDTH = 1.5
+
+/** The normal of direction u that points up the screen (or right, when u is vertical). */
+function upperNormal(u: Pt): Pt {
+  const n = { x: u.y, y: -u.x }
+  if (Math.abs(n.y) < 1e-9) return n.x >= 0 ? n : { x: -n.x, y: -n.y }
+  return n.y < 0 ? n : { x: -n.x, y: -n.y }
+}
+
+/** Each edge's outward unit normal (edge i: vertex i → i + 1), from the polygon's orientation. */
+function edgeNormals(pts: readonly Pt[]): (Pt | null)[] {
+  const n = pts.length
+  let a2 = 0
+  for (let i = 0; i < n; i++) {
+    const p = pts[i]
+    const q = pts[(i + 1) % n]
+    a2 += p.x * q.y - q.x * p.y
+  }
+  const sgn = a2 >= 0 ? 1 : -1
+  const out: (Pt | null)[] = []
+  for (let i = 0; i < n; i++) {
+    const p = pts[i]
+    const q = pts[(i + 1) % n]
+    const u = unit(q.x - p.x, q.y - p.y)
+    out.push(u ? { x: sgn * u.y, y: -sgn * u.x } : null)
+  }
+  return out
+}
+
+/** How far a chip of this text reaches along `dir` from its own centre. */
+function chipReach(ctx: CanvasRenderingContext2D, text: string, dir: Pt, st: Style): number {
+  const w = ctx.measureText(text).width + 2 * SHAPE_LABEL_PAD * st.type
+  const h = SHAPE_LABEL_H * st.type
+  return Math.abs(dir.x) * (w / 2) + Math.abs(dir.y) * (h / 2)
+}
+
+/**
+ * Chips stacked outward from (x, y) along `dir`: the first just clear of the
+ * line, each next one clear of the one before.
+ */
+function chipStack(ctx: CanvasRenderingContext2D, fr: Frame, x: number, y: number, dir: Pt, r: number, texts: readonly string[], st: Style): void {
+  let at = r
+  for (const t of texts) {
+    if (!t) continue
+    label(ctx, fr, x, y, dir, at, t, st)
+    at += 2 * chipReach(ctx, t, dir, st) + SHAPE_LABEL_GAP * st.type * 0.6
+  }
+}
+
+/** A hollow ring at a midpoint. */
+function midRing(ctx: CanvasRenderingContext2D, fr: Frame, p: Pt, st: Style): void {
+  if (!onCanvas(fr, p)) return
+  ctx.beginPath()
+  ctx.arc(p.x, p.y, MID_R * st.stroke, 0, TWO_PI)
+  ctx.fillStyle = st.theme.bg
+  ctx.fill()
+  ctx.lineWidth = MARK_WIDTH * st.stroke
+  ctx.strokeStyle = st.color
+  ctx.stroke()
+}
+
+/** k short ticks across the edge a→b, centred at fraction `f` of the way along. */
+function ticks(ctx: CanvasRenderingContext2D, fr: Frame, a: Pt, b: Pt, k: number, f: number, st: Style): void {
+  const u = unit(b.x - a.x, b.y - a.y)
+  if (!u || k <= 0) return
+  const n = { x: -u.y, y: u.x }
+  const cx = a.x + (b.x - a.x) * f
+  const cy = a.y + (b.y - a.y) * f
+  if (!onCanvas(fr, { x: cx, y: cy })) return
+  const half = (TICK_LEN / 2) * st.stroke
+  const gap = TICK_GAP * st.stroke
+  ctx.beginPath()
+  for (let j = 0; j < k; j++) {
+    const off = (j - (k - 1) / 2) * gap
+    const mx = cx + u.x * off
+    const my = cy + u.y * off
+    ctx.moveTo(mx - n.x * half, my - n.y * half)
+    ctx.lineTo(mx + n.x * half, my + n.y * half)
+  }
+  ctx.lineWidth = MARK_WIDTH * st.stroke
+  ctx.strokeStyle = st.color
+  ctx.stroke()
+}
+
+/** The canvas arc at vertex c from the ray toward `a` to the ray toward `b`, on the side `inward` points to. */
+function interiorArc(ctx: CanvasRenderingContext2D, c: Pt, a: Pt, b: Pt, inward: Pt, r: number): void {
+  const a0 = Math.atan2(a.y - c.y, a.x - c.x)
+  const a1 = Math.atan2(b.y - c.y, b.x - c.x)
+  let delta = a1 - a0
+  while (delta < 0) delta += TWO_PI
+  while (delta >= TWO_PI) delta -= TWO_PI
+  const mid = a0 + delta / 2
+  const cw = Math.cos(mid) * inward.x + Math.sin(mid) * inward.y >= 0
+  ctx.beginPath()
+  if (cw) ctx.arc(c.x, c.y, r, a0, a0 + delta, false)
+  else ctx.arc(c.x, c.y, r, a0, a1, true)
+  ctx.stroke()
+}
+
+function polygonMarks(ctx: CanvasRenderingContext2D, fr: Frame, pts: readonly Pt[], m: ShapeMeasureDraw, st: Style): void {
+  const n = pts.length
+  const out = outwardDirs(pts)
+  ctx.save()
+  ctx.lineWidth = MARK_WIDTH * st.stroke
+  ctx.strokeStyle = st.color
+  ctx.lineCap = 'butt'
+  ctx.lineJoin = 'miter'
+  for (let i = 0; i < n; i++) {
+    const c = pts[i]
+    if (!onCanvas(fr, c)) continue
+    const prev = pts[(i - 1 + n) % n]
+    const next = pts[(i + 1) % n]
+    const inward = { x: -out[i].x, y: -out[i].y }
+    const square = m.right?.[i] === true
+    if (square) {
+      const u = unit(prev.x - c.x, prev.y - c.y)
+      const w = unit(next.x - c.x, next.y - c.y)
+      if (u && w) {
+        const k = MEASURE_SQUARE * st.stroke
+        ctx.beginPath()
+        ctx.moveTo(c.x + u.x * k, c.y + u.y * k)
+        ctx.lineTo(c.x + (u.x + w.x) * k, c.y + (u.y + w.y) * k)
+        ctx.lineTo(c.x + w.x * k, c.y + w.y * k)
+        ctx.stroke()
+      }
+      continue
+    }
+    const rings = Math.max(m.angles?.[i] ? 1 : 0, m.arcs?.[i] ?? 0)
+    for (let j = 0; j < rings; j++) {
+      interiorArc(ctx, c, prev, next, inward, (MEASURE_ARC_R + j * ARC_RING_GAP) * st.stroke)
+    }
+  }
+  // congruence ticks; moved off the midpoint when a midpoint ring is there
+  if (m.ticks) {
+    for (let i = 0; i < n; i++) {
+      const k = m.ticks[i] ?? 0
+      if (k > 0) ticks(ctx, fr, pts[i], pts[(i + 1) % n], k, m.midpoints?.[i] ? 0.36 : 0.5, st)
+    }
+  }
+  ctx.restore()
+}
+
+function polygonChips(ctx: CanvasRenderingContext2D, fr: Frame, pts: readonly Pt[], m: ShapeMeasureDraw, st: Style): void {
+  const n = pts.length
+  const normals = edgeNormals(pts)
+  const out = outwardDirs(pts)
+  const line = (SHAPE_POLYGON_WIDTH / 2) * st.stroke
+
+  for (let i = 0; i < n; i++) {
+    const a = pts[i]
+    const b = pts[(i + 1) % n]
+    const nrm = normals[i]
+    if (!nrm) continue
+    const mx = (a.x + b.x) / 2
+    const my = (a.y + b.y) / 2
+    if (m.midpoints?.[i]) {
+      const mp = { x: mx, y: my }
+      midRing(ctx, fr, mp, st)
+      label(ctx, fr, mx, my, { x: -nrm.x, y: -nrm.y }, MID_R * st.stroke, m.midpoints[i]!, st)
+    }
+    const texts = [m.lengths?.[i] ?? '', m.slopes?.[i] ?? ''].filter((t) => t)
+    // clear of the congruence ticks crossing the side, not just of the line
+    const base = (m.ticks?.[i] ?? 0) > 0 ? Math.max(line, (TICK_LEN / 2 + 1) * st.stroke) : line
+    if (texts.length > 0) chipStack(ctx, fr, mx, my, nrm, base, texts, st)
+  }
+
+  if (m.angles) {
+    for (let i = 0; i < n; i++) {
+      const text = m.angles[i]
+      if (!text) continue
+      const c = pts[i]
+      const prev = pts[(i - 1 + n) % n]
+      const next = pts[(i + 1) % n]
+      const inward = { x: -out[i].x, y: -out[i].y }
+      // keep the chip clear of both sides: its centre must sit at least its
+      // half-diagonal away from each, which a thin angle pushes outward
+      const u = unit(prev.x - c.x, prev.y - c.y)
+      const w = unit(next.x - c.x, next.y - c.y)
+      const theta = u && w ? Math.acos(Math.max(-1, Math.min(1, u.x * w.x + u.y * w.y))) : Math.PI / 2
+      const wTxt = ctx.measureText(text).width + 2 * SHAPE_LABEL_PAD * st.type
+      const hTxt = SHAPE_LABEL_H * st.type
+      const halfDiag = Math.hypot(wTxt, hTxt) / 2
+      const reach = chipReach(ctx, text, inward, st)
+      const rings = Math.max(1, m.arcs?.[i] ?? 0)
+      const arcR = (MEASURE_ARC_R + (rings - 1) * ARC_RING_GAP) * st.stroke
+      const need = Math.sin(Math.min(theta, Math.PI - 1e-3) / 2) > 0.05 ? halfDiag / Math.sin(theta / 2) - reach - SHAPE_LABEL_GAP * st.type : arcR
+      const r = Math.min(90 * st.stroke, Math.max(arcR, need))
+      label(ctx, fr, c.x, c.y, inward, r, text, st)
+    }
+  }
+
+  if (m.summary && m.summary.length > 0) {
+    // clear of the side chips stacked under the lowest edges
+    const stacked = (m.lengths ? 1 : 0) + (m.slopes ? 1 : 0)
+    summaryChip(ctx, fr, pts, m.summary.map((l) => l.text), st, stacked)
+  }
+}
+
+/** The chip under the figure: perimeter and area, the classification. */
+function summaryChip(ctx: CanvasRenderingContext2D, fr: Frame, pts: readonly Pt[], lines: readonly string[], st: Style, stacked = 0): void {
+  let x0 = Infinity
+  let x1 = -Infinity
+  let y0 = Infinity
+  let y1 = -Infinity
+  for (const p of pts) {
+    x0 = Math.min(x0, p.x)
+    x1 = Math.max(x1, p.x)
+    y0 = Math.min(y0, p.y)
+    y1 = Math.max(y1, p.y)
+  }
+  const pad = SHAPE_LABEL_PAD * st.type
+  const lh = SHAPE_LABEL_H * st.type
+  const w = Math.max(...lines.map((t) => ctx.measureText(t).width)) + 2 * pad
+  const h = lh * lines.length + pad * 0.6
+  // under the figure, clear of its vertex labels; above it when there is no room
+  const clear = (30 + stacked * (SHAPE_LABEL_H + 4)) * st.type
+  let top = y1 + clear
+  if (top + h > 2 * fr.hh - 4 && y0 - clear - h >= 4) top = y0 - clear - h
+  const cx = Math.min(Math.max((x0 + x1) / 2, w / 2 + 4), 2 * fr.hw - w / 2 - 4)
+  if (!Number.isFinite(cx) || !Number.isFinite(top)) return
+  if (!onCanvas(fr, { x: cx, y: top + h / 2 })) return
+  const x = cx - w / 2
+  roundRect(ctx, x, top, w, h, 4 * st.type)
+  ctx.fillStyle = st.theme.bg
+  ctx.fill()
+  ctx.lineWidth = 1 * st.stroke
+  ctx.strokeStyle = st.color
+  ctx.stroke()
+  ctx.fillStyle = st.ink
+  ctx.textBaseline = 'middle'
+  lines.forEach((t, i) => ctx.fillText(t, x + pad, top + pad * 0.3 + lh * (i + 0.5)))
+}
+
+/**
+ * A segment's readouts (or a point's, measured to another point): length and
+ * slope stacked on the upper side, the midpoint ring and its coordinates on
+ * the lower side, the equation after them. `dashed` draws the connector
+ * first — a point pair has no segment of its own.
+ */
+function segmentMeasure(ctx: CanvasRenderingContext2D, fr: Frame, a: Pt, b: Pt, m: ShapeMeasureDraw, st: Style, dashed: boolean): void {
+  if (!nearBox(fr, [a, b])) return
+  const u = unit(b.x - a.x, b.y - a.y)
+  if (dashed) {
+    ctx.save()
+    ctx.setLineDash([6 * st.stroke, 4 * st.stroke])
+    ctx.lineWidth = MARK_WIDTH * st.stroke
+    ctx.strokeStyle = st.color
+    strokePath(ctx, fr, [a, b], false)
+    ctx.restore()
+    dot(ctx, fr, b, st)
+  }
+  if (!u) return
+  const nUp = upperNormal(u)
+  const mx = (a.x + b.x) / 2
+  const my = (a.y + b.y) / 2
+  const line = (SHAPE_SEGMENT_WIDTH / 2) * st.stroke
+  if (m.midpoints?.[0]) {
+    midRing(ctx, fr, { x: mx, y: my }, st)
+    const down = { x: -nUp.x, y: -nUp.y }
+    chipStack(ctx, fr, mx, my, down, MID_R * st.stroke, [m.midpoints[0]!, m.equation ?? ''], st)
+  }
+  const up = [m.lengths?.[0] ?? '', m.slopes?.[0] ?? '', m.midpoints?.[0] ? '' : (m.equation ?? '')].filter((t) => t)
+  if (up.length > 0) chipStack(ctx, fr, mx, my, nUp, line, up, st)
 }
 
 // ---------------------------------------------------------------------------
@@ -711,6 +1044,9 @@ export function drawShapes(
           break
         case 'polygon':
           drawPolygon(ctx, s, fr, st)
+          break
+        case 'line':
+          drawLine(ctx, s, fr, st)
           break
       }
     } catch {

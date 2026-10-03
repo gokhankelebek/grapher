@@ -31,6 +31,12 @@
 //   series:<id>:value            a series' verdict and sum
 //   euler:<fieldId>:value        a field's Euler approximations
 //   system:value                 the inequality system's corners / optimum
+//   shape:<id>:<part>            a shape's measurements: lengths, slopes,
+//                                angles, marks (congruence ticks / arcs),
+//                                midpoints, area (perimeter and area), class
+//                                (classification, ∥ / ⊥ pairs), trig (right-
+//                                triangle ratios), pair (point to point),
+//                                line (an equation)
 //
 // An index key is the point's rank among the points of its kind sorted by
 // x, so the same answer keeps its key across re-renders and recomputation
@@ -43,7 +49,7 @@
 // byte-identically with or without it.
 // ============================================================================
 
-import type { FittedCurve, SpecialPoint, SpecialPointKind, Vec2 } from '../core/types'
+import type { FittedCurve, Shape, ShapeMeasureDraw, SpecialPoint, SpecialPointKind, Vec2 } from '../core/types'
 import type { BoardIntersection, BoardScene } from './renderBoard'
 import type { Overlay } from '../render/overlays'
 import type { UnitCircleFigure } from '../render/unitCircle'
@@ -81,6 +87,10 @@ export const statKey = (id: string): string => `stat:${id}:value`
 export const seriesKey = (id: string): string => `series:${id}:value`
 export const eulerKey = (fieldId: string): string => `euler:${fieldId}:value`
 export const SYSTEM_KEY = 'system:value'
+
+/** The parts of a shape's measurements that are answers, each revealed on its own. */
+export type ShapePart = 'lengths' | 'slopes' | 'angles' | 'marks' | 'midpoints' | 'area' | 'class' | 'trig' | 'pair' | 'line'
+export const shapeKey = (id: string, part: ShapePart): string => `shape:${id}:${part}`
 
 const byXY = (a: SpecialPoint, b: SpecialPoint): number =>
   a.pos.x - b.pos.x || a.pos.y - b.pos.y
@@ -524,6 +534,57 @@ function maskChip(text: string): string {
 }
 
 /**
+ * A shape's measurements with every hidden answer as "?": the chips stay where
+ * they are (the class sees WHAT is asked — this side's length, that angle),
+ * the congruence ticks and arcs go (they would say which sides are equal).
+ * Right-angle squares stay: they are the given of a right-triangle problem.
+ */
+export function maskShapeMeasure(m: ShapeMeasureDraw, hidden: (part: ShapePart) => boolean): ShapeMeasureDraw {
+  const q = (list: readonly (string | null)[] | undefined, text: string) => list?.map((t) => (t === null ? null : text))
+  const out: ShapeMeasureDraw = { ...m }
+  if (hidden('lengths') && m.lengths) out.lengths = q(m.lengths, '?')
+  if (hidden('slopes') && m.slopes) out.slopes = q(m.slopes, 'm = ?')
+  if (hidden('angles') && m.angles) out.angles = q(m.angles, '?')
+  if (hidden('marks')) {
+    delete out.ticks
+    delete out.arcs
+  }
+  if (hidden('midpoints') && m.midpoints) out.midpoints = q(m.midpoints, '(?, ?)')
+  if (m.summary) {
+    const lines: { part: 'area' | 'class'; text: string }[] = []
+    let classDone = false
+    for (const l of m.summary) {
+      if (l.part === 'area') lines.push(hidden('area') ? { part: 'area', text: 'P = ?   A = ?' } : l)
+      else if (!hidden('class')) lines.push(l)
+      else if (!classDone) {
+        classDone = true
+        const at = l.text.indexOf(': ')
+        lines.push({ part: 'class', text: at > 0 ? `${l.text.slice(0, at)}: ?` : '?' })
+      }
+    }
+    out.summary = lines
+  }
+  if (m.pair && hidden('pair')) {
+    out.pair = {
+      to: m.pair.to,
+      length: m.pair.length === null ? null : '?',
+      slope: m.pair.slope === null ? null : 'm = ?',
+      midpoint: m.pair.midpoint === null ? null : '(?, ?)',
+    }
+  }
+  if (m.equation && hidden('line')) out.equation = 'y = ?'
+  return out
+}
+
+/** Every shape with its hidden measurement answers masked. */
+export function maskShapes(shapes: readonly Shape[], hidden: (key: string) => boolean): Shape[] {
+  return shapes.map((s) => {
+    if (s.kind === 'vector' || !s.measure) return s
+    return { ...s, measure: maskShapeMeasure(s.measure, (part) => hidden(shapeKey(s.id, part))) } as Shape
+  })
+}
+
+/**
  * A sign chart as a blank to fill in: the strips and their x line stay, the
  * signs, arrows, cups and the critical values' names go ("?" under each tick).
  */
@@ -683,9 +744,54 @@ export function applyReveal(scene: BoardScene, r: SceneReveal | null | undefined
     if (hiddenIds.size > 0) out.nlHidden = hiddenIds
   }
 
+  // ---- shapes: their measurement chips say "?" until revealed
+  if (scene.shapes && scene.shapes.some((s) => s.kind !== 'vector' && s.measure)) {
+    out.shapes = maskShapes(scene.shapes, (k) => r.hidden(k))
+    for (const s of scene.shapes) {
+      if (s.kind === 'vector' || !s.measure || !s.visible) continue
+      for (const { part, pos } of shapeAnswerSpots(s)) {
+        const key = shapeKey(s.id, part)
+        if (r.hidden(key)) marks.push({ key, pos, color: s.color, ghost: true })
+        else visit(r, key, pos, s.color, marks, pulses)
+      }
+    }
+  }
+
   if (marks.length > 0) out.revealMarks = marks
   if (pulses.length > 0) out.revealPulses = pulses
   return out
+}
+
+/**
+ * Where a shape's answers sit, in math coords — one spot per part, for the
+ * board's click-to-reveal: the middle of the first side for a side readout,
+ * the centroid for perimeter / area / classification.
+ */
+export function shapeAnswerSpots(s: Shape): { part: ShapePart; pos: Vec2 }[] {
+  if (s.kind === 'vector' || !s.measure) return []
+  const m = s.measure
+  const out: { part: ShapePart; pos: Vec2 }[] = []
+  const pts: readonly Vec2[] =
+    s.kind === 'polygon' ? s.pts : s.kind === 'segment' ? [s.a, s.b] : s.kind === 'point' ? [s.at, m.pair?.to ?? s.at] : [s.through]
+  if (pts.length === 0) return out
+  const mid = (i: number): Vec2 => {
+    const a = pts[i % pts.length]
+    const b = pts[(i + 1) % pts.length]
+    return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
+  }
+  const centroid = {
+    x: pts.reduce((t, p) => t + p.x, 0) / pts.length,
+    y: pts.reduce((t, p) => t + p.y, 0) / pts.length,
+  }
+  if (m.lengths?.some((t) => t)) out.push({ part: 'lengths', pos: mid(0) })
+  if (m.slopes?.some((t) => t)) out.push({ part: 'slopes', pos: mid(pts.length > 2 ? 1 : 0) })
+  if (m.midpoints?.some((t) => t)) out.push({ part: 'midpoints', pos: mid(pts.length > 2 ? 2 : 0) })
+  if (m.angles?.some((t) => t)) out.push({ part: 'angles', pos: { x: (pts[0].x * 3 + centroid.x) / 4, y: (pts[0].y * 3 + centroid.y) / 4 } })
+  if (m.summary?.some((l) => l.part === 'area')) out.push({ part: 'area', pos: centroid })
+  if (m.summary?.some((l) => l.part === 'class')) out.push({ part: 'class', pos: centroid })
+  if (m.pair) out.push({ part: 'pair', pos: mid(0) })
+  if (m.equation) out.push({ part: 'line', pos: s.kind === 'segment' ? mid(0) : pts[0] })
+  return out.filter((o) => Number.isFinite(o.pos.x) && Number.isFinite(o.pos.y))
 }
 
 /** The marks within `radius` px of a screen point, nearest first. */

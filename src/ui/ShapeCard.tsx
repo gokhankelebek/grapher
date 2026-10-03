@@ -7,6 +7,8 @@ import { coord } from './fieldLinks'
 import type { BoardShape, ShapeCardData } from './shapeLinks'
 import { useInk } from './inkContext'
 import { equationLabel } from '../core/mathSpeech'
+import type { ShapeMeasureSettings } from '../core/persist'
+import { ShapeMeasureSection } from './ShapeMeasureSection'
 
 // ============================================================================
 // src/ui/ShapeCard.tsx — a point, segment, vector or polygon in the sidebar.
@@ -51,6 +53,10 @@ interface Props {
   onEquationCommit(src: string): string | null
   /** Type one exact coordinate; it replaces that coordinate's source text. */
   onCoordSet(pair: number, axis: 'x' | 'y', value: number): void
+  /** The Measurements section's toggles / a point's partner. */
+  onMeasure?(next: ShapeMeasureSettings | undefined, label: string): void
+  /** Add a shape (a linked line, a plotted endpoint); the parser's complaint or null. */
+  onAddShape?(src: string): string | null
 }
 
 export function ShapeCard({
@@ -68,6 +74,8 @@ export function ShapeCard({
   onParamSetExact,
   onEquationCommit,
   onCoordSet,
+  onMeasure,
+  onAddShape,
 }: Props) {
   const ink = useInk()
   // ---- the ⋯ menu (identical behaviour to a curve's, deliberately)
@@ -401,6 +409,16 @@ export function ShapeCard({
                 constant becomes the number.
               </div>
             </div>
+          )}
+
+          {data.measure && onMeasure && (
+            <ShapeMeasureSection
+              shapeId={shape.id}
+              data={data.measure}
+              settings={shape.measure}
+              onMeasure={onMeasure}
+              onAddShape={(src) => onAddShape?.(src) ?? null}
+            />
           )}
 
           {data.fillable && (

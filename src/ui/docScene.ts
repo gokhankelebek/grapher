@@ -49,7 +49,9 @@
 // with them; a related-rates picture says "?" for the unknown rate and
 // drops its rate-vs-time graph (reveal.ts maskRelatedRates); a statistics
 // panel keeps its curve, shading and dots and says "?" for the probability,
-// z-scores, percentile, simulated mean / SD and p-value (reveal.ts maskStats).
+// z-scores, percentile, simulated mean / SD and p-value (reveal.ts maskStats);
+// a shape's measurement chips say "?" (side lengths, slopes, angles, area,
+// the classification) and its congruence marks go (reveal.ts maskShapes).
 //
 // THE BOARD SIZE. A document stores its centre and zoom, not the size of the
 // window it was framed in. The caller passes the size of the live board (the
@@ -87,7 +89,7 @@ import type { Overlay } from '../render/overlays'
 import { viewStatesFrom } from './curveViews'
 import { partnerPolylines, sequenceFigure } from './seqLinks'
 import { relatedRatesBox, relatedRatesFigure } from './relatedRatesLinks'
-import { maskRelatedRates, maskStats } from './reveal'
+import { maskRelatedRates, maskShapes, maskStats } from './reveal'
 import { statsBox, statsFigures } from './statsLinks'
 import { systemCard, systemOverlays, systemSolutionShown } from './systemLinks'
 import { constructionConicsOf, constructionFigure } from './conicLinks'
@@ -382,7 +384,11 @@ export function docFigure(m: DocModel, o: FigureOptions): DocFigure {
   const overlays = o.answers ? allOverlays : allOverlays.filter((ov) => !(ov.kind === 'label' && ov.answer))
   const shapes = cartesian
     ? [
-        ...safe(() => sceneShapes(board.shapes, compileShapes(board.shapes)), []),
+        ...safe(() => {
+          const all = sceneShapes(board.shapes, compileShapes(board.shapes))
+          // A student copy asks for every measurement instead of stating it.
+          return o.answers ? all : maskShapes(all, () => true)
+        }, []),
         ...(construction?.shapes ?? []),
         ...(particle?.shapes ?? []),
       ]

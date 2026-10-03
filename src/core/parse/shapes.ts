@@ -396,8 +396,118 @@ const texTight = (p: [Compiled, Compiled]): string => `(${p[0].latex},${p[1].lat
 // Public API
 // ----------------------------------------------------------------------------
 
+// ----------------------------------------------------------------------------
+// Linked lines: "parallel to AB through P", "line through P perpendicular to AB"
+// ----------------------------------------------------------------------------
+
+const LINE_HINT = 'Write it as: parallel to AB through P (or perpendicular to AB through (1, 2))'
+const LINE_START_RE = /^\s*(?:line\s+through\b|parallel\b|perpendicular\b|perp\b)/i
+
+/** Does this line start like a linked line? */
+export function looksLikeLinkedLine(src: string): boolean {
+  return typeof src === 'string' && LINE_START_RE.test(src)
+}
+
+/**
+ * The line through a point, parallel or perpendicular to a segment named by
+ * its two endpoints. The names are NOT resolved here — a shape parses on its
+ * own — so the outcome carries the link and the board resolves it.
+ */
+export function parseLinkedLine(src: string): ShapeOutcome | null {
+  if (!looksLikeLinkedLine(src)) return null
+  let rest = src.trim()
+  let through: string | Vec2 | null = null
+  let rel: 'parallel' | 'perpendicular' | null = null
+  let to: [string, string] | null = null
+
+  const readThrough = (): Fail | null => {
+    const named = /^through\s+([A-Za-z])(?![A-Za-z0-9(])\s*/i.exec(rest)
+    if (named) {
+      through = named[1]
+      rest = rest.slice(named[0].length)
+      return null
+    }
+    const at = /^through\s*\(/i.exec(rest)
+    if (at) {
+      const open = at[0].length - 1
+      const close = matchParen(rest, open)
+      if (close < 0) return fail(`Missing closing ')' after 'through'`)
+      const inner = rest.slice(open + 1, close)
+      const commas = topLevelCommas(inner)
+      if (commas.length !== 1) return fail('A point needs two coordinates separated by a comma, e.g. (1, 2)')
+      const xs = compileExpr(inner.slice(0, commas[0]))
+      const ys = compileExpr(inner.slice(commas[0] + 1))
+      if (!xs.ok || !ys.ok) return fail(`That point is not a pair of numbers — ${LINE_HINT}`)
+      if (xs.expr.vars.length || ys.expr.vars.length || xs.expr.paramNames.length || ys.expr.paramNames.length) {
+        return fail('The point a linked line passes through is a number pair or a named point, e.g. through (1, 2) or through P')
+      }
+      const p = { x: xs.expr.ev([], 0, 0), y: ys.expr.ev([], 0, 0) }
+      if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return fail('That point is not a finite pair of numbers')
+      through = p
+      rest = rest.slice(close + 1).trimStart()
+      return null
+    }
+    return fail(`'through' needs a point after it — a name like P or coordinates like (1, 2)`)
+  }
+
+  const lineWord = /^line\s+/i.exec(rest)
+  if (lineWord) rest = rest.slice(lineWord[0].length)
+  if (/^through\b/i.test(rest)) {
+    const f = readThrough()
+    if (f) return f
+  }
+  const relWord = /^(parallel|perpendicular|perp)\b\s*/i.exec(rest)
+  if (!relWord) return fail(LINE_HINT)
+  rel = relWord[1].toLowerCase() === 'parallel' ? 'parallel' : 'perpendicular'
+  rest = rest.slice(relWord[0].length)
+  const toWord = /^to\b\s*/i.exec(rest)
+  if (toWord) rest = rest.slice(toWord[0].length)
+  const kind = /^(?:segment|side|line)\s+/i.exec(rest)
+  if (kind) rest = rest.slice(kind[0].length)
+  const seg = /^([A-Za-z])([A-Za-z])(?![A-Za-z0-9])\s*/.exec(rest)
+  if (!seg) return fail(`Name the segment by its two endpoints, e.g. ${rel} to AB through P`)
+  if (seg[1] === seg[2]) return fail(`'${seg[0].trim()}' names one point twice — a segment needs two different endpoints`)
+  to = [seg[1], seg[2]]
+  rest = rest.slice(seg[0].length)
+  if (/^through\b/i.test(rest)) {
+    if (through !== null) return fail(`'through' is said twice — ${LINE_HINT}`)
+    const f = readThrough()
+    if (f) return f
+  }
+  if (rest.trim() !== '') return fail(`Unexpected '${rest.trim().slice(0, 12)}' — ${LINE_HINT}`)
+  if (through === null) return fail(`Say which point the line passes through, e.g. ${rel} to ${to.join('')} through P`)
+
+  const link = { rel, to, through } as { rel: 'parallel' | 'perpendicular'; to: [string, string]; through: string | Vec2 }
+  const thr = typeof link.through === 'string' ? link.through : `(${fmtNum(link.through.x)}, ${fmtNum(link.through.y)})`
+  const latex = `\\ell ${rel === 'parallel' ? '\\parallel' : '\\perp'} \\overline{${to.join('')}}\\text{ through }${thr}`
+  return {
+    ok: true,
+    kind: 'line',
+    latex,
+    paramNames: [],
+    defaultParams: [],
+    link,
+    makeShape: (id, _params, color) => ({
+      kind: 'line',
+      id,
+      through: typeof link.through === 'string' ? { x: NaN, y: NaN } : { ...link.through },
+      dir: { x: NaN, y: NaN },
+      color,
+      visible: true,
+    }),
+  }
+}
+
+const fmtNum = (v: number): string => {
+  const r = Math.round(v * 1e6) / 1e6
+  return r < 0 ? `-${-r}` : String(r)
+}
+
 export function parseShape(src: string): ShapeOutcome {
   if (!src || src.trim() === '') return fail('Empty shape')
+
+  const linked = parseLinkedLine(src)
+  if (linked) return linked
 
   // An equation whose right side is a formula rather than points is a curve,
   // however it is named: "y = x", "f(x) = x^2", "r = 2cos(θ)".
@@ -681,5 +791,9 @@ function build(
         },
       }
     }
+
+    case 'line':
+      // A line is only ever made from words (parseLinkedLine), never from points.
+      return fail('A line through a point is written in words, e.g. parallel to AB through P')
   }
 }

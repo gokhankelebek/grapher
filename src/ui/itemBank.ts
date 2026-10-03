@@ -44,7 +44,7 @@ import { analyzeCurve } from '../core/analyze'
 import type { ImportedDefinition, LatexImport } from '../core/latexImport'
 import { importFromLatex } from '../core/latexImport'
 import type { AdapterCurve, AdapterInput } from '../core/describeAdapters'
-import { describeCurves } from '../core/describeAdapters'
+import { describeCurves, describeShapes } from '../core/describeAdapters'
 import type { DescribeExtra, DescribeWindow } from '../core/describeGraph'
 import { fmt } from '../core/describeGraph'
 import { formatPiTick, pickPiTickStep, pickTickStep, PI_LABEL_MIN_PX, UNIT_MIN_PX } from '../render/grid'
@@ -403,6 +403,7 @@ export function describeInputOf(
     if (!s.visible || s.kind !== 'point' || !s.label || s.id === ADDED_POINT_ID) continue
     extras.push(`Point ${s.label} is marked at ${pointLabel(s.at.x, s.at.y)}.`)
   }
+  extras.push(...describeShapes((scene.shapes ?? []).filter((s) => s.id !== ADDED_POINT_ID)))
   if ((scene.fields ?? []).some((f) => f.visible)) {
     extras.push('A slope field is drawn.')
     for (const f of scene.fields ?? []) if (f.visible) extras.push({ text: `The slope field is ${f.latex}.`, answer: true })

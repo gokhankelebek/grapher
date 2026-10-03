@@ -15,7 +15,7 @@ import type { FactoredSpec } from '../core/factored'
 import type { ExpSpec } from '../core/exponential'
 import type { LogisticSpec } from '../core/logistic'
 import type { LogSpec } from '../core/logarithmic'
-import type { StyleMap } from '../core/persist'
+import type { ShapeMeasureSettings, StyleMap } from '../core/persist'
 import type { NLPart } from '../render/numberline'
 import type { DomainActions, DomainPanel, SetNotation } from './domainLinks'
 import { StableCurveCard } from './CurveCard'
@@ -331,6 +331,10 @@ interface Props {
   onShapeEquation(id: string, src: string): string | null
   /** Type one exact coordinate, which rewrites that coordinate's source text. */
   onShapeCoord(id: string, pair: number, axis: 'x' | 'y', value: number): void
+  /** A shape's measurement toggles / partner (undefined: nothing shown). */
+  onShapeMeasure?(id: string, next: ShapeMeasureSettings | undefined, label: string): void
+  /** Add a new shape from a typed line (a linked line, a plotted endpoint); the parser's error or null. */
+  onShapeAdd?(src: string): string | null
   /** "Build ▾ → Data table". Absent hides the item. */
   onDataAdd?(): void
   /**
@@ -553,6 +557,8 @@ export function Sidebar({
   onShapeParamSetExact,
   onShapeEquation,
   onShapeCoord,
+  onShapeMeasure,
+  onShapeAdd,
   onDataAdd,
   data = NO_DATA,
   dataCardFor,
@@ -919,6 +925,8 @@ export function Sidebar({
                   onParamSetExact={(i, v) => onShapeParamSetExact(shape.id, i, v)}
                   onEquationCommit={(src) => onShapeEquation(shape.id, src)}
                   onCoordSet={(pair, axis, v) => onShapeCoord(shape.id, pair, axis, v)}
+                  onMeasure={(next, label) => onShapeMeasure?.(shape.id, next, label)}
+                  onAddShape={(src) => onShapeAdd?.(src) ?? null}
                 />
               )
             })}

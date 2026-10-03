@@ -24,7 +24,8 @@ import type {
   EndCap,
   Vec2,
 } from './types'
-import { FIGURE_STYLES } from './types'
+import { FIGURE_STYLES, MEASURE_FLAGS } from './types'
+import type { MeasureFlag } from './types'
 import { namedCallSites, parseExpression } from './parse'
 import type { FunctionEnv } from './functionEnv'
 import { parseSlopeField } from './parse/slopeField'
@@ -614,6 +615,32 @@ export interface BoardShape {
   /** Polygons only: paint the interior. Ignored by the other kinds. */
   fill: boolean
   visible: boolean
+  /**
+   * What the shape's Measurements section draws on the board, and (a point)
+   * which other point it is measured to. Absent or empty writes nothing at
+   * all, so a document that never measured anything is byte-identical.
+   */
+  measure?: ShapeMeasureSettings
+}
+
+/** A shape's measurement display toggles, as the document keeps them. */
+export interface ShapeMeasureSettings {
+  /** The toggles that are on, in MEASURE_FLAGS order. */
+  show?: MeasureFlag[]
+  /** A point's partner: another shape's id, or "id#k" for vertex k of it. */
+  to?: string
+}
+
+/** The toggles in canonical order, unknown ones dropped, each once. */
+export function cleanMeasure(m: unknown): ShapeMeasureSettings | undefined {
+  if (!m || typeof m !== 'object') return undefined
+  const raw = m as { show?: unknown; to?: unknown }
+  const flags = Array.isArray(raw.show) ? raw.show : []
+  const show = MEASURE_FLAGS.filter((f) => flags.includes(f))
+  const out: ShapeMeasureSettings = {}
+  if (show.length > 0) out.show = show
+  if (typeof raw.to === 'string' && raw.to.trim() !== '') out.to = raw.to
+  return out.show || out.to ? out : undefined
 }
 
 // --- data tables --------------------------------------------------------------
@@ -1639,6 +1666,8 @@ export interface StoredShape {
   fill?: true
   /** Written only when the shape is hidden. */
   hidden?: true
+  /** Written only when a measurement toggle is on (or a point has a partner). */
+  measure?: ShapeMeasureSettings
 }
 
 /**
@@ -2323,6 +2352,8 @@ export function shapeToStored(s: BoardShape): StoredShape {
   if (s.params.length > 0) out.params = s.params.slice()
   if (s.fill === true) out.fill = true
   if (s.visible === false) out.hidden = true
+  const m = cleanMeasure(s.measure)
+  if (m) out.measure = m
   return out
 }
 
@@ -2364,6 +2395,7 @@ export function storedToShape(raw: unknown): { shape: BoardShape } | { error: st
       color: isStr(color) && color ? color : '#4f9cf9',
       fill: raw.fill === true,
       visible: raw.hidden !== true,
+      ...(cleanMeasure(raw.measure) ? { measure: cleanMeasure(raw.measure) } : {}),
     },
   }
 }
