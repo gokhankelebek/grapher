@@ -251,7 +251,7 @@ export default function App() {
   } = viewport
   const { addUnitCircle, ucFigures, unitCircleCardNodes } = unitCircle
   const { addRelatedRates, rrFigures, relatedRatesCardNodes } = rates
-  const { addNormal, addSimulation, addDataPlot, statsFigs, statsCardNodes } = statsApi
+  const { addNormal, addSimulation, addDataPlot, addProbability, statsFigs, statsCardNodes } = statsApi
   const { ineqSolution, systemCardNode } = system
   const { overlays, calcFor, betweenFor } = overlaysApi
   const { motionScalesFor, boardHandles, boardAnalysis, screenPolylines, screenShapes } = marks
@@ -407,6 +407,7 @@ export default function App() {
         onNormalAdd={addNormal}
         onSimulationAdd={addSimulation}
         onDataPlotAdd={addDataPlot}
+        onProbabilityAdd={addProbability}
         statsCards={statsCardNodes}
         statsCount={kind === 'cartesian' ? stats.length : 0}
         seqOpen={seqOpen}

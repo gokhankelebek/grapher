@@ -48,6 +48,7 @@ import { freshSeed } from '../core/stats'
 import type { DescribeStat } from '../core/describeAdapters'
 import type { StatPrim, StatsFigure } from '../render/stats'
 import { dataPlotFigure, dataPlotName } from './dataPlotLinks'
+import { probFigure, probName } from './probLinks'
 
 export type { BoardDataPlot, BoardNormal, BoardSim, BoardStat }
 
@@ -975,6 +976,7 @@ export function simFigure(s: BoardSim, index: number, opts: FigureOpts = {}): St
 
 export function statsFigure(s: BoardStat, index: number, opts: FigureOpts = {}): StatsFigure {
   if (s.type === 'data') return dataPlotFigure(s, index)
+  if (s.type === 'prob') return probFigure(s, index)
   return s.type === 'normal' ? normalFigure(s, index, opts) : simFigure(s, index, opts)
 }
 
@@ -993,7 +995,7 @@ export function statsFigures(list: readonly BoardStat[], opts: (s: BoardStat) =>
 
 /** Short name for a card and a toast. */
 export const statName = (s: BoardStat): string =>
-  s.type === 'data' ? dataPlotName : s.type === 'normal' ? 'Normal distribution' : s.mode === 'compare' ? 'Compare treatments' : 'Sampling simulation'
+  s.type === 'prob' ? probName : s.type === 'data' ? dataPlotName : s.type === 'normal' ? 'Normal distribution' : s.mode === 'compare' ? 'Compare treatments' : 'Sampling simulation'
 
 // ---------------------------------------------------------------------------
 // Play: the simulation builds up

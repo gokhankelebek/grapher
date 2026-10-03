@@ -219,6 +219,7 @@ interface Props {
   onNormalAdd?(): void
   onSimulationAdd?(): void
   onDataPlotAdd?(): void
+  onProbabilityAdd?(): void
   /** The statistics cards, rendered by the App (it owns the play state). */
   statsCards?: ReactNode
   /** How many statistics objects the list holds, for the header count. */
@@ -505,6 +506,7 @@ export function Sidebar({
   onNormalAdd,
   onSimulationAdd,
   onDataPlotAdd,
+  onProbabilityAdd,
   statsCards,
   statsCount = 0,
   onSeqToggle,
@@ -665,7 +667,7 @@ export function Sidebar({
               +
             </button>
             )}
-            {!readOnly && !numberLine && (onFactorToggle || onExpToggle || onLogisticToggle || onLogToggle || onSinToggle || onTransformToggle || onPiecewiseToggle || onConicToggle || onMotionToggle || onSeqToggle || onDataAdd || onUnitCircleAdd || onRelatedRatesAdd || onNormalAdd || onSimulationAdd || onDataPlotAdd) && (
+            {!readOnly && !numberLine && (onFactorToggle || onExpToggle || onLogisticToggle || onLogToggle || onSinToggle || onTransformToggle || onPiecewiseToggle || onConicToggle || onMotionToggle || onSeqToggle || onDataAdd || onUnitCircleAdd || onRelatedRatesAdd || onNormalAdd || onSimulationAdd || onDataPlotAdd || onProbabilityAdd) && (
               <BuildMenu
                 factorOpen={factorOpen}
                 expOpen={expOpen}
@@ -693,6 +695,7 @@ export function Sidebar({
                 onNormalAdd={onNormalAdd}
                 onSimulationAdd={onSimulationAdd}
                 onDataPlotAdd={onDataPlotAdd}
+                onProbabilityAdd={onProbabilityAdd}
               />
             )}
           </div>

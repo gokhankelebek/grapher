@@ -27,6 +27,7 @@ import { newUnitCircle } from '../src/ui/unitCircleLinks'
 import { EXAMPLE_GROUP_A, EXAMPLE_GROUP_B, newNormal, newSim } from '../src/ui/statsLinks'
 import { bankFigure, buildItemDoc, planItem } from '../src/ui/itemBank'
 import { EXAMPLE_SETS, newDataPlot } from '../src/ui/dataPlotLinks'
+import { newProb } from '../src/core/probPersist'
 import { fitRegression, regressionSource } from '../src/core/data'
 
 export const STYLES: readonly FigureStyleId[] = ['screen', 'textbook', 'sat', 'ap']
@@ -408,6 +409,31 @@ export function corpusDocs(): CorpusDoc[] {
         }],
       })),
     )
+  }
+
+  // ---- probability (NC Math 2): a two-way table with column percentages and
+  // P(B|A); a three-set Venn diagram with an event; a tree without replacement
+  // and a typed dependent tree — labels carrying characters LaTeX dislikes
+  {
+    const base = newProb('P1')
+    const table = { ...base, table: { ...base.table, rows: ['Grade 9 & 10', 'Grade 11 #2', 'Gökhan’s 50%'], cols: ['Plays_sport', 'Doesn’t'], counts: [[30, 20], [15, 35], [5, 5]], given: 'A' as const, rel: 'col' as const, a: 1 } }
+    const venn = { ...newProb('P2'), view: 'venn' as const, venn: { sets: 3 as const, names: ['Sport & music', 'Club #1', 'Art_50%'], regions: ['4', '6', '5', '3', '7', '2', '1', '2'], fromTable: false, expr: '(A ∪ B)ᶜ ∪ C' } }
+    out.push(doc('probtable', 'Two-way table and Venn diagram', input({ stats: [table, venn], viewport: { center: { x: 0, y: -4 }, pxPerUnit: 45 } })))
+    const tree = { ...newProb('P3'), view: 'tree' as const, tree: { ...newProb('P3').tree, draws: 3, pick: ['0.0.1', '0.1.0', '1.0.0'], event: 'exactly two Red' } }
+    const typedTree = {
+      ...newProb('P4'),
+      view: 'tree' as const,
+      tree: {
+        ...newProb('P4').tree,
+        mode: 'manual' as const,
+        stages: [
+          { name: 'Weather', outcomes: ['Rain', 'Dry'], probs: [['0.3', '0.7']], same: true },
+          { name: 'Bus', outcomes: ['Late', 'On time'], probs: [['2/5', '3/5'], ['10%', '90%']], same: false },
+        ],
+        pick: ['0.0', '1.0'],
+      },
+    }
+    out.push(doc('probtree', 'Tree diagrams: 3 red, 2 blue; rain and the bus', input({ stats: [tree, typedTree], viewport: { center: { x: 0, y: -4 }, pxPerUnit: 45 } })))
   }
 
   // ---- shapes

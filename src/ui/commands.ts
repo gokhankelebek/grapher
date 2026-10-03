@@ -118,6 +118,7 @@ export interface CommandActions {
   addNormal(): void
   addSimulation(): void
   addDataPlot(): void
+  addProbability(): void
   // ---- a curve's ⋯ menu
   addCalc(curveId: string, kind: CalcKind): void
   addAreaBetween(curveId: string): void
@@ -872,6 +873,22 @@ export const COMMANDS: readonly Command[] = [
     path: 'Build ▾ → One-variable data',
     when: graphEdit,
     run: (ctx) => ctx.actions.addDataPlot(),
+  },
+  {
+    id: 'build-probability',
+    title: 'Probability (two-way table, Venn diagram, tree diagram)',
+    description: 'A two-way table with joint, marginal and conditional probabilities and the independence check; a Venn diagram that shades A ∩ Bᶜ, A ∪ B … with the Addition Rule; a tree diagram for draws with or without replacement with the Multiplication Rule',
+    keywords: [
+      'probability', 'two-way table', 'two way table', 'contingency table', 'conditional probability', 'conditional',
+      'given', 'p(a|b)', 'independent', 'independence', 'dependent', 'joint', 'marginal', 'relative frequency',
+      'venn', 'venn diagram', 'union', 'intersection', 'complement', 'addition rule', 'or', 'and', 'not',
+      'tree', 'tree diagram', 'multiplication rule', 'with replacement', 'without replacement', 'draws', 'bag',
+      'marbles', 'compound events', 'sample space', 'outcomes', 'events', 'counting',
+    ],
+    group: 'Build',
+    path: 'Build ▾ → Probability',
+    when: graphEdit,
+    run: (ctx) => ctx.actions.addProbability(),
   },
   seeded('build-slope-field', 'dy/dx = ', 'Slope field', 'Type dy/dx = … and get its slope field; tap to draw solutions', [
     'slope field', 'slope fields', 'direction field', 'differential equation', 'diff eq', 'dy/dx', 'ode',
@@ -1877,6 +1894,13 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     { id: 'curve-table', note: 'A quadratic’s table: Δ²y is constant; a table on the figure for a worksheet' },
     { id: 'curve-compare', note: 'A quadratic beside a linear or exponential function, given by equation, graph or table' },
     { id: 'curve-evaluate' },
+  ] },
+  { id: 'm2-prob', course: 'NC Math 2', title: 'Probability (S-CP.1, 3–8)', entries: [
+    { id: 'build-probability', note: 'Two-way table: type the counts; the totals, P(A and B), P(A), P(B) and P(A | B) as the fraction of B’s outcomes, with B’s column and the cell highlighted (S-CP.3a, 6)' },
+    { id: 'build-probability', note: 'Independent? P(A | B) against P(A) and P(A and B) against P(A)·P(B), with a verdict about the sample (S-CP.3b, 5)' },
+    { id: 'build-probability', note: 'Joint, row and column percentages (Show → Joint % / Row % / Column %)' },
+    { id: 'build-probability', note: 'Venn diagram: two or three sets; shade A ∪ B, A ∩ Bᶜ, (A ∪ B)ᶜ … and read P by the Addition Rule P(A ∪ B) = P(A) + P(B) − P(A ∩ B) (S-CP.1, 7)' },
+    { id: 'build-probability', note: 'Tree diagram: draw 2 from 3 red and 2 blue with or without replacement, or type the stages; path products by the Multiplication Rule and an event as a sum of paths (S-CP.4, 8)' },
   ] },
   { id: 'm2-xform', course: 'NC Math 2', title: 'Transformations, congruence and similarity', entries: [
     { id: 'build-shape', note: 'Type the figure: ABC = (1,2) (4,2) (4,6)' },

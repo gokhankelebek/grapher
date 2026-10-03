@@ -16,6 +16,10 @@ import type { StatsFigure } from '../render/stats'
 import type { ExtraHandle } from '../ui/CanvasStage'
 import { NormalCard, SimCard } from '../ui/StatsCard'
 import { DataPlotCard } from '../ui/DataPlotCard'
+import { ProbCard } from '../ui/ProbCard'
+import { probCard, probSpots, settleProb, toggleLeaf } from '../ui/probLinks'
+import type { BoardProb } from '../ui/probLinks'
+import { newProb } from '../core/probPersist'
 import type { TableColumn } from '../ui/DataPlotCard'
 import { dataPlotCard, dataPlotSpots, newDataPlot, toggleOff } from '../ui/dataPlotLinks'
 import type { BoardDataPlot } from '../ui/dataPlotLinks'
@@ -75,7 +79,7 @@ export function useStats({ board, refs, notices, history, calc, viewport }: Stat
   // and its seed, so the same document always shows the same samples.
 
   const mapStat = useCallback(
-    (id: string, patch: Partial<BoardNormal> | Partial<BoardSim> | Partial<BoardDataPlot>): BoardStat[] =>
+    (id: string, patch: Partial<BoardNormal> | Partial<BoardSim> | Partial<BoardDataPlot> | Partial<BoardProb>): BoardStat[] =>
       statsRef.current.map((s) => {
         if (s.id !== id) return s
         const next = { ...s, ...patch } as BoardStat
@@ -88,7 +92,7 @@ export function useStats({ board, refs, notices, history, calc, viewport }: Stat
 
   /** One stated change. `live`: a drag in flight, inside the bracket the gesture opened (one undo). */
   const patchStat = useCallback(
-    (id: string, patch: Partial<BoardNormal> | Partial<BoardSim> | Partial<BoardDataPlot>, label: string, live = false): void => {
+    (id: string, patch: Partial<BoardNormal> | Partial<BoardSim> | Partial<BoardDataPlot> | Partial<BoardProb>, label: string, live = false): void => {
       if (!statsRef.current.some((s) => s.id === id)) return
       const next = mapStat(id, patch)
       if (live) applyState({ stats: next })
@@ -125,6 +129,8 @@ export function useStats({ board, refs, notices, history, calc, viewport }: Stat
   const addSimulation = useCallback((): void => add((id) => newSim(id, freshSeed()), 'add simulation'), [add])
   /** Build ▾ → One-variable data. */
   const addDataPlot = useCallback((): void => add((id) => newDataPlot(id), 'add data plot'), [add])
+  /** Build ▾ → Probability (two-way table, Venn diagram, tree diagram). */
+  const addProbability = useCallback((): void => add((id) => newProb(id), 'add probability'), [add])
 
   const deleteStat = useCallback(
     (id: string): void => {
@@ -251,6 +257,37 @@ export function useStats({ board, refs, notices, history, calc, viewport }: Stat
     if (kind !== 'cartesian') return []
     const out: ExtraHandle[] = []
     stats.forEach((s, index) => {
+      // A probability panel, while its card is selected: a table cell makes its row A and its
+      // column B; a tree leaf goes in or out of the event.
+      if (s.type === 'prob') {
+        if (s.hidden === true || selectedId !== s.id) return
+        for (const spot of probSpots(s, index)) {
+          out.push({
+            id: spot.kind === 'cell' ? `stat:${s.id}:cell:${spot.row}:${spot.col}` : `stat:${s.id}:leaf:${spot.key}`,
+            pos: spot.pos,
+            label: spot.kind === 'cell' ? `${s.table.rows[spot.row]} and ${s.table.cols[spot.col]}` : spot.label,
+            color: s.color,
+            glyph: 'none',
+            onDrag: () => {},
+            onTap: () => {
+              const cur = statsRef.current.find((c) => c.id === s.id)
+              if (!cur || cur.type !== 'prob') return
+              let next: BoardProb
+              let label: string
+              if (spot.kind === 'cell') {
+                if (cur.table.a === spot.row && cur.table.b === spot.col) return
+                next = { ...cur, table: { ...cur.table, a: spot.row, b: spot.col } }
+                label = 'pick A and B'
+              } else {
+                next = toggleLeaf(cur, spot.key)
+                label = cur.tree.pick.includes(spot.key) ? `leave out ${spot.label}` : `include ${spot.label}`
+              }
+              commitState({ stats: statsRef.current.map((c) => (c.id === s.id ? next : c)) }, label)
+            },
+          })
+        }
+        return
+      }
       // A data plot's dots, while its card is selected: a click leaves a value out, or brings it back.
       if (s.type === 'data') {
         if (s.hidden === true || selectedId !== s.id) return
@@ -391,6 +428,22 @@ export function useStats({ board, refs, notices, history, calc, viewport }: Stat
             },
             onZoom: () => zoomTo(s.id),
           }
+          if (s.type === 'prob') {
+            return (
+              <ProbCard
+                key={s.id}
+                p={s}
+                card={probCard(s)}
+                {...common}
+                onPatch={(patch, label) => {
+                  const cur = statsRef.current.find((c) => c.id === s.id)
+                  if (!cur || cur.type !== 'prob') return
+                  const next = settleProb({ ...cur, ...patch })
+                  patchStat(s.id, { view: next.view, table: next.table, venn: next.venn, tree: next.tree }, label)
+                }}
+              />
+            )
+          }
           if (s.type === 'data') {
             return (
               <DataPlotCard
@@ -436,7 +489,7 @@ export function useStats({ board, refs, notices, history, calc, viewport }: Stat
       : null
 
   return {
-    addNormal, addSimulation, addDataPlot, deleteStat, statsFigs, statsFiguresRef, statsHandles, statsCardNodes,
+    addNormal, addSimulation, addDataPlot, addProbability, deleteStat, statsFigs, statsFiguresRef, statsHandles, statsCardNodes,
   }
 }
 

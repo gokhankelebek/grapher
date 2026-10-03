@@ -9790,3 +9790,171 @@ button.calc-field-btn {
 .vt-footer {
   margin-top: var(--sp-2);
 }
+
+/* ------------------------------------------------ probability (Build ▾ → Probability)
+   The two-way table is edited in place: label boxes in the header row and
+   column, a count box per cell, totals read-only. The conditional's given
+   row or column carries the object's colour; the cell itself the hot ink, as
+   on the board. */
+.prob-view {
+  margin: var(--sp-1) 0 var(--sp-2);
+}
+
+.prob-input {
+  min-width: 0;
+}
+
+.prob-grid-wrap {
+  overflow-x: auto;
+  margin: var(--sp-1) 0;
+}
+
+.prob-grid {
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.prob-grid th,
+.prob-grid td {
+  padding: 2px var(--sp-1);
+  border: 1px solid var(--border);
+  text-align: center;
+}
+
+.prob-grid th .prob-input {
+  width: 9ch;
+  font-weight: 600;
+}
+
+.prob-grid td .prob-input {
+  text-align: right;
+}
+
+.prob-grid .prob-on .prob-input {
+  color: var(--curve, var(--accent));
+}
+
+.prob-given {
+  background: color-mix(in srgb, var(--curve, var(--accent)) 14%, transparent);
+}
+
+.prob-cell-on {
+  background: color-mix(in srgb, var(--danger) 26%, transparent);
+  outline: 2px solid var(--danger);
+  outline-offset: -2px;
+}
+
+.prob-total {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.prob-grand {
+  color: var(--text);
+}
+
+.prob-num {
+  display: inline-block;
+  min-width: 5ch;
+  text-align: right;
+}
+
+.prob-events {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-1);
+}
+
+.prob-lines td:first-child {
+  width: 8ch;
+  vertical-align: top;
+}
+
+.prob-conditional {
+  margin-top: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  border-left: 3px solid var(--danger);
+}
+
+.prob-verdict {
+  font-weight: 600;
+  color: var(--curve, var(--accent));
+}
+
+.prob-verdict-no {
+  color: var(--danger-text);
+}
+
+.prob-names,
+.prob-regions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-2);
+  margin: var(--sp-1) 0;
+}
+
+.prob-names .prob-input {
+  width: 13ch;
+}
+
+.prob-region .calc-tag {
+  min-width: 7ch;
+}
+
+.prob-expr {
+  width: 100%;
+  font-size: var(--fs-md);
+}
+
+.prob-rule {
+  margin-top: var(--sp-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.prob-bag {
+  display: grid;
+  gap: var(--sp-1);
+  margin: var(--sp-1) 0 var(--sp-2);
+}
+
+.prob-bag-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.prob-bag-row .prob-input:first-child {
+  flex: 1 1 auto;
+}
+
+.prob-stage {
+  margin: var(--sp-1) 0 var(--sp-2);
+  padding-left: var(--sp-2);
+  border-left: 2px solid var(--border);
+}
+
+.prob-stage-probs td .prob-input {
+  text-align: right;
+}
+
+.prob-leaves {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+  margin: var(--sp-1) 0;
+}
+
+.prob-leaf-name {
+  font-weight: 600;
+}
+
+.prob-rules {
+  font-variant-numeric: tabular-nums;
+}
+
+.prob-picked {
+  color: var(--danger-text);
+  font-weight: 600;
+}

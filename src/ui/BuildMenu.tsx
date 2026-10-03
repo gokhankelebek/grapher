@@ -57,6 +57,8 @@ interface Props {
   onSimulationAdd?(): void
   /** Put a one-variable data plot on the board (dot plot, histogram, box plots — NC Math 1). */
   onDataPlotAdd?(): void
+  /** Put a probability object on the board (two-way table, Venn diagram, tree diagram — NC Math 2). */
+  onProbabilityAdd?(): void
 }
 
 export function BuildMenu({
@@ -86,6 +88,7 @@ export function BuildMenu({
   onNormalAdd,
   onSimulationAdd,
   onDataPlotAdd,
+  onProbabilityAdd,
 }: Props) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -211,6 +214,22 @@ export function BuildMenu({
               }}
             >
               One-variable data
+            </button>
+          )}
+          {onProbabilityAdd && (
+            <button
+              type="button"
+              role="menuitem"
+              data-testid="build-probability"
+              className="card-menu-item build-item"
+              title="Probability: a two-way table (conditional probability, independence), a Venn diagram (shade A ∩ Bᶜ, the Addition Rule) or a tree diagram (draws with or without replacement, the Multiplication Rule)"
+              onClick={(e) => {
+                e.stopPropagation()
+                setOpen(false)
+                onProbabilityAdd()
+              }}
+            >
+              Probability
             </button>
           )}
           {onNormalAdd && (

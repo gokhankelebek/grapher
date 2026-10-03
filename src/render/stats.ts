@@ -47,7 +47,16 @@ export interface StatBox {
 export type StatPrim =
   | { k: 'curve'; pts: Vec2[]; ink: StatInk; w: number; dash?: number[]; color?: string }
   | { k: 'fill'; pts: Vec2[]; ink: StatInk; alpha: number; color?: string; answer?: boolean }
-  | { k: 'rect'; x0: number; y0: number; x1: number; y1: number; ink: StatInk; alpha: number; color?: string }
+  /** `edge: false`: the wash alone, no outline (a two-way table's highlighted row, column or cell). */
+  | { k: 'rect'; x0: number; y0: number; x1: number; y1: number; ink: StatInk; alpha: number; color?: string; edge?: false }
+  /**
+   * A Venn diagram: the universe `box` and its circles, with the regions in
+   * `atoms` shaded — atom m is the region inside circle i exactly when bit i
+   * of m is set (0 = outside every circle); `atoms` has bit m set for each
+   * shaded atom. Shading is clipped to the circles, so arcs stay arcs in the
+   * vector exports.
+   */
+  | { k: 'venn'; box: StatBox; circles: { x: number; y: number; r: number }[]; atoms: number; ink: StatInk; alpha: number; color?: string }
   /** Many dots of one radius (board units). */
   | { k: 'dots'; pts: Vec2[]; r: number; ink: StatInk; color?: string }
   /** Many hollow rings of one radius (board units): values left out, outliers. */
@@ -79,7 +88,7 @@ export type StatPrim =
 
 export interface StatsFigure {
   id: string
-  kind: 'normal' | 'sim' | 'data' | 'resid'
+  kind: 'normal' | 'sim' | 'data' | 'resid' | 'prob'
   visible: boolean
   color: string
   /** The opaque panel. */
@@ -89,6 +98,8 @@ export interface StatsFigure {
   prims: StatPrim[]
   /** The axis line's height. */
   axisY: number
+  /** No horizontal axis at all (a two-way table, a Venn or a tree diagram). */
+  noAxis?: true
   /** Ticks with their raw-value label and (normal) z label. An empty text keeps the tick only. */
   ticks: { x: number; text: string; z: string }[]
   /** Emphasised ticks: the bounds, the observed difference. */
@@ -256,9 +267,62 @@ function drawOne(ctx: CanvasRenderingContext2D, f: StatsFigure, toPx: (p: Vec2) 
         ctx.fillStyle = fillInk(p.ink, p.color)
         ctx.fillRect(x, y, w, h)
         ctx.globalAlpha = prev
+        if (p.edge === false) break
         ctx.lineWidth = 1 * s
         ctx.strokeStyle = inkOf(p.ink, p.color)
         ctx.strokeRect(x, y, w, h)
+        break
+      }
+      case 'venn': {
+        const q0 = P(p.box.x0, p.box.y1)
+        const q1 = P(p.box.x1, p.box.y0)
+        const bx = Math.min(q0.x, q1.x)
+        const by = Math.min(q0.y, q1.y)
+        const bw = Math.abs(q1.x - q0.x)
+        const bh = Math.abs(q1.y - q0.y)
+        if (!(bw > 0) || !(bh > 0)) break
+        const ppx = Math.abs(P(1, 0).x - P(0, 0).x)
+        const cs = p.circles.map((c) => ({ ...toPx({ x: c.x, y: c.y }), r: c.r * ppx }))
+        const n = 1 << cs.length
+        for (let atom = 0; atom < n; atom++) {
+          if (!(p.atoms & (1 << atom))) continue
+          ctx.save()
+          // inside each circle the atom is in…
+          cs.forEach((c, i) => {
+            if (!(atom & (1 << i))) return
+            ctx.beginPath()
+            ctx.moveTo(c.x + c.r, c.y)
+            ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2)
+            ctx.clip()
+          })
+          // …and outside the others: the box with that circle as a hole (opposite winding)
+          cs.forEach((c, i) => {
+            if (atom & (1 << i)) return
+            ctx.beginPath()
+            ctx.rect(bx, by, bw, bh)
+            ctx.moveTo(c.x + c.r, c.y)
+            ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2, true)
+            ctx.clip()
+          })
+          const prev = ctx.globalAlpha
+          ctx.globalAlpha = prev * wash(p.alpha)
+          ctx.fillStyle = fillInk(p.ink, p.color)
+          ctx.fillRect(bx, by, bw, bh)
+          ctx.globalAlpha = prev
+          ctx.restore()
+        }
+        ctx.lineWidth = 1.4 * s
+        ctx.setLineDash([])
+        ctx.strokeStyle = st.theme.axis
+        ctx.strokeRect(bx, by, bw, bh)
+        ctx.lineWidth = 2 * s
+        ctx.strokeStyle = inkOf('main', p.color)
+        for (const c of cs) {
+          ctx.beginPath()
+          ctx.moveTo(c.x + c.r, c.y)
+          ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2)
+          ctx.stroke()
+        }
         break
       }
       case 'dots': {
@@ -361,7 +425,7 @@ function drawOne(ctx: CanvasRenderingContext2D, f: StatsFigure, toPx: (p: Vec2) 
   // ---- the axis, its ticks, the raw row and the z row
   const axisL = P(f.plot.x0, f.axisY)
   const axisR = P(f.plot.x1, f.axisY)
-  line([axisL, axisR], st.theme.axis, 1.4)
+  if (!f.noAxis) line([axisL, axisR], st.theme.axis, 1.4)
   const tickLen = 5 * t
   const row1 = axisL.y + tickLen + 9 * t
   const row2 = row1 + 17 * t

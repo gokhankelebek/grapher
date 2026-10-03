@@ -15,6 +15,10 @@
 
 import type { NormalMode, Tail } from './stats'
 import { NORMAL_MODES, cleanSeed } from './stats'
+import type { BoardProb, StoredProb } from './probPersist'
+import { probToStored, storedToProb } from './probPersist'
+
+export type { BoardProb, StoredProb }
 
 export const STAT_COLOR_DEFAULT = '#c678dd'
 export const SIM_COLOR_DEFAULT = '#2dd4bf'
@@ -118,7 +122,7 @@ export interface BoardDataPlot {
   hidden?: true
 }
 
-export type BoardStat = BoardNormal | BoardSim | BoardDataPlot
+export type BoardStat = BoardNormal | BoardSim | BoardDataPlot | BoardProb
 
 export interface StoredNormal {
   id: string
@@ -170,7 +174,7 @@ export interface StoredDataPlot {
   hidden?: true
 }
 
-export type StoredStat = StoredNormal | StoredSim | StoredDataPlot
+export type StoredStat = StoredNormal | StoredSim | StoredDataPlot | StoredProb
 
 /** Off indices that point into `values`: ascending, unique, in range. */
 export function cleanOff(off: readonly unknown[] | undefined, length: number): number[] {
@@ -181,6 +185,7 @@ export function cleanOff(off: readonly unknown[] | undefined, length: number): n
 }
 
 export function statToStored(s: BoardStat): StoredStat {
+  if (s.type === 'prob') return probToStored(s)
   if (s.type === 'data') {
     const out: StoredDataPlot = {
       id: s.id,
@@ -265,6 +270,7 @@ export function storedToStat(raw: unknown, problems?: string[]): { stat: BoardSt
   if (!isObj(raw)) return { error: 'it was not readable' }
   const { id, type } = raw
   if (!isStr(id) || !id) return { error: 'it had no id' }
+  if (type === 'prob') return storedToProb(raw, id, problems)
   if (type !== 'normal' && type !== 'sim' && type !== 'data') return { error: 'its kind was unknown' }
   const what = type === 'normal' ? 'normal distribution' : type === 'sim' ? 'simulation' : 'data plot'
   const say = (s: string): void => {

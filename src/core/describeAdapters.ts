@@ -156,6 +156,11 @@ export type DescribeStat =
       compare: string
     }
   | {
+      /** A probability object (two-way table, Venn or tree diagram): its sentences, answers flagged. */
+      kind: 'prob'
+      lines: { text: string; answer?: boolean }[]
+    }
+  | {
       /** A residual plot under a data table's scatter plot. */
       kind: 'resid'
       table: string
@@ -701,6 +706,8 @@ export function describeStats(list: readonly DescribeStat[]): DescribeExtra[] {
       })
     } else if (s.kind === 'data') {
       describeDataPlot(s, out)
+    } else if (s.kind === 'prob') {
+      for (const l of s.lines) out.push(l.answer ? { text: l.text, answer: true } : { text: l.text })
     } else if (s.kind === 'resid') {
       out.push({
         text: `A residual plot for the ${s.model} model fitted to ${s.table} shows the ${s.n} residuals against x, with a dashed line at residual 0; the largest residual is ${sNum(s.maxAbs, 3)} in size.`,

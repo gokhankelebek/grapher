@@ -120,6 +120,7 @@ export function useCommands({ board, docState, session, refs, derived, notices, 
   const addNormal = statsApi?.addNormal ?? NOOP
   const addSimulation = statsApi?.addSimulation ?? NOOP
   const addDataPlot = statsApi?.addDataPlot ?? NOOP
+  const addProbability = statsApi?.addProbability ?? NOOP
   const { calcCards, betweenCards } = overlaysApi
   const { cardNames } = naming
   const { revealStep, toggleReveal } = revealMode
@@ -216,6 +217,7 @@ export function useCommands({ board, docState, session, refs, derived, notices, 
     addNormal,
     addSimulation,
     addDataPlot,
+    addProbability,
     addCalc: addCalcObject,
     addAreaBetween,
     showInverse: showInverseOf,
