@@ -55,6 +55,8 @@ interface Props {
   onNormalAdd?(): void
   /** Put a sampling simulation on the board. */
   onSimulationAdd?(): void
+  /** Put a one-variable data plot on the board (dot plot, histogram, box plots — NC Math 1). */
+  onDataPlotAdd?(): void
 }
 
 export function BuildMenu({
@@ -83,6 +85,7 @@ export function BuildMenu({
   onRelatedRatesAdd,
   onNormalAdd,
   onSimulationAdd,
+  onDataPlotAdd,
 }: Props) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -192,6 +195,22 @@ export function BuildMenu({
               }}
             >
               Related rates
+            </button>
+          )}
+          {onDataPlotAdd && (
+            <button
+              type="button"
+              role="menuitem"
+              data-testid="build-data-plot"
+              className="card-menu-item build-item"
+              title="One-variable data: paste a list (or several) for a dot plot, histogram and box plots — the summary, shape, outliers and a comparison"
+              onClick={(e) => {
+                e.stopPropagation()
+                setOpen(false)
+                onDataPlotAdd()
+              }}
+            >
+              One-variable data
             </button>
           )}
           {onNormalAdd && (

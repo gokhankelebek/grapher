@@ -227,7 +227,7 @@ export default function App() {
   const {
     addDataTable, setDataCellText, setDataLabel, removeDataRowAt, pasteData, toggleDataVisible,
     cycleDataColor, setDataMarker, deleteData, duplicateData, addRegression, removeRegression,
-    setRegressionDigits, toggleResiduals, refitRegression, scatterScene, dataCardFor, seqCardFor,
+    setRegressionDigits, toggleResiduals, toggleResidualPlot, refitRegression, scatterScene, dataCardFor, seqCardFor,
     seqDefaultName,
   } = tables
   const {
@@ -248,7 +248,7 @@ export default function App() {
   } = viewport
   const { addUnitCircle, ucFigures, unitCircleCardNodes } = unitCircle
   const { addRelatedRates, rrFigures, relatedRatesCardNodes } = rates
-  const { addNormal, addSimulation, statsFigs, statsCardNodes } = statsApi
+  const { addNormal, addSimulation, addDataPlot, statsFigs, statsCardNodes } = statsApi
   const { ineqSolution, systemCardNode } = system
   const { overlays, calcFor, betweenFor } = overlaysApi
   const { motionScalesFor, boardHandles, boardAnalysis, screenPolylines, screenShapes } = marks
@@ -402,6 +402,7 @@ export default function App() {
         relatedRatesCount={kind === 'cartesian' ? relatedRates.length : 0}
         onNormalAdd={addNormal}
         onSimulationAdd={addSimulation}
+        onDataPlotAdd={addDataPlot}
         statsCards={statsCardNodes}
         statsCount={kind === 'cartesian' ? stats.length : 0}
         seqOpen={seqOpen}
@@ -517,6 +518,7 @@ export default function App() {
         onRegressionRemove={removeRegression}
         onRegressionDigits={setRegressionDigits}
         onRegressionResiduals={toggleResiduals}
+        onRegressionResidualPlot={toggleResidualPlot}
         onRegressionRefit={refitRegression}
       />
       </AnswerContext.Provider>

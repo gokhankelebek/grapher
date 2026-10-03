@@ -216,6 +216,7 @@ interface Props {
   /** "Build ▾ → Normal distribution" / "→ Simulation". */
   onNormalAdd?(): void
   onSimulationAdd?(): void
+  onDataPlotAdd?(): void
   /** The statistics cards, rendered by the App (it owns the play state). */
   statsCards?: ReactNode
   /** How many statistics objects the list holds, for the header count. */
@@ -364,6 +365,7 @@ interface Props {
   onRegressionRemove?(id: string, regId: string): void
   onRegressionDigits?(id: string, regId: string, digits: number): void
   onRegressionResiduals?(id: string, regId: string): void
+  onRegressionResidualPlot?(id: string, regId: string): void
   onRegressionRefit?(id: string, regId: string): void
   /**
    * What each card is called (f, g, f′, f⁻¹), keyed by curve id — shown as the
@@ -497,6 +499,7 @@ export function Sidebar({
   relatedRatesCount = 0,
   onNormalAdd,
   onSimulationAdd,
+  onDataPlotAdd,
   statsCards,
   statsCount = 0,
   onSeqToggle,
@@ -588,6 +591,7 @@ export function Sidebar({
   onRegressionRemove = noop,
   onRegressionDigits = noop,
   onRegressionResiduals = noop,
+  onRegressionResidualPlot = noop,
   onRegressionRefit = noop,
   cardNames,
   storedNames,
@@ -654,7 +658,7 @@ export function Sidebar({
               +
             </button>
             )}
-            {!readOnly && !numberLine && (onFactorToggle || onExpToggle || onLogisticToggle || onLogToggle || onSinToggle || onTransformToggle || onPiecewiseToggle || onConicToggle || onMotionToggle || onSeqToggle || onDataAdd || onUnitCircleAdd || onRelatedRatesAdd || onNormalAdd || onSimulationAdd) && (
+            {!readOnly && !numberLine && (onFactorToggle || onExpToggle || onLogisticToggle || onLogToggle || onSinToggle || onTransformToggle || onPiecewiseToggle || onConicToggle || onMotionToggle || onSeqToggle || onDataAdd || onUnitCircleAdd || onRelatedRatesAdd || onNormalAdd || onSimulationAdd || onDataPlotAdd) && (
               <BuildMenu
                 factorOpen={factorOpen}
                 expOpen={expOpen}
@@ -681,6 +685,7 @@ export function Sidebar({
                 onRelatedRatesAdd={onRelatedRatesAdd}
                 onNormalAdd={onNormalAdd}
                 onSimulationAdd={onSimulationAdd}
+                onDataPlotAdd={onDataPlotAdd}
               />
             )}
           </div>
@@ -972,6 +977,7 @@ export function Sidebar({
                   onRemoveRegression={(regId) => onRegressionRemove(table.id, regId)}
                   onDigits={(regId, d) => onRegressionDigits(table.id, regId, d)}
                   onResiduals={(regId) => onRegressionResiduals(table.id, regId)}
+                  onResidualPlot={(regId) => onRegressionResidualPlot(table.id, regId)}
                   onRefit={(regId) => onRegressionRefit(table.id, regId)}
                 />
               )

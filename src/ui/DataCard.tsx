@@ -24,6 +24,9 @@ import type {
   RegressionRow,
 } from './dataLinks'
 import { useInk } from './inkContext'
+import { Answer } from './RevealAnswer'
+import { statKey } from './reveal'
+import { CAUSATION, R_THRESHOLDS } from '../core/residuals'
 
 // ============================================================================
 // src/ui/DataCard.tsx — a data table in the sidebar.
@@ -78,6 +81,8 @@ interface Props {
   onRemoveRegression(regId: string): void
   onDigits(regId: string, digits: number): void
   onResiduals(regId: string): void
+  /** The residual plot under the scatter plot (one per table). */
+  onResidualPlot?(regId: string): void
   /** Re-attach a detached regression: its curve follows the table again. */
   onRefit(regId: string): void
 }
@@ -101,6 +106,7 @@ export function DataCard({
   onRemoveRegression,
   onDigits,
   onResiduals,
+  onResidualPlot,
   onRefit,
 }: Props) {
   const ink = useInk()
@@ -294,6 +300,8 @@ export function DataCard({
   }
 
   const count = card.count
+  const resid = card.residualCol
+  const residKey = statKey(`resid:${data.id}`)
   const hasResiduals = data.regressions.some((r) => r.residuals && !r.detached)
 
   return (
@@ -374,6 +382,8 @@ export function DataCard({
               onRemove={() => onRemoveRegression(row.reg.id)}
               onDigits={(d) => onDigits(row.reg.id, d)}
               onResiduals={() => onResiduals(row.reg.id)}
+              onResidualPlot={onResidualPlot ? () => onResidualPlot(row.reg.id) : undefined}
+              answerKey={statKey(`resid:${data.id}`)}
               onRefit={() => onRefit(row.reg.id)}
             />
           ))}
@@ -389,6 +399,11 @@ export function DataCard({
                   <th className="data-idx" aria-hidden="true" />
                   <th>{headerInput('x', data.xLabel)}</th>
                   <th>{headerInput('y', data.yLabel)}</th>
+                  {resid && (
+                    <th className="data-resid-head" title="y − ŷ: the point's vertical distance from the fit">
+                      residual
+                    </th>
+                  )}
                   <th className="data-drop-col" aria-hidden="true" />
                 </tr>
               </thead>
@@ -398,6 +413,13 @@ export function DataCard({
                     <td className="data-idx">{i + 1}</td>
                     <td>{cellInput(i, 'x', r.x)}</td>
                     <td>{cellInput(i, 'y', r.y)}</td>
+                    {resid && (
+                      <td className="data-resid" data-testid="data-resid">
+                        <Answer k={residKey} what="the residual">
+                          {resid[i] === null || resid[i] === undefined ? '' : statText(resid[i] as number)}
+                        </Answer>
+                      </td>
+                    )}
                     <td className="data-drop-col">
                       <button
                         type="button"
@@ -420,6 +442,7 @@ export function DataCard({
                     <td className="data-idx">{phantom + 1}</td>
                     <td>{cellInput(phantom, 'x', '')}</td>
                     <td>{cellInput(phantom, 'y', '')}</td>
+                    {resid && <td className="data-resid" />}
                     <td className="data-drop-col" />
                   </tr>
                 )}
@@ -630,6 +653,8 @@ function RegressionLine({
   onRemove,
   onDigits,
   onResiduals,
+  onResidualPlot,
+  answerKey,
   onRefit,
 }: {
   row: RegressionRow
@@ -637,6 +662,9 @@ function RegressionLine({
   onRemove(): void
   onDigits(d: number): void
   onResiduals(): void
+  onResidualPlot?(): void
+  /** The reveal key of this table's residual plot. */
+  answerKey: string
   onRefit(): void
 }) {
   const { reg, status, readout } = row
@@ -724,6 +752,47 @@ function RegressionLine({
           >
             residuals
           </button>
+          {onResidualPlot && (
+            <button
+              type="button"
+              className={`calc-chip${reg.residualPlot ? ' calc-chip-on' : ''}`}
+              aria-pressed={reg.residualPlot === true}
+              data-testid="data-reg-residual-plot"
+              title="The residual plot — residuals against x — in a panel under the scatter plot, and the residuals in the table"
+              onClick={onResidualPlot}
+            >
+              residual plot
+            </button>
+          )}
+        </div>
+      )}
+      {selected && status === 'ok' && (row.pattern || row.rWords) && (
+        <div className="data-reg-assess" data-testid="data-reg-assess">
+          {row.pattern && (
+            <Answer k={answerKey} block what="the residual plot's verdict">
+              <div className={`rr-sentence data-reg-pattern data-reg-pattern-${row.pattern.verdict}`} data-testid="data-reg-pattern">
+                {row.pattern.sentence}
+              </div>
+            </Answer>
+          )}
+          {row.rWords &&
+            (row.pattern ? (
+              <Answer k={answerKey} block what="r in words">
+                <div className="rr-sentence" data-testid="data-reg-r-words">
+                  {row.rWords.sentence}
+                </div>
+              </Answer>
+            ) : (
+              <div className="rr-sentence" data-testid="data-reg-r-words">
+                {row.rWords.sentence}
+              </div>
+            ))}
+          {row.rWords && (
+            <div className="field-hint" data-testid="data-reg-causation">
+              <div className="uc-dim data-reg-thresholds">{R_THRESHOLDS}</div>
+              {CAUSATION}
+            </div>
+          )}
         </div>
       )}
       {selected && status === 'ok' && row.notes.length > 0 && (

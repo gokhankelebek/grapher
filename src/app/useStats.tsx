@@ -15,6 +15,12 @@ import { MAX_STATS } from '../core/statsPersist'
 import type { StatsFigure } from '../render/stats'
 import type { ExtraHandle } from '../ui/CanvasStage'
 import { NormalCard, SimCard } from '../ui/StatsCard'
+import { DataPlotCard } from '../ui/DataPlotCard'
+import type { TableColumn } from '../ui/DataPlotCard'
+import { dataPlotCard, dataPlotSpots, newDataPlot, toggleOff } from '../ui/dataPlotLinks'
+import type { BoardDataPlot } from '../ui/dataPlotLinks'
+import { residualFigures } from '../ui/residualLinks'
+import { dataColumns } from '../ui/dataLinks'
 import {
   newNormal,
   newSim,
@@ -51,11 +57,11 @@ export interface StatsDeps {
 }
 
 /** The optional keys a patch clears by passing undefined: removed, never stored as undefined. */
-const OPTIONAL = ['rule', 'zRow', 'hidden', 'theory', 'observed'] as const
+const OPTIONAL = ['rule', 'zRow', 'hidden', 'theory', 'observed', 'binWidth', 'dropOutliers'] as const
 
 export function useStats({ board, refs, notices, history, calc, viewport }: StatsDeps) {
-  const { kind, selectedId, setSelectedId, stats, statsPlay, setStatsPlay, statsPlayRef } = board
-  const { kindRef, selectedRef, preEditRef, statsRef } = refs
+  const { kind, selectedId, setSelectedId, stats, statsPlay, setStatsPlay, statsPlayRef, dataSets, curves } = board
+  const { kindRef, selectedRef, preEditRef, statsRef, fitCacheRef } = refs
   const { showToast } = notices
   const { applyState, commitState, undo } = history
   const { selectObject } = calc
@@ -69,7 +75,7 @@ export function useStats({ board, refs, notices, history, calc, viewport }: Stat
   // and its seed, so the same document always shows the same samples.
 
   const mapStat = useCallback(
-    (id: string, patch: Partial<BoardNormal> | Partial<BoardSim>): BoardStat[] =>
+    (id: string, patch: Partial<BoardNormal> | Partial<BoardSim> | Partial<BoardDataPlot>): BoardStat[] =>
       statsRef.current.map((s) => {
         if (s.id !== id) return s
         const next = { ...s, ...patch } as BoardStat
@@ -82,7 +88,7 @@ export function useStats({ board, refs, notices, history, calc, viewport }: Stat
 
   /** One stated change. `live`: a drag in flight, inside the bracket the gesture opened (one undo). */
   const patchStat = useCallback(
-    (id: string, patch: Partial<BoardNormal> | Partial<BoardSim>, label: string, live = false): void => {
+    (id: string, patch: Partial<BoardNormal> | Partial<BoardSim> | Partial<BoardDataPlot>, label: string, live = false): void => {
       if (!statsRef.current.some((s) => s.id === id)) return
       const next = mapStat(id, patch)
       if (live) applyState({ stats: next })
@@ -117,6 +123,8 @@ export function useStats({ board, refs, notices, history, calc, viewport }: Stat
   const addNormal = useCallback((): void => add((id) => newNormal(id), 'add normal distribution'), [add])
   /** Build ▾ → Simulation. */
   const addSimulation = useCallback((): void => add((id) => newSim(id, freshSeed()), 'add simulation'), [add])
+  /** Build ▾ → One-variable data. */
+  const addDataPlot = useCallback((): void => add((id) => newDataPlot(id), 'add data plot'), [add])
 
   const deleteStat = useCallback(
     (id: string): void => {
@@ -211,16 +219,25 @@ export function useStats({ board, refs, notices, history, calc, viewport }: Stat
     }
   }, [dragFrame !== null])
 
+  /** A data table's residual plot (under its scatter plot) is a statistics panel too. */
+  const residFigs = useMemo<StatsFigure[]>(() => {
+    if (kind !== 'cartesian' || !dataSets.some((d) => d.regressions.some((r) => r.residualPlot))) return []
+    return residualFigures(dataSets, new Set(curves.map((c) => c.id)), fitCacheRef.current)
+  }, [kind, dataSets, curves])
+
   /** What the board draws: the build-up while one plays, the held frame while one is dragged. */
   const statsFigs = useMemo<StatsFigure[]>(
     () =>
       kind === 'cartesian'
-        ? statsFigures(stats, (s) => ({
-            frame: dragFrame && dragFrame.id === s.id ? dragFrame.frame : null,
-            shown: statsPlay && statsPlay.id === s.id ? statsPlay.shown : null,
-          }))
+        ? [
+            ...statsFigures(stats, (s) => ({
+              frame: dragFrame && dragFrame.id === s.id ? dragFrame.frame : null,
+              shown: statsPlay && statsPlay.id === s.id ? statsPlay.shown : null,
+            })),
+            ...residFigs,
+          ]
         : [],
-    [kind, stats, statsPlay, dragFrame],
+    [kind, stats, statsPlay, dragFrame, residFigs],
   )
   const statsFiguresRef = useRef<StatsFigure[]>(statsFigs)
   statsFiguresRef.current = statsFigs
@@ -234,6 +251,28 @@ export function useStats({ board, refs, notices, history, calc, viewport }: Stat
     if (kind !== 'cartesian') return []
     const out: ExtraHandle[] = []
     stats.forEach((s, index) => {
+      // A data plot's dots, while its card is selected: a click leaves a value out, or brings it back.
+      if (s.type === 'data') {
+        if (s.hidden === true || selectedId !== s.id) return
+        for (const spot of dataPlotSpots(s, index)) {
+          out.push({
+            id: `stat:${s.id}:dot:${spot.set}:${spot.i}`,
+            pos: spot.pos,
+            label: String(spot.value),
+            color: s.color,
+            glyph: 'none',
+            onDrag: () => {},
+            onTap: () => {
+              const cur = statsRef.current.find((c) => c.id === s.id)
+              if (!cur || cur.type !== 'data') return
+              const set = cur.sets[spot.set]
+              const wasOff = (set?.off ?? []).includes(spot.i)
+              commitState({ stats: statsRef.current.map((c) => (c.id === s.id ? toggleOff(cur, spot.set, spot.i) : c)) }, wasOff ? `bring back ${spot.value}` : `leave out ${spot.value}`)
+            },
+          })
+        }
+        return
+      }
       if (s.type !== 'normal' || s.hidden === true) return
       if (selectedId !== s.id && selectedId !== null) return
       const held = dragFrame && dragFrame.id === s.id ? dragFrame.frame : null
@@ -323,7 +362,19 @@ export function useStats({ board, refs, notices, history, calc, viewport }: Stat
       }
     })
     return out
-  }, [kind, stats, selectedId, dragFrame, patchStat])
+  }, [kind, stats, selectedId, dragFrame, patchStat, commitState])
+
+  /** Every numeric column of the board's data tables, for "From a table…" on a data plot's card. */
+  const tableColumns = useMemo<TableColumn[]>(() => {
+    const out: TableColumn[] = []
+    for (const d of dataSets) {
+      const cols = dataColumns(d.rows)
+      if (cols.xs.length === 0) continue
+      out.push({ key: `${d.id}:x`, label: `${d.name} · ${d.xLabel || 'x'}`, values: cols.xs })
+      out.push({ key: `${d.id}:y`, label: `${d.name} · ${d.yLabel || 'y'}`, values: cols.ys })
+    }
+    return out
+  }, [dataSets])
 
   const statsCardNodes =
     kind === 'cartesian' && stats.length > 0
@@ -339,6 +390,18 @@ export function useStats({ board, refs, notices, history, calc, viewport }: Stat
               patchStat(s.id, { color: CURVE_COLORS[(i + 1) % CURVE_COLORS.length] }, 'change colour')
             },
             onZoom: () => zoomTo(s.id),
+          }
+          if (s.type === 'data') {
+            return (
+              <DataPlotCard
+                key={s.id}
+                p={s}
+                card={dataPlotCard(s)}
+                columns={tableColumns}
+                {...common}
+                onPatch={(patch, label) => patchStat(s.id, patch, label)}
+              />
+            )
           }
           if (s.type === 'normal') {
             return (
@@ -373,7 +436,7 @@ export function useStats({ board, refs, notices, history, calc, viewport }: Stat
       : null
 
   return {
-    addNormal, addSimulation, deleteStat, statsFigs, statsFiguresRef, statsHandles, statsCardNodes,
+    addNormal, addSimulation, addDataPlot, deleteStat, statsFigs, statsFiguresRef, statsHandles, statsCardNodes,
   }
 }
 

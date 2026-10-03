@@ -753,6 +753,8 @@ export interface DataRegression {
   digits: number
   /** Draw each point's residual to this curve. At most one per table. */
   residuals: boolean
+  /** The residual plot (residuals vs x) in a panel under the scatter plot. At most one per table. */
+  residualPlot?: true
   /**
    * The curve's equation was edited by hand, so it no longer follows the
    * table: it is an ordinary curve, and the card says so.
@@ -1795,6 +1797,8 @@ export interface StoredRegression {
   digits?: number
   /** Written only when on. */
   residuals?: true
+  /** Written only when on. */
+  residualPlot?: true
   /** Written only when the curve was edited by hand. */
   detached?: true
 }
@@ -2513,6 +2517,7 @@ export function dataToStored(d: BoardData): StoredData {
       const digits = clampRegDigits(r.digits)
       if (digits !== REG_DIGITS_DEFAULT) sr.digits = digits
       if (r.residuals) sr.residuals = true
+      if (r.residualPlot) sr.residualPlot = true
       if (r.detached) sr.detached = true
       return sr
     })
@@ -2571,6 +2576,7 @@ export function storedToData(
       digits: clampRegDigits(rr.digits),
       residuals: rr.residuals === true,
     }
+    if (rr.residualPlot === true) reg.residualPlot = true
     if (rr.detached === true) reg.detached = true
     regressions.push(reg)
   }

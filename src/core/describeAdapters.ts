@@ -133,6 +133,41 @@ export type DescribeStat =
       p: number
       tail: 'two' | 'upper' | 'lower'
     }
+  | {
+      /** A one-variable data plot: dot plot / histogram and/or box plot, one row per set. */
+      kind: 'data'
+      dist: 'dots' | 'hist' | 'none'
+      box: boolean
+      binWidth: number | null
+      sets: {
+        name: string
+        /** Values analysed (after any left out). */
+        n: number
+        /** Values left out. */
+        left: number
+        five: [number, number, number, number, number]
+        mean: number
+        sd: number
+        outliers: number[]
+        /** "appears skewed right". */
+        shape: string
+      }[]
+      /** The comparison sentence ('' for one set). */
+      compare: string
+    }
+  | {
+      /** A residual plot under a data table's scatter plot. */
+      kind: 'resid'
+      table: string
+      /** "linear", "quadratic" … */
+      model: string
+      n: number
+      maxAbs: number
+      verdict: 'none' | 'curved' | 'few'
+      /** The card's verdict sentence. */
+      sentence: string
+      r: number | null
+    }
 
 // ----------------------------------------------------------------------------
 // Text helpers
@@ -664,6 +699,14 @@ export function describeStats(list: readonly DescribeStat[]): DescribeExtra[] {
         text: `The simulated ${what} have mean ${sNum(s.mean)} and standard deviation ${sNum(s.sd)}, so the 95% margin of error is about ${sNum(s.me95)}.`,
         answer: true,
       })
+    } else if (s.kind === 'data') {
+      describeDataPlot(s, out)
+    } else if (s.kind === 'resid') {
+      out.push({
+        text: `A residual plot for the ${s.model} model fitted to ${s.table} shows the ${s.n} residuals against x, with a dashed line at residual 0; the largest residual is ${sNum(s.maxAbs, 3)} in size.`,
+      })
+      out.push({ text: s.sentence, answer: true })
+      if (s.r !== null) out.push({ text: `The correlation coefficient is r = ${fixedN(s.r, 4)}.`, answer: true })
     } else {
       const plot = s.plot === 'dots' ? 'A dot plot' : 'A histogram'
       out.push({
@@ -677,6 +720,33 @@ export function describeStats(list: readonly DescribeStat[]): DescribeExtra[] {
     }
   }
   return out
+}
+
+/** A data plot's sentences: what is drawn (always), the summaries (answers). */
+function describeDataPlot(s: Extract<DescribeStat, { kind: 'data' }>, out: DescribeExtra[]): void {
+  const pics = [s.dist === 'dots' ? 'a dot plot' : s.dist === 'hist' ? `a histogram (bin width ${sNum(s.binWidth ?? 1)})` : '', s.box ? 'a box plot' : '']
+    .filter(Boolean)
+    .join(' and ')
+  const names = s.sets.map((x) => `${x.name} (${x.n} value${x.n === 1 ? '' : 's'})`)
+  const list = names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+  out.push({
+    text:
+      s.sets.length > 1
+        ? `${pics[0].toUpperCase()}${pics.slice(1)} of ${s.sets.length} data sets on one number line, one row each: ${list}.`
+        : `${pics[0].toUpperCase()}${pics.slice(1)} of ${list}.`,
+  })
+  for (const x of s.sets) {
+    if (x.left > 0) out.push({ text: `${x.left} value${x.left === 1 ? ' is' : 's are'} left out of ${x.name} and drawn as dashed rings.` })
+    if (x.n === 0) continue
+    const [mn, q1, med, q3, mx] = x.five.map((v) => sNum(v, 2))
+    out.push({
+      text: `${x.name}: minimum ${mn}, Q1 ${q1}, median ${med}, Q3 ${q3}, maximum ${mx}; mean ${sNum(x.mean, 2)}, standard deviation ${sNum(x.sd, 2)}. ${
+        x.outliers.length > 0 ? `Outlier${x.outliers.length === 1 ? '' : 's'}: ${x.outliers.map((o) => sNum(o, 2)).join(', ')}.` : 'No outliers.'
+      } It ${x.shape}.`,
+      answer: true,
+    })
+  }
+  if (s.compare) out.push({ text: s.compare, answer: true })
 }
 
 // ----------------------------------------------------------------------------

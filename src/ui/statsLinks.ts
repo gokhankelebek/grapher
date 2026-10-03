@@ -42,13 +42,14 @@ import {
   zStar,
 } from '../core/stats'
 import type { NormalMode, Population, RandomizationResult, Tail } from '../core/stats'
-import type { BoardNormal, BoardSim, BoardStat } from '../core/statsPersist'
+import type { BoardDataPlot, BoardNormal, BoardSim, BoardStat } from '../core/statsPersist'
 import { SIM_COLOR_DEFAULT, STAT_COLOR_DEFAULT } from '../core/statsPersist'
 import { freshSeed } from '../core/stats'
 import type { DescribeStat } from '../core/describeAdapters'
 import type { StatPrim, StatsFigure } from '../render/stats'
+import { dataPlotFigure, dataPlotName } from './dataPlotLinks'
 
-export type { BoardNormal, BoardSim, BoardStat }
+export type { BoardDataPlot, BoardNormal, BoardSim, BoardStat }
 
 // ---------------------------------------------------------------------------
 // New objects
@@ -973,6 +974,7 @@ export function simFigure(s: BoardSim, index: number, opts: FigureOpts = {}): St
 // ---------------------------------------------------------------------------
 
 export function statsFigure(s: BoardStat, index: number, opts: FigureOpts = {}): StatsFigure {
+  if (s.type === 'data') return dataPlotFigure(s, index)
   return s.type === 'normal' ? normalFigure(s, index, opts) : simFigure(s, index, opts)
 }
 
@@ -991,7 +993,7 @@ export function statsFigures(list: readonly BoardStat[], opts: (s: BoardStat) =>
 
 /** Short name for a card and a toast. */
 export const statName = (s: BoardStat): string =>
-  s.type === 'normal' ? 'Normal distribution' : s.mode === 'compare' ? 'Compare treatments' : 'Sampling simulation'
+  s.type === 'data' ? dataPlotName : s.type === 'normal' ? 'Normal distribution' : s.mode === 'compare' ? 'Compare treatments' : 'Sampling simulation'
 
 // ---------------------------------------------------------------------------
 // Play: the simulation builds up

@@ -28,7 +28,7 @@ import { MAX_N, MAX_REPS, MIN_REPS } from '../core/statsPersist'
 // src/ui/statsLinks.ts, the same numbers the board draws.
 // ============================================================================
 
-const stop = (e: { stopPropagation(): void }): void => e.stopPropagation()
+export const stop = (e: { stopPropagation(): void }): void => e.stopPropagation()
 
 interface Shell {
   color: string
@@ -47,7 +47,7 @@ interface Shell {
 }
 
 /** The frame both cards share: head, ⋯ menu, the summary line, the body when selected. */
-function CardShell(p: Shell) {
+export function CardShell(p: Shell) {
   const ink = useInk()
   const revealApi = useReveal()
   const [menuOpen, setMenuOpen] = useState(false)
@@ -151,7 +151,7 @@ function CardShell(p: Shell) {
 }
 
 /** A typed number: Enter or blur commits, Escape abandons; exact input ("100 - 2*15", "1/3") welcome. */
-function NumField({
+export function NumField({
   value,
   onCommit,
   width = '7ch',
@@ -225,7 +225,7 @@ function NumField({
 }
 
 /** A pasted list of numbers: committed on blur (or ⌘/Ctrl+Enter). */
-function ListField({
+export function ListField({
   values,
   onCommit,
   testId,
@@ -284,7 +284,7 @@ function ListField({
   )
 }
 
-function Seg<T extends string>({
+export function Seg<T extends string>({
   options,
   value,
   onPick,

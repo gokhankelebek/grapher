@@ -28,6 +28,8 @@ import {
 import { parseExpression } from '../core/parse'
 import type { ScatterSet } from '../render/scatter'
 import { parseNumeric } from './numeric'
+import type { CorrelationWords, ResidualPattern } from '../core/residuals'
+import { correlationWords, residualPattern } from '../core/residuals'
 
 export type { BoardData, DataMarker, DataRegression, DataRow, RegressionKind, RegressionResult }
 export { REG_DIGITS_DEFAULT, REG_DIGITS_MAX, REG_DIGITS_MIN, clampRegDigits, isRegressionKind }
@@ -418,6 +420,10 @@ export interface RegressionRow {
   /** Why the curve is hidden (a failed re-fit). */
   reason?: string
   notes: string[]
+  /** A linear fit's r in words (S-ID.8). */
+  rWords?: CorrelationWords
+  /** The residual plot's verdict, when this regression shows one (S-ID.6b). */
+  pattern?: ResidualPattern
 }
 
 export interface DataCardData {
@@ -427,6 +433,29 @@ export interface DataCardData {
   regressions: RegressionRow[]
   /** The kinds already on this table, so the menu can tick them. */
   onBoard: ReadonlySet<RegressionKind>
+  /**
+   * The residual column (row index → y − ŷ, null for a row not plotted), for
+   * the regression whose residual plot — or else residual segments — is on.
+   */
+  residualCol: (number | null)[] | null
+}
+
+/** "a linear model", "this quadratic model". */
+export const modelWords = (kind: RegressionKind): string =>
+  kind === 'linear' ? 'a linear model' : `this ${KIND_NAME[kind].toLowerCase()} model`
+
+/** The fit's residuals, finite pairs only, aligned (x, y − ŷ). */
+export function residualPairs(cols: DataColumns, res: RegressionResult): { xs: number[]; residuals: number[] } {
+  const xs: number[] = []
+  const residuals: number[] = []
+  cols.xs.forEach((x, i) => {
+    const r = res.residuals[i]
+    if (Number.isFinite(x) && Number.isFinite(r)) {
+      xs.push(x)
+      residuals.push(r)
+    }
+  })
+  return { xs, residuals }
 }
 
 /** Everything one table's card prints, already worked out. */
@@ -472,7 +501,7 @@ export function dataCard(
       }
     }
     const fresh = regressionSource(result, clampRegDigits(reg.digits))
-    return {
+    const row: RegressionRow = {
       reg,
       status: 'ok',
       result,
@@ -481,8 +510,27 @@ export function dataCard(
       readout: regressionReadout(result),
       notes: result.notes.slice(),
     }
+    if (reg.kind === 'linear' && result.r !== undefined && Number.isFinite(result.r)) {
+      row.rWords = correlationWords(result.r, statText(result.r), data.xLabel || 'x', data.yLabel || 'y')
+    }
+    if (reg.residualPlot) {
+      const pr = residualPairs(columns, result)
+      row.pattern = residualPattern(pr.xs, pr.residuals, modelWords(reg.kind))
+    }
+    return row
   })
-  return { columns, count: columns.xs.length, regressions, onBoard }
+  // The residual column: the residual plot's regression first, else the one drawing residual segments.
+  const colRow =
+    regressions.find((r) => r.status === 'ok' && r.reg.residualPlot) ?? regressions.find((r) => r.status === 'ok' && r.reg.residuals)
+  let residualCol: (number | null)[] | null = null
+  if (colRow && colRow.result) {
+    residualCol = data.rows.map(() => null)
+    columns.used.forEach((row, k) => {
+      const r = colRow.result!.residuals[k]
+      if (Number.isFinite(r)) residualCol![row] = r
+    })
+  }
+  return { columns, count: columns.xs.length, regressions, onBoard, residualCol }
 }
 
 // ---------------------------------------------------------------------------
@@ -661,7 +709,7 @@ export interface Box {
  * The box a table's points occupy, padded so a single point or a flat row of
  * them still has an extent to frame. Null for a table with nothing plotted.
  */
-export function dataBox(data: BoardData): Box | null {
+export function pointsBox(data: BoardData): Box | null {
   const { xs, ys } = dataColumns(data.rows)
   if (xs.length === 0) return null
   let minX = Infinity
@@ -677,6 +725,50 @@ export function dataBox(data: BoardData): Box | null {
   const padX = maxX > minX ? 0 : Math.max(1, Math.abs(minX) * 0.1)
   const padY = maxY > minY ? 0 : Math.max(1, Math.abs(minY) * 0.1)
   return { min: { x: minX - padX, y: minY - padY }, max: { x: maxX + padX, y: maxY + padY } }
+}
+
+/** The regression whose residual plot the table shows (at most one), if its curve is on the board. */
+export function residualPlotReg(data: BoardData, curveIds?: ReadonlySet<string>): DataRegression | null {
+  return data.regressions.find((r) => r.residualPlot && !r.detached && (!curveIds || curveIds.has(r.curveId))) ?? null
+}
+
+export interface ResidualPanel {
+  /** The opaque panel. */
+  panel: { x0: number; y0: number; x1: number; y1: number }
+  /** Where the residuals are plotted: x0..x1 are the data's own x (the plot lines up under the scatter). */
+  plot: { x0: number; y0: number; x1: number; y1: number }
+}
+
+/**
+ * A residual plot's panel, under the table's points: the same x as the
+ * scatter plot (so each residual sits right under its point), about half the
+ * points' height, a little below the lowest point.
+ */
+export function residualPanelOf(points: Box): ResidualPanel {
+  const sx = Math.max(points.max.x - points.min.x, 1e-9)
+  const sy = Math.max(points.max.y - points.min.y, 1e-9)
+  const x0 = points.min.x - 0.05 * sx
+  const x1 = points.max.x + 0.05 * sx
+  const H = 0.6 * sy
+  const top = points.min.y - 0.14 * sy
+  const panel = { x0: x0 - 0.17 * sx, x1: x1 + 0.04 * sx, y1: top, y0: top - H }
+  const plot = { x0, x1, y1: top - 0.2 * H, y0: top - H + 0.22 * H }
+  return { panel, plot }
+}
+
+/**
+ * The box a table occupies on the board: its points, and its residual plot's
+ * panel when one is shown. Null for a table with nothing plotted.
+ */
+export function dataBox(data: BoardData): Box | null {
+  const pts = pointsBox(data)
+  if (!pts) return null
+  if (!residualPlotReg(data)) return pts
+  const { panel } = residualPanelOf(pts)
+  return {
+    min: { x: Math.min(pts.min.x, panel.x0), y: Math.min(pts.min.y, panel.y0) },
+    max: { x: Math.max(pts.max.x, panel.x1), y: Math.max(pts.max.y, panel.y1) },
+  }
 }
 
 /** "Table 3": the next name no table on the board is using. */

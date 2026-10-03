@@ -9561,3 +9561,117 @@ button.calc-field-btn {
 .xform-alt {
   white-space: nowrap;
 }
+
+/* ------------------------------------------------ one-variable data plot
+   The data plot's card: named sets with a colour swatch, the summary table
+   (one column per set), the shape lines, the values left out and the
+   before / after table. And on a data table's card: the residual column and
+   the residual plot's verdict. */
+.dp-set {
+  margin: var(--sp-1) 0 var(--sp-2);
+}
+
+.dp-set-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.dp-swatch {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.dp-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 600;
+}
+
+.dp-actions {
+  flex-wrap: wrap;
+}
+
+.dp-table td:not(.dp-label) {
+  text-align: right;
+}
+
+.dp-table th {
+  text-align: right;
+}
+
+.dp-label {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.dp-method {
+  margin-top: var(--sp-1);
+}
+
+.dp-shape-line + .dp-shape-line {
+  margin-top: var(--sp-2);
+}
+
+.dp-left {
+  display: grid;
+  gap: var(--sp-1);
+  margin-top: var(--sp-2);
+}
+
+.dp-left-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.dp-outlier-chip {
+  cursor: default;
+  border-style: dashed;
+}
+
+.dp-effect {
+  margin-top: var(--sp-2);
+}
+
+.dp-effect td + td {
+  text-align: right;
+}
+
+.dp-moved td {
+  font-weight: 600;
+  color: var(--curve, var(--accent));
+}
+
+.data-resid-head {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: var(--fs-xs);
+  text-align: right;
+}
+
+.data-resid {
+  padding: 0 var(--sp-1);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.data-reg-assess {
+  display: grid;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1);
+}
+
+.data-reg-pattern-curved {
+  color: var(--warn, #f59e0b);
+}
+
+.data-reg-thresholds {
+  font-size: var(--fs-xs);
+}

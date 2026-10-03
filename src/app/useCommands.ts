@@ -118,6 +118,7 @@ export function useCommands({ board, docState, session, refs, derived, notices, 
   const { addRelatedRates } = rates
   const addNormal = statsApi?.addNormal ?? NOOP
   const addSimulation = statsApi?.addSimulation ?? NOOP
+  const addDataPlot = statsApi?.addDataPlot ?? NOOP
   const { calcCards, betweenCards } = overlaysApi
   const { cardNames } = naming
   const { revealStep, toggleReveal } = revealMode
@@ -210,6 +211,7 @@ export function useCommands({ board, docState, session, refs, derived, notices, 
     addRelatedRates,
     addNormal,
     addSimulation,
+    addDataPlot,
     addCalc: addCalcObject,
     addAreaBetween,
     showInverse: showInverseOf,

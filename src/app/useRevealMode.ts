@@ -44,6 +44,8 @@ import type { BoardLookApi } from './useBoardLook'
 import type { ShapesApi } from './useShapes'
 import { measureAnswerParts } from '../ui/shapeMeasure'
 import { shapeKey } from '../ui/reveal'
+import { residualPlotReg } from '../ui/dataLinks'
+import { residFigId } from '../ui/residualLinks'
 
 /** What useRevealMode reads from the hooks App calls before it. */
 export interface RevealModeDeps {
@@ -63,6 +65,7 @@ export interface RevealModeDeps {
 export function useRevealMode({ board, docState, session, derived, editing, system, overlaysApi, panel, lookApi, shapesApi }: RevealModeDeps) {
   const {
     curves, kind, items, selectedId, calcLinks, fields, sequences, unitCircles, relatedRates, stats, shapes,
+    dataSets,
   } = board
   const shapeCompiled = shapesApi?.shapeCompiled
   const { docMeta } = docState
@@ -101,6 +104,9 @@ export function useRevealMode({ board, docState, session, derived, editing, syst
     for (const u of unitCircles) if (u.hidden !== true) after.push(ucKey(u.id))
     for (const r of relatedRates) if (r.hidden !== true) after.push(rrKey(r.id))
     for (const st of stats) if (st.hidden !== true) after.push(statKey(st.id))
+    // a residual plot's verdict (and the table card's r in words)
+    const curveIds = new Set(curves.map((c) => c.id))
+    for (const d of dataSets) if (d.visible && residualPlotReg(d, curveIds)) after.push(statKey(residFigId(d.id)))
     if (sysCard?.lp) after.push(SYSTEM_KEY)
     for (const s of shapes) {
       if (!s.visible) continue
@@ -137,7 +143,7 @@ export function useRevealMode({ board, docState, session, derived, editing, syst
     })
     // depKeys: a curve that calls another moves when it does.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reveal.on, kind, items, curves, selectedId, models, analysis, analysisFor, domainPanel, calcLinks, crossings, sequences, fields, unitCircles, relatedRates, stats, sysCard, depKeys, shapes, shapeCompiled])
+  }, [reveal.on, kind, items, curves, selectedId, models, analysis, analysisFor, domainPanel, calcLinks, crossings, sequences, fields, unitCircles, relatedRates, stats, sysCard, depKeys, shapes, shapeCompiled, dataSets])
   const revealInvRef = useRef(revealInv)
   revealInvRef.current = revealInv
 

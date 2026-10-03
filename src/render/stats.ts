@@ -39,24 +39,47 @@ export interface StatBox {
   y1: number
 }
 
-/** Everything in BOARD units except where a field says px. */
+/**
+ * Everything in BOARD units except where a field says px. `color`, where a
+ * primitive has it, overrides the named ink with an object's own colour (one
+ * per data set on a data plot); a mono figure style still paints it black.
+ */
 export type StatPrim =
-  | { k: 'curve'; pts: Vec2[]; ink: StatInk; w: number; dash?: number[] }
-  | { k: 'fill'; pts: Vec2[]; ink: StatInk; alpha: number }
-  | { k: 'rect'; x0: number; y0: number; x1: number; y1: number; ink: StatInk; alpha: number }
+  | { k: 'curve'; pts: Vec2[]; ink: StatInk; w: number; dash?: number[]; color?: string }
+  | { k: 'fill'; pts: Vec2[]; ink: StatInk; alpha: number; color?: string; answer?: boolean }
+  | { k: 'rect'; x0: number; y0: number; x1: number; y1: number; ink: StatInk; alpha: number; color?: string }
   /** Many dots of one radius (board units). */
-  | { k: 'dots'; pts: Vec2[]; r: number; ink: StatInk }
-  | { k: 'vline'; x: number; y0: number; y1: number; ink: StatInk; w?: number; dash?: number[] }
+  | { k: 'dots'; pts: Vec2[]; r: number; ink: StatInk; color?: string }
+  /** Many hollow rings of one radius (board units): values left out, outliers. */
+  | { k: 'ring'; pts: Vec2[]; r: number; ink: StatInk; color?: string; dash?: boolean }
+  | { k: 'vline'; x: number; y0: number; y1: number; ink: StatInk; w?: number; dash?: number[]; color?: string }
   /** ←── 68% ──→ between x0 and x1 at height y. */
   | { k: 'bracket'; x0: number; x1: number; y: number; text: string; ink: StatInk }
   /** A value chip stepped off `at` along `dir` (screen, y down). */
   | { k: 'chip'; at: Vec2; text: string; ink: StatInk; dir?: Vec2; answer?: boolean }
-  /** Plain text centred at `at`, raised by `rise` × the plot's height. */
-  | { k: 'text'; at: Vec2; text: string; ink: StatInk; small?: boolean; rise: number; align?: 'center' | 'right' }
+  /**
+   * Plain text at `at`, raised by `rise` × the plot's height. 'center' and
+   * 'right' as before ('right' hangs from its point); 'start' / 'end' are
+   * left- / right-aligned on the middle line. `avoid`: skipped when it would
+   * overlap text already placed. `answer`: reveal mode masks it.
+   */
+  | {
+      k: 'text'
+      at: Vec2
+      text: string
+      ink: StatInk
+      small?: boolean
+      rise: number
+      align?: 'center' | 'right' | 'start' | 'end'
+      color?: string
+      avoid?: boolean
+      answer?: boolean
+      bold?: boolean
+    }
 
 export interface StatsFigure {
   id: string
-  kind: 'normal' | 'sim'
+  kind: 'normal' | 'sim' | 'data' | 'resid'
   visible: boolean
   color: string
   /** The opaque panel. */
@@ -74,6 +97,9 @@ export interface StatsFigure {
   zRow: boolean
   /** What the axis measures ("x", "sample mean x̄"). */
   axisLabel: string
+  /** A vertical axis at the plot's left edge (a residual plot's): ticks and what it measures. */
+  yTicks?: { y: number; text: string }[]
+  yLabel?: string
   /** The title band: the question, and its answer (masked in reveal mode). */
   title: { question: string; answer: string }
   /** The figure in words (src/core/describeAdapters.ts describeStats). */
@@ -114,6 +140,8 @@ interface St {
   theme: Theme
   face: { font: 'sans' | 'serif' }
   ink(i: StatInk): string
+  /** An object's own colour, painted for the palette (black under mono). */
+  own(c: string): string
 }
 
 function drawOne(ctx: CanvasRenderingContext2D, f: StatsFigure, toPx: (p: Vec2) => Vec2, st: St): void {
@@ -196,7 +224,8 @@ function drawOne(ctx: CanvasRenderingContext2D, f: StatsFigure, toPx: (p: Vec2) 
   }
 
   const wash = (alpha: number): number => (st.mono ? Math.min(0.28, alpha * 0.6) : alpha)
-  const fillInk = (i: StatInk): string => (st.mono ? '#777777' : st.ink(i))
+  const inkOf = (i: StatInk, c?: string): string => (c ? st.own(c) : st.ink(i))
+  const fillInk = (i: StatInk, c?: string): string => (st.mono ? '#777777' : inkOf(i, c))
 
   for (const p of f.prims) {
     switch (p.k) {
@@ -209,7 +238,7 @@ function drawOne(ctx: CanvasRenderingContext2D, f: StatsFigure, toPx: (p: Vec2) 
         ctx.closePath()
         const prev = ctx.globalAlpha
         ctx.globalAlpha = prev * wash(p.alpha)
-        ctx.fillStyle = fillInk(p.ink)
+        ctx.fillStyle = fillInk(p.ink, p.color)
         ctx.fill()
         ctx.globalAlpha = prev
         break
@@ -224,18 +253,18 @@ function drawOne(ctx: CanvasRenderingContext2D, f: StatsFigure, toPx: (p: Vec2) 
         if (!(h > 0)) break
         const prev = ctx.globalAlpha
         ctx.globalAlpha = prev * wash(p.alpha)
-        ctx.fillStyle = fillInk(p.ink)
+        ctx.fillStyle = fillInk(p.ink, p.color)
         ctx.fillRect(x, y, w, h)
         ctx.globalAlpha = prev
         ctx.lineWidth = 1 * s
-        ctx.strokeStyle = st.ink(p.ink)
+        ctx.strokeStyle = inkOf(p.ink, p.color)
         ctx.strokeRect(x, y, w, h)
         break
       }
       case 'dots': {
         const ppx = Math.abs(P(1, 0).x - P(0, 0).x)
         const r = Math.max(0.8, p.r * ppx)
-        ctx.fillStyle = st.ink(p.ink)
+        ctx.fillStyle = inkOf(p.ink, p.color)
         ctx.beginPath()
         for (const q of p.pts) {
           const c = toPx(q)
@@ -245,11 +274,26 @@ function drawOne(ctx: CanvasRenderingContext2D, f: StatsFigure, toPx: (p: Vec2) 
         ctx.fill()
         break
       }
+      case 'ring': {
+        const ppx = Math.abs(P(1, 0).x - P(0, 0).x)
+        const r = Math.max(1.2, p.r * ppx)
+        ctx.strokeStyle = inkOf(p.ink, p.color)
+        ctx.lineWidth = 1.4 * s
+        ctx.setLineDash(p.dash ? [2 * s, 2 * s] : [])
+        for (const q of p.pts) {
+          const c = toPx(q)
+          ctx.beginPath()
+          ctx.arc(c.x, c.y, r, 0, Math.PI * 2)
+          ctx.stroke()
+        }
+        ctx.setLineDash([])
+        break
+      }
       case 'curve':
-        line(p.pts.map(toPx), st.ink(p.ink), p.w, p.dash)
+        line(p.pts.map(toPx), inkOf(p.ink, p.color), p.w, p.dash)
         break
       case 'vline':
-        line([P(p.x, p.y0), P(p.x, p.y1)], st.ink(p.ink), p.w ?? 1.5, p.dash)
+        line([P(p.x, p.y0), P(p.x, p.y1)], inkOf(p.ink, p.color), p.w ?? 1.5, p.dash)
         break
       case 'bracket': {
         const l = P(p.x0, p.y)
@@ -276,12 +320,27 @@ function drawOne(ctx: CanvasRenderingContext2D, f: StatsFigure, toPx: (p: Vec2) 
       case 'text': {
         const at = toPx(p.at)
         const y = at.y - p.rise * plotH
-        const color = st.ink(p.ink)
+        const color = inkOf(p.ink, p.color)
         const text = p.text
         const align = p.align ?? 'center'
         later.push(() => {
-          ctx.font = p.small ? small : font
+          if (!text) return
+          ctx.font = p.bold ? (p.small ? `bold ${small}` : bold) : p.small ? small : font
+          if (p.avoid) {
+            const w = ctx.measureText(text).width
+            const h = (p.small ? 12 : 15) * t
+            const x0 = align === 'center' ? at.x - w / 2 : align === 'start' ? at.x : at.x - w
+            const r = { x: x0 - 1, y: y - h / 2, w: w + 2, h }
+            if (placed.some((q) => overlaps(q, r))) return
+            placed.push(r)
+          }
           ctx.fillStyle = color
+          if (align === 'start' || align === 'end') {
+            ctx.textAlign = align === 'start' ? 'left' : 'right'
+            ctx.textBaseline = 'middle'
+            ctx.fillText(text, at.x, y)
+            return
+          }
           ctx.textAlign = align
           ctx.textBaseline = align === 'right' ? 'top' : 'middle'
           ctx.fillText(text, at.x, align === 'right' ? y + 4 * t : y)
@@ -333,6 +392,32 @@ function drawOne(ctx: CanvasRenderingContext2D, f: StatsFigure, toPx: (p: Vec2) 
     label(x, row1, k.text, st.theme.label, font)
     if (f.zRow) label(x, row2, k.z, st.theme.label, small)
   }
+  // ---- a vertical axis (a residual plot's), its ticks and what it measures
+  if (f.yTicks && f.yTicks.length > 0) {
+    const top = P(f.plot.x0, f.plot.y1)
+    const bottom = P(f.plot.x0, f.plot.y0)
+    line([bottom, top], st.theme.axis, 1.2)
+    ctx.font = small
+    ctx.fillStyle = st.theme.label
+    ctx.textAlign = 'right'
+    ctx.textBaseline = 'middle'
+    for (const k of f.yTicks) {
+      const q = P(f.plot.x0, k.y)
+      line([{ x: q.x - tickLen, y: q.y }, q], st.theme.axis, 1.1)
+      if (k.text) ctx.fillText(k.text, q.x - tickLen - 3 * t, q.y)
+    }
+    if (f.yLabel) {
+      ctx.save()
+      ctx.font = labelFont(st.face, 11 * t, true)
+      ctx.translate(panel.x + 9 * t, (top.y + bottom.y) / 2)
+      ctx.rotate(-Math.PI / 2)
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(f.yLabel, 0, 0)
+      ctx.restore()
+    }
+  }
+
   ctx.font = labelFont(st.face, 12 * t, true)
   ctx.fillStyle = st.theme.label
   if (f.zRow) {
@@ -400,6 +485,7 @@ export function drawStats(ctx: CanvasRenderingContext2D, figs: readonly StatsFig
         if (i === 'rule') return o.theme.label
         return paint(STAT_INK[i])
       },
+      own: (c) => (mono ? o.theme.axis : paint(c)),
     }
     ctx.save()
     try {

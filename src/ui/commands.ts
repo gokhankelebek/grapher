@@ -110,6 +110,7 @@ export interface CommandActions {
   addRelatedRates(): void
   addNormal(): void
   addSimulation(): void
+  addDataPlot(): void
   // ---- a curve's ⋯ menu
   addCalc(curveId: string, kind: CalcKind): void
   addAreaBetween(curveId: string): void
@@ -787,6 +788,21 @@ export const COMMANDS: readonly Command[] = [
     path: 'Build ▾ → Simulation',
     when: graphEdit,
     run: (ctx) => ctx.actions.addSimulation(),
+  },
+  {
+    id: 'build-data-plot',
+    title: 'One-variable data (dot plot, histogram, box plot)',
+    description: 'Paste a list — or several to compare — for a dot plot, histogram and parallel box plots, the summary, shape, outliers and which measures to use',
+    keywords: [
+      'data', 'one-variable', 'one variable', '1-var stats', 'dot plot', 'histogram', 'box plot', 'boxplot',
+      'box and whisker', 'parallel box plots', 'five-number summary', 'five number summary', 'quartiles', 'iqr',
+      'interquartile range', 'median', 'mean', 'mode', 'standard deviation', 'outlier', 'outliers', 'fences',
+      'skewed', 'skew', 'symmetric', 'shape', 'center', 'centre', 'spread', 'compare data sets', 'statistics', 'stats',
+    ],
+    group: 'Build',
+    path: 'Build ▾ → One-variable data',
+    when: graphEdit,
+    run: (ctx) => ctx.actions.addDataPlot(),
   },
   seeded('build-slope-field', 'dy/dx = ', 'Slope field', 'Type dy/dx = … and get its slope field; tap to draw solutions', [
     'slope field', 'slope fields', 'direction field', 'differential equation', 'diff eq', 'dy/dx', 'ode',
@@ -1659,6 +1675,7 @@ export interface HelpSection {
 export const HELP_COURSES: readonly string[] = [
   'AP Calculus AB / BC',
   'AP Precalculus',
+  'NC Math 1',
   'NC Math 2',
   'NC Math 3',
   'Drawing & editing',
@@ -1765,6 +1782,18 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     { id: 'build-unit-circle' },
     { id: 'build-sin' },
     { id: 'axis-pi' },
+  ] },
+  // ---------------------------------------------------- NC Math 1
+  { id: 'm1-stats', course: 'NC Math 1', title: 'Statistics: one-variable data (S-ID.1–3)', entries: [
+    { id: 'build-data-plot', note: 'Paste a list for a dot plot or histogram (bin width editable) and a box plot with outliers as separate points (S-ID.1)' },
+    { id: 'build-data-plot', note: 'Paste two or more sets: parallel box plots, a table of mean, median, SD, IQR, and the sentence comparing centre and spread (S-ID.2)' },
+    { id: 'build-data-plot', note: 'Shape (roughly symmetric / skewed) and which measures fit it: median and IQR for skewed data or outliers, mean and SD otherwise' },
+    { id: 'build-data-plot', note: 'Outliers by the 1.5·IQR fences: leave them out, or click dots, and compare before and after (S-ID.3)' },
+  ] },
+  { id: 'm1-bivariate', course: 'NC Math 1', title: 'Statistics: two-variable data (S-ID.6–8)', entries: [
+    { id: 'build-data', note: 'Paste (x, y) data for a scatter plot, then Regression ▾ → Linear for the line of best fit' },
+    { title: 'Residual plot', text: 'Residuals vs x under the scatter plot, the residuals in the table, and whether a linear model appears appropriate (S-ID.6b)', how: 'Data table → select a regression → residual plot' },
+    { title: 'Correlation coefficient', text: 'r and its meaning in words — strong / moderate / weak, positive / negative — and that correlation is not causation (S-ID.8)', how: 'Data table → Regression ▾ → Linear' },
   ] },
   // ---------------------------------------------------- NC Math 2
   { id: 'm2-xform', course: 'NC Math 2', title: 'Transformations, congruence and similarity', entries: [

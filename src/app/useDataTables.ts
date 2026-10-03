@@ -424,6 +424,35 @@ export function useDataTables({ board, docState, refs, derived, notices, history
     [commitState, mapData],
   )
 
+  /**
+   * The residual plot of this fit, in a panel under the scatter plot — one per
+   * table, so turning one on turns the others off. Turning it on frames the
+   * table with its panel, so the plot is seen.
+   */
+  const toggleResidualPlot = useCallback(
+    (id: string, regId: string): void => {
+      const d = dataRef.current.find((t) => t.id === id)
+      const reg = d?.regressions.find((r) => r.id === regId)
+      if (!d || !reg) return
+      const on = !reg.residualPlot
+      const regressions = d.regressions.map((r) => {
+        if (r.id === regId || (on && r.residualPlot)) {
+          const next: DataRegression = { ...r }
+          if (r.id === regId && on) next.residualPlot = true
+          else delete next.residualPlot
+          return next
+        }
+        return r
+      })
+      commitState({ data: mapData(id, (t) => ({ ...t, regressions })) }, on ? 'show residual plot' : 'hide residual plot')
+      if (on) {
+        const box = dataBox({ ...d, regressions })
+        if (box) frameBoxRef.current(box)
+      }
+    },
+    [commitState, mapData],
+  )
+
   /** Re-attach a detached regression: the next sync writes the fit over the hand edit. */
   const refitRegression = useCallback(
     (id: string, regId: string): void => {
@@ -616,7 +645,7 @@ export function useDataTables({ board, docState, refs, derived, notices, history
   return {
     addDataTable, setDataCellText, setDataLabel, removeDataRowAt, pasteData, toggleDataVisible,
     cycleDataColor, setDataMarker, deleteData, duplicateData, addRegression, removeRegression,
-    setRegressionDigits, toggleResiduals, refitRegression, seqCompiled, seqCompiledRef,
+    setRegressionDigits, toggleResiduals, toggleResidualPlot, refitRegression, seqCompiled, seqCompiledRef,
     scatterScene, scatterSceneRef, dataCardFor, seqCardFor, seqDefaultName, refreshPartnerSpan,
     partnerLines,
   }

@@ -18,6 +18,12 @@ import { NORMAL_MODES, cleanSeed } from './stats'
 
 export const STAT_COLOR_DEFAULT = '#c678dd'
 export const SIM_COLOR_DEFAULT = '#2dd4bf'
+export const DATA_PLOT_COLOR_DEFAULT = '#4f9cf9'
+
+/** Data sets one data plot compares (parallel box plots). */
+export const MAX_SETS = 6
+/** A data set's name, at most. */
+export const MAX_SET_NAME = 40
 
 /** How many statistics objects a board keeps. */
 export const MAX_STATS = 8
@@ -80,7 +86,39 @@ export interface BoardSim {
   hidden?: true
 }
 
-export type BoardStat = BoardNormal | BoardSim
+/**
+ * Build ▾ → One-variable data (NC Math 1 S-ID.1–3): one or more pasted lists
+ * on a shared number line — a dot plot or a histogram, and/or a (modified) box
+ * plot. What is stored is the lists as pasted, the values the teacher clicked
+ * out (`off`, indices into `values`), the display and the bin width when one
+ * was typed. Every summary, quartile, fence and sentence is recomputed.
+ */
+export interface DataPlotSet {
+  name: string
+  values: number[]
+  /** Indices into `values` the teacher left out (clicked). Ascending, unique. */
+  off?: number[]
+}
+
+export type DataDist = 'dots' | 'hist' | 'none'
+
+export interface BoardDataPlot {
+  id: string
+  type: 'data'
+  sets: DataPlotSet[]
+  /** The distribution's picture: a dot plot, a histogram, or neither. */
+  dist: DataDist
+  /** The box plot (modified: outliers as separate points). */
+  box: boolean
+  /** The histogram's bin width; absent = the default for the data. */
+  binWidth?: number
+  /** Leave every 1.5·IQR outlier out (the outlier explorer). */
+  dropOutliers?: true
+  color: string
+  hidden?: true
+}
+
+export type BoardStat = BoardNormal | BoardSim | BoardDataPlot
 
 export interface StoredNormal {
   id: string
@@ -120,9 +158,49 @@ export interface StoredSim {
   hidden?: true
 }
 
-export type StoredStat = StoredNormal | StoredSim
+export interface StoredDataPlot {
+  id: string
+  type: 'data'
+  sets: { name: string; values: number[]; off?: number[] }[]
+  dist: DataDist
+  box: boolean
+  binWidth?: number
+  dropOutliers?: true
+  color?: string
+  hidden?: true
+}
+
+export type StoredStat = StoredNormal | StoredSim | StoredDataPlot
+
+/** Off indices that point into `values`: ascending, unique, in range. */
+export function cleanOff(off: readonly unknown[] | undefined, length: number): number[] {
+  if (!off) return []
+  const set = new Set<number>()
+  for (const v of off) if (typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < length) set.add(v)
+  return [...set].sort((a, b) => a - b)
+}
 
 export function statToStored(s: BoardStat): StoredStat {
+  if (s.type === 'data') {
+    const out: StoredDataPlot = {
+      id: s.id,
+      type: 'data',
+      sets: s.sets.slice(0, MAX_SETS).map((set) => {
+        const values = set.values.slice(0, MAX_LIST)
+        const o: StoredDataPlot['sets'][number] = { name: set.name, values }
+        const off = cleanOff(set.off, values.length)
+        if (off.length > 0) o.off = off
+        return o
+      }),
+      dist: s.dist,
+      box: s.box,
+    }
+    if (s.binWidth !== undefined && s.binWidth > 0 && Number.isFinite(s.binWidth)) out.binWidth = s.binWidth
+    if (s.dropOutliers) out.dropOutliers = true
+    if (s.color !== DATA_PLOT_COLOR_DEFAULT) out.color = s.color
+    if (s.hidden) out.hidden = true
+    return out
+  }
   if (s.type === 'normal') {
     const out: StoredNormal = { id: s.id, type: 'normal', mu: s.mu, sigma: s.sigma, mode: s.mode, a: s.a, b: s.b, pct: s.pct }
     if (s.rule) out.rule = true
@@ -187,8 +265,8 @@ export function storedToStat(raw: unknown, problems?: string[]): { stat: BoardSt
   if (!isObj(raw)) return { error: 'it was not readable' }
   const { id, type } = raw
   if (!isStr(id) || !id) return { error: 'it had no id' }
-  if (type !== 'normal' && type !== 'sim') return { error: 'its kind was unknown' }
-  const what = type === 'normal' ? 'normal distribution' : 'simulation'
+  if (type !== 'normal' && type !== 'sim' && type !== 'data') return { error: 'its kind was unknown' }
+  const what = type === 'normal' ? 'normal distribution' : type === 'sim' ? 'simulation' : 'data plot'
   const say = (s: string): void => {
     problems?.push(`The ${what}’s ${s}.`)
   }
@@ -201,7 +279,7 @@ export function storedToStat(raw: unknown, problems?: string[]): { stat: BoardSt
     }
     return v
   }
-  const colorDefault = type === 'normal' ? STAT_COLOR_DEFAULT : SIM_COLOR_DEFAULT
+  const colorDefault = type === 'normal' ? STAT_COLOR_DEFAULT : type === 'sim' ? SIM_COLOR_DEFAULT : DATA_PLOT_COLOR_DEFAULT
   let color = colorDefault
   if (raw.color !== undefined) {
     if (isColor(raw.color)) color = raw.color.trim()
@@ -209,6 +287,53 @@ export function storedToStat(raw: unknown, problems?: string[]): { stat: BoardSt
   }
   const hidden = raw.hidden === true
   if (raw.hidden !== undefined && raw.hidden !== true) say('hidden switch was unreadable; it is shown')
+
+  if (type === 'data') {
+    const sets: DataPlotSet[] = []
+    if (!Array.isArray(raw.sets)) {
+      if (raw.sets !== undefined) say('data sets were unreadable; it is empty')
+    } else {
+      if (raw.sets.length > MAX_SETS) say(`data sets beyond the first ${MAX_SETS} were dropped`)
+      raw.sets.slice(0, MAX_SETS).forEach((rs, i) => {
+        if (!isObj(rs)) {
+          say(`data set ${i + 1} was unreadable; it was dropped`)
+          return
+        }
+        const values = numList(rs.values)
+        if (values === null) say(`data set ${i + 1}’s values were unreadable; it is empty`)
+        const vs = values ?? []
+        const name = isStr(rs.name) ? rs.name.slice(0, MAX_SET_NAME) : `Set ${String.fromCharCode(65 + i)}`
+        if (rs.name !== undefined && !isStr(rs.name)) say(`data set ${i + 1}’s name was unreadable`)
+        const set: DataPlotSet = { name, values: vs }
+        if (rs.off !== undefined) {
+          if (!Array.isArray(rs.off)) say(`data set ${i + 1}’s left-out values were unreadable; none are left out`)
+          else {
+            const off = cleanOff(rs.off, vs.length)
+            if (off.length !== rs.off.length) say(`some of data set ${i + 1}’s left-out values were unreadable`)
+            if (off.length > 0) set.off = off
+          }
+        }
+        sets.push(set)
+      })
+    }
+    const distRaw = raw.dist
+    const dist: DataDist = distRaw === 'dots' || distRaw === 'hist' || distRaw === 'none' ? distRaw : 'dots'
+    if (distRaw !== undefined && dist !== distRaw) say('plot was unreadable; a dot plot was used')
+    let box = true
+    if (raw.box !== undefined) {
+      if (typeof raw.box === 'boolean') box = raw.box
+      else say('box-plot switch was unreadable; it is on')
+    }
+    const out: BoardDataPlot = { id, type: 'data', sets, dist, box, color }
+    if (raw.binWidth !== undefined) {
+      if (isNum(raw.binWidth) && raw.binWidth > 0 && raw.binWidth <= LIMIT) out.binWidth = raw.binWidth
+      else say('bin width was unreadable; the default was used')
+    }
+    if (raw.dropOutliers === true) out.dropOutliers = true
+    else if (raw.dropOutliers !== undefined) say('outlier switch was unreadable; outliers are kept')
+    if (hidden) out.hidden = true
+    return { stat: out }
+  }
 
   if (type === 'normal') {
     const mode = (NORMAL_MODES as readonly string[]).includes(raw.mode as string) ? (raw.mode as NormalMode) : null

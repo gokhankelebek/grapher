@@ -2214,9 +2214,13 @@ export function renderBoard(ctx: CanvasRenderingContext2D, sceneIn: BoardScene):
     /* grid module absent or failed — keep going */
   }
 
+  // A residual plot is drawn later, over the curves (its panel sits under a
+  // scatter plot whose fitted curve would otherwise run across it).
+  const residFigs = statsFigs ? statsFigs.filter((f) => f.kind === 'resid') : []
   if (statsFigs) {
     try {
-      drawStats(ctx, statsFigs, { vp, theme, paint: ink, mono, scale, font: fig?.font ?? null })
+      const early = residFigs.length > 0 ? statsFigs.filter((f) => f.kind !== 'resid') : statsFigs
+      drawStats(ctx, early, { vp, theme, paint: ink, mono, scale, font: fig?.font ?? null })
     } catch {
       /* the statistics panels are lost; the figure still stands */
     }
@@ -2565,6 +2569,13 @@ export function renderBoard(ctx: CanvasRenderingContext2D, sceneIn: BoardScene):
       })
     } catch {
       /* data render failed — the figure still stands */
+    }
+  }
+  if (residFigs.length > 0) {
+    try {
+      drawStats(ctx, residFigs, { vp, theme, paint: ink, mono, scale, font: fig?.font ?? null })
+    } catch {
+      /* the residual plot is lost; the figure still stands */
     }
   }
 

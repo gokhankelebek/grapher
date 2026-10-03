@@ -79,7 +79,8 @@ import { overlaysFor } from './calcLinks'
 import { compileFields, sceneFields, solutionPolylines, solveSpan } from './fieldLinks'
 import { eulerScene } from './eulerLinks'
 import { compileShapes, sceneShapes } from './shapeLinks'
-import { dataBox, scatterSets } from './dataLinks'
+import { dataBox, makeFitCache, scatterSets } from './dataLinks'
+import { residualFigures } from './residualLinks'
 import { unitCircleBox, unitCircleFigure } from './unitCircleLinks'
 import { signChartFigures, signRange } from './signChartLinks'
 import { signBandHeight } from '../render/signChart'
@@ -104,6 +105,9 @@ import { findAsymptotes } from '../core/holes'
 import type { DisplayList } from '../render/vectorCtx'
 import { measure } from '../render/vectorPage'
 import type { TextOpts } from '../render/vectorPage'
+
+/** The regressions a residual plot needs, fitted once per data (the App's fit cache, for the pure path). */
+const docFit = makeFitCache()
 
 /** The board size assumed when the caller does not know the live one. */
 export const DEFAULT_SCREEN = { widthPx: 900, heightPx: 600 } as const
@@ -299,7 +303,9 @@ export function docFigure(m: DocModel, o: FigureOptions): DocFigure {
         return f ? [o.answers ? f : maskRelatedRates(f)] : []
       })
     : []
-  const statsAll = cartesian ? safe(() => statsFigures(board.stats), []) : []
+  const statsAll = cartesian
+    ? [...safe(() => statsFigures(board.stats), []), ...safe(() => residualFigures(board.data, curveIds, docFit), [])]
+    : []
   const stats = o.answers ? statsAll : statsAll.map(maskStats)
   const sysCard = cartesian ? safe(() => systemCard(curves, models, board.system), null) : null
   const sysOverlays = safe(() => systemOverlays(sysCard, board.system, { answers: o.answers }), [])

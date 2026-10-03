@@ -510,7 +510,10 @@ export function maskRelatedRates(f: RelatedRatesFigure): RelatedRatesFigure {
 export function maskStats(f: StatsFigure): StatsFigure {
   return {
     ...f,
-    prims: f.prims.map((p) => (p.k === 'chip' && p.answer ? { ...p, text: maskChip(p.text) } : p)),
+    // answer chips and labels say "?"; an answer mark (a data plot's mean) is not drawn
+    prims: f.prims
+      .filter((p) => !(p.k === 'fill' && p.answer))
+      .map((p) => (p.k === 'chip' && p.answer ? { ...p, text: maskChip(p.text) } : p.k === 'text' && p.answer ? { ...p, text: '?' } : p)),
     marks: f.marks.map((m) => ({
       ...m,
       text: m.answerText ? '?' : m.text,

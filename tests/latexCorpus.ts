@@ -26,6 +26,8 @@ import { newRelatedRates } from '../src/ui/relatedRatesLinks'
 import { newUnitCircle } from '../src/ui/unitCircleLinks'
 import { EXAMPLE_GROUP_A, EXAMPLE_GROUP_B, newNormal, newSim } from '../src/ui/statsLinks'
 import { bankFigure, buildItemDoc, planItem } from '../src/ui/itemBank'
+import { EXAMPLE_SETS, newDataPlot } from '../src/ui/dataPlotLinks'
+import { fitRegression, regressionSource } from '../src/core/data'
 
 export const STYLES: readonly FigureStyleId[] = ['screen', 'textbook', 'sat', 'ap']
 
@@ -368,6 +370,41 @@ export function corpusDocs(): CorpusDoc[] {
           id: 'T1', name: 'Table 1', xLabel: 'Year', yLabel: 'Pop', color: '#4f9cf9', visible: true,
           rows: [['0', '3'], ['1', '6.1'], ['2', '11.8'], ['3', '24.5'], ['4', '47.9']].map(([x, y]) => ({ x, y })),
           regressions: [{ id: 'r1', kind: 'exponential', curveId: 'c1', digits: 4, residuals: true }],
+        }],
+      })),
+    )
+  }
+
+  // ---- one-variable data (NC Math 1): parallel dot and box plots, a value
+  // clicked out; a histogram with a typed bin width and its outliers left out;
+  // a residual plot under a linear fit to curved data
+  {
+    const dp = {
+      ...newDataPlot('D1'),
+      sets: EXAMPLE_SETS.map((x, i) => (i === 1 ? { name: x.name, values: x.values.slice(), off: [6] } : { name: x.name, values: x.values.slice() })),
+    }
+    out.push(doc('dataplot', 'Test scores: Period 1 vs Period 2', input({ stats: [dp], viewport: { center: { x: 0, y: 0 }, pxPerUnit: 60 } })))
+    const hist = {
+      ...newDataPlot('D2'),
+      sets: [{ name: 'Scores #1 & 50% ğ', values: [41, 62, 65, 68, 70, 71, 72, 72, 74, 75, 75, 77, 78, 80, 81, 84, 86, 88, 90, 99] }],
+      dist: 'hist' as const,
+      binWidth: 4,
+      dropOutliers: true as const,
+    }
+    const boxOnly = { ...newDataPlot('D3'), sets: EXAMPLE_SETS.map((x) => ({ name: x.name, values: x.values.slice() })), dist: 'none' as const }
+    out.push(doc('datahist', 'Histogram and box plots', input({ stats: [hist, boxOnly], viewport: { center: { x: 0, y: -4 }, pxPerUnit: 45 } })))
+    const xs = [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    const ys = xs.map((x) => x * x + (x % 2 === 0 ? 0.4 : -0.4))
+    const src = regressionSource(fitRegression('linear', xs, ys))
+    const line = typed('c9', src, 'expr_1', '#22c55e')
+    out.push(
+      doc('residplot', 'Residual plot: linear fit to curved data', input({
+        curves: [line], exprSources: { c9: src },
+        viewport: { center: { x: 4, y: 10 }, pxPerUnit: 40, pxPerUnitY: 6 },
+        data: [{
+          id: 'T9', name: 'Stopping distance', xLabel: 'Speed', yLabel: 'Distance', color: '#22c55e', visible: true,
+          rows: xs.map((x, i) => ({ x: String(x), y: String(ys[i]) })),
+          regressions: [{ id: 'r9', kind: 'linear', curveId: 'c9', digits: 4, residuals: false, residualPlot: true }],
         }],
       })),
     )

@@ -114,7 +114,14 @@ export interface ExtraHandle {
    * curve is the curve's colour, which is what renderBoard already paints.
    */
   color?: string
+  /**
+   * 'none': nothing is drawn for it — the figure already draws the point (a
+   * data plot's dot) — but it is grabbed and tapped like any other.
+   */
+  glyph?: 'none'
   onDrag(pos: Vec2): void
+  /** A press that did not move: a click on the point (a data plot's dot leaves the analysis, or comes back). */
+  onTap?(): void
 }
 
 export interface CanvasStageHandle {
@@ -803,7 +810,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       // same KIND of thing — which they are: somewhere to put a finger. They
       // are drawn whether or not a CURVE is selected: the point a solution
       // curve passes through belongs to a slope field, which has no curve.
-      handles = handles.concat(asCurveHandles(extraHandlesRef.current))
+      handles = handles.concat(asCurveHandles(extraHandlesRef.current.filter((h) => h.glyph !== 'none')))
     }
 
     const openFeature = handleEditRef.current?.feature
@@ -892,7 +899,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
         ctx,
         vp,
         themeRef.current,
-        extraHandlesRef.current,
+        extraHandlesRef.current.filter((h) => h.glyph !== 'none'),
         g?.type === 'dragHandle'
           ? g.handleId
           : (handleEditRef.current?.handleId ?? hoverRef.current?.handleId ?? null),
@@ -2452,6 +2459,15 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       if (cancelled || g.moved < 2) {
         // Cancelled, or a plain click on the curve/handle — no edit.
         onCurveEditCancel()
+        // …but an App-owned point may answer a click (a data plot's dot).
+        if (!cancelled && g.type === 'dragHandle' && g.extra) {
+          const owner = extraHandlesRef.current.find((x) => x.id === g.handleId)
+          try {
+            owner?.onTap?.()
+          } catch {
+            /* the App refused the click — nothing changes */
+          }
+        }
       } else if (g.type === 'dragHandle' && g.extra) {
         // The curve under an App-owned point was never edited, so magnetizing
         // its coefficients here would be an edit nobody asked for.
