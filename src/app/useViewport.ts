@@ -45,6 +45,7 @@ import type { FieldsApi } from './useFields'
 import type { TypedLinesApi } from './useTypedLines'
 import type { DataTablesApi } from './useDataTables'
 import type { NumberLineApi } from './useNumberLine'
+import { statsBox } from '../ui/statsLinks'
 
 /** What useViewport reads from the hooks App calls before it. */
 export interface ViewportDeps {
@@ -65,7 +66,7 @@ export interface ViewportDeps {
 export function useViewport({ board, refs, derived, notices, history, persistence, docActions, calc, fieldsApi, typed, tables, numberLine }: ViewportDeps) {
   const { setSelectedId, lens, lensRef, boardGrid, axesMode, setAxesMode, viewSubsRef } = board
   const {
-    curvesRef, itemsRef, kindRef, exprSourcesRef, calcRef, dataRef, seqRef, ucRef, rrRef,
+    curvesRef, itemsRef, kindRef, exprSourcesRef, calcRef, dataRef, seqRef, ucRef, rrRef, statsRef,
     frameBoxRef, boardGridRef,
   } = refs
   const { modelsRef, vpRef, stageRef, nlStageRef, overlayRef } = derived
@@ -383,6 +384,10 @@ export function useViewport({ board, refs, derived, notices, history, persistenc
       for (const u of ucRef.current) if (u.hidden !== true) boxes.push(unitCircleBox(u))
       // And the related-rates picture, with its graph.
       for (const r of rrRef.current) if (r.hidden !== true) boxes.push(relatedRatesBox(r))
+      // And each statistics panel, at its place in the stack.
+      statsRef.current.forEach((st, i) => {
+        if (st.hidden !== true) boxes.push(statsBox(i))
+      })
       // And what the lesson is ABOUT, where the curves' extent in this window
       // may not reach: the step points of every Euler path, and the key
       // points of secant, Taylor and limit overlays. None of them: the same

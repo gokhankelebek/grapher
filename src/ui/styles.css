@@ -7470,6 +7470,103 @@ button.calc-field-btn {
   margin-top: var(--sp-1);
 }
 
+/* ------------------------------------------------ statistics cards
+   The normal distribution and the simulation: the rr card's frame, a wrapping
+   segmented row, a pasted-list box and the margin-of-error table. */
+.stat-seg {
+  display: flex;
+  flex-wrap: wrap;
+  margin: var(--sp-1) 0 var(--sp-2);
+}
+
+.stat-seg .seg-btn {
+  flex: 1 1 auto;
+}
+
+.stat-seg .seg-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.stat-list {
+  display: grid;
+  gap: 2px;
+  margin: var(--sp-1) 0;
+}
+
+.stat-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 3.2em;
+  padding: var(--sp-1) 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+.stat-textarea:focus {
+  outline: 2px solid var(--curve, var(--accent));
+  outline-offset: 1px;
+}
+
+.stat-group-label {
+  margin-top: var(--sp-2);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.stat-inline-error {
+  font-size: var(--fs-xs);
+}
+
+.stat-work {
+  margin-top: var(--sp-1);
+}
+
+.stat-prob {
+  margin-top: var(--sp-2);
+  font-size: var(--fs-md);
+}
+
+.stat-seed {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-me-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-top: var(--sp-2);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.stat-me {
+  width: 100%;
+  margin-top: var(--sp-1);
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-me th {
+  color: var(--muted);
+  font-weight: 500;
+  text-align: left;
+  padding: 2px var(--sp-1);
+  border-bottom: 1px solid var(--border);
+}
+
+.stat-me td {
+  padding: 2px var(--sp-1);
+}
+
 /* ------------------------------------------------ sign chart (card section)
    The small chart: one line per strip, the label, then signs and critical x's
    in reading order. It wraps rather than widening the card; the conclusions

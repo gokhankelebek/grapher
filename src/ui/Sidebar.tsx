@@ -212,6 +212,13 @@ interface Props {
   relatedRatesCards?: ReactNode
   /** How many related-rates objects the list holds (0 or 1). */
   relatedRatesCount?: number
+  /** "Build ▾ → Normal distribution" / "→ Simulation". */
+  onNormalAdd?(): void
+  onSimulationAdd?(): void
+  /** The statistics cards, rendered by the App (it owns the play state). */
+  statsCards?: ReactNode
+  /** How many statistics objects the list holds, for the header count. */
+  statsCount?: number
   /** "Build ▾ → Sequence" open at the top of the list. */
   seqOpen?: boolean
   onSeqToggle?(): void
@@ -477,6 +484,10 @@ export function Sidebar({
   onRelatedRatesAdd,
   relatedRatesCards,
   relatedRatesCount = 0,
+  onNormalAdd,
+  onSimulationAdd,
+  statsCards,
+  statsCount = 0,
   onSeqToggle,
   onSeqBuild,
   seqDefaultName,
@@ -607,7 +618,7 @@ export function Sidebar({
             <span className="sidebar-count">
               {numberLine
                 ? items.length
-                : curves.length + fields.length + shapes.length + data.length + sequences.length + unitCircleCount + relatedRatesCount}
+                : curves.length + fields.length + shapes.length + data.length + sequences.length + unitCircleCount + relatedRatesCount + statsCount}
             </span>
             {!readOnly && (
             <button
@@ -625,7 +636,7 @@ export function Sidebar({
               +
             </button>
             )}
-            {!readOnly && !numberLine && (onFactorToggle || onExpToggle || onLogisticToggle || onLogToggle || onSinToggle || onTransformToggle || onPiecewiseToggle || onConicToggle || onMotionToggle || onSeqToggle || onDataAdd || onUnitCircleAdd || onRelatedRatesAdd) && (
+            {!readOnly && !numberLine && (onFactorToggle || onExpToggle || onLogisticToggle || onLogToggle || onSinToggle || onTransformToggle || onPiecewiseToggle || onConicToggle || onMotionToggle || onSeqToggle || onDataAdd || onUnitCircleAdd || onRelatedRatesAdd || onNormalAdd || onSimulationAdd) && (
               <BuildMenu
                 factorOpen={factorOpen}
                 expOpen={expOpen}
@@ -650,6 +661,8 @@ export function Sidebar({
                 onDataAdd={onDataAdd}
                 onUnitCircleAdd={onUnitCircleAdd}
                 onRelatedRatesAdd={onRelatedRatesAdd}
+                onNormalAdd={onNormalAdd}
+                onSimulationAdd={onSimulationAdd}
               />
             )}
           </div>
@@ -969,6 +982,7 @@ export function Sidebar({
             })}
           {!numberLine && unitCircleCards}
           {!numberLine && relatedRatesCards}
+          {!numberLine && statsCards}
           </div>
         </div>
       </div>

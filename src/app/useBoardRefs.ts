@@ -24,6 +24,7 @@ import { makeFitCache } from '../ui/dataLinks'
 import type { BoardData } from '../ui/dataLinks'
 import type { BoardField } from '../ui/fieldLinks'
 import type { BoardRelatedRates } from '../ui/relatedRatesLinks'
+import type { BoardStat } from '../ui/statsLinks'
 import type { BoardSequence } from '../ui/seqLinks'
 import type { BoardShape } from '../ui/shapeLinks'
 import type { BoardUnitCircle } from '../ui/unitCircleLinks'
@@ -77,6 +78,7 @@ export function useBoardRefs({ board, docState, session }: BoardRefsDeps) {
   const seqRef = useRef<BoardSequence[]>([])
   const ucRef = useRef<BoardUnitCircle[]>([])
   const rrRef = useRef<BoardRelatedRates[]>([])
+  const statsRef = useRef<BoardStat[]>([])
   const sysRef = useRef<BoardIneqSystem | null>(null)
   const namesRef = useRef<Record<string, string>>({})
   const callsRef = useRef<Record<string, string[]>>({})
@@ -184,8 +186,8 @@ export function useBoardRefs({ board, docState, session }: BoardRefsDeps) {
     curvesRef, itemsRef, kindRef, stylesRef, selectedRef, undoRef, redoRef, preEditRef, gesturing,
     setGesturing, candidatesRef, exprCounterRef, altRef, snapTimerRef, shakeTimerRef, toastTimerRef,
     exprSourcesRef, brokenExprRef, displaySourcesRef, axisUnitChoiceRef, editsRef, calcRef,
-    fieldsRef, shapesRef, dataRef, seqRef, ucRef, rrRef, sysRef, namesRef, callsRef, inversesRef,
-    boardCurveNamesRef, regWrittenRef, regAutoHiddenRef, fitCacheRef, cellFoldRef, frameBoxRef,
+    fieldsRef, shapesRef, dataRef, seqRef, ucRef, rrRef, statsRef, sysRef, namesRef, callsRef,
+    inversesRef, boardCurveNamesRef, regWrittenRef, regAutoHiddenRef, fitCacheRef, cellFoldRef, frameBoxRef,
     boardGridRef, figureStyleRef, figureCaptionRef, polarOfferedRef, derivCounterRef, calcSigRef,
     calcDomainRef, calcAutoHiddenRef, calcSpecOriginRef, docMetaRef, saveTimerRef, hydratedRef,
     docStoredRef, skipAutosaveRef, unsavedRef, loadedStateRef,

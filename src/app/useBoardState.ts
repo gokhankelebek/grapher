@@ -28,6 +28,7 @@ import type { BoardData } from '../ui/dataLinks'
 import type { BoardField } from '../ui/fieldLinks'
 import type { MotionPlayState } from '../ui/motionLinks'
 import type { BoardRelatedRates, RRSpeed } from '../ui/relatedRatesLinks'
+import type { BoardStat } from '../ui/statsLinks'
 import type { BoardSequence } from '../ui/seqLinks'
 import type { BoardShape } from '../ui/shapeLinks'
 import type { BoardUnitCircle, PlaySpeed } from '../ui/unitCircleLinks'
@@ -296,6 +297,16 @@ export function useBoardState() {
   rrPlayRef.current = rrPlay
   const [rrSpeed, setRrSpeed] = useState<RRSpeed>(1)
   /**
+   * The statistics objects — normal distributions and simulations, as the
+   * teacher set them (src/core/statsPersist.ts). Every probability and every
+   * simulated statistic is recomputed from these (src/ui/statsLinks.ts).
+   */
+  const [stats, setStats] = useState<BoardStat[]>([])
+  /** A simulation building up under Play: which one, and how many samples show. Session only. */
+  const [statsPlay, setStatsPlay] = useState<{ id: string; shown: number } | null>(null)
+  const statsPlayRef = useRef(statsPlay)
+  statsPlayRef.current = statsPlay
+  /**
    * The inequality system (the visible inequalities, taken together): only
    * what the teacher set for it — solution region, test point, objective.
    * Every corner, verdict and table is recomputed from the curves.
@@ -409,7 +420,8 @@ export function useBoardState() {
     curveViewsSig, extraModels, setExtraModels, calcLinks, setCalcLinks, fields, setFields,
     armedField, setArmedField, setArmedBetween, armedBetweenRef, shapes, setShapes, dataSets,
     setDataSets, sequences, setSequences, seqOpen, setSeqOpen, unitCircles, setUnitCircles,
-    relatedRates, setRelatedRates, rrPlay, setRrPlay, rrPlayRef, rrSpeed, setRrSpeed, ineqSystem,
+    relatedRates, setRelatedRates, rrPlay, setRrPlay, rrPlayRef, rrSpeed, setRrSpeed, stats,
+    setStats, statsPlay, setStatsPlay, statsPlayRef, ineqSystem,
     setIneqSystem, ucPlay, setUcPlay, ucPlayRef, ucSpeed, setUcSpeed, playEpoch, setPlayEpoch,
     boardGrid, setBoardGrid, axesMode, setAxesMode, viewSubsRef, figureStyle, setFigureStyle,
     figureCaption, setFigureCaption, previewFigure, setPreviewFigure, snapFlash, setSnapFlash,

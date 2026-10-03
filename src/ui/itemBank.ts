@@ -407,11 +407,13 @@ export function describeInputOf(
     extras.push('A slope field is drawn.')
     for (const f of scene.fields ?? []) if (f.visible) extras.push({ text: `The slope field is ${f.latex}.`, answer: true })
   }
+  const stats = (scene.stats ?? []).flatMap((f) => (f.visible && f.describe ? [f.describe] : []))
   return {
     window: { ...w, ...axisSteps(scene) },
     curves,
     models: scene.models,
     ...(extras.length > 0 ? { extras } : {}),
+    ...(stats.length > 0 ? { stats } : {}),
     board: scene.grid === 'polar' ? 'polar' : 'cartesian',
   }
 }

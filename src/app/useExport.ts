@@ -61,6 +61,8 @@ import type { SelectionMarksApi } from './useSelectionMarks'
 import type { CurveNamesApi } from './useCurveNames'
 import type { BoardLookApi } from './useBoardLook'
 import type { RevealModeApi } from './useRevealMode'
+import type { StatsApi } from './useStats'
+import { statsBox } from '../ui/statsLinks'
 
 /** What useExport reads from the hooks App calls before it. */
 export interface ExportDeps {
@@ -84,9 +86,11 @@ export interface ExportDeps {
   revealMode: RevealModeApi
   /** The board in words: an SVG's <desc>. */
   describer?: GraphDescriptionApi
+  /** Statistics panels: their figures for the scene, their frames for a fitted export. */
+  statsApi?: StatsApi
 }
 
-export function useExport({ board, docState, session, refs, derived, notices, calc, fieldsApi, shapesApi, tables, unitCircle, rates, system, overlaysApi, marks, naming, lookApi, revealMode, describer }: ExportDeps) {
+export function useExport({ board, docState, session, refs, derived, notices, calc, fieldsApi, shapesApi, tables, unitCircle, rates, system, overlaysApi, marks, naming, lookApi, revealMode, describer, statsApi }: ExportDeps) {
   const { kind } = board
   const { docMeta } = docState
   const { setExportSettings, setCopyState, curvePalette } = session
@@ -96,7 +100,7 @@ export function useExport({ board, docState, session, refs, derived, notices, ca
   describeNowRef.current = describer?.describeNow
   const {
     curvesRef, itemsRef, kindRef, stylesRef, selectedRef, exprSourcesRef, dataRef, seqRef, ucRef,
-    rrRef, boardCurveNamesRef, boardGridRef, figureStyleRef, docMetaRef,
+    rrRef, statsRef, boardCurveNamesRef, boardGridRef, figureStyleRef, docMetaRef,
   } = refs
   const { modelsRef, analysisRef, axisUnitsRef, vpRef } = derived
   const { showToast } = notices
@@ -106,6 +110,7 @@ export function useExport({ board, docState, session, refs, derived, notices, ca
   const { seqCompiledRef, scatterSceneRef } = tables
   const { ucFiguresRef } = unitCircle
   const { rrFiguresRef } = rates
+  const statsFiguresRef = statsApi?.statsFiguresRef ?? null
   const { ineqSolutionRef } = system
   const {
     exportSettingsRef, exportFormatRef, latexWidthRef, showAnalysisRef, contextAnalysisRef,
@@ -152,7 +157,8 @@ export function useExport({ board, docState, session, refs, derived, notices, ca
       })
     const ucBoxes = ucRef.current.filter((u) => u.hidden !== true).map((u) => unitCircleBox(u))
     const rrBoxes = rrRef.current.filter((r) => r.hidden !== true).map((r) => relatedRatesBox(r))
-    return unionBoxes([box, ...dataRef.current.filter((d) => d.visible).map(dataBox), ...construction, ...seqBoxes, ...ucBoxes, ...rrBoxes])
+    const statBoxes = statsRef.current.flatMap((st, i) => (st.hidden === true ? [] : [statsBox(i)]))
+    return unionBoxes([box, ...dataRef.current.filter((d) => d.visible).map(dataBox), ...construction, ...seqBoxes, ...ucBoxes, ...rrBoxes, ...statBoxes])
   }, [])
 
   const buildExportScene = useCallback(
@@ -302,6 +308,8 @@ export function useExport({ board, docState, session, refs, derived, notices, ca
       ...(ucFiguresRef.current.length > 0 ? { unitCircles: ucFiguresRef.current } : {}),
       // And the related-rates picture and its mini-graph.
       ...(rrFiguresRef.current.length > 0 ? { relatedRates: rrFiguresRef.current } : {}),
+      // And the statistics panels: the bell curve, the dots, their own axes.
+      ...(statsFiguresRef && statsFiguresRef.current.length > 0 ? { stats: statsFiguresRef.current } : {}),
       // And the sign charts' strips, along the bottom of the figure.
       ...(kindRef.current === 'cartesian' && signFiguresRef.current.length > 0
         ? { signCharts: signFiguresRef.current }

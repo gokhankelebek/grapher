@@ -101,7 +101,7 @@ function cartesian(m: DocModel, o: DescribeBoardOptions): BoardDescription {
   }
   const others =
     m.board.fields.length + m.board.shapes.length + m.board.data.length + m.board.sequences.length +
-    m.board.unitCircles.length + m.board.relatedRates.length
+    m.board.unitCircles.length + m.board.relatedRates.length + m.board.stats.length
   if (input.curves.length === 0 && others === 0) return EMPTY_GRAPH
   const d = describeCurves(input, { answers: o.answers, maxLength: 300 })
   return { ...d, summary: clip(lead('Graph', d.figuredesc), o.maxSummary ?? 160) }

@@ -84,8 +84,54 @@ export interface AdapterInput {
   calc?: AdapterCalc[]
   numberLine?: DescribeNumberLine
   extras?: (string | DescribeExtra)[]
+  /** Statistics figures: normal curves and simulations (see describeStats). */
+  stats?: DescribeStat[]
   board?: DescribeInput['board']
 }
+
+/**
+ * A statistics figure, as the description states it: a normal curve with its
+ * shading, or a simulation's dot plot / histogram with what it found.
+ */
+export type DescribeStat =
+  | {
+      kind: 'normal'
+      mu: number
+      sigma: number
+      mode: 'below' | 'above' | 'between' | 'outside' | 'percentile'
+      /** The bound(s) in order; percentile mode: the x it marks. */
+      bounds: number[]
+      z: number[]
+      /** The probability (percentile: the share below). */
+      p: number
+      pct: number
+      rule: boolean
+    }
+  | {
+      kind: 'sample'
+      /** "a normal population (μ = 100, σ = 15)". */
+      population: string
+      stat: 'mean' | 'proportion'
+      symbol: string
+      n: number
+      reps: number
+      plot: 'dots' | 'hist'
+      theory: { center: number; sd: number } | null
+      mean: number
+      sd: number
+      me95: number
+    }
+  | {
+      kind: 'compare'
+      nA: number
+      nB: number
+      reps: number
+      plot: 'dots' | 'hist'
+      observed: number
+      extreme: number
+      p: number
+      tail: 'two' | 'upper' | 'lower'
+    }
 
 // ----------------------------------------------------------------------------
 // Text helpers
@@ -564,7 +610,71 @@ export function describeInputFromCurves(input: AdapterInput): DescribeInput {
   if (sums.length) out.riemann = sums
   if (tangents.length) out.tangents = tangents
   if (input.numberLine) out.numberLine = input.numberLine
-  if (input.extras?.length) out.extras = [...input.extras]
+  const extras = [...(input.extras ?? []), ...describeStats(input.stats ?? [])]
+  if (extras.length) out.extras = extras
+  return out
+}
+
+// ----------------------------------------------------------------------------
+// Statistics figures
+// ----------------------------------------------------------------------------
+
+const sNum = (v: number, d = 4): string => {
+  if (!Number.isFinite(v)) return 'undefined'
+  const t = String(Number(v.toFixed(d)))
+  return t.replace(/^-/, MINUS)
+}
+
+const fixedN = (v: number, d: number): string => v.toFixed(d).replace(/^-/, MINUS)
+
+/**
+ * The sentences a statistics figure contributes: what is drawn (always), and
+ * what it shows (answers only — a student copy keeps the question).
+ */
+export function describeStats(list: readonly DescribeStat[]): DescribeExtra[] {
+  const out: DescribeExtra[] = []
+  for (const s of list) {
+    if (s.kind === 'normal') {
+      out.push({ text: `A normal curve with mean ${sNum(s.mu)} and standard deviation ${sNum(s.sigma)} is drawn, with a z-scale beneath its x-axis.` })
+      const [a, b] = s.bounds.map((v) => sNum(v))
+      if (s.mode === 'percentile') {
+        out.push({ text: `The ${sNum(s.pct)}th percentile is marked, with the area below it shaded.` })
+        out.push({ text: `The ${sNum(s.pct)}th percentile is x ≈ ${sNum(s.bounds[0], 2)} (z ≈ ${fixedN(s.z[0], 4)}).`, answer: true })
+      } else {
+        const q =
+          s.mode === 'below' ? `P(X < ${a})` : s.mode === 'above' ? `P(X > ${a})` : s.mode === 'between' ? `P(${a} < X < ${b})` : `P(X < ${a} or X > ${b})`
+        const region =
+          s.mode === 'below' ? `below x = ${a}` : s.mode === 'above' ? `above x = ${a}` : s.mode === 'between' ? `between x = ${a} and x = ${b}` : `below x = ${a} and above x = ${b}`
+        out.push({ text: `The area ${region} is shaded, for ${q}.` })
+        const zs = s.z.map((z) => fixedN(z, 2)).join(' and ')
+        out.push({ text: `${q} ≈ ${fixedN(s.p, 4)}; the z-score${s.z.length > 1 ? 's are' : ' is'} ${zs}.`, answer: true })
+      }
+      if (s.rule) {
+        out.push({ text: 'The empirical rule is marked: about 68% of the area lies within one standard deviation of the mean, 95% within two and 99.7% within three.' })
+      }
+    } else if (s.kind === 'sample') {
+      const what = s.stat === 'proportion' ? 'sample proportions' : 'sample means'
+      const plot = s.plot === 'dots' ? 'A dot plot' : 'A histogram'
+      const theory = s.theory
+        ? `, with the theoretical sampling distribution, a normal curve with mean ${sNum(s.theory.center)} and standard deviation ${sNum(s.theory.sd, 4)}, drawn over it`
+        : ''
+      out.push({ text: `${plot} shows ${s.reps} simulated ${what} from samples of ${s.n} drawn from ${s.population}${theory}.` })
+      out.push({
+        text: `The simulated ${what} have mean ${sNum(s.mean)} and standard deviation ${sNum(s.sd)}, so the 95% margin of error is about ${sNum(s.me95)}.`,
+        answer: true,
+      })
+    } else {
+      const plot = s.plot === 'dots' ? 'A dot plot' : 'A histogram'
+      out.push({
+        text: `${plot} shows the difference in means after each of ${s.reps} re-randomisations of two groups of ${s.nA} and ${s.nB}, with the observed difference ${sNum(s.observed, 3)} marked.`,
+      })
+      const dir = s.tail === 'two' ? 'at least as extreme as' : s.tail === 'upper' ? 'at least as large as' : 'at most'
+      out.push({
+        text: `In ${s.extreme} of ${s.reps} re-randomisations the difference was ${dir} the observed one, so the p-value is about ${fixedN(s.p, 3)}.`,
+        answer: true,
+      })
+    }
+  }
   return out
 }
 

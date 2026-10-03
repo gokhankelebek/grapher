@@ -37,7 +37,7 @@ export function useHistory({ board, docState, session, refs, derived, notices }:
   const {
     setCurves, setKind, setItems, setStyles, setSelectedId, readViewStates, writeViewStates,
     setCalcLinks, setFields, setShapes, setDataSets, setSequences, setUnitCircles, setRelatedRates,
-    setRrPlay, rrPlayRef, setIneqSystem, setUcPlay, ucPlayRef, setPlayEpoch, setFigureStyle,
+    setRrPlay, rrPlayRef, setStats, setStatsPlay, statsPlayRef, setIneqSystem, setUcPlay, ucPlayRef, setPlayEpoch, setFigureStyle,
     setFigureCaption, setSnapFlash, bumpHistory,
   } = board
   const {
@@ -47,8 +47,8 @@ export function useHistory({ board, docState, session, refs, derived, notices }:
   const {
     curvesRef, itemsRef, kindRef, stylesRef, undoRef, redoRef, preEditRef, setGesturing,
     candidatesRef, altRef, snapTimerRef, exprSourcesRef, brokenExprRef, displaySourcesRef, editsRef,
-    calcRef, fieldsRef, shapesRef, dataRef, seqRef, ucRef, rrRef, sysRef, namesRef, callsRef,
-    inversesRef, figureStyleRef, figureCaptionRef,
+    calcRef, fieldsRef, shapesRef, dataRef, seqRef, ucRef, rrRef, statsRef, sysRef, namesRef,
+    callsRef, inversesRef, figureStyleRef, figureCaptionRef,
   } = refs
   const { modelsRef } = derived
   const { showToast } = notices
@@ -71,6 +71,7 @@ export function useHistory({ board, docState, session, refs, derived, notices }:
       sequences: seqRef.current,
       unitCircles: ucRef.current,
       relatedRates: rrRef.current,
+      stats: statsRef.current,
       system: sysRef.current,
       names: namesRef.current,
       calls: callsRef.current,
@@ -154,6 +155,10 @@ export function useHistory({ board, docState, session, refs, derived, notices }:
     if (s.relatedRates) {
       rrRef.current = s.relatedRates
       setRelatedRates(s.relatedRates)
+    }
+    if (s.stats) {
+      statsRef.current = s.stats
+      setStats(s.stats)
     }
     if (s.system !== undefined) {
       sysRef.current = s.system
@@ -242,6 +247,10 @@ export function useHistory({ board, docState, session, refs, derived, notices }:
       ucPlayRef.current = null
       setUcPlay(null)
     }
+    if (statsPlayRef.current) {
+      statsPlayRef.current = null
+      setStatsPlay(null)
+    }
     editEndRef.current()
     setPlayEpoch((e) => e + 1)
   }, [])
@@ -267,7 +276,8 @@ export function useHistory({ board, docState, session, refs, derived, notices }:
         prev.data.some((d) => d.id === sel) ||
         prev.sequences.some((q) => q.id === sel) ||
         prev.unitCircles.some((u) => u.id === sel) ||
-        prev.relatedRates.some((r) => r.id === sel))
+        prev.relatedRates.some((r) => r.id === sel) ||
+        prev.stats.some((st) => st.id === sel))
         ? sel
         : null,
     )
@@ -296,7 +306,8 @@ export function useHistory({ board, docState, session, refs, derived, notices }:
         next.data.some((d) => d.id === sel) ||
         next.sequences.some((q) => q.id === sel) ||
         next.unitCircles.some((u) => u.id === sel) ||
-        next.relatedRates.some((r) => r.id === sel))
+        next.relatedRates.some((r) => r.id === sel) ||
+        next.stats.some((st) => st.id === sel))
         ? sel
         : null,
     )
@@ -348,6 +359,8 @@ export function useHistory({ board, docState, session, refs, derived, notices }:
         pre.unitCircles !== ucRef.current ||
         // And the related-rates t slider: it moves no curve either.
         pre.relatedRates !== rrRef.current ||
+        // And a statistics object's dragged μ, σ or bound: no curve moves.
+        pre.stats !== statsRef.current ||
         // And the inequality system's test point, dragged: no curve moves.
         pre.system !== sysRef.current)
     ) {

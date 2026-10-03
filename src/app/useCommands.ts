@@ -47,6 +47,9 @@ import type { SidebarEditorsApi } from './useSidebarEditors'
 import type { ExamplesApi } from './useExamples'
 import type { ItemBankApi } from './useItemBank'
 import type { GraphDescriptionApi } from './useGraphDescription'
+import type { StatsApi } from './useStats'
+
+const NOOP = (): void => {}
 
 /** What useCommands reads from the hooks App calls before it. */
 export interface CommandsDeps {
@@ -77,9 +80,10 @@ export interface CommandsDeps {
   examples: ExamplesApi
   itemBank: ItemBankApi
   describer: GraphDescriptionApi
+  statsApi?: StatsApi
 }
 
-export function useCommands({ board, docState, session, refs, derived, notices, history, docActions, editing, calc, fieldsApi, typed, tables, domain, numberLine, viewport, unitCircle, rates, overlaysApi, naming, revealMode, exporter, figureSettings, editors, examples, itemBank, describer }: CommandsDeps) {
+export function useCommands({ board, docState, session, refs, derived, notices, history, docActions, editing, calc, fieldsApi, typed, tables, domain, numberLine, viewport, unitCircle, rates, overlaysApi, naming, revealMode, exporter, figureSettings, editors, examples, itemBank, describer, statsApi }: CommandsDeps) {
   const {
     curves, kind, items, selectedId, setSelectedId, sidebarOpen, setSidebarOpen, lens, fields,
     shapes, dataSets, sequences, boardGrid, figureStyle, previewFigure, setPreviewFigure,
@@ -108,6 +112,8 @@ export function useCommands({ board, docState, session, refs, derived, notices, 
   const { zoomBy, resetView, fitToContent, graphSolve } = viewport
   const { addUnitCircle } = unitCircle
   const { addRelatedRates } = rates
+  const addNormal = statsApi?.addNormal ?? NOOP
+  const addSimulation = statsApi?.addSimulation ?? NOOP
   const { calcCards, betweenCards } = overlaysApi
   const { cardNames } = naming
   const { revealStep, toggleReveal } = revealMode
@@ -198,6 +204,8 @@ export function useCommands({ board, docState, session, refs, derived, notices, 
     },
     addUnitCircle,
     addRelatedRates,
+    addNormal,
+    addSimulation,
     addCalc: addCalcObject,
     addAreaBetween,
     showInverse: showInverseOf,

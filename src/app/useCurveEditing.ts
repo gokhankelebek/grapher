@@ -84,7 +84,7 @@ export function useCurveEditing({ board, session, refs, derived, notices, histor
   const {
     curvesRef, itemsRef, kindRef, stylesRef, selectedRef, candidatesRef, exprCounterRef,
     shakeTimerRef, toastTimerRef, exprSourcesRef, brokenExprRef, displaySourcesRef, editsRef,
-    calcRef, fieldsRef, shapesRef, dataRef, seqRef, ucRef, rrRef, namesRef, callsRef, inversesRef,
+    calcRef, fieldsRef, shapesRef, dataRef, seqRef, ucRef, rrRef, statsRef, namesRef, callsRef, inversesRef,
     derivCounterRef,
   } = refs
   const { modelsRef, registerModels, envFor, analysisRef } = derived
@@ -261,7 +261,8 @@ export function useCurveEditing({ board, session, refs, derived, notices, histor
       dataRef.current.length === 0 &&
       seqRef.current.length === 0 &&
       ucRef.current.length === 0 &&
-      rrRef.current.length === 0
+      rrRef.current.length === 0 &&
+      statsRef.current.length === 0
     ) {
       return
     }
@@ -280,6 +281,7 @@ export function useCurveEditing({ board, session, refs, derived, notices, histor
         sequences: [],
         unitCircles: [],
         relatedRates: [],
+        stats: [],
         system: null,
         styles,
         exprSources: {},

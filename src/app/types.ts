@@ -18,6 +18,7 @@ import type { CalcLink } from '../ui/calcLinks'
 import type { BoardData } from '../ui/dataLinks'
 import type { BoardField } from '../ui/fieldLinks'
 import type { BoardRelatedRates } from '../ui/relatedRatesLinks'
+import type { BoardStat } from '../ui/statsLinks'
 import type { BoardSequence } from '../ui/seqLinks'
 import type { BoardShape } from '../ui/shapeLinks'
 import type { BoardUnitCircle } from '../ui/unitCircleLinks'
@@ -87,6 +88,8 @@ export interface Snapshot {
   unitCircles: BoardUnitCircle[]
   /** The related-rates problem (none or one): givens, t, the when-question. */
   relatedRates: BoardRelatedRates[]
+  /** The statistics objects: normal distributions and simulations (settings and seeds). */
+  stats: BoardStat[]
   /**
    * The inequality system's settings — solution region, test point, the
    * objective — in the same history: each switch comes back with one undo.
@@ -162,6 +165,7 @@ export interface StatePatch {
   sequences?: BoardSequence[]
   unitCircles?: BoardUnitCircle[]
   relatedRates?: BoardRelatedRates[]
+  stats?: BoardStat[]
   /** null clears the system's settings; absent leaves them. */
   system?: BoardIneqSystem | null
   names?: Record<string, string>

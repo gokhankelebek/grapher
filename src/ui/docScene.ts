@@ -24,7 +24,9 @@
 //   5. what the per-card pipelines add to the App's export, each through the
 //      pure helper the card's module owns: sequences and series (dots,
 //      partial sums, bars, band, y = S, the dashed partner — seqLinks),
-//      related-rates pictures (relatedRatesLinks), the inequality system's
+//      related-rates pictures (relatedRatesLinks), statistics panels — normal
+//      curves and seeded simulations, recomputed from their seeds
+//      (statsLinks) — the inequality system's
 //      solution region, test point, corners and objective (systemLinks), the
 //      conic constructions that are switched on (conicLinks), a polar area
 //      and the selected curve's particle when "show particle in export" is on
@@ -45,7 +47,9 @@
 // optimum, a series' "S = …", a calculus tool's value) is dropped; a series'
 // dashed y = S, the optimum's colour and the iso-profit line through it go
 // with them; a related-rates picture says "?" for the unknown rate and
-// drops its rate-vs-time graph (reveal.ts maskRelatedRates).
+// drops its rate-vs-time graph (reveal.ts maskRelatedRates); a statistics
+// panel keeps its curve, shading and dots and says "?" for the probability,
+// z-scores, percentile, simulated mean / SD and p-value (reveal.ts maskStats).
 //
 // THE BOARD SIZE. A document stores its centre and zoom, not the size of the
 // window it was framed in. The caller passes the size of the live board (the
@@ -83,7 +87,8 @@ import type { Overlay } from '../render/overlays'
 import { viewStatesFrom } from './curveViews'
 import { partnerPolylines, sequenceFigure } from './seqLinks'
 import { relatedRatesBox, relatedRatesFigure } from './relatedRatesLinks'
-import { maskRelatedRates } from './reveal'
+import { maskRelatedRates, maskStats } from './reveal'
+import { statsBox, statsFigures } from './statsLinks'
 import { systemCard, systemOverlays, systemSolutionShown } from './systemLinks'
 import { constructionConicsOf, constructionFigure } from './conicLinks'
 import { exportParticle, polarAreaOverlays } from './motionLinks'
@@ -292,6 +297,8 @@ export function docFigure(m: DocModel, o: FigureOptions): DocFigure {
         return f ? [o.answers ? f : maskRelatedRates(f)] : []
       })
     : []
+  const statsAll = cartesian ? safe(() => statsFigures(board.stats), []) : []
+  const stats = o.answers ? statsAll : statsAll.map(maskStats)
   const sysCard = cartesian ? safe(() => systemCard(curves, models, board.system), null) : null
   const sysOverlays = safe(() => systemOverlays(sysCard, board.system, { answers: o.answers }), [])
   const inequalitySolution = systemSolutionShown(sysCard, board.system)
@@ -329,6 +336,7 @@ export function docFigure(m: DocModel, o: FigureOptions): DocFigure {
           ...(seq?.boxes ?? []),
           ...board.unitCircles.filter((u) => u.hidden !== true).map((u) => unitCircleBox(u)),
           ...rrShown.map((r) => safe(() => relatedRatesBox(r), null)),
+          ...board.stats.flatMap((st, i) => (st.hidden === true ? [] : [statsBox(i)])),
         ])
       : box
   }
@@ -427,6 +435,7 @@ export function docFigure(m: DocModel, o: FigureOptions): DocFigure {
     ...(scatter.length > 0 ? { scatter } : {}),
     ...(unitCircles.length > 0 ? { unitCircles } : {}),
     ...(relatedRates.length > 0 ? { relatedRates } : {}),
+    ...(stats.length > 0 ? { stats } : {}),
     ...(signs.length > 0 ? { signCharts: signs } : {}),
     ...(inequalitySolution ? { inequalitySolution: true } : {}),
     grid: board.grid,

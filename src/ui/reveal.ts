@@ -25,6 +25,9 @@
 //   solve:<id>:solution          a number-line inequality's solution set
 //   uc:<id>:values               a unit circle's exact values
 //   rr:<id>:value                a related-rates scenario's unknown rate
+//   stat:<id>:value              a statistics figure's probability, z-scores,
+//                                percentile, simulated mean / SD, margins of
+//                                error and p-value
 //   series:<id>:value            a series' verdict and sum
 //   euler:<fieldId>:value        a field's Euler approximations
 //   system:value                 the inequality system's corners / optimum
@@ -45,6 +48,7 @@ import type { BoardIntersection, BoardScene } from './renderBoard'
 import type { Overlay } from '../render/overlays'
 import type { UnitCircleFigure } from '../render/unitCircle'
 import type { RelatedRatesFigure } from '../render/relatedRates'
+import type { StatsFigure } from '../render/stats'
 import type { SignChartFigure } from '../render/signChart'
 
 // ---------------------------------------------------------------------------
@@ -73,6 +77,7 @@ export const oneToOneKey = (curveId: string): string => `curve:${curveId}:onetoo
 export const inverseKey = (curveId: string): string => `curve:${curveId}:inverse`
 export const ucKey = (id: string): string => `uc:${id}:values`
 export const rrKey = (id: string): string => `rr:${id}:value`
+export const statKey = (id: string): string => `stat:${id}:value`
 export const seriesKey = (id: string): string => `series:${id}:value`
 export const eulerKey = (fieldId: string): string => `euler:${fieldId}:value`
 export const SYSTEM_KEY = 'system:value'
@@ -484,6 +489,41 @@ export function maskRelatedRates(f: RelatedRatesFigure): RelatedRatesFigure {
 }
 
 /**
+ * A statistics figure with its answers as "?": the probability chip and the
+ * title's answer, the bounds' z-scores, a percentile's x, the simulated mean
+ * and SD, the p-value. The shading, the curve and the dots — the question —
+ * stay.
+ */
+export function maskStats(f: StatsFigure): StatsFigure {
+  return {
+    ...f,
+    prims: f.prims.map((p) => (p.k === 'chip' && p.answer ? { ...p, text: maskChip(p.text) } : p)),
+    marks: f.marks.map((m) => ({
+      ...m,
+      text: m.answerText ? '?' : m.text,
+      z: m.answerZ && m.z ? m.z.replace(/=.*$/, '= ?') : m.z,
+    })),
+    title: { question: f.title.question, answer: maskTitle(f.title.answer) },
+    // a student describes only what is drawn
+    describe: f.describe,
+  }
+}
+
+/** " x ≈ 119.22" → " x ≈ ?"; " 0.8186" → " ?". */
+function maskTitle(a: string): string {
+  if (!a) return ''
+  const m = /^(.*?[≈=])/.exec(a)
+  return m ? `${m[1]} ?` : ' ?'
+}
+
+/** "mean 100.02 · SD 2.77" → "mean ? · SD ?"; "0.8186" → "?"; "p ≈ 0.024 (24 of 1000)" → "p ≈ ? (? of 1000)". */
+function maskChip(text: string): string {
+  // "(23 of 1000)" keeps its 1000: how many were run is the question, not the answer.
+  const out = text.replace(/(?<![\d.,])(?<!of )[−-]?\d[\d.,]*(?:×10\^[−-]?\d+)?/g, '?')
+  return out === text ? '?' : out
+}
+
+/**
  * A sign chart as a blank to fill in: the strips and their x line stay, the
  * signs, arrows, cups and the critical values' names go ("?" under each tick).
  */
@@ -603,6 +643,20 @@ export function applyReveal(scene: BoardScene, r: SceneReveal | null | undefined
       if (!r.hidden(key)) return f
       if (f.visible && f.title) marks.push({ key, pos: f.title.at, color: f.color, ghost: true })
       return maskRelatedRates(f)
+    })
+  }
+
+  // ---- statistics: the answers say "?" until revealed
+  if (scene.stats && scene.stats.length > 0) {
+    out.stats = scene.stats.map((f) => {
+      const key = statKey(f.id)
+      const at = { x: (f.panel.x0 + f.panel.x1) / 2, y: f.panel.y1 - 0.45 }
+      if (!r.hidden(key)) {
+        visit(r, key, at, f.color, marks, pulses)
+        return f
+      }
+      if (f.visible) marks.push({ key, pos: at, color: f.color, ghost: true })
+      return maskStats(f)
     })
   }
 

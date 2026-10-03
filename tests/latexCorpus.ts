@@ -24,6 +24,7 @@ import { toPgfplots } from '../src/ui/pgfplotsExport'
 import { buildSheet, sheetLatex } from '../src/ui/worksheetExport'
 import { newRelatedRates } from '../src/ui/relatedRatesLinks'
 import { newUnitCircle } from '../src/ui/unitCircleLinks'
+import { EXAMPLE_GROUP_A, EXAMPLE_GROUP_B, newNormal, newSim } from '../src/ui/statsLinks'
 import { bankFigure, buildItemDoc, planItem } from '../src/ui/itemBank'
 
 export const STYLES: readonly FigureStyleId[] = ['screen', 'textbook', 'sat', 'ap']
@@ -268,6 +269,19 @@ export function corpusDocs(): CorpusDoc[] {
     out.push(doc('rrcone', 'Related rates: cone', input({ relatedRates: [newRelatedRates('R2', 'cone')] })))
   }
 
+  // ---- statistics: a normal curve (shaded, empirical rule, z row), a
+  // percentile, a seeded sampling simulation and a randomisation test
+  {
+    const n = { ...newNormal('N1'), rule: true as const }
+    out.push(doc('normal', 'Normal distribution', input({ stats: [n], viewport: { center: { x: 0, y: 0 }, pxPerUnit: 60 } })))
+    const pct = { ...newNormal('N2'), mu: 0, sigma: 1, mode: 'percentile' as const, pct: 97.5, zRow: false as const }
+    const sim = { ...newSim('S1', 12345), plot: 'hist' as const }
+    out.push(doc('normalsim', 'Percentile and sampling', input({ stats: [pct, sim], viewport: { center: { x: 0, y: -4 }, pxPerUnit: 45 } })))
+    const prop = { ...newSim('S2', 777), pop: 'proportion' as const, p: 0.42, n: 50, reps: 500 }
+    const cmp = { ...newSim('S3', 99), mode: 'compare' as const, groupA: EXAMPLE_GROUP_A.slice(), groupB: EXAMPLE_GROUP_B.slice(), reps: 1000 }
+    out.push(doc('simcompare', 'Proportions and treatments: 50% ğ', input({ stats: [prop, cmp], viewport: { center: { x: 0, y: -4 }, pxPerUnit: 45 } })))
+  }
+
   // ---- polar curves, polar area, polar area-between, on a polar grid
   {
     const l = lines({ a: 'r = 3sin(θ)', b: 'r = 1 + sin(θ)' })
@@ -471,6 +485,8 @@ export function sheetExports(models: Map<string, DocModel>): CorpusTex[] {
         { docId: 'limit' },
         { docId: 'volume' },
         { docId: 'unitcircle' },
+        { docId: 'normal' },
+        { docId: 'simcompare' },
         { docId: 'gone' },
       ],
     },

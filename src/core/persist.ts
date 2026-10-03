@@ -34,6 +34,8 @@ import { accumulationModel, derivativeModel } from './calculus'
 import { TAYLOR_N_DEFAULT, TAYLOR_N_MAX, TAYLOR_N_MIN } from './taylor'
 import type { RiemannMethod } from './calculus'
 import { RR_DEFS, RR_SCENARIOS, cleanParams } from './relatedRates'
+import type { BoardStat, StoredStat } from './statsPersist'
+import { MAX_STATS, statToStored, storedToStat } from './statsPersist'
 import type { RRScenario } from './relatedRates'
 import type { SectionShape, VolumeAxis, VolumeMethod } from './volume'
 import { isSectionShape } from './volume'
@@ -1567,6 +1569,14 @@ export interface StoredBoard {
    */
   relatedRates?: StoredRelatedRates
   /**
+   * The statistics objects — normal distributions and simulations — as the
+   * teacher set them (μ, σ, bounds; population, n, samples, seed). Never a
+   * result: those are recomputed from the seed. Omitted when there are none,
+   * which is every document written before this field existed: such a board
+   * serialises byte-for-byte as it did then.
+   */
+  stats?: StoredStat[]
+  /**
    * The inequality system's settings (solution region, test point, objective).
    * Omitted when nothing is set — every document written before it existed.
    */
@@ -1869,6 +1879,8 @@ export interface BoardInput {
   unitCircles?: readonly BoardUnitCircle[]
   /** The related-rates object (the first, if several). Absent or empty writes nothing at all. */
   relatedRates?: readonly BoardRelatedRates[]
+  /** Statistics objects. Absent or empty writes nothing at all. */
+  stats?: readonly BoardStat[]
   /** The inequality system's settings. Absent or empty writes nothing at all. */
   system?: BoardIneqSystem | null
   /** The ruling. Absent means 'cartesian', which writes nothing at all. */
@@ -1967,6 +1979,8 @@ export interface HydratedBoard {
   unitCircles: BoardUnitCircle[]
   /** The related-rates object, as a list of none or one; an unreadable one is dropped and REPORTED. */
   relatedRates: BoardRelatedRates[]
+  /** The statistics objects that could be read; an unreadable one is dropped and REPORTED. */
+  stats: BoardStat[]
   /** The inequality system's settings; null when the document has none. */
   system: BoardIneqSystem | null
   /** The ruling this document states. 'cartesian' when it is silent. */
@@ -2228,6 +2242,10 @@ export function boardToStored(input: BoardInput): StoredBoard {
   // And the related-rates object: one per board, only when there is one.
   const rates = input.relatedRates ?? []
   if (rates.length > 0) board.relatedRates = relatedRatesToStored(rates[0])
+
+  // And the statistics objects, only when there are some.
+  const stats = input.stats ?? []
+  if (stats.length > 0) board.stats = stats.slice(0, MAX_STATS).map(statToStored)
 
   // And the inequality system, only when something about it is set.
   const system = systemToStored(input.system)
@@ -3994,6 +4012,41 @@ export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResu
     }
   }
 
+  // ---- statistics: normal distributions and simulations
+  const stats: BoardStat[] = []
+  if (rawBoard.stats !== undefined) {
+    const rawStats = Array.isArray(rawBoard.stats) ? rawBoard.stats : null
+    if (!rawStats) {
+      problems.push('The statistics objects could not be read.')
+      degraded = true
+    } else {
+      if (rawStats.length > MAX_STATS) {
+        problems.push(`Only the first ${MAX_STATS} statistics objects were loaded.`)
+        degraded = true
+      }
+      for (const raw of rawStats.slice(0, MAX_STATS)) {
+        const statProblems: string[] = []
+        const built = storedToStat(raw, statProblems)
+        if ('error' in built) {
+          problems.push(`A statistics object could not be restored: ${built.error}.`)
+          degraded = true
+          continue
+        }
+        if (statProblems.length > 0) {
+          problems.push(...statProblems)
+          degraded = true
+        }
+        if (seen.has(built.stat.id)) {
+          problems.push('A statistics object was dropped: two objects claimed the same id.')
+          degraded = true
+          continue
+        }
+        seen.add(built.stat.id)
+        stats.push(built.stat)
+      }
+    }
+  }
+
   // ---- the inequality system. Absent is the default; unreadable keys drop.
   const sysProblems: string[] = []
   const system = storedToSystem(rawBoard.system, sysProblems)
@@ -4094,6 +4147,7 @@ export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResu
     ...sequences.map((q) => q.id),
     ...unitCircles.map((u) => u.id),
     ...relatedRates.map((r) => r.id),
+    ...stats.map((s) => s.id),
   ])
   const selectedId =
     isStr(rawBoard.selectedId) && selectable.has(rawBoard.selectedId)
@@ -4124,6 +4178,7 @@ export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResu
       sequences,
       unitCircles,
       relatedRates,
+      stats,
       system,
       grid,
       figure,
@@ -4279,6 +4334,7 @@ function blankHydrated(): HydratedBoard {
     sequences: [],
     unitCircles: [],
     relatedRates: [],
+    stats: [],
     system: null,
     grid: 'cartesian',
     figure: 'screen',

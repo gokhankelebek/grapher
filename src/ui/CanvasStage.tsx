@@ -43,6 +43,7 @@ import type {
   ScatterSet,
   UnitCircleFigure,
   RelatedRatesFigure,
+  StatsFigure,
   SignChartFigure,
   Shape,
   SlopeField,
@@ -180,6 +181,8 @@ interface Props {
   unitCircles?: readonly UnitCircleFigure[] | null
   /** The related-rates scenario — straight into the scene, like the unit circle. */
   relatedRates?: readonly RelatedRatesFigure[] | null
+  /** Statistics panels (normal curves, simulations) — straight into the scene, like the unit circle. */
+  stats?: readonly StatsFigure[] | null
   /** Sign-chart strips along the bottom — straight into the scene, like the unit circle. */
   signCharts?: readonly SignChartFigure[] | null
   /**
@@ -591,6 +594,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     scatter,
     unitCircles,
     relatedRates,
+    stats,
     signCharts,
     inequalitySolution,
     grid,
@@ -637,6 +641,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   const scatterRef = useRef<readonly ScatterSet[] | null | undefined>(scatter)
   const unitCirclesRef = useRef<readonly UnitCircleFigure[] | null | undefined>(unitCircles)
   const relatedRatesRef = useRef<readonly RelatedRatesFigure[] | null | undefined>(relatedRates)
+  const statsRef = useRef<readonly StatsFigure[] | null | undefined>(stats)
   const signChartsRef = useRef<readonly SignChartFigure[] | null | undefined>(signCharts)
   const ineqSolutionRef = useRef<boolean>(inequalitySolution === true)
   const gridRef = useRef<BoardGrid | null | undefined>(grid)
@@ -826,6 +831,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       ...(scatterRef.current && scatterRef.current.length > 0 ? { scatter: scatterRef.current } : {}),
       ...(unitCirclesRef.current && unitCirclesRef.current.length > 0 ? { unitCircles: unitCirclesRef.current } : {}),
       ...(relatedRatesRef.current && relatedRatesRef.current.length > 0 ? { relatedRates: relatedRatesRef.current } : {}),
+      ...(statsRef.current && statsRef.current.length > 0 ? { stats: statsRef.current } : {}),
       ...(signChartsRef.current && signChartsRef.current.length > 0 ? { signCharts: signChartsRef.current } : {}),
       ...(ineqSolutionRef.current ? { inequalitySolution: true } : {}),
       ...(inkPaletteRef.current === 'safe' ? { inkPalette: 'safe' as const } : {}),
@@ -929,6 +935,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     scatterRef.current = scatter
     unitCirclesRef.current = unitCircles
     relatedRatesRef.current = relatedRates
+    statsRef.current = stats
     signChartsRef.current = signCharts
     ineqSolutionRef.current = inequalitySolution === true
     gridRef.current = grid
@@ -959,6 +966,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     scatter,
     unitCircles,
     relatedRates,
+    stats,
     signCharts,
     inequalitySolution,
     grid,

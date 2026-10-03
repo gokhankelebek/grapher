@@ -6,7 +6,7 @@
 // memo and effect on the board, so a new hook goes where its inputs exist.
 // ============================================================================
 
-import { useCallback } from 'react'
+import { useCallback, useRef } from 'react'
 import type { BuilderKey } from '../ui/commands'
 import type { BoardStateApi } from './useBoardState'
 import type { SessionStateApi } from './useSessionState'
@@ -22,6 +22,7 @@ import type { NumberLineApi } from './useNumberLine'
 import type { UnitCircleApi } from './useUnitCircle'
 import type { RelatedRatesApi } from './useRelatedRates'
 import { prefersReducedMotion } from '../ui/motionPref'
+import type { StatsApi } from './useStats'
 
 /** What useSidebarEditors reads from the hooks App calls before it. */
 export interface SidebarEditorsDeps {
@@ -38,16 +39,17 @@ export interface SidebarEditorsDeps {
   numberLine: NumberLineApi
   unitCircle: UnitCircleApi
   rates: RelatedRatesApi
+  statsApi?: StatsApi
 }
 
-export function useSidebarEditors({ board, session, refs, notices, docActions, editing, fieldsApi, shapesApi, typed, tables, numberLine, unitCircle, rates }: SidebarEditorsDeps) {
+export function useSidebarEditors({ board, session, refs, notices, docActions, editing, fieldsApi, shapesApi, typed, tables, numberLine, unitCircle, rates, statsApi }: SidebarEditorsDeps) {
   const {
     setSelectedId, setSidebarOpen, setExprOpen, setFactorOpen, setExpOpen, setLogisticOpen,
     setLogOpen, setSinOpen, setTransformOpen, setPiecewiseOpen, setConicOpen, setMotionOpen,
     setSeqOpen,
   } = board
   const { setPresentMode, setExprSeed } = session
-  const { kindRef, selectedRef, fieldsRef, shapesRef, dataRef, seqRef, ucRef, rrRef } = refs
+  const { kindRef, selectedRef, fieldsRef, shapesRef, dataRef, seqRef, ucRef, rrRef, statsRef } = refs
   const { showToast } = notices
   const { importDocument } = docActions
   const { deleteCurve } = editing
@@ -58,6 +60,8 @@ export function useSidebarEditors({ board, session, refs, notices, docActions, e
   const { deleteItem } = numberLine
   const { deleteUnitCircle } = unitCircle
   const { deleteRelatedRates } = rates
+  const deleteStatRef = useRef(statsApi?.deleteStat)
+  deleteStatRef.current = statsApi?.deleteStat
 
   // ------------------------------------------------- editors in the sidebar
   /**
@@ -119,6 +123,7 @@ export function useSidebarEditors({ board, session, refs, notices, docActions, e
     else if (seqRef.current.some((q) => q.id === id)) deleteSequence(id)
     else if (ucRef.current.some((u) => u.id === id)) deleteUnitCircle(id)
     else if (rrRef.current.some((r) => r.id === id)) deleteRelatedRates(id)
+    else if (statsRef.current.some((st) => st.id === id)) deleteStatRef.current?.(id)
     else deleteCurve(id)
     // deleteUnitCircle / deleteRelatedRates read refs only, as in the Delete key's handler
     // eslint-disable-next-line react-hooks/exhaustive-deps

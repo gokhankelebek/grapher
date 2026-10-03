@@ -72,6 +72,8 @@ import type { UnitCircleFigure } from '../render/unitCircle'
 import { drawUnitCircles } from '../render/unitCircle'
 import type { RelatedRatesFigure } from '../render/relatedRates'
 import { drawRelatedRates } from '../render/relatedRates'
+import type { StatsFigure } from '../render/stats'
+import { drawStats } from '../render/stats'
 import { drawScatter } from '../render/scatter'
 import type { SignChartFigure } from '../render/signChart'
 import { drawSignGuides, drawSignStrips, signBandHeight } from '../render/signChart'
@@ -422,6 +424,19 @@ export interface BoardScene {
    */
   relatedRates?: readonly RelatedRatesFigure[]
   /**
+   * Statistics figures — a normal curve with its shaded probability, the
+   * empirical rule and a z row; a simulation's dot plot or histogram with the
+   * theoretical curve and the observed difference (src/render/stats.ts). Each
+   * sits on its own opaque panel with its own axis, painted right after the
+   * grid, so a curve drawn over one still shows. A board whose only figure
+   * content is statistics draws no grid at all: a density has no use for the
+   * board's x and y, and the panels carry the only axes that mean anything.
+   *
+   * FIGURE, not chrome: it exports, and goes mono under SAT / AP. Absent or
+   * empty draws exactly what the board drew before this field existed.
+   */
+  stats?: readonly StatsFigure[]
+  /**
    * Sign charts — strips of f, f′, f″ along the bottom of the board, each
    * critical x under the board x it is, with optional dashed guides up
    * through the graph (src/render/signChart.ts). The strips sit on an opaque
@@ -514,6 +529,7 @@ export type { EulerPath } from '../render/euler'
 export type { ScatterMarker, ScatterSet } from '../render/scatter'
 export type { UnitCircleFigure } from '../render/unitCircle'
 export type { RelatedRatesFigure } from '../render/relatedRates'
+export type { StatsFigure } from '../render/stats'
 export type { SignChartFigure } from '../render/signChart'
 
 /**
@@ -2169,14 +2185,41 @@ export function renderBoard(ctx: CanvasRenderingContext2D, sceneIn: BoardScene):
     return
   }
 
+  // Statistics panels carry their own axes. On a board with nothing else on it
+  // the grid would only be noise around them, so it is not drawn at all.
+  const statsFigs = scene.stats && scene.stats.length > 0 ? scene.stats : null
+  const statsOnly =
+    statsFigs !== null &&
+    statsFigs.some((f) => f.visible) &&
+    !scene.curves.some((c) => c.visible) &&
+    !(scene.fields ?? []).some((f) => f.visible) &&
+    (scene.polylines ?? []).length === 0 &&
+    (scene.shapes ?? []).length === 0 &&
+    (scene.scatter ?? []).length === 0 &&
+    (scene.eulers ?? []).length === 0 &&
+    !(scene.unitCircles ?? []).some((u) => u.visible) &&
+    !(scene.relatedRates ?? []).some((r) => r.visible) &&
+    (scene.overlays ?? []).length === 0 &&
+    !signs
+
   // The ruling is the board's, not the curve's: one dispatch, one grid, and
   // the export takes whichever one the screen took because it is the same call.
   try {
-    if (scene.grid === 'polar')
+    if (statsOnly) {
+      /* the panels' own axes are the figure's only axes */
+    } else if (scene.grid === 'polar')
       drawPolarGrid(ctx, vp, theme, scale, scene.axisUnits ?? null, gridStyle)
     else drawGrid(ctx, vp, theme, scale, scene.axisUnits ?? null, gridStyle)
   } catch {
     /* grid module absent or failed — keep going */
+  }
+
+  if (statsFigs) {
+    try {
+      drawStats(ctx, statsFigs, { vp, theme, paint: ink, mono, scale, font: fig?.font ?? null })
+    } catch {
+      /* the statistics panels are lost; the figure still stands */
+    }
   }
 
   // A sign chart's guides: dashed lines from each critical x up to the strips,

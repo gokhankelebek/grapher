@@ -51,6 +51,10 @@ interface Props {
   onUnitCircleAdd?(): void
   /** Put a related-rates problem on the board, or select the one already there. */
   onRelatedRatesAdd?(): void
+  /** Put a normal distribution on the board (Math 3 / AP Precalc statistics). */
+  onNormalAdd?(): void
+  /** Put a sampling simulation on the board. */
+  onSimulationAdd?(): void
 }
 
 export function BuildMenu({
@@ -77,6 +81,8 @@ export function BuildMenu({
   onDataAdd,
   onUnitCircleAdd,
   onRelatedRatesAdd,
+  onNormalAdd,
+  onSimulationAdd,
 }: Props) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -155,7 +161,7 @@ export function BuildMenu({
           {item('Conic section', conicOpen, onConicToggle, 'build-conic')}
           {item('Parametric / polar', motionOpen, onMotionToggle, 'build-motion')}
           {item('Sequence', seqOpen, onSeqToggle, 'build-seq')}
-          {(onDataAdd || onUnitCircleAdd || onRelatedRatesAdd) && <div className="card-menu-sep" role="separator" />}
+          {(onDataAdd || onUnitCircleAdd || onRelatedRatesAdd || onNormalAdd || onSimulationAdd) && <div className="card-menu-sep" role="separator" />}
           {onUnitCircleAdd && (
             <button
               type="button"
@@ -186,6 +192,38 @@ export function BuildMenu({
               }}
             >
               Related rates
+            </button>
+          )}
+          {onNormalAdd && (
+            <button
+              type="button"
+              role="menuitem"
+              data-testid="build-normal"
+              className="card-menu-item build-item"
+              title="A normal distribution N(μ, σ): shade a probability, read the z-scores, find the value for a percentile, show the empirical rule"
+              onClick={(e) => {
+                e.stopPropagation()
+                setOpen(false)
+                onNormalAdd()
+              }}
+            >
+              Normal distribution
+            </button>
+          )}
+          {onSimulationAdd && (
+            <button
+              type="button"
+              role="menuitem"
+              data-testid="build-simulation"
+              className="card-menu-item build-item"
+              title="Simulation: repeated samples of means or proportions with the margin of error, or a randomisation test comparing two treatments"
+              onClick={(e) => {
+                e.stopPropagation()
+                setOpen(false)
+                onSimulationAdd()
+              }}
+            >
+              Simulation
             </button>
           )}
           {onDataAdd && (

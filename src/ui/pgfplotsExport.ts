@@ -1467,6 +1467,9 @@ export function toPgfplots(sceneIn: BoardScene, opts: PgfplotsOptions = {}): str
   if ((scene.relatedRates ?? []).some((r) => r?.visible)) {
     notExported.push('the related-rates scenario (use TikZ for this figure)')
   }
+  if ((scene.stats ?? []).some((f) => f?.visible)) {
+    notExported.push('the statistics panel (use TikZ for this figure)')
+  }
 
   // ---- marks and labels on top ------------------------------------------------
   for (const h of holesAll) marks([h.at], h.col, true)

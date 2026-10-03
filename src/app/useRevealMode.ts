@@ -22,6 +22,7 @@ import {
   revealOne,
   rrKey,
   seriesKey,
+  statKey,
   solveKey,
   SYSTEM_KEY,
   ucKey,
@@ -56,7 +57,7 @@ export interface RevealModeDeps {
 
 export function useRevealMode({ board, docState, session, derived, editing, system, overlaysApi, panel, lookApi }: RevealModeDeps) {
   const {
-    curves, kind, items, selectedId, calcLinks, fields, sequences, unitCircles, relatedRates,
+    curves, kind, items, selectedId, calcLinks, fields, sequences, unitCircles, relatedRates, stats,
   } = board
   const { docMeta } = docState
   const { reveal, setReveal, revealRef, revealByDocRef, revealFreshRef } = session
@@ -93,6 +94,7 @@ export function useRevealMode({ board, docState, session, derived, editing, syst
     for (const f of fields) if (f.eulers && f.eulers.length > 0) after.push(eulerKey(f.id))
     for (const u of unitCircles) if (u.hidden !== true) after.push(ucKey(u.id))
     for (const r of relatedRates) if (r.hidden !== true) after.push(rrKey(r.id))
+    for (const st of stats) if (st.hidden !== true) after.push(statKey(st.id))
     if (sysCard?.lp) after.push(SYSTEM_KEY)
     return buildInventory({
       curves: shown.map((c) => {
@@ -120,7 +122,7 @@ export function useRevealMode({ board, docState, session, derived, editing, syst
     })
     // depKeys: a curve that calls another moves when it does.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reveal.on, kind, items, curves, selectedId, models, analysis, analysisFor, domainPanel, calcLinks, crossings, sequences, fields, unitCircles, relatedRates, sysCard, depKeys])
+  }, [reveal.on, kind, items, curves, selectedId, models, analysis, analysisFor, domainPanel, calcLinks, crossings, sequences, fields, unitCircles, relatedRates, stats, sysCard, depKeys])
   const revealInvRef = useRef(revealInv)
   revealInvRef.current = revealInv
 

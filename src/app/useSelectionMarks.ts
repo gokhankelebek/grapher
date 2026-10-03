@@ -74,6 +74,10 @@ import type { ViewportApi } from './useViewport'
 import type { UnitCircleApi } from './useUnitCircle'
 import type { InequalitySystemApi } from './useInequalitySystem'
 import type { ExtraHandlesApi } from './useExtraHandles'
+import type { StatsApi } from './useStats'
+
+/** No statistics handles: one array, so the memo below keeps its identity. */
+const NO_HANDLES: ExtraHandle[] = []
 
 /** What useSelectionMarks reads from the hooks App calls before it. */
 export interface SelectionMarksDeps {
@@ -91,9 +95,11 @@ export interface SelectionMarksDeps {
   unitCircle: UnitCircleApi
   system: InequalitySystemApi
   handlesApi: ExtraHandlesApi
+  /** The statistics objects' grab points (μ, σ, the bounds). */
+  statsApi?: StatsApi
 }
 
-export function useSelectionMarks({ board, docState, session, refs, derived, fieldsApi, shapesApi, tables, builders, domain, viewport, unitCircle, system, handlesApi }: SelectionMarksDeps) {
+export function useSelectionMarks({ board, docState, session, refs, derived, fieldsApi, shapesApi, tables, builders, domain, viewport, unitCircle, system, handlesApi, statsApi }: SelectionMarksDeps) {
   const {
     curves, kind, selectedId, construction, motionPlay, setMotionPlay, showParent, lens,
   } = board
@@ -113,6 +119,7 @@ export function useSelectionMarks({ board, docState, session, refs, derived, fie
   const { ucHandle } = unitCircle
   const { sysTestHandle } = system
   const { extraHandles } = handlesApi
+  const statsHandles = statsApi?.statsHandles ?? NO_HANDLES
 
   // ----------------------------------------------- a selected sinusoid, marked
   //
@@ -485,8 +492,9 @@ export function useSelectionMarks({ board, docState, session, refs, derived, fie
     if (domainHandles.length > 0) more.push(...domainHandles)
     if (ucHandle) more.push(ucHandle)
     if (sysTestHandle) more.push(sysTestHandle)
+    if (statsHandles.length > 0) more.push(...statsHandles)
     return more.length > 0 ? [...extraHandles, ...more] : extraHandles
-  }, [extraHandles, motionHandle, domainHandles, ucHandle, sysTestHandle])
+  }, [extraHandles, motionHandle, domainHandles, ucHandle, sysTestHandle, statsHandles])
 
   /** What the board marks for the selected curve. */
   const boardAnalysis = useMemo<SpecialPoint[]>(() => {

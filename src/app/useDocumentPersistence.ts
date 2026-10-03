@@ -65,6 +65,7 @@ export function useDocumentPersistence({ board, docState, session, refs, derived
     setSidebarOpen, readViewStates, writeViewStates, curveViewsSig, setExtraModels, calcLinks,
     setCalcLinks, fields, setFields, setArmedField, shapes, setShapes, dataSets, setDataSets,
     sequences, setSequences, unitCircles, setUnitCircles, relatedRates, setRelatedRates, setRrPlay,
+    stats, setStats, setStatsPlay,
     ineqSystem, setIneqSystem, setUcPlay, boardGrid, setBoardGrid, setAxesMode, viewSubsRef,
     figureStyle, setFigureStyle, figureCaption, setFigureCaption, setPreviewFigure, bumpHistory,
   } = board
@@ -79,7 +80,7 @@ export function useDocumentPersistence({ board, docState, session, refs, derived
     curvesRef, itemsRef, kindRef, stylesRef, selectedRef, undoRef, redoRef, preEditRef,
     setGesturing, candidatesRef, exprCounterRef, exprSourcesRef, brokenExprRef, displaySourcesRef,
     axisUnitChoiceRef, editsRef, calcRef, fieldsRef, shapesRef, dataRef, seqRef, ucRef, rrRef,
-    sysRef, namesRef, callsRef, inversesRef, regWrittenRef, regAutoHiddenRef, cellFoldRef,
+    statsRef, sysRef, namesRef, callsRef, inversesRef, regWrittenRef, regAutoHiddenRef, cellFoldRef,
     boardGridRef, figureStyleRef, figureCaptionRef, polarOfferedRef, derivCounterRef, calcSigRef,
     calcDomainRef, calcAutoHiddenRef, docMetaRef, saveTimerRef, hydratedRef, docStoredRef,
     skipAutosaveRef, unsavedRef, loadedStateRef,
@@ -117,6 +118,7 @@ export function useDocumentPersistence({ board, docState, session, refs, derived
       sequences: [],
       unitCircles: [],
       relatedRates: [],
+      stats: [],
       system: null,
       grid: 'cartesian',
       figure: 'screen',
@@ -153,6 +155,7 @@ export function useDocumentPersistence({ board, docState, session, refs, derived
       sequences: seqRef.current,
       unitCircles: ucRef.current,
       relatedRates: rrRef.current,
+      stats: statsRef.current,
       system: sysRef.current,
       grid: boardGridRef.current,
       figure: figureStyleRef.current,
@@ -308,6 +311,8 @@ export function useDocumentPersistence({ board, docState, session, refs, derived
     ucRef.current = board.unitCircles
     // And the related-rates problem: givens and t; every drawing is re-derived.
     rrRef.current = board.relatedRates
+    // And the statistics objects: settings and seeds; every result is re-derived.
+    statsRef.current = board.stats
     // And the inequality system's settings; its corners are re-derived.
     sysRef.current = board.system
     // The inverse links come back; their models are registered below, reading
@@ -382,6 +387,8 @@ export function useDocumentPersistence({ board, docState, session, refs, derived
     setUnitCircles(board.unitCircles)
     setRelatedRates(board.relatedRates)
     setRrPlay(null)
+    setStats(board.stats)
+    setStatsPlay(null)
     setIneqSystem(board.system)
     setUcPlay(null)
     setInverses(board.inverses)
@@ -617,6 +624,8 @@ export function useDocumentPersistence({ board, docState, session, refs, derived
     unitCircles,
     // And the related-rates problem: its givens, t, its question.
     relatedRates,
+    // And the statistics objects: μ, σ, bounds, a simulation's settings and seed.
+    stats,
     // And the inequality system: its switches, test point and objective.
     ineqSystem,
     // And a rename, which may change nothing but a letter.

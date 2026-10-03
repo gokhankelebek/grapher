@@ -101,6 +101,8 @@ export interface CommandActions {
   addDataTable(): void
   addUnitCircle(): void
   addRelatedRates(): void
+  addNormal(): void
+  addSimulation(): void
   // ---- a curve's ⋯ menu
   addCalc(curveId: string, kind: CalcKind): void
   addAreaBetween(curveId: string): void
@@ -746,6 +748,34 @@ export const COMMANDS: readonly Command[] = [
     path: 'Build ▾ → Related rates',
     when: graphEdit,
     run: (ctx) => ctx.actions.addRelatedRates(),
+  },
+  {
+    id: 'build-normal',
+    title: 'Normal distribution',
+    description: 'N(μ, σ) with a shaded probability, z-scores, percentiles and the empirical rule',
+    keywords: [
+      'normal', 'normal distribution', 'normal curve', 'bell curve', 'gaussian', 'z-score', 'z score',
+      'z-scores', 'empirical rule', '68 95 99.7', 'percentile', 'invnorm', 'normalcdf', 'probability',
+      'area under the curve', 'standard deviation', 'statistics', 'stats',
+    ],
+    group: 'Build',
+    path: 'Build ▾ → Normal distribution',
+    when: graphEdit,
+    run: (ctx) => ctx.actions.addNormal(),
+  },
+  {
+    id: 'build-simulation',
+    title: 'Sampling simulation',
+    description: 'Repeated samples (means or proportions), margin of error, and a randomisation test for two treatments',
+    keywords: [
+      'simulation', 'simulate', 'sampling', 'sampling distribution', 'sample mean', 'sample proportion',
+      'margin of error', 'confidence interval', 'randomization', 'randomisation', 'permutation test',
+      'compare treatments', 'experiment', 'p-value', 'p value', 'inference', 'dot plot', 'statistics', 'stats',
+    ],
+    group: 'Build',
+    path: 'Build ▾ → Simulation',
+    when: graphEdit,
+    run: (ctx) => ctx.actions.addSimulation(),
   },
   seeded('build-slope-field', 'dy/dx = ', 'Slope field', 'Type dy/dx = … and get its slope field; tap to draw solutions', [
     'slope field', 'slope fields', 'direction field', 'differential equation', 'diff eq', 'dy/dx', 'ode',
@@ -1657,6 +1687,12 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     { id: 'doc-new-nl' },
     { id: 'build-inequality' },
     { id: 'build-piecewise' },
+  ] },
+  { id: 'm3-stats', course: 'NC Math 3', title: 'Statistics: normal distributions and simulation', entries: [
+    { id: 'build-normal', note: 'Shade P(a < X < b), read the z-scores, find the value for a percentile; drag the peak for μ and a shoulder for σ' },
+    { id: 'build-normal', note: 'The empirical rule: μ ± σ, 2σ, 3σ with 68%, 95%, 99.7% (Show → empirical rule)' },
+    { id: 'build-simulation', note: 'Sample means or proportions, n × samples, with σ/√n, the margin of error and an interval estimate' },
+    { id: 'build-simulation', note: 'Compare treatments: paste two groups, re-randomise, read the p-value and the conclusion' },
   ] },
   // ---------------------------------------------------- Drawing & editing
   { id: 'draw', course: 'Drawing & editing', title: 'On the board', entries: [

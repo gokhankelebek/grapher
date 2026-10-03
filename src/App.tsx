@@ -49,6 +49,7 @@ import { useUnitCircle } from './app/useUnitCircle'
 import { useExamples } from './app/useExamples'
 import { useItemBank } from './app/useItemBank'
 import { useRelatedRates } from './app/useRelatedRates'
+import { useStats } from './app/useStats'
 import { useInequalitySystem } from './app/useInequalitySystem'
 import { useBoardOverlays } from './app/useBoardOverlays'
 import { useExtraHandles } from './app/useExtraHandles'
@@ -115,6 +116,7 @@ export default function App() {
   const examplesApi = useExamples({ docState, refs, derived, notices, persistence, viewport })
   const unitCircle = useUnitCircle({ board, refs, derived, notices, history, calc, viewport })
   const rates = useRelatedRates({ board, refs, notices, history, calc, viewport })
+  const statsApi = useStats({ board, refs, notices, history, calc, viewport })
   const system = useInequalitySystem({ board, refs, derived, history })
   const overlaysApi = useBoardOverlays({
     board, docState, session, derived, calc, tables, domain, system,
@@ -124,7 +126,7 @@ export default function App() {
   })
   const marks = useSelectionMarks({
     board, docState, session, refs, derived, fieldsApi, shapesApi, tables, builders, domain,
-    viewport, unitCircle, system, handlesApi,
+    viewport, unitCircle, system, handlesApi, statsApi,
   })
   const naming = useCurveNames({ board, docState, session, refs, derived, history, overlaysApi })
   const panel = useDomainPanel({ board, docState, refs, derived, calc, domain, naming })
@@ -138,7 +140,7 @@ export default function App() {
   })
   const exporter = useExport({
     board, docState, session, refs, derived, notices, calc, fieldsApi, shapesApi, tables,
-    unitCircle, rates, system, overlaysApi, marks, naming, lookApi, revealMode, describer,
+    unitCircle, rates, system, overlaysApi, marks, naming, lookApi, revealMode, describer, statsApi,
   })
   const figureSettings = useFigureSettings({
     board, docState, session, refs, derived, notices, history, viewport, lookApi,
@@ -146,7 +148,7 @@ export default function App() {
   const fileDrop = useFileDrop({ docState })
   const editors = useSidebarEditors({
     board, session, refs, notices, docActions, editing, fieldsApi, shapesApi, typed, tables,
-    numberLine, unitCircle, rates,
+    numberLine, unitCircle, rates, statsApi,
   })
   const itemBank = useItemBank({
     refs, derived, notices, persistence, overlaysApi, examples: examplesApi,
@@ -154,7 +156,7 @@ export default function App() {
   const commandsApi = useCommands({
     board, docState, session, refs, derived, notices, history, docActions, editing, calc, fieldsApi,
     typed, tables, domain, numberLine, viewport, unitCircle, rates, overlaysApi, naming, revealMode,
-    exporter, figureSettings, editors, examples: examplesApi, itemBank, describer,
+    exporter, figureSettings, editors, examples: examplesApi, itemBank, describer, statsApi,
   })
   useKeyboard({
     board, docState, session, refs, history, editing, calc, revealMode, figureSettings, editors,
@@ -169,7 +171,7 @@ export default function App() {
     curves, kind, items, styles, selectedId, sidebarOpen, setSidebarOpen, drawingActive,
     setDrawingActive, exprOpen, factorOpen, expOpen, logisticOpen, logOpen, sinOpen, transformOpen,
     piecewiseOpen, conicOpen, motionOpen, fields, armedField, shapes, dataSets, sequences, seqOpen,
-    unitCircles, relatedRates, boardGrid, figureStyle, figureCaption, previewFigure,
+    unitCircles, relatedRates, stats, boardGrid, figureStyle, figureCaption, previewFigure,
     setPreviewFigure, snapFlash, shake, toast, setToast, confirmAsk, setConfirmAsk,
   } = board
   const {
@@ -245,6 +247,7 @@ export default function App() {
   } = viewport
   const { addUnitCircle, ucFigures, unitCircleCardNodes } = unitCircle
   const { addRelatedRates, rrFigures, relatedRatesCardNodes } = rates
+  const { addNormal, addSimulation, statsFigs, statsCardNodes } = statsApi
   const { ineqSolution, systemCardNode } = system
   const { overlays, calcFor, betweenFor } = overlaysApi
   const { motionScalesFor, boardHandles, boardAnalysis, screenPolylines, screenShapes } = marks
@@ -396,6 +399,10 @@ export default function App() {
         onRelatedRatesAdd={addRelatedRates}
         relatedRatesCards={relatedRatesCardNodes}
         relatedRatesCount={kind === 'cartesian' ? relatedRates.length : 0}
+        onNormalAdd={addNormal}
+        onSimulationAdd={addSimulation}
+        statsCards={statsCardNodes}
+        statsCount={kind === 'cartesian' ? stats.length : 0}
         seqOpen={seqOpen}
         onSeqToggle={() => showBuilder('seq', 'toggle')}
         onSeqBuild={buildSequence}
@@ -599,6 +606,7 @@ export default function App() {
           scatter={scatterScene}
           unitCircles={ucFigures}
           relatedRates={rrFigures}
+          stats={statsFigs}
           signCharts={signFigures}
           inequalitySolution={ineqSolution}
           grid={boardGrid}
@@ -1032,6 +1040,7 @@ export default function App() {
           sequences.length === 0 &&
           unitCircles.length === 0 &&
           relatedRates.length === 0 &&
+          stats.length === 0 &&
           !drawingActive &&
           !loadNotice?.fatal && (
           <div className="empty-hint" aria-hidden="true">
