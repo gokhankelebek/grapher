@@ -53,7 +53,7 @@ const START: BoardDescription = { summary: 'Graph', figuredesc: 'Graph.', long: 
 export function useGraphDescription({ board, session, refs, derived, notices, persistence, overlaysApi }: GraphDescriptionDeps) {
   const {
     curves, items, kind, fields, shapes, dataSets, sequences, calcLinks, unitCircles, relatedRates,
-    historyTick, viewSubsRef, stats, valueTables,
+    historyTick, viewSubsRef, stats, valueTables, circleViews,
   } = board
   const { reveal, curvePalette } = session
   const { docMetaRef } = refs
@@ -111,7 +111,7 @@ export function useGraphDescription({ board, session, refs, derived, notices, pe
     schedule()
   }, [
     schedule, curves, items, kind, fields, shapes, dataSets, sequences, calcLinks, unitCircles,
-    relatedRates, historyTick, answers, curvePalette, stats, valueTables,
+    relatedRates, historyTick, answers, curvePalette, stats, valueTables, circleViews,
   ])
   useEffect(() => {
     const subs = viewSubsRef.current

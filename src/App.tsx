@@ -57,6 +57,7 @@ import { useSelectionMarks } from './app/useSelectionMarks'
 import { useCurveNames } from './app/useCurveNames'
 import { useDomainPanel } from './app/useDomainPanel'
 import { useValueTables } from './app/useValueTables'
+import { useCircleViews } from './app/useCircleViews'
 import { useBoardLook } from './app/useBoardLook'
 import { useRevealMode } from './app/useRevealMode'
 import { useCardCrossings } from './app/useCardCrossings'
@@ -120,7 +121,7 @@ export default function App() {
   const statsApi = useStats({ board, refs, notices, history, calc, viewport })
   const system = useInequalitySystem({ board, refs, derived, history })
   const overlaysApi = useBoardOverlays({
-    board, docState, session, derived, calc, tables, domain, system,
+    board, docState, session, derived, calc, tables, domain, system, shapesApi,
   })
   const handlesApi = useExtraHandles({
     board, docState, refs, derived, calc, fieldsApi, shapesApi, builders,
@@ -132,6 +133,7 @@ export default function App() {
   const naming = useCurveNames({ board, docState, session, refs, derived, history, overlaysApi })
   const panel = useDomainPanel({ board, docState, refs, derived, calc, domain, naming })
   const valueTablesApi = useValueTables({ board, docState, derived, notices, tables, naming })
+  const circleViewsApi = useCircleViews({ board, docState })
   const lookApi = useBoardLook({ board, session, refs, derived, calc, marks, naming })
   const revealMode = useRevealMode({
     board, docState, session, derived, editing, system, overlaysApi, panel, lookApi, shapesApi,
@@ -160,6 +162,7 @@ export default function App() {
     board, docState, session, refs, derived, notices, history, docActions, editing, calc, fieldsApi,
     typed, tables, domain, numberLine, viewport, unitCircle, rates, overlaysApi, naming, revealMode,
     exporter, figureSettings, editors, examples: examplesApi, itemBank, describer, statsApi, shapesApi,
+    circleViewsApi,
   })
   useKeyboard({
     board, docState, session, refs, history, editing, calc, revealMode, figureSettings, editors,
@@ -261,6 +264,7 @@ export default function App() {
   } = naming
   const { domainPanelFor, logInverseSources } = panel
   const { tablePanelFor, tableActions, tableFigs } = valueTablesApi
+  const { circlePanelFor, circleActions } = circleViewsApi
   const {
     captionText, screenTheme, look, boardFigure, boardCaption, boardTheme, lightBoard,
     boardCrossings,
@@ -456,6 +460,8 @@ export default function App() {
         setNotation={setNotation}
         tablePanelFor={tablePanelFor}
         tableActions={tableActions}
+        circlePanelFor={circlePanelFor}
+        circleActions={circleActions}
         depKeys={depKeys}
         exprNames={exprNames}
         onExpBuild={buildExponential}

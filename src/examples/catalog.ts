@@ -813,6 +813,25 @@ export const EXAMPLE_DEFS: readonly ExampleDef[] = [
     },
   },
   {
+    id: 'm2-triangle-centres',
+    course: 'math2',
+    unit: 'M2',
+    help: ['m2-centres'],
+    title: 'Centres of an obtuse triangle and the Euler line',
+    short: 'four centres and the Euler line',
+    note:
+      'ABC is obtuse at C, so the circumcentre O (2, −2) and the orthocentre H (0, 6) fall outside it while the centroid G (4/3, 2/3) and the incentre I stay inside. O, G and H lie on the Euler line y = −4x + 6 with HG = 2·GO. Ask the class to check O by showing OA = OB = OC = 2√5, then to drag C up until the triangle is acute and watch O and H move inside.',
+    keywords: [
+      'centroid', 'circumcenter', 'circumcentre', 'incenter', 'incentre', 'orthocenter', 'orthocentre', 'median',
+      'perpendicular bisector', 'angle bisector', 'altitude', 'circumscribed circle', 'inscribed circle',
+      'points of concurrency', 'euler line', 'obtuse', 'G-CO.10',
+    ],
+    build: (b) => {
+      b.frame([-6, 10], [-7, 7.5])
+      b.shape('ABC = (-2,0) (6,0) (0,2)', { centres: ['centroid', 'circumcentre', 'incentre', 'orthocentre', 'euler'] })
+    },
+  },
+  {
     id: 'm2-right-triangle-trig',
     course: 'math2',
     unit: 'M2',
@@ -963,6 +982,40 @@ export const EXAMPLE_DEFS: readonly ExampleDef[] = [
       b.frame([-4, 6], [-6, 2])
       const c = b.line('x^2 + y^2 - 2x + 4y - 4 = 0')
       b.view(c, { construction: true })
+    },
+  },
+  {
+    id: 'm3-inscribed-central',
+    course: 'math3',
+    unit: 'M3',
+    help: ['m3-geo'],
+    title: 'An inscribed angle is half the central angle',
+    short: 'inscribed and central angles',
+    note:
+      'P (3, 4), Q (−4, 3) and R (0, −5) are on x² + y² = 25. The central angle ∠POQ is 90° (OP · OQ = −12 + 12 = 0), so the inscribed angle ∠PRQ on the same arc is 45°. Ask the class to predict ∠PRQ before you reveal it, then to retype R as 100° (a point on arc PQ) and explain why the angle becomes 135°.',
+    keywords: ['inscribed angle', 'central angle', 'intercepted arc', 'chord', 'circle theorem', 'arc measure', 'G-C.2'],
+    build: (b) => {
+      b.frame([-8.5, 8.5], [-6.5, 6.5])
+      const c = b.line('x^2 + y^2 = 25')
+      b.circle(c, { pts: ['(3, 4)', '(-4, 3)', '(0, -5)'], show: ['angles'] })
+      b.select(c)
+    },
+  },
+  {
+    id: 'm3-arc-sector',
+    course: 'math3',
+    unit: 'M3',
+    help: ['m3-geo'],
+    title: 'Arc length and sector area in radians',
+    short: 'arc length and sector area',
+    note:
+      'The sector runs counterclockwise from P at 30° to Q at 150° on a circle of radius 6, so θ = 120° = 2π/3. The arc length is s = rθ = 6 · 2π/3 = 4π and the area A = ½r²θ = 12π — the same as (120/360) · 2π · 6 and (120/360) · π · 6². Ask the class why θ = s/r makes the radian the natural unit, and what s is on a circle of radius 12 with the same angle.',
+    keywords: ['arc length', 'sector', 'sector area', 'radian', 'radian measure', 'central angle', 's = rθ', 'proportion', 'G-C.5'],
+    build: (b) => {
+      b.frame([-9.5, 9.5], [-7.5, 7.5])
+      const c = b.line('x^2 + y^2 = 36')
+      b.circle(c, { pts: ['30°', '150°'], show: ['sector'] })
+      b.select(c)
     },
   },
 ]

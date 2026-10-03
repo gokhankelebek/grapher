@@ -479,7 +479,7 @@ describe('the gallery', () => {
     expect(g[0].units[0].id).toBe('calc-1')
     expect(g[0].units[0].title).toMatch(/^Unit 1 · Limits/)
     expect(g[2].units.map((u) => u.id)).toEqual(['m1-linexp', 'm1-quad', 'm1-systems', 'm1-functions', 'm1-coord', 'm1-stats', 'm1-bivariate'])
-    expect(g[3].units.map((u) => u.id)).toEqual(['m2-quad', 'm2-radical', 'm2-functions', 'm2-xform', 'm2-trig', 'm2-prob'])
+    expect(g[3].units.map((u) => u.id)).toEqual(['m2-quad', 'm2-radical', 'm2-functions', 'm2-xform', 'm2-centres', 'm2-trig', 'm2-prob'])
     expect(g[4].units.map((u) => u.id)).toEqual(['m3-ineq', 'm3-functions', 'm3-geo'])
     expect(g.flatMap((x) => x.units.flatMap((u) => u.examples)).length).toBe(EXAMPLE_DEFS.length)
   })

@@ -1046,6 +1046,11 @@ export function toPgfplots(sceneIn: BoardScene, opts: PgfplotsOptions = {}): str
         // The formula stays editable; its domain is the stretch of the window
         // where the line is near enough to be drawn (a steep tangent's y
         // would otherwise run past what TeX can hold).
+        if (ov.slope === Infinity || ov.slope === -Infinity) {
+          if (!(ov.at.x >= xmin && ov.at.x <= xmax)) break
+          add(`\\addplot[${col}${ov.dashed ? ', dashed' : ''}, forget plot] coordinates {${P(ov.at.x, ymin)} ${P(ov.at.x, ymax)}};`)
+          break
+        }
         const yAt = (x: number): number => ov.at.y + ov.slope * (x - ov.at.x)
         const cut = clipSegment(far, xmin, yAt(xmin), xmax, yAt(xmax))
         if (!cut || !(cut[2] > cut[0])) break

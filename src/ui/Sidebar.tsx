@@ -1,5 +1,7 @@
 import type { TablePanel } from './valueTableLinks'
 import type { TableActions } from './TableSection'
+import type { CirclePanel } from './circleLinks'
+import type { CircleActions } from './CircleSection'
 import type {
   BoardKind,
   EndCap,
@@ -396,6 +398,9 @@ interface Props {
   /** The selected explicit card's Table section (src/ui/TableSection.tsx). */
   tablePanelFor?(id: string): TablePanel | undefined
   tableActions?: TableActions
+  /** The selected circle's Circle theorems section (src/ui/CircleSection.tsx). */
+  circlePanelFor?(id: string): CirclePanel | undefined
+  circleActions?: CircleActions
 }
 
 const NO_DATA: BoardData[] = []
@@ -613,6 +618,8 @@ export function Sidebar({
   exprNames,
   tablePanelFor,
   tableActions,
+  circlePanelFor,
+  circleActions,
 }: Props) {
   const numberLine = kind === 'number-line'
   // `inert` on a display:contents wrapper: everything inside stops taking
@@ -900,6 +907,8 @@ export function Sidebar({
               setNotation={setNotation}
               tablePanel={curve.id === selectedId ? tablePanelFor?.(curve.id) : undefined}
               tableActions={tableActions}
+              circlePanel={curve.id === selectedId ? circlePanelFor?.(curve.id) : undefined}
+              circleActions={circleActions}
             />
           ))}
           {!numberLine && systemCard}

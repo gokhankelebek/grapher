@@ -9,6 +9,7 @@ import { useInk } from './inkContext'
 import { equationLabel } from '../core/mathSpeech'
 import type { ShapeMeasureSettings } from '../core/persist'
 import { ShapeMeasureSection } from './ShapeMeasureSection'
+import { ShapeCentresSection } from './ShapeCentresSection'
 import type { XformAid, XformOp } from '../core/types'
 import { CompareSection, ImageSection, SymmetrySection, TransformTool } from './ShapeXformSection'
 
@@ -446,6 +447,10 @@ export function ShapeCard({
               onMeasure={onMeasure}
               onAddShape={(src) => onAddShape?.(src) ?? null}
             />
+          )}
+
+          {data.centres && onMeasure && (
+            <ShapeCentresSection shapeId={shape.id} data={data.centres} settings={shape.measure} onMeasure={onMeasure} />
           )}
 
           {data.canTransform && onAddImage && (

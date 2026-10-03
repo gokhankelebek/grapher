@@ -320,7 +320,7 @@ export interface PointMeasure {
   tex: string
 }
 
-function pointMeasure(pt: Vec2, rx: Rat | null, ry: Rat | null): PointMeasure {
+export function pointMeasure(pt: Vec2, rx: Rat | null, ry: Rat | null): PointMeasure {
   const x = coordMeasure(pt.x, rx)
   const y = coordMeasure(pt.y, ry)
   return { pt, x, y, text: `(${x.text}, ${y.text})`, tex: `\\left(${x.tex}, ${y.tex}\\right)` }

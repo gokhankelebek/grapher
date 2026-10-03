@@ -74,10 +74,10 @@ import {
   cleanSignRows,
   docFromBoard,
 } from '../core/persist'
-import type { FigureStyleId, MeasureFlag, NLItem, XformAid } from '../core/types'
-import { MEASURE_FLAGS } from '../core/types'
+import type { CentreFlag, FigureStyleId, MeasureFlag, NLItem, XformAid } from '../core/types'
+import { CENTRE_FLAGS, MEASURE_FLAGS } from '../core/types'
 import { cleanXform } from '../core/persist'
-import type { ShapeMeasureSettings } from '../core/persist'
+import type { CircleView, ShapeMeasureSettings } from '../core/persist'
 import { parseXformCommand, resolveOp } from '../core/parse/xform'
 import type { BoardStat, DataDist, DataPlotSet } from '../core/statsPersist'
 import { newProb } from '../core/probPersist'
@@ -259,6 +259,15 @@ export class ExampleBoard {
   select(id: string): this {
     this.selected = id
     return this
+  }
+
+  /**
+   * A circle's Circle theorems section: points typed on it and the figures
+   * drawn — the card's own switches, with the points it would add.
+   */
+  circle(curveId: string, v: CircleView): this {
+    this.curve(curveId, 'circle theorems')
+    return this.view(curveId, { circle: { ...v, ...(v.pts ? { pts: v.pts.slice() } : {}), ...(v.show ? { show: v.show.slice() } : {}) } })
   }
 
   /** A curve's view settings: a conic's construction, a restricted line's ghost, … */
@@ -854,7 +863,10 @@ export class ExampleBoard {
    * toggles the lesson switches on (`measure`), and a polygon's symmetry
    * overlay (`sym`).
    */
-  shape(src: string, o: { fill?: boolean; color?: string; measure?: MeasureFlag[]; sym?: boolean } = {}): string {
+  shape(
+    src: string,
+    o: { fill?: boolean; color?: string; measure?: MeasureFlag[]; sym?: boolean; centres?: CentreFlag[] } = {},
+  ): string {
     this.requireGraph(src)
     const outcome = readShape(src)
     if (!outcome.ok) throw new Error(`example: “${src}” is not a shape: ${outcome.error}`)
@@ -869,6 +881,10 @@ export class ExampleBoard {
     }
     const measure = measureOf(o.measure)
     if (measure) shape.measure = measure
+    if (o.centres && o.centres.length > 0) {
+      if (outcome.kind !== 'polygon') throw new Error(`example: only a triangle has centres (“${src}”)`)
+      shape.measure = { ...(shape.measure ?? {}), centres: CENTRE_FLAGS.filter((f) => o.centres!.includes(f)) }
+    }
     if (o.sym) {
       if (outcome.kind !== 'polygon') throw new Error(`example: only a polygon has a symmetry overlay (“${src}”)`)
       shape.sym = true

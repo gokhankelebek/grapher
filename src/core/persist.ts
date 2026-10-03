@@ -24,8 +24,8 @@ import type {
   EndCap,
   Vec2,
 } from './types'
-import { FIGURE_STYLES, MEASURE_FLAGS, XFORM_AIDS } from './types'
-import type { MeasureFlag, XformAid, XformOp } from './types'
+import { CENTRE_FLAGS, FIGURE_STYLES, MEASURE_FLAGS, XFORM_AIDS } from './types'
+import type { CentreFlag, MeasureFlag, XformAid, XformOp } from './types'
 import { namedCallSites, parseExpression } from './parse'
 import type { FunctionEnv } from './functionEnv'
 import { parseSlopeField } from './parse/slopeField'
@@ -695,18 +695,23 @@ export interface ShapeMeasureSettings {
   show?: MeasureFlag[]
   /** A point's partner: another shape's id, or "id#k" for vertex k of it. */
   to?: string
+  /** A triangle's centres drawn on the board, in CENTRE_FLAGS order. Written only when one is on. */
+  centres?: CentreFlag[]
 }
 
 /** The toggles in canonical order, unknown ones dropped, each once. */
 export function cleanMeasure(m: unknown): ShapeMeasureSettings | undefined {
   if (!m || typeof m !== 'object') return undefined
-  const raw = m as { show?: unknown; to?: unknown }
+  const raw = m as { show?: unknown; to?: unknown; centres?: unknown }
   const flags = Array.isArray(raw.show) ? raw.show : []
   const show = MEASURE_FLAGS.filter((f) => flags.includes(f))
   const out: ShapeMeasureSettings = {}
   if (show.length > 0) out.show = show
   if (typeof raw.to === 'string' && raw.to.trim() !== '') out.to = raw.to
-  return out.show || out.to ? out : undefined
+  const cf = Array.isArray(raw.centres) ? raw.centres : []
+  const centres = CENTRE_FLAGS.filter((f) => cf.includes(f))
+  if (centres.length > 0) out.centres = centres
+  return out.show || out.to || out.centres ? out : undefined
 }
 
 // --- data tables --------------------------------------------------------------
@@ -1453,8 +1458,52 @@ export interface CurveView {
   reflect?: number
   /** The Table section's settings (see ValueTableView). Absent = every default. */
   table?: ValueTableView
+  /** A circle's Circle theorems section (see CircleView). Absent = never used. */
+  circle?: CircleView
 }
 export type CurveViews = Record<string, CurveView>
+
+/**
+ * What a circle's "Circle theorems" section draws (NC Math 3 G-C.2, G-C.5):
+ * figures built on points ON the circle, each kept as the teacher TYPED it
+ * ("30°", "pi/3", "(3, 4)") and named P, Q, R, S, U, V in order.
+ *
+ *   angles    the inscribed angle ∠PRQ and the central angle ∠POQ on arc PQ
+ *   tangent   the tangent at point `at` (absent: P), ⟂ the radius
+ *   sector    the sector counterclockwise from P to Q: arc length, area
+ *   chords    chords PQ and RS crossing at E: PE·EQ = RE·ES
+ *   external  the two tangents from the outside point T = `ext` (and the
+ *             secant through P)
+ *
+ * Every field absent at its default, so a circle nobody touched stores nothing.
+ */
+export type CircleFlag = 'angles' | 'tangent' | 'sector' | 'chords' | 'external'
+export const CIRCLE_FLAGS: readonly CircleFlag[] = ['angles', 'tangent', 'sector', 'chords', 'external']
+export interface CircleView {
+  pts?: string[]
+  show?: CircleFlag[]
+  at?: number
+  ext?: string
+}
+const MAX_CIRCLE_TEXT = 60
+const MAX_CIRCLE_PTS = 6
+
+/** One circle's settings with every default dropped, or null when nothing is left. */
+export function normalizeCircleView(v: unknown): CircleView | null {
+  if (!isObj(v)) return null
+  const out: CircleView = {}
+  if (Array.isArray(v.pts)) {
+    const pts = v.pts.filter((t): t is string => typeof t === 'string' && t.length <= MAX_CIRCLE_TEXT).slice(0, MAX_CIRCLE_PTS)
+    if (pts.length > 0) out.pts = pts
+  }
+  if (Array.isArray(v.show)) {
+    const show = CIRCLE_FLAGS.filter((f) => (v.show as unknown[]).includes(f))
+    if (show.length > 0) out.show = show
+  }
+  if (isNum(v.at) && Number.isInteger(v.at) && v.at > 0 && v.at < MAX_CIRCLE_PTS) out.at = v.at
+  if (typeof v.ext === 'string' && v.ext.trim() !== '' && v.ext.length <= MAX_CIRCLE_TEXT) out.ext = v.ext
+  return Object.keys(out).length > 0 ? out : null
+}
 
 /** A table column beyond x and f(x): Δy, Δ²y, the ratio, the average rate of change. */
 export type ValueTableCol = 'd1' | 'd2' | 'ratio' | 'avg'
@@ -1537,6 +1586,7 @@ export interface StoredCurveView {
   hlt?: number
   reflect?: number
   table?: ValueTableView
+  circle?: CircleView
 }
 
 /** A typed θ-bound longer than this is not a bound anybody typed. */
@@ -1570,6 +1620,8 @@ export function normalizeCurveView(v: CurveView | undefined | null): CurveView |
   if (isNum(v.reflect)) out.reflect = v.reflect
   const table = normalizeTableView(v.table)
   if (table) out.table = table
+  const circle = normalizeCircleView(v.circle)
+  if (circle) out.circle = circle
   return Object.keys(out).length > 0 ? out : null
 }
 
@@ -2468,6 +2520,13 @@ export function boardToStored(input: BoardInput): StoredBoard {
       if (v.hlt !== undefined) st.hlt = v.hlt
       if (v.reflect !== undefined) st.reflect = v.reflect
       if (v.table) st.table = { ...v.table, ...(v.table.cols ? { cols: v.table.cols.slice() } : {}) }
+      if (v.circle) {
+        st.circle = {
+          ...v.circle,
+          ...(v.circle.pts ? { pts: v.circle.pts.slice() } : {}),
+          ...(v.circle.show ? { show: v.circle.show.slice() } : {}),
+        }
+      }
       views[c.id] = st
       any = true
     }
@@ -4464,6 +4523,11 @@ function readStoredCurveView(raw: Record<string, unknown>): { view: CurveView | 
     const t = normalizeTableView(raw.table)
     if (t) v.table = t
     else if (!isObj(raw.table)) damaged = true
+  }
+  if (raw.circle !== undefined) {
+    const c = normalizeCircleView(raw.circle)
+    if (c) v.circle = c
+    else if (!isObj(raw.circle)) damaged = true
   }
   return { view: normalizeCurveView(v), damaged }
 }

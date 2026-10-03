@@ -3,6 +3,9 @@ import type { ReactNode } from 'react'
 import { CardSection } from './CardSection'
 import type { ConicSpec } from '../core/conics'
 import { Latex } from './Latex'
+import { circleSquareSteps } from '../core/conics'
+import { Answer } from './RevealAnswer'
+import { circleKey } from './reveal'
 import { ExpFacts, XField, badText } from './ExpEditor'
 import {
   CONIC_FIELD_LABEL,
@@ -518,9 +521,53 @@ interface SectionProps {
   /** The construction (foci, directrix, asymptotes, box) is figure content: drawn always, exported. */
   construction?: boolean
   onConstruction?(on: boolean): void
+  /** The typed line: a circle in general form shows its completed square, step by step. */
+  src?: string
+  /** The curve's id: the completed square is an answer under circle:<id>:square. */
+  curveId?: string
 }
 
-export function ConicSection({ info, onRestate, construction = false, onConstruction }: SectionProps) {
+/** A general-form circle, completed to standard form one written step at a time (G-GPE.1). */
+function SquareSteps({ src, curveId }: { src: string; curveId?: string }) {
+  const sq = useMemo(() => {
+    try {
+      return circleSquareSteps(src)
+    } catch {
+      return null
+    }
+  }, [src])
+  if (!sq) return null
+  const body = (
+    <>
+      <ol className="ci-steps">
+        {sq.steps.map((st, i) => (
+          <li key={i} className="ci-step">
+            <Latex tex={st.tex} />
+            <span className="ci-why">{st.why}</span>
+          </li>
+        ))}
+      </ol>
+      <div className="calc-fact calc-fact-lead">
+        Centre {sq.centreText}, radius r = √{sq.r2Text}
+        {sq.radiusText !== `√${sq.r2Text}` ? ` = ${sq.radiusText}` : ''}
+      </div>
+    </>
+  )
+  return (
+    <div className="secant-block" data-testid="conic-square-steps">
+      <div className="secant-block-title">Completing the square</div>
+      {curveId ? (
+        <Answer k={circleKey(curveId, 'square')} block what="the completed square">
+          {body}
+        </Answer>
+      ) : (
+        body
+      )}
+    </div>
+  )
+}
+
+export function ConicSection({ info, onRestate, construction = false, onConstruction, src, curveId }: SectionProps) {
   const [error, setError] = useState<string | null>(null)
   const spec: ConicSpec | null = info.kind === 'conic' ? info.spec : null
   useEffect(() => setError(null), [spec])
@@ -679,6 +726,7 @@ export function ConicSection({ info, onRestate, construction = false, onConstruc
               </button>
             </div>
           )}
+          {s.kind === 'circle' && info.general && src && <SquareSteps src={src} curveId={curveId} />}
           <ExpFacts sentences={features ? features.sentences : []} features={[]} testPrefix="conic" />
           {error && <div className="expr-error">{error}</div>}
           {onConstruction && s.kind !== 'circle' && (

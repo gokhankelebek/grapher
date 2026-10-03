@@ -249,7 +249,8 @@ export function toggleMeasure(settings: ShapeMeasureSettings | undefined, flag: 
   const out: ShapeMeasureSettings = {}
   if (show.length > 0) out.show = show
   if (settings?.to) out.to = settings.to
-  return out.show || out.to ? out : undefined
+  if (settings?.centres && settings.centres.length > 0) out.centres = [...settings.centres]
+  return out.show || out.to || out.centres ? out : undefined
 }
 
 /** Every toggle the card offers, on (or all off). */
@@ -262,7 +263,8 @@ export function setAllMeasure(
   const out: ShapeMeasureSettings = {}
   if (flags.length > 0) out.show = [...flags]
   if (settings?.to) out.to = settings.to
-  return out.show || out.to ? out : undefined
+  if (settings?.centres && settings.centres.length > 0) out.centres = [...settings.centres]
+  return out.show || out.to || out.centres ? out : undefined
 }
 
 /** A point's partner set (or cleared). */
@@ -274,7 +276,8 @@ export function setMeasureTo(settings: ShapeMeasureSettings | undefined, to: str
     // a fresh partner shows its distance, so choosing one visibly does something
     if (!settings?.to && !out.show) out.show = ['lengths', 'slopes', 'midpoints']
   }
-  return out.show || out.to ? out : undefined
+  if (settings?.centres && settings.centres.length > 0) out.centres = [...settings.centres]
+  return out.show || out.to || out.centres ? out : undefined
 }
 
 // ---------------------------------------------------------------------------
@@ -310,6 +313,8 @@ export function measureAnswerParts(
   if (on('area')) out.push('area')
   if (on('classify')) out.push('class')
   if (kind === 'segment' && on('equation')) out.push('line')
+  // a triangle's centres, in the order the card lists them
+  if (kind === 'polygon') for (const f of settings?.centres ?? []) out.push(f)
   return out
 }
 

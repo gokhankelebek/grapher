@@ -359,7 +359,8 @@ describe('the commands', () => {
   it('registers Transform, Compare and Symmetry, with a Math 2 help section', () => {
     for (const id of ['shape-transform', 'shape-compare', 'shape-symmetry']) expect(COMMAND_BY_ID.get(id)?.target).toBe('shape')
     expect(HELP_SECTIONS.some((s) => s.course === 'NC Math 2' && s.entries.some((e) => 'id' in e && e.id === 'shape-compare'))).toBe(true)
-    expect(COMMANDS.filter((c) => c.id.startsWith('shape-')).length).toBe(3)
+    // Transform, Compare, Symmetry — and Centres (tests/circleTheorems.test.ts)
+    expect(COMMANDS.filter((c) => c.id.startsWith('shape-')).length).toBe(4)
   })
 
   it('runs on the selected figure and asks which one otherwise', () => {

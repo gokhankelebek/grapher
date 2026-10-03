@@ -89,6 +89,8 @@ import { physicalViewport, recordScene } from './vectorExport'
 import type { Overlay } from '../render/overlays'
 import { viewStatesFrom } from './curveViews'
 import { tableFigures, tableOverlays } from './valueTableLinks'
+import { anyCentres, centreOverlays } from './centreLinks'
+import { circleOverlays } from './circleLinks'
 import { partnerPolylines, sequenceFigure } from './seqLinks'
 import { relatedRatesBox, relatedRatesFigure } from './relatedRatesLinks'
 import { maskRelatedRates, maskShapes, maskStats, maskValueTable } from './reveal'
@@ -395,14 +397,22 @@ export function docFigure(m: DocModel, o: FigureOptions): DocFigure {
     ? safe(() => tableFigures(curves, views.table, tableCtx), [])
     : []
   const valueTables = o.answers ? valueTablesAll : valueTablesAll.map(maskValueTable)
+  // A triangle's centres and a circle's theorems, as the App draws them.
+  const shapesCompiled = cartesian ? safe(() => compileShapes(board.shapes), null) : null
+  const centreMarks = shapesCompiled && anyCentres(board.shapes) ? safe(() => centreOverlays(board.shapes, shapesCompiled), []) : []
+  const circleMarks = cartesian && Object.values(views.circle).some((v) => v.show && v.show.length > 0)
+    ? safe(() => circleOverlays(curves, board.exprSources, views.circle), [])
+    : []
   // The ghost goes first (under everything else), as the App orders them.
-  const allOverlays: Overlay[] = [...domain, ...base, ...polarAreas, ...sysOverlays, ...(seq?.overlays ?? []), ...tableMarks]
+  const allOverlays: Overlay[] = [
+    ...domain, ...base, ...polarAreas, ...sysOverlays, ...(seq?.overlays ?? []), ...tableMarks, ...circleMarks, ...centreMarks,
+  ]
   // A student copy keeps no chip that states an answer (reveal mode's keys).
   const overlays = o.answers ? allOverlays : allOverlays.filter((ov) => !(ov.kind === 'label' && ov.answer))
   const shapes = cartesian
     ? [
         ...safe(() => {
-          const all = sceneShapes(board.shapes, compileShapes(board.shapes))
+          const all = sceneShapes(board.shapes, shapesCompiled ?? compileShapes(board.shapes))
           // A student copy asks for every measurement instead of stating it.
           return o.answers ? all : maskShapes(all, () => true)
         }, []),

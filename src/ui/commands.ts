@@ -87,6 +87,8 @@ export interface CurveFacts extends TargetFacts {
   table?: boolean
   /** A polynomial: its Table section can divide by (x − a). */
   poly?: boolean
+  /** A circle (typed or sketched): its card has the Circle theorems section. */
+  circle?: boolean
 }
 
 export interface SequenceFacts extends TargetFacts {
@@ -99,6 +101,8 @@ export interface ShapeFacts extends TargetFacts {
   kind: 'point' | 'segment' | 'vector' | 'polygon' | 'line' | null
   /** It is a transformation's image. */
   image: boolean
+  /** A triangle (three non-collinear vertices): its card has the Centres section. */
+  triangle?: boolean
 }
 
 export interface SolveFacts extends TargetFacts {
@@ -135,7 +139,9 @@ export interface CommandActions {
   toggleSeqSums(seqId: string): void
   solveShow(itemId: string, patch: { signs?: boolean; tests?: boolean }): void
   /** A shape's card, with one of its sections opened (Transform, Compare, Symmetry). */
-  openShapeTool?(shapeId: string, tool: 'transform' | 'compare' | 'symmetry'): void
+  openShapeTool?(shapeId: string, tool: 'transform' | 'compare' | 'symmetry' | 'centres'): void
+  /** A circle's card with its Circle theorems section open and one figure drawn. */
+  openCircleTool?(curveId: string, flag: 'angles' | 'tangent' | 'sector' | 'chords' | 'external'): void
   /** A function's card with its Table section open, at one of its tools. */
   openTableTool?(curveId: string, tool: TableTool): void
   solveGraph(itemId: string): void
@@ -970,6 +976,72 @@ export const COMMANDS: readonly Command[] = [
     run: (ctx, id) => {
       if (id) ctx.actions.openShapeTool?.(id, 'symmetry')
     },
+  },
+  {
+    id: 'shape-centres',
+    title: 'Triangle centres',
+    description: 'Centroid, circumcentre, incentre and orthocentre — exact where they can be — drawn with the medians, bisectors and altitudes, the two circles and the Euler line',
+    keywords: [
+      'centroid', 'circumcenter', 'circumcentre', 'incenter', 'incentre', 'orthocenter', 'orthocentre',
+      'triangle centers', 'triangle centres', 'points of concurrency', 'concurrency', 'medians', 'median',
+      'perpendicular bisector', 'perpendicular bisectors', 'angle bisector', 'angle bisectors', 'altitude',
+      'altitudes', 'circumscribed circle', 'circumcircle', 'inscribed circle', 'incircle', 'circumradius',
+      'inradius', 'euler line', 'G-CO.10', 'G-CO.14',
+    ],
+    group: 'Build',
+    path: 'Triangle card → Centres',
+    target: 'shape',
+    when: graphEdit,
+    accepts: (ctx, id) => ctx.shapes?.find((s) => s.id === id)?.triangle === true,
+    run: (ctx, id) => {
+      if (id) ctx.actions.openShapeTool?.(id, 'centres')
+    },
+  },
+  {
+    id: 'circle-angles',
+    title: 'Inscribed and central angles',
+    description: 'Points on a circle: the inscribed angle ∠PRQ is half the central angle ∠POQ on the same arc — 90° on a diameter',
+    keywords: [
+      'inscribed angle', 'central angle', 'intercepted arc', 'arc', 'chord', 'chords', 'circle theorems',
+      'circle theorem', 'semicircle', 'thales', 'angle in a semicircle', 'points on a circle', 'G-C.2',
+    ],
+    group: 'Build',
+    path: 'Circle card → Circle theorems → Inscribed & central angle',
+    target: 'curve',
+    when: graphEdit,
+    accepts: (ctx, id) => curveOf(ctx, id)?.circle === true,
+    run: (ctx, id) => id && ctx.actions.openCircleTool?.(id, 'angles'),
+  },
+  {
+    id: 'circle-tangent',
+    title: 'Tangent to a circle',
+    description: 'The tangent line at a point of a circle, its equation, and the right angle it makes with the radius',
+    keywords: [
+      'tangent to a circle', 'tangent line', 'tangent', 'radius perpendicular', 'perpendicular to the radius',
+      'point of tangency', 'tangents from a point', 'two tangents', 'tangent segments', 'secant', 'tangent secant',
+      'intersecting chords', 'chord chord', 'power of a point', 'G-C.2',
+    ],
+    group: 'Build',
+    path: 'Circle card → Circle theorems → Tangent',
+    target: 'curve',
+    when: graphEdit,
+    accepts: (ctx, id) => curveOf(ctx, id)?.circle === true,
+    run: (ctx, id) => id && ctx.actions.openCircleTool?.(id, 'tangent'),
+  },
+  {
+    id: 'circle-sector',
+    title: 'Arc length and sector area',
+    description: 'A sector of a circle shaded and its arc highlighted: θ in radians, s = rθ and A = ½r²θ, exact in π, with the degree-proportion forms',
+    keywords: [
+      'arc length', 'sector', 'sector area', 'area of a sector', 'radian', 'radians', 'radian measure',
+      's = r theta', 'central angle', 'proportional', 'degree to radian', 'G-C.5',
+    ],
+    group: 'Build',
+    path: 'Circle card → Circle theorems → Arc & sector',
+    target: 'curve',
+    when: graphEdit,
+    accepts: (ctx, id) => curveOf(ctx, id)?.circle === true,
+    run: (ctx, id) => id && ctx.actions.openCircleTool?.(id, 'sector'),
   },
   seeded('build-parallel-line', 'parallel to ', 'Line parallel or perpendicular through a point', 'Type parallel to AB through P (or perpendicular to …) — a line that follows A, B and P', [
     'parallel', 'perpendicular', 'parallel line', 'perpendicular line', 'through a point', 'slope criteria',
@@ -1946,6 +2018,13 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     { id: 'shape-compare', note: 'Congruent or similar, the motion that maps one onto the other, and SSS / SAS / ASA / AAS / HL or AA / SAS~ / SSS~ (never SSA)' },
     { id: 'shape-symmetry', note: 'The lines of symmetry and the rotation symmetry of a triangle, quadrilateral or regular polygon' },
   ] },
+  { id: 'm2-centres', course: 'NC Math 2', title: 'Centres of triangles (G-CO.10)', entries: [
+    { id: 'shape-centres', note: 'Centroid G where the medians meet, exact: ((x₁ + x₂ + x₃)/3, (y₁ + y₂ + y₃)/3); G is two-thirds of the way along each median' },
+    { id: 'shape-centres', note: 'Circumcentre O where the perpendicular bisectors meet, with the circle through the vertices and R exact; on a right triangle it is the midpoint of the hypotenuse' },
+    { id: 'shape-centres', note: 'Incentre I where the angle bisectors meet, with the inscribed circle and r = Area ÷ s' },
+    { id: 'shape-centres', note: 'Orthocentre H where the altitudes meet — outside an obtuse triangle, the altitudes extended; drag a vertex and watch O and H leave' },
+    { id: 'shape-centres', note: 'The Euler line through O, G and H with HG = 2·GO; an equilateral triangle has all four centres in one point' },
+  ] },
   { id: 'm2-trig', course: 'NC Math 2', title: 'Right triangle trigonometry (G-SRT.6–8, 12)', entries: [
     { id: 'build-shape', note: 'ABC = (0,0) (4,0) (4,3): the right angle, 4² + 3² = 5², and sin, cos and tan of each acute angle as side ratios (G-SRT.6–8)' },
     { id: 'build-shape', note: 'A 45-45-90 or 30-60-90 triangle is recognised, with its side ratio (G-SRT.12)' },
@@ -1959,7 +2038,11 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     { id: 'build-probability', note: 'Tree diagram: draw 2 from 3 red and 2 blue with or without replacement, or type the stages; path products by the Multiplication Rule and an event as a sum of paths (S-CP.4, 8)' },
   ] },
   { id: 'm3-geo', course: 'NC Math 3', title: 'Circles, conics and shapes', entries: [
-    { id: 'build-conic' },
+    { id: 'build-conic', note: 'Type x² + y² − 4x + 6y − 3 = 0: the Conic section completes the square step by step to (x − 2)² + (y + 3)² = 16 (G-GPE.1)' },
+    { id: 'circle-angles', note: 'Points on the circle typed as angles (30°, pi/6) or points: ∠PRQ = ½·∠POQ on the arc PQ, and 90° on a diameter (G-C.2)' },
+    { id: 'circle-tangent', note: 'The tangent at P ⟂ the radius OP, with its equation; tangents from an outside point are equal, TA² = TP·TP′ for a secant, and PE·EQ = RE·ES for crossing chords (G-C.2)' },
+    { id: 'circle-sector', note: 'θ = 2π/3 on r = 6: s = rθ = 4π and A = ½r²θ = 12π, and the same as (120/360)·2πr — radians as arc per unit of radius (G-C.5)' },
+    { id: 'shape-centres', note: 'A triangle’s centroid, circumcentre, incentre and orthocentre, for proofs with coordinates (G-CO.14)' },
     { id: 'build-shape' },
   ] },
   { id: 'm3-ineq', course: 'NC Math 3', title: 'Equations, inequalities and systems', entries: [

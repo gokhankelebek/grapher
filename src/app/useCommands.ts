@@ -22,6 +22,9 @@ import type {
 } from '../ui/commands'
 import { OPEN_SECTION_EVENT, rememberSection } from '../ui/CardSection'
 import type { ShapesApi } from './useShapes'
+import type { CircleViewsApi } from './useCircleViews'
+import { circleOf, toggleCircleFlag } from '../ui/circleLinks'
+import { toggleCentre } from '../ui/centreLinks'
 import { curveLegend } from '../ui/present'
 import { MAX_RECENT_COMMANDS, updatePrefs } from '../ui/storage'
 import type { BoardStateApi } from './useBoardState'
@@ -86,9 +89,11 @@ export interface CommandsDeps {
   describer: GraphDescriptionApi
   statsApi?: StatsApi
   shapesApi?: ShapesApi
+  /** The circles' Circle theorems settings. Optional: tests may omit it. */
+  circleViewsApi?: CircleViewsApi
 }
 
-export function useCommands({ board, docState, session, refs, derived, notices, history, docActions, editing, calc, fieldsApi, typed, tables, domain, numberLine, viewport, unitCircle, rates, overlaysApi, naming, revealMode, exporter, figureSettings, editors, examples, itemBank, describer, statsApi, shapesApi }: CommandsDeps) {
+export function useCommands({ board, docState, session, refs, derived, notices, history, docActions, editing, calc, fieldsApi, typed, tables, domain, numberLine, viewport, unitCircle, rates, overlaysApi, naming, revealMode, exporter, figureSettings, editors, examples, itemBank, describer, statsApi, shapesApi, circleViewsApi }: CommandsDeps) {
   const {
     curves, kind, items, selectedId, setSelectedId, sidebarOpen, setSidebarOpen, lens, fields,
     shapes, dataSets, sequences, boardGrid, figureStyle, previewFigure, setPreviewFigure,
@@ -182,6 +187,7 @@ export function useCommands({ board, docState, session, refs, derived, notices, 
         // the Table section: any function of x that is not a region
         table: c.kind === 'explicit' && !broken && typeof spec?.inequality !== 'function',
         poly: c.kind === 'explicit' && !broken && typeof spec?.inequality !== 'function' && polyOf(c, models) !== null,
+        circle: !broken && circleOf(c, exprSources[c.id]) !== null,
       }
     })
   }, [
@@ -249,12 +255,33 @@ export function useCommands({ board, docState, session, refs, derived, notices, 
     },
     openShapeTool: (id, tool) => {
       revealSidebar()
-      const section = tool === 'transform' ? 'shape-transform' : tool === 'compare' ? 'shape-compare' : 'shape-symmetry'
+      const section =
+        tool === 'transform' ? 'shape-transform' : tool === 'compare' ? 'shape-compare' : tool === 'centres' ? 'shape-centres' : 'shape-symmetry'
       rememberSection(section, true)
       setSelectedId(id)
       if (tool === 'symmetry') shapesApi?.toggleSymmetry(id, true)
+      if (tool === 'centres') {
+        // nothing drawn yet: draw the four centres, so the command visibly does something
+        const sh = shapes.find((x) => x.id === id)
+        if (sh && !(sh.measure?.centres && sh.measure.centres.length > 0)) {
+          let next = sh.measure
+          for (const f of ['centroid', 'circumcentre', 'incentre', 'orthocentre'] as const) next = toggleCentre(next, f)
+          shapesApi?.setShapeMeasure(id, next, 'show triangle centres')
+        }
+      }
       // a card already open keeps its sections' state: tell this one to open
       window.requestAnimationFrame(() => window.dispatchEvent(new CustomEvent(OPEN_SECTION_EVENT, { detail: section })))
+    },
+    openCircleTool: (id, flag) => {
+      revealSidebar()
+      rememberSection('circle-geo', true)
+      setSelectedId(id)
+      const c = curves.find((x) => x.id === id)
+      const view = board.circleViews[id]
+      if (c && !view?.show?.includes(flag)) {
+        circleViewsApi?.setCircleView(id, toggleCircleFlag(view, flag, circleOf(c, exprSources[id])))
+      }
+      window.requestAnimationFrame(() => window.dispatchEvent(new CustomEvent(OPEN_SECTION_EVENT, { detail: 'circle-geo' })))
     },
     solveGraph: (id) => {
       const err = graphSolve(id)
@@ -361,6 +388,7 @@ export function useCommands({ board, docState, session, refs, derived, notices, 
                   color: sh.color,
                   kind: card?.kind ?? null,
                   image: sh.xform !== undefined,
+                  triangle: card?.centres != null,
                 }
               })
             : [],

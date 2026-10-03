@@ -150,7 +150,7 @@ export type Overlay =
       curveId?: string
       /** A point the line passes through, in math units. */
       at: Vec2
-      /** dy/dx in math units. */
+      /** dy/dx in math units; ±Infinity is the vertical line x = at.x. */
       slope: number
       dashed?: boolean
       color?: string
@@ -784,7 +784,28 @@ function drawLine(
   stroke: number,
 ): void {
   const { at, slope } = ov
-  if (!Number.isFinite(at.x) || !Number.isFinite(at.y) || !Number.isFinite(slope)) return
+  if (!Number.isFinite(at.x) || !Number.isFinite(at.y)) return
+  if (slope === Infinity || slope === -Infinity) {
+    // A vertical line x = at.x (a tangent at the side of a circle, an Euler
+    // line on an isosceles triangle's axis): top to bottom of the overdraw band.
+    const x = sx(fr, at.x)
+    if (!Number.isFinite(x) || x < fr.bx0 || x > fr.bx1) return
+    const alphaV = typeof ov.alpha === 'number' && Number.isFinite(ov.alpha) ? clamp(ov.alpha, 0, 1) : 1
+    const wV = typeof ov.width === 'number' && Number.isFinite(ov.width) && ov.width > 0 ? ov.width : MARK_LINE_WIDTH
+    ctx.globalAlpha = alphaV
+    ctx.strokeStyle = color
+    ctx.lineWidth = wV * stroke
+    ctx.lineCap = 'butt'
+    if (ov.dashed) ctx.setLineDash([7 * stroke, 5 * stroke])
+    ctx.beginPath()
+    ctx.moveTo(x, fr.by0)
+    ctx.lineTo(x, fr.by1)
+    ctx.stroke()
+    if (ov.dashed) ctx.setLineDash([])
+    ctx.globalAlpha = 1
+    return
+  }
+  if (!Number.isFinite(slope)) return
   const pad = 0.1 * vp.widthPx
   const x0 = mathX(fr, -pad)
   const x1 = mathX(fr, vp.widthPx + pad)

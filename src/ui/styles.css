@@ -9958,3 +9958,72 @@ button.calc-field-btn {
   color: var(--danger-text);
   font-weight: 600;
 }
+
+/* ---- triangle centres (src/ui/ShapeCentresSection.tsx) ---- */
+
+.centre-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: var(--sp-1);
+  vertical-align: 1px;
+}
+
+.centre-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--sp-2);
+  align-items: baseline;
+}
+
+.centre-name {
+  min-width: 9.5em;
+  color: var(--muted);
+}
+
+.centre-fact {
+  color: var(--muted);
+}
+
+/* ---- circle theorems (src/ui/CircleSection.tsx) and completing the square ---- */
+
+.ci-circle {
+  margin-bottom: var(--sp-1);
+}
+
+.ci-point {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--sp-2);
+  align-items: center;
+}
+
+.ci-input {
+  font-variant-numeric: tabular-nums;
+}
+
+.ci-coords {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.ci-remove {
+  margin-left: auto;
+  padding: 0 var(--sp-2);
+}
+
+.ci-steps {
+  margin: var(--sp-1) 0;
+  padding-left: 1.4em;
+}
+
+.ci-step {
+  margin: 2px 0 6px;
+}
+
+.ci-why {
+  display: block;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}

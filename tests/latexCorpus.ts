@@ -509,6 +509,37 @@ export function corpusDocs(): CorpusDoc[] {
     )
   }
 
+  // ---- triangle centres: an obtuse triangle with every centre and the Euler
+  // line (O and H outside, the altitudes extended), an isosceles triangle
+  // whose Euler line is vertical, an equilateral one (G = O = I = H)
+  {
+    const all = ['centroid', 'circumcentre', 'incentre', 'orthocentre', 'euler'] as const
+    const sh = (id: string, src: string, color: string) => ({ id, src, params: [], color, fill: false, visible: true, measure: { centres: [...all] } })
+    const shapes = [
+      sh('T1', 'ABC = (-2,0) (6,0) (0,2)', '#4f9cf9'),
+      sh('T2', 'DEF = (-9,-4) (-5,-4) (-7,1)', '#f97316'),
+      sh('T3', 'JKL = (8,-4) (10,-4) (9,-4+sqrt(3))', '#22c55e'),
+    ]
+    out.push(doc('centres', 'Triangle centres: G, O, I, H & the Euler line', input({ shapes, viewport: { center: { x: 0, y: -0.5 }, pxPerUnit: 26 } })))
+  }
+
+  // ---- circle theorems: inscribed and central angles, a vertical tangent,
+  // a sector with its arc (exact π), crossing chords, tangents from T with a
+  // secant; and a circle typed in general form (completing the square)
+  {
+    const l = lines({ C1: 'x^2 + y^2 = 36', C2: 'x^2 + y^2 - 4x + 6y - 3 = 0' })
+    out.push(
+      doc('circles', 'Circle theorems: ∠PRQ = ½∠POQ, s = rθ', input({
+        ...l, selectedId: 'C1',
+        viewport: { center: { x: 2, y: -1 }, pxPerUnit: 26 },
+        curveViews: {
+          C1: { circle: { pts: ['30°', '150°', '270°', '90°', '0'], show: ['angles', 'tangent', 'sector', 'chords', 'external'], at: 4, ext: '(10, 0)' } },
+          C2: { circle: { pts: ['(2, 1)', 'pi'], show: ['sector'] } },
+        },
+      })),
+    )
+  }
+
   return out
 }
 
@@ -670,7 +701,8 @@ export function declaredPreamble(tex: string): string[] {
 /** The graphs whose bank blocks are compiled (every family a stem figure can be). */
 export const BANK_DOCS: readonly string[] = [
   'explicit', 'caption', 'sketch', 'piecewise', 'piaxes', 'areas', 'tangent', 'secant', 'signchart',
-  'slopefield', 'polar', 'param', 'series', 'shapes', 'measure', 'xform', 'implicit', 'data', 'lp',
+  'slopefield', 'polar', 'param', 'series', 'shapes', 'measure', 'xform', 'implicit', 'data', 'lp', 'centres',
+  'circles',
 ]
 
 /** Stems as the bank holds them, graphed by "Graph from item" and copied back. */

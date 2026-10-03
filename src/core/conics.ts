@@ -1045,6 +1045,130 @@ function pText(p: number, t: Texts): string {
   return numSrc(p, lit ? lit.text.includes('.') : false)
 }
 
+// ----------------------------------------------------------------------------
+// circleSquareSteps — the general form of a circle, completed to standard
+// form one written step at a time (NC Math 3 G-GPE.1):
+//
+//   x² + y² − 4x + 6y − 3 = 0
+//   (x² − 4x) + (y² + 6y) = 3                       group, move the constant
+//   (x² − 4x + 4) + (y² + 6y + 9) = 3 + 4 + 9       add (b/2)² to both sides
+//   (x − 2)² + (y + 3)² = 16                        factor the squares
+//   centre (2, −3), r = √16 = 4
+//
+// Only for a circle whose coefficients are fractions (as typed); a common
+// x², y² coefficient is divided out first. Null otherwise.
+// ----------------------------------------------------------------------------
+
+export interface SquareStep {
+  tex: string
+  /** What was done to reach this line. */
+  why: string
+}
+
+export interface CircleSquare {
+  steps: SquareStep[]
+  h: number
+  k: number
+  r2: number
+  /** "(2, −3)" */
+  centreText: string
+  /** "4", "√10" */
+  radiusText: string
+  /** "16" */
+  r2Text: string
+}
+
+/** A fraction in TeX, with its sign: "-\frac{3}{2}", "4". */
+function ratTexOf(r: Rat): string {
+  const neg = r[0] < 0 ? '-' : ''
+  const n = Math.abs(r[0])
+  return r[1] === 1 ? `${neg}${n}` : `${neg}\\frac{${n}}{${r[1]}}`
+}
+
+/** A fraction as Unicode text: "−3/2", "4". */
+function ratUni(r: Rat): string {
+  return `${r[0] < 0 ? MINUS : ''}${Math.abs(r[0])}${r[1] === 1 ? '' : `/${r[1]}`}`
+}
+
+/** " + 6y", " - 4x", " + \frac{1}{2}x" — a linear term after another term. */
+function termTex(c: Rat, v: string): string {
+  if (c[0] === 0) return ''
+  const sign = c[0] < 0 ? ' - ' : ' + '
+  const a: Rat = [Math.abs(c[0]), c[1]]
+  const coef = a[0] === 1 && a[1] === 1 ? '' : ratTexOf(a)
+  return `${sign}${coef}${v}`
+}
+
+/** "x - 2", "y + \frac{3}{2}", "x" — the bracket (v − h). */
+function shiftTex(v: string, h: Rat): string {
+  if (h[0] === 0) return v
+  return h[0] > 0 ? `${v} - ${ratTexOf(h)}` : `${v} + ${ratTexOf(rNeg(h))}`
+}
+
+export function circleSquareSteps(src: string): CircleSquare | null {
+  const got = functionOf(src)
+  if (!got.ok || !got.implicit) return null
+  const q = quadOf(got.f)
+  if (!q) return null
+  const [A, B, C, D, E, F] = q
+  if (A === 0 || B !== 0 || Math.abs(A - C) > 1e-12 * Math.abs(A)) return null
+  const ra = snapRat(A)
+  const rd = snapRat(D)
+  const re = snapRat(E)
+  const rf = snapRat(F)
+  if (!ra || !rd || !re || !rf) return null
+  const d = rDiv(rd, ra)
+  const e = rDiv(re, ra)
+  const f = rDiv(rf, ra)
+  if (!d || !e || !f) return null
+  const half: Rat = [1, 2]
+  const h = rMul(rNeg(d), half)
+  const k = rMul(rNeg(e), half)
+  if (!h || !k) return null
+  const ax = rMul(h, h) // (d/2)²
+  const ay = rMul(k, k)
+  const rhs0 = rNeg(f)
+  if (!ax || !ay) return null
+  const r2a = rAdd(rhs0, ax)
+  const r2 = r2a && rAdd(r2a, ay)
+  if (!r2 || r2[0] <= 0) return null
+
+  const steps: SquareStep[] = []
+  const lead = (a: Rat): string => (a[0] === 1 && a[1] === 1 ? '' : a[0] === -1 && a[1] === 1 ? '-' : ratTexOf(a))
+  const constTex = (c: Rat): string => (c[0] === 0 ? '' : c[0] < 0 ? ` - ${ratTexOf(rNeg(c))}` : ` + ${ratTexOf(c)}`)
+  const general = `${lead(ra)}x^{2}${termTex(ra, 'y^{2}')}${termTex(rd, 'x')}${termTex(re, 'y')}${constTex(rf)} = 0`
+  steps.push({ tex: general, why: 'The equation in general form, everything on the left' })
+  if (!(ra[0] === 1 && ra[1] === 1)) {
+    steps.push({
+      tex: `x^{2} + y^{2}${termTex(d, 'x')}${termTex(e, 'y')}${constTex(f)} = 0`,
+      why: `Divide every term by ${ratUni(ra)}, so x² and y² each have coefficient 1`,
+    })
+  }
+  const grp = (v: string, c: Rat): string => (c[0] === 0 ? `${v}^{2}` : `\\left(${v}^{2}${termTex(c, v)}\\right)`)
+  steps.push({
+    tex: `${grp('x', d)} + ${grp('y', e)} = ${ratTexOf(rhs0)}`,
+    why: 'Group the x-terms and the y-terms; move the constant to the right',
+  })
+  const fill = (v: string, c: Rat, add: Rat): string =>
+    c[0] === 0 ? `${v}^{2}` : `\\left(${v}^{2}${termTex(c, v)} + ${ratTexOf(add)}\\right)`
+  const adds = [d[0] !== 0 ? ax : null, e[0] !== 0 ? ay : null].filter((x): x is Rat => x !== null)
+  if (adds.length > 0) {
+    const whyParts: string[] = []
+    if (d[0] !== 0) whyParts.push(`(${ratUni(d)}/2)² = ${ratUni(ax)}`)
+    if (e[0] !== 0) whyParts.push(`(${ratUni(e)}/2)² = ${ratUni(ay)}`)
+    steps.push({
+      tex: `${fill('x', d, ax)} + ${fill('y', e, ay)} = ${ratTexOf(rhs0)}${adds.map((a) => ` + ${ratTexOf(a)}`).join('')}`,
+      why: `Complete each square: add half the coefficient, squared, to both sides — ${whyParts.join(', ')}`,
+    })
+  }
+  const sq = (v: string, c: Rat): string => (c[0] === 0 ? `${v}^{2}` : `\\left(${shiftTex(v, c)}\\right)^{2}`)
+  steps.push({ tex: `${sq('x', h)} + ${sq('y', k)} = ${ratTexOf(r2)}`, why: 'Each bracket is a perfect square: (x − h)² + (y − k)² = r²' })
+  const r2v = r2[0] / r2[1]
+  const radiusText = sqrtUni(r2v)
+  const centreText = `(${ratUni(h)}, ${ratUni(k)})`
+  return { steps, h: h[0] / h[1], k: k[0] / k[1], r2: r2v, centreText, radiusText, r2Text: ratUni(r2) }
+}
+
 export function readConic(src: string): ConicSpec | null {
   const got = functionOf(src)
   if (!got.ok || !got.implicit) return null

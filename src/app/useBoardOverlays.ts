@@ -24,6 +24,9 @@ import type { Overlay } from '../ui/renderBoard'
 import { seriesOverlays } from '../ui/seqLinks'
 import { signRange } from '../ui/signChartLinks'
 import { tableOverlays } from '../ui/valueTableLinks'
+import { anyCentres, centreOverlays } from '../ui/centreLinks'
+import { circleOverlays } from '../ui/circleLinks'
+import type { ShapesApi } from './useShapes'
 import { keepStableEntries } from '../ui/stableProps'
 import type { ExportFormat } from '../ui/vectorExport'
 import { betweenCardInfo } from './between'
@@ -46,10 +49,13 @@ export interface BoardOverlaysDeps {
   tables: DataTablesApi
   domain: DomainLensApi
   system: InequalitySystemApi
+  /** The shapes' compiled geometry: a triangle's centres. Optional: tests may omit it. */
+  shapesApi?: ShapesApi
 }
 
-export function useBoardOverlays({ board, docState, session, derived, calc, tables, domain, system }: BoardOverlaysDeps) {
-  const { curves, kind, motionPlay, motionPlayRef, lens, calcLinks, sequences, playEpoch, valueTables } = board
+export function useBoardOverlays({ board, docState, session, derived, calc, tables, domain, system, shapesApi }: BoardOverlaysDeps) {
+  const { curves, kind, motionPlay, motionPlayRef, lens, calcLinks, sequences, playEpoch, valueTables, shapes, circleViews } = board
+  const shapeCompiled = shapesApi?.shapeCompiled
   const { exprSources, displaySources, names, calls, inverses } = docState
   const { markersOn, canvasTheme, exportFormat, latexWidthCm, exportSettings, curvePalette } = session
   const { models, depKeys, contextAnalysis } = derived
@@ -207,6 +213,33 @@ export function useBoardOverlays({ board, docState, session, derived, calc, tabl
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind, valueTables, curves, models, names, depKeys])
 
+  /**
+   * A triangle's centres (Centres section): medians, bisectors, altitudes,
+   * the circles and the Euler line, with the coordinates as answer chips.
+   * FIGURE: it exports.
+   */
+  const centreMarks = useMemo<Overlay[]>(() => {
+    if (kind !== 'cartesian' || !shapeCompiled || !anyCentres(shapes)) return []
+    try {
+      return centreOverlays(shapes, shapeCompiled)
+    } catch {
+      return []
+    }
+  }, [kind, shapes, shapeCompiled])
+
+  /**
+   * A circle's Circle theorems: points, chords, angle marks, the tangent, the
+   * sector, the tangents from T. FIGURE: it exports.
+   */
+  const circleMarks = useMemo<Overlay[]>(() => {
+    if (kind !== 'cartesian' || !Object.values(circleViews).some((v) => v.show && v.show.length > 0)) return []
+    try {
+      return circleOverlays(curves, exprSources, circleViews)
+    } catch {
+      return []
+    }
+  }, [kind, curves, exprSources, circleViews])
+
   /** Σ aₙ on the board: staircase bars, the joined sums, the band, y = S. */
   const seriesMarks = useMemo<Overlay[]>(
     () => (kind === 'cartesian' && sequences.some((q) => q.series) ? seriesOverlays(sequences, seqCompiled) : []),
@@ -237,13 +270,17 @@ export function useBoardOverlays({ board, docState, session, derived, calc, tabl
         ? overlaysFor(calcLinks, curves, models, bandSpan, { sources: implicitSources, box: implicitBox }, depKeys)
         : []
     const more =
-      motionAreaOverlays.length + domainOverlays.length + sysOverlays.length + seriesMarks.length + tableMarks.length
+      motionAreaOverlays.length + domainOverlays.length + sysOverlays.length + seriesMarks.length + tableMarks.length +
+      centreMarks.length + circleMarks.length
     if (more === 0) return base
     // The ghost goes first (under everything else); the marks sort themselves
     // onto the curves by kind.
-    return [...domainOverlays, ...base, ...motionAreaOverlays, ...sysOverlays, ...seriesMarks, ...tableMarks]
+    return [
+      ...domainOverlays, ...base, ...motionAreaOverlays, ...sysOverlays, ...seriesMarks, ...tableMarks,
+      ...circleMarks, ...centreMarks,
+    ]
     // depKeys: a secant, limit or volume on p(x) = h(x) + 1 moves when h is retyped.
-  }, [kind, calcLinks, curves, models, motionAreaOverlays, bandSpan, domainOverlays, sysOverlays, seriesMarks, tableMarks, implicitSources, implicitBox, depKeys])
+  }, [kind, calcLinks, curves, models, motionAreaOverlays, bandSpan, domainOverlays, sysOverlays, seriesMarks, tableMarks, circleMarks, centreMarks, implicitSources, implicitBox, depKeys])
   const overlaysRef = useRef<Overlay[]>(overlays)
   overlaysRef.current = overlays
 

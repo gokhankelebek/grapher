@@ -28,6 +28,7 @@ import type { CurvePalette } from '../core/a11yPalette'
 import { solveOf } from './nlSolve'
 import { viewStatesFrom } from './curveViews'
 import { tableSentences } from './valueTableLinks'
+import { circleSentences } from './circleLinks'
 
 export interface BoardDescription extends GraphDescription {
   /** One short sentence for the board's accessible name (aria-label). */
@@ -106,13 +107,18 @@ function cartesian(m: DocModel, o: DescribeBoardOptions): BoardDescription {
         sources: m.sources,
       })
     : []
+  // A circle's Circle theorems: what is drawn always, what it states as answers.
+  const circles = Object.keys(views.circle).length > 0
+    ? circleSentences(m.board.curves, m.board.exprSources, views.circle)
+    : []
+  const added = [...tables, ...circles]
   const input: AdapterInput = {
     ...base,
     // The board's cards show every equation, so the description states them.
     curves: base.curves.filter((c) => !hide.has(c.curve.id)).map((c) => ({ ...c, shows: { equation: true } })),
     ...(calc.length > 0 ? { calc } : {}),
-    ...(tables.length > 0
-      ? { extras: [...(base.extras ?? []), ...tables.map((t) => ({ text: t.text, ...(t.answer ? { answer: true } : {}) }))] }
+    ...(added.length > 0
+      ? { extras: [...(base.extras ?? []), ...added.map((t) => ({ text: t.text, ...(t.answer ? { answer: true } : {}) }))] }
       : {}),
   }
   const others =

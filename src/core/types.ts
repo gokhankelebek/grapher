@@ -670,7 +670,7 @@ export type Shape =
   | ({ kind: 'point'; id: string; at: Vec2; color: string; visible: boolean; label?: string; measure?: ShapeMeasureDraw } & ShapeXformDraw)
   | ({ kind: 'segment'; id: string; a: Vec2; b: Vec2; color: string; visible: boolean; labels?: [string, string]; measure?: ShapeMeasureDraw } & ShapeXformDraw)
   | { kind: 'vector'; id: string; tail: Vec2; v: Vec2; color: string; visible: boolean; label?: string }
-  | ({ kind: 'polygon'; id: string; pts: readonly Vec2[]; color: string; visible: boolean; fill?: boolean; labels?: readonly string[]; measure?: ShapeMeasureDraw } & ShapeXformDraw)
+  | ({ kind: 'polygon'; id: string; pts: readonly Vec2[]; color: string; visible: boolean; fill?: boolean; labels?: readonly string[]; measure?: ShapeMeasureDraw; centres?: readonly CentreFlag[] } & ShapeXformDraw)
   /** A whole line through `through` along `dir` — "parallel to AB through P" (a linked line). */
   | ({ kind: 'line'; id: string; through: Vec2; dir: Vec2; color: string; visible: boolean; measure?: ShapeMeasureDraw } & ShapeXformDraw)
 
@@ -761,6 +761,28 @@ export interface ShapeMeasureDraw {
   /** A line's equation chip. */
   equation?: string | null
 }
+
+// ============================================================================
+// Triangle centres (NC Math 2 G-CO.10, Math 3 G-CO.14).
+//
+//   src/core/triangleCentres.ts  centroid, circumcentre (+ R), incentre (+ r),
+//                                orthocentre, exact where they can be; the
+//                                construction points; the Euler line; notes
+//                                that are true of THIS triangle
+//   BoardShape.measure.centres   which are drawn (stored only when set)
+//   Shape (polygon).centres      the same flags on the scene shape, so the
+//                                description can state them
+//   src/ui/centreLinks.ts        → Overlay[]: medians, perpendicular
+//                                bisectors + circumcircle, angle bisectors +
+//                                incircle, altitudes (extended when obtuse),
+//                                the Euler line; the coordinates are answer
+//                                chips (reveal mode, student copies)
+// ============================================================================
+
+export type CentreFlag = 'centroid' | 'circumcentre' | 'incentre' | 'orthocentre' | 'euler'
+
+/** The order centre toggles are listed and stored in. */
+export const CENTRE_FLAGS: readonly CentreFlag[] = ['centroid', 'circumcentre', 'incentre', 'orthocentre', 'euler']
 
 // ============================================================================
 // Transformations of shapes (NC Math 2 G-CO.2–8, G-SRT.1–3, F-IF.1–2).

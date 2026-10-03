@@ -16,6 +16,7 @@
 // ============================================================================
 
 import type { Asymptote, FittedCurve, ModelSpec, Shape, SpecialPoint, Vec2 } from './types'
+import { triangleCentres } from './triangleCentres'
 import { pointText as geoPoint, polygonReport, segmentReport, withApprox, distance, slope as geoSlope, midpoint as geoMid } from './geometry'
 import { analyzeCurve, intersectionPoints } from './analyze'
 import { findAsymptotes, findHoles } from './holes'
@@ -788,6 +789,7 @@ export function describeShapes(list: readonly Shape[]): DescribeExtra[] {
         if (!r) continue
         const what = POLY_WORD[s.pts.length] ?? 'Polygon'
         out.push({ text: `${what} ${r.names.join('')} has vertices ${vertexList(r.names, s.pts)}.`, ...(s.image ? { answer: true } : {}) })
+        if (s.centres && s.centres.length > 0 && s.pts.length === 3) out.push(...centreSentences(s.pts, s.labels, s.centres))
         const m = s.measure
         if (!m) continue
         if (m.right?.some((x) => x)) {
@@ -845,6 +847,43 @@ export function describeShapes(list: readonly Shape[]): DescribeExtra[] {
     } catch {
       /* a shape that cannot be described is left out, never the description */
     }
+  }
+  return out
+}
+
+/** What a triangle's centres say: what is drawn (always) and where they are (answers). */
+function centreSentences(pts: readonly Vec2[], labels: readonly string[] | undefined, flags: readonly string[]): DescribeExtra[] {
+  const t = triangleCentres(pts, labels)
+  if (!t) return []
+  const out: DescribeExtra[] = []
+  const tri = `△${t.names.join('')}`
+  const drawn: Record<string, string> = {
+    centroid: 'the medians and the centroid G',
+    circumcentre: 'the perpendicular bisectors, the circumscribed circle and the circumcentre O',
+    incentre: 'the angle bisectors, the inscribed circle and the incentre I',
+    orthocentre: 'the altitudes and the orthocentre H',
+    euler: 'the Euler line',
+  }
+  const list = flags.map((f) => drawn[f]).filter((x): x is string => !!x)
+  if (list.length > 0) {
+    const words = list.length === 1 ? list[0] : `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`
+    out.push({ text: `${capitalFirst(words)} of ${tri} are drawn.` })
+  }
+  const where = (k: 'centroid' | 'circumcentre' | 'incentre' | 'orthocentre'): string => {
+    const c = t[k]
+    return `the ${c.name} ${c.letter} is ${c.exact ? 'at' : 'at about'} ${c.pt.text}${c.where === 'outside' ? ', outside the triangle' : ''}`
+  }
+  const facts: string[] = []
+  if (flags.includes('centroid')) facts.push(where('centroid'))
+  if (flags.includes('circumcentre')) facts.push(`${where('circumcentre')} with circumradius ${withApprox(t.circumradius).replace(/^≈/, 'about')}`)
+  if (flags.includes('incentre')) facts.push(`${where('incentre')} with inradius ${withApprox(t.inradius).replace(/^≈/, 'about')}`)
+  if (flags.includes('orthocentre')) facts.push(where('orthocentre'))
+  if (facts.length > 0) out.push({ text: `${capitalFirst(facts.join('; '))}.`, answer: true })
+  if (flags.includes('euler')) {
+    out.push({
+      text: t.euler ? `O, G and H lie on the Euler line ${t.euler.line.slopeIntercept.text}, and ${t.euler.ratioText}.` : `${tri} is equilateral: all four centres coincide.`,
+      answer: true,
+    })
   }
   return out
 }

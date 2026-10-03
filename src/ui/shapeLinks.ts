@@ -39,6 +39,8 @@ import { buildImage, compareCard, shapeLabels, shapePoints, symmetryAids, transf
 import { figureNames } from '../core/transform2d'
 import type { CompareCardData, XformReport } from './shapeXform'
 import { fieldParamMeta } from './fieldLinks'
+import { triangleCentres } from '../core/triangleCentres'
+import type { TriangleCentres } from '../core/triangleCentres'
 import { coord } from './fieldLinks'
 import type { LegendEntry } from './present'
 
@@ -144,6 +146,8 @@ export interface CompiledShape {
   xform?: XformReport
   /** A polygon with its symmetry overlay on: the lines and turns it draws. */
   sym?: SymmetryReport | null
+  /** A triangle's centres (src/core/triangleCentres.ts); null when its points are collinear. */
+  centres?: TriangleCentres | null
 }
 
 /**
@@ -277,7 +281,18 @@ export function compileShapes(shapes: readonly BoardShape[]): Map<string, Compil
       sym = got.report
       if (got.aids) shape = { ...shape, aids: { ...(shape.aids ?? {}), ...got.aids } }
     }
-    out.set(s.id, { ...c, shape, reports, ...(sym !== undefined ? { sym } : {}) })
+    // A triangle's centres: every triangle's card states them; the flags say which are drawn.
+    let centres: TriangleCentres | null | undefined
+    if (shape.kind === 'polygon' && shape.pts.length === 3) {
+      try {
+        centres = triangleCentres(shape.pts, shape.labels)
+      } catch {
+        centres = null
+      }
+      const flags = s.measure?.centres
+      if (flags && flags.length > 0) shape = { ...shape, centres: flags }
+    }
+    out.set(s.id, { ...c, shape, reports, ...(sym !== undefined ? { sym } : {}), ...(centres !== undefined ? { centres } : {}) })
   }
   return out
 }
@@ -689,6 +704,8 @@ export interface ShapeCardData {
   symmetry: SymmetryReport | null
   /** Compare with another figure (segments and polygons). */
   compare: CompareCardData | null
+  /** A triangle's centres (null for anything else, or three collinear points). */
+  centres: TriangleCentres | null
 }
 
 export function shapeCard(
@@ -751,6 +768,7 @@ export function shapeCard(
     figureLabel: c?.xform ? c.xform.imageName : fig ? figureLabelOf(fig) : '',
     symmetry: fig && fig.kind === 'polygon' ? (c?.sym !== undefined ? c.sym : symmetryAids(fig).report) : null,
     compare: fig && fig.kind !== 'point' ? compareCard(fig, shape.id, boardList(compiled), shape.compare) : null,
+    centres: c?.centres ?? null,
   }
 }
 

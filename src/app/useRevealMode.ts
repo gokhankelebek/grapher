@@ -7,6 +7,7 @@
 // ============================================================================
 
 import { tableKeysOf } from '../ui/valueTableLinks'
+import { circleKeysOf } from '../ui/circleLinks'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { asymptoteTexts } from '../ui/CurveCard'
 import { solveCached, solveXs } from '../ui/nlSolve'
@@ -66,8 +67,9 @@ export interface RevealModeDeps {
 export function useRevealMode({ board, docState, session, derived, editing, system, overlaysApi, panel, lookApi, shapesApi }: RevealModeDeps) {
   const {
     curves, kind, items, selectedId, calcLinks, fields, sequences, unitCircles, relatedRates, stats, shapes,
-    dataSets, valueTables,
+    dataSets, valueTables, circleViews,
   } = board
+  const { exprSources } = docState
   const shapeCompiled = shapesApi?.shapeCompiled
   const { docMeta } = docState
   const { reveal, setReveal, revealRef, revealByDocRef, revealFreshRef } = session
@@ -138,7 +140,8 @@ export function useRevealMode({ board, docState, session, derived, editing, syst
           inverse: domainPanel?.role === 'function',
           calc: calcLinks.filter((l) => l.parentId === c.id).map((l) => l.id),
           // The Table section's answers, for a table the teacher set up.
-          extra: c.kind === 'explicit' ? tableKeysOf(c.id, valueTables[c.id]) : [],
+          // …and a circle's Circle theorems (and its completed square).
+          extra: c.kind === 'explicit' ? tableKeysOf(c.id, valueTables[c.id]) : circleKeysOf(c, exprSources[c.id], circleViews[c.id]),
         }
       }),
       crossings,
@@ -146,7 +149,7 @@ export function useRevealMode({ board, docState, session, derived, editing, syst
     })
     // depKeys: a curve that calls another moves when it does.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reveal.on, kind, items, curves, selectedId, models, analysis, analysisFor, domainPanel, calcLinks, crossings, sequences, fields, unitCircles, relatedRates, stats, sysCard, depKeys, shapes, shapeCompiled, dataSets, valueTables])
+  }, [reveal.on, kind, items, curves, selectedId, models, analysis, analysisFor, domainPanel, calcLinks, crossings, sequences, fields, unitCircles, relatedRates, stats, sysCard, depKeys, shapes, shapeCompiled, dataSets, valueTables, circleViews, exprSources])
   const revealInvRef = useRef(revealInv)
   revealInvRef.current = revealInv
 

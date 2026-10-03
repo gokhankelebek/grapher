@@ -59,6 +59,9 @@ import { ImplicitSection } from './ImplicitSection'
 import { CardSection } from './CardSection'
 import { InequalitySection } from './InequalitySection'
 import { TableSection } from './TableSection'
+import { CircleSection } from './CircleSection'
+import type { CircleActions } from './CircleSection'
+import type { CirclePanel } from './circleLinks'
 import type { TableActions } from './TableSection'
 import type { TablePanel } from './valueTableLinks'
 import { setRowText } from './domainLinks'
@@ -286,6 +289,13 @@ interface Props {
    */
   tablePanel?: TablePanel
   tableActions?: TableActions
+  /**
+   * The Circle theorems section (src/ui/CircleSection.tsx): points on the
+   * circle, inscribed / central angles, the tangent, arc and sector. Only the
+   * selected circle's card is handed one; absent = no section.
+   */
+  circlePanel?: CirclePanel
+  circleActions?: CircleActions
 }
 
 /**
@@ -829,6 +839,8 @@ export function CurveCard({
   depKey,
   tablePanel,
   tableActions,
+  circlePanel,
+  circleActions,
 }: Props) {
   const ink = useInk()
   const spec: ModelSpec | undefined = models[curve.modelId]
@@ -2573,6 +2585,8 @@ export function CurveCard({
           {conic && (
             <ConicSection
               info={conic}
+              src={exprSource}
+              curveId={curve.id}
               onRestate={onConicRestate}
               construction={conicConstruction ?? false}
               onConstruction={onConicConstruction}
@@ -2861,6 +2875,9 @@ export function CurveCard({
               </div>
             </CardSection>
           )}
+
+          {/* Circle theorems: points on the circle and what they make. */}
+          {circlePanel && circleActions && <CircleSection panel={circlePanel} actions={circleActions} />}
 
           {/* The table of values: what f does at the x's a class picks. */}
           {tablePanel && tableActions && <TableSection panel={tablePanel} actions={tableActions} />}

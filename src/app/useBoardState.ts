@@ -17,7 +17,7 @@ import type { ExpSpec } from '../core/exponential'
 import type { FactoredSpec } from '../core/factored'
 import type { LogSpec } from '../core/logarithmic'
 import type { LogisticSpec } from '../core/logistic'
-import type { BoardGrid, BoardIneqSystem, StyleMap, ValueTableView } from '../core/persist'
+import type { BoardGrid, BoardIneqSystem, CircleView, StyleMap, ValueTableView } from '../core/persist'
 import type { SinSpec } from '../core/sinusoidal'
 import type { TransformSpec } from '../core/transform'
 import type { BoardKind, FigureStyleId, FittedCurve, ModelSpec, NLItem, Vec2 } from '../core/types'
@@ -190,6 +190,14 @@ export function useBoardState() {
   const [valueTables, setValueTables] = useState<Record<string, ValueTableView>>({})
   const valueTablesRef = useRef(valueTables)
   valueTablesRef.current = valueTables
+  /**
+   * A circle's Circle theorems section, per circle (its points as typed and
+   * what is drawn). Saved with the document (board.curveViews); never an undo
+   * step, like the Table section.
+   */
+  const [circleViews, setCircleViews] = useState<Record<string, CircleView>>({})
+  const circleViewsRef = useRef(circleViews)
+  circleViewsRef.current = circleViews
   /** The per-curve view maps, as one value (src/ui/curveViews.ts). */
   const readViewStates = useCallback(
     (): ViewStates => ({
@@ -199,6 +207,7 @@ export function useBoardState() {
       motion: motionPlayRef.current,
       lens: lensRef.current,
       table: valueTablesRef.current,
+      circle: circleViewsRef.current,
     }),
     [],
   )
@@ -228,14 +237,20 @@ export function useBoardState() {
       valueTablesRef.current = next.table
       setValueTables(next.table)
     }
+    if (next.circle !== circleViewsRef.current) {
+      circleViewsRef.current = next.circle
+      setCircleViews(next.circle)
+    }
   }, [])
   /** What the document's curveViews map says, as a string that ignores the particle. */
   const curveViewsSig = useMemo(
     () =>
       curveViewsKey(
-        collectCurveViews({ construction, showParent, factorThrough, motion: motionPlay, lens, table: valueTables }),
+        collectCurveViews({
+          construction, showParent, factorThrough, motion: motionPlay, lens, table: valueTables, circle: circleViews,
+        }),
       ),
-    [construction, showParent, factorThrough, motionPlay, lens, valueTables],
+    [construction, showParent, factorThrough, motionPlay, lens, valueTables, circleViews],
   )
   const [extraModels, setExtraModels] = useState<Record<string, ModelSpec>>({})
   /**
@@ -433,6 +448,7 @@ export function useBoardState() {
     setPiecewiseOpen, conicOpen, setConicOpen, conicDragRef, construction, setConstruction,
     motionOpen, setMotionOpen, motionPlay, setMotionPlay, motionPlayRef, transformDragRef,
     showParent, setShowParent, lens, setLens, lensRef, valueTables, setValueTables, valueTablesRef,
+    circleViews, setCircleViews, circleViewsRef,
     readViewStates, writeViewStates,
     curveViewsSig, extraModels, setExtraModels, calcLinks, setCalcLinks, fields, setFields,
     armedField, setArmedField, setArmedBetween, armedBetweenRef, shapes, setShapes, dataSets,
