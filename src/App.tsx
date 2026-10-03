@@ -18,6 +18,7 @@ import { Sidebar } from './ui/Sidebar'
 import { Toolbar } from './ui/Toolbar'
 import { WorksheetEditor } from './ui/WorksheetEditor'
 import { ExampleGallery } from './ui/ExampleGallery'
+import { CopyForBankDialog, GraphFromItemDialog } from './ui/ItemBankDialogs'
 import { TeacherNote } from './ui/TeacherNote'
 import { useBoardState } from './app/useBoardState'
 import { useDocumentState } from './app/useDocumentState'
@@ -40,6 +41,7 @@ import { useNumberLine } from './app/useNumberLine'
 import { useViewport } from './app/useViewport'
 import { useUnitCircle } from './app/useUnitCircle'
 import { useExamples } from './app/useExamples'
+import { useItemBank } from './app/useItemBank'
 import { useRelatedRates } from './app/useRelatedRates'
 import { useInequalitySystem } from './app/useInequalitySystem'
 import { useBoardOverlays } from './app/useBoardOverlays'
@@ -137,10 +139,13 @@ export default function App() {
     board, session, refs, notices, docActions, editing, fieldsApi, shapesApi, typed, tables,
     numberLine, unitCircle, rates,
   })
+  const itemBank = useItemBank({
+    refs, derived, notices, persistence, overlaysApi, examples: examplesApi,
+  })
   const commandsApi = useCommands({
     board, docState, session, refs, derived, notices, history, docActions, editing, calc, fieldsApi,
     typed, tables, domain, numberLine, viewport, unitCircle, rates, overlaysApi, naming, revealMode,
-    exporter, figureSettings, editors, examples: examplesApi,
+    exporter, figureSettings, editors, examples: examplesApi, itemBank,
   })
   useKeyboard({
     board, docState, session, refs, history, editing, calc, revealMode, figureSettings, editors,
@@ -175,6 +180,10 @@ export default function App() {
   const { undo, redo, editStart, editEnd, editCancel, commitWithSnap } = history
   const { saveNow, reloadCurrentDoc, docNote } = persistence
   const { galleryOpen, openGallery, closeGallery, openExample, foldedNotes, setNoteFolded } = examplesApi
+  const {
+    bankOpen, openBankCopy, closeBankCopy, itemOpen, openGraphFromItem, closeGraphFromItem,
+    buildBankFigure, copyBankText, downloadTex, graphItem,
+  } = itemBank
   const {
     worksheetOpen, setWorksheetOpen, openWorksheet, renameDoc, newDocument, setBoardKind,
     openDocument, saveBoardAsNewDoc, copyName, makeSharedCopy, duplicateDocument, openShareDialog,
@@ -660,6 +669,7 @@ export default function App() {
               onImport={importDocument}
               onWorksheet={openWorksheet}
               onExamples={openGallery}
+              onGraphFromItem={openGraphFromItem}
               onShare={openShareDialog}
               shared={shared ? (shared.viewOnly ? 'view' : 'edit') : null}
               onMakeCopy={() => makeSharedCopy('asked')}
@@ -737,6 +747,7 @@ export default function App() {
                 physicalSizeOf={physicalSizeOf}
                 onCopyLatex={copyLatex}
                 latexCopyState={latexCopyState}
+                onItemBank={kind === 'cartesian' ? openBankCopy : undefined}
                 axisUnits={kind === 'cartesian' ? axisUnitChoice : null}
                 resolvedAxisUnits={axisUnits}
                 onAxisUnit={setAxisUnit}
@@ -999,6 +1010,17 @@ export default function App() {
         )}
 
         {galleryOpen && <ExampleGallery onOpen={openExample} onClose={closeGallery} />}
+        {bankOpen && (
+          <CopyForBankDialog
+            docName={docMeta.name}
+            graph={kind === 'cartesian'}
+            build={buildBankFigure}
+            copy={copyBankText}
+            download={downloadTex}
+            onClose={closeBankCopy}
+          />
+        )}
+        {itemOpen && <GraphFromItemDialog graph={graphItem} onClose={closeGraphFromItem} />}
 
         {shareDialog && (
           <ShareDialog

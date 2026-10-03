@@ -153,6 +153,8 @@ interface Props {
   /** Put the LaTeX source on the clipboard. */
   onCopyLatex?(): void
   latexCopyState?: CopyState
+  /** Open "Copy for item bank…" (a graph only). */
+  onItemBank?(): void
 }
 
 /** The three states, in the order the segment shows them. */
@@ -195,6 +197,7 @@ export function ExportMenu({
   physicalSizeOf,
   onCopyLatex,
   latexCopyState = { kind: 'idle' },
+  onItemBank,
 }: Props) {
   const [open, setOpen] = useState(false)
   const size = sizeOf(settings)
@@ -427,6 +430,25 @@ export function ExportMenu({
             </svg>
             {latex && copyState.kind === 'idle' ? 'Copy as picture' : copyLabel}
           </button>
+
+          {onItemBank && (
+            <button
+              className="exp-item"
+              onClick={() => {
+                setOpen(false)
+                onItemBank()
+              }}
+              disabled={!hasContent}
+              data-testid="export-item-bank"
+              title="The figure as a block for an AP item bank record: %%% figure=tikz, its figuredesc and the picture"
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <rect x="2.4" y="2.4" width="11.2" height="11.2" rx="1.6" stroke="currentColor" strokeWidth="1.4" />
+                <path d="M5 6h6M5 8.5h6M5 11h3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+              </svg>
+              Copy for item bank…
+            </button>
+          )}
 
           {axisUnits && (
             <>

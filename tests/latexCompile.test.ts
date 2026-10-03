@@ -20,11 +20,11 @@
 
 import { describe, expect, it } from 'vitest'
 import { execFileSync, spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { cpus, homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { CorpusTex } from './latexCorpus'
-import { STYLES, corpusDocs, declaredPreamble, figureExports, loadModels, sheetExports } from './latexCorpus'
+import { STYLES, bankExports, bankPreamble, corpusDocs, declaredPreamble, figureExports, loadModels, sheetExports } from './latexCorpus'
 import { docFigure, recordFigure } from '../src/ui/docScene'
 import { keyLineTokens } from '../src/ui/renderBoard'
 import { toPgfplots } from '../src/ui/pgfplotsExport'
@@ -128,10 +128,40 @@ interface Job {
  * very preamble. Worksheets get a document each, on the page they were laid
  * out for.
  */
+/**
+ * Item-bank blocks are compiled the way they will be used: PASTED (not
+ * \input) into a record's stem — or, for a key figure, its key — inside a
+ * problem with choices, in a document that loads the bank's own package (a
+ * stand-in, tests/fixtures/apitem.sty, on the packages the real one requires)
+ * and the preamble the block's comment line names. \keybuild, so the key's
+ * body is typeset too.
+ */
+function bankDocument(pre: readonly string[], part: readonly CorpusTex[]): string {
+  const body: string[] = []
+  for (const t of part) {
+    body.push(`\\typeout{${MARK} ${t.name}}`, '\\begin{problem}', '\\begin{stem}', 'The figure is shown below.')
+    if (t.format === 'bank-stem') body.push(t.tex.trimEnd(), 'On which interval is $f$ increasing?')
+    body.push('\\end{stem}', '\\begin{choices}', '\\choice $(-1, 1)$', '\\choice $(1, \\infty)$', '\\end{choices}')
+    body.push('\\begin{key}', 'Read it off the figure.')
+    if (t.format === 'bank-key') body.push(t.tex.trimEnd())
+    body.push('\\end{key}', '\\end{problem}', '\\clearpage')
+  }
+  return ['\\documentclass{article}', '\\usepackage{apitem}', ...pre, '\\pagestyle{empty}', '\\begin{document}', '\\keybuild', ...body, '\\end{document}', ''].join('\n')
+}
+
 function writeJobs(dir: string, texs: readonly CorpusTex[]): Job[] {
   const groups = new Map<string, CorpusTex[]>()
   const jobs: Job[] = []
+  copyFileSync(new URL('./fixtures/apitem.sty', import.meta.url), join(dir, 'apitem.sty'))
   for (const t of texs) {
+    if (t.format === 'bank-stem' || t.format === 'bank-key') {
+      writeFileSync(join(dir, `${t.name}.tex`), t.tex)
+      const key = `bank\n${bankPreamble(t.tex).join('\n')}`
+      const g = groups.get(key) ?? []
+      g.push(t)
+      groups.set(key, g)
+      continue
+    }
     writeFileSync(join(dir, `${t.name}.tex`), t.tex)
     const pre = declaredPreamble(t.tex)
     if (t.format === 'sheet-tikz' || t.format === 'sheet-pgfplots') {
@@ -164,6 +194,12 @@ function writeJobs(dir: string, texs: readonly CorpusTex[]): Job[] {
     const pre = key.split('\n').slice(1).filter((l) => l !== '')
     for (let i = 0; i < g.length; i += CHUNK) {
       const part = g.slice(i, i + CHUNK)
+      if (key.startsWith('bank\n')) {
+        const file = `doc-bank-${++n}.tex`
+        writeFileSync(join(dir, file), bankDocument(pre, part))
+        jobs.push({ file, figures: part.map((t) => t.name) })
+        continue
+      }
       const file = `doc-${part[0].format}-${++n}.tex`
       const body: string[] = []
       for (const t of part) {
@@ -185,7 +221,8 @@ const docs = corpusDocs()
 const models = loadModels(docs)
 const figures = figureExports(models)
 const sheets = sheetExports(models)
-const all = [...figures, ...sheets]
+const banks = bankExports(models)
+const all = [...figures, ...sheets, ...banks]
 
 describe('the LaTeX corpus', () => {
   it('covers every feature family in every style, as TikZ and pgfplots, and worksheets', () => {
@@ -196,10 +233,25 @@ describe('the LaTeX corpus', () => {
   })
 
   it('every export declares its preamble in its header, and it starts with the package it draws with', () => {
-    for (const t of all) {
+    for (const t of [...figures, ...sheets]) {
       const pre = declaredPreamble(t.tex)
       expect(pre.length, t.name).toBeGreaterThan(0)
       expect(pre.some((l) => /\\usepackage\{(tikz|pgfplots)\}/.test(l)), t.name).toBe(true)
+    }
+  })
+})
+
+describe('the item-bank blocks', () => {
+  it('cover every bank graph and every stem, student and key, and name their preamble', () => {
+    expect(banks.length).toBeGreaterThanOrEqual(60)
+    expect(banks.some((b) => b.format === 'bank-key')).toBe(true)
+    for (const b of banks) {
+      const lines = b.tex.split('\n')
+      expect(lines[0], b.name).toBe('%%% figure=tikz')
+      expect(lines[1], b.name).toMatch(/^%%% figuredesc="[^"\n]+"$/)
+      const pre = bankPreamble(b.tex)
+      expect(pre[0], b.name).toBe('\\usepackage{tikz}')
+      if (b.name.includes('pgfplots')) expect(pre, b.name).toContain('\\usepackage{pgfplots}')
     }
   })
 })
@@ -269,7 +321,7 @@ describe.skipIf(!PDFLATEX)('pdflatex compiles every export', () => {
       if (report.length > 0) {
         console.log(`LaTeX: ${report.length} note(s) (overfull boxes / warnings), see ${join(OUT, 'findings.txt')}:\n  ${report.slice(0, 30).join('\n  ')}`)
       }
-      console.log(`LaTeX: compiled ${all.length} exports (${docs.length} documents × ${STYLES.length} styles, ${sheets.length} worksheets) in ${jobs.length} documents → ${OUT}`)
+      console.log(`LaTeX: compiled ${all.length} exports (${docs.length} documents × ${STYLES.length} styles, ${sheets.length} worksheets, ${banks.length} item-bank blocks in apitem stems) in ${jobs.length} documents → ${OUT}`)
       expect(failing, failing.slice(0, 40).join('\n')).toEqual([])
     },
     600_000,

@@ -1,0 +1,50 @@
+% apitem.sty — a minimal stand-in for the AP Calculus item bank's package,
+% for tests/latexCompile.test.ts: the environments a bank record uses (stem,
+% choices / \choice, key, distractors, problem) on the same packages the real
+% one requires — amsmath, amssymb, enumitem, xcolor, environ — so a figure
+% block pasted into a stem is compiled in the company it will keep.
+
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{apitem}[2026/10/02 Grapher test stand-in for the item bank environments]
+
+\RequirePackage{amsmath,amssymb}
+\RequirePackage{enumitem}
+\RequirePackage{xcolor}
+\RequirePackage{environ}
+
+\newif\ifapkeys
+\apkeysfalse
+\newcommand{\studentbuild}{\apkeysfalse}
+\newcommand{\keybuild}{\apkeystrue}
+
+\newcounter{approblem}
+\newenvironment{problem}
+  {\refstepcounter{approblem}\par\medskip\noindent\textbf{\theapproblem.}\ }
+  {\par\medskip}
+
+\newenvironment{stem}{}{\par}
+
+\newcounter{apchoice}[approblem]
+\newcommand{\choice}{\stepcounter{apchoice}\item[(\Alph{apchoice})]}
+\newenvironment{choices}
+  {\setcounter{apchoice}{0}%
+   \begin{list}{}{\setlength{\leftmargin}{2.2em}\setlength{\itemsep}{0.35em}\setlength{\topsep}{0.5em}}}
+  {\end{list}}
+
+\NewEnviron{key}{%
+  \ifapkeys
+    \par\smallskip\noindent
+    {\small\textbf{Key.}\ \BODY}\par
+  \fi
+}
+
+\NewEnviron{distractors}{%
+  \ifapkeys
+    \par\smallskip\noindent{\small\textbf{Distractors.}}
+    {\small\begin{list}{}{\setlength{\leftmargin}{3em}\setlength{\itemsep}{0.15em}}
+    \BODY
+    \end{list}}
+  \fi
+}
+
+\endinput

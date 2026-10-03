@@ -19,6 +19,7 @@ import { useCallback, useState } from 'react'
 import { createDoc, deserializeDoc, docFromBoard, emptyBoard } from '../core/persist'
 import type { DocMeta } from '../core/persist'
 import { buildExample, exampleById, exampleCopyName } from '../examples'
+import type { ExampleWindow } from '../examples'
 import { listDocs, setCurrentDoc, writeDoc } from '../ui/storage'
 import type { DocumentStateApi } from './useDocumentState'
 import type { BoardRefsApi } from './useBoardRefs'
@@ -52,35 +53,27 @@ export function useExamples({ docState, refs, derived, notices, persistence, vie
   const openGallery = useCallback((): void => setGalleryOpen(true), [])
   const closeGallery = useCallback((): void => setGalleryOpen(false), [])
 
-  /** Open example `id` as a new document copy. False when nothing was opened. */
-  const openExample = useCallback(
-    (id: string): boolean => {
-      const def = exampleById(id)
-      if (!def) return false
-      let json: string
-      let win: ReturnType<typeof buildExample>['window']
-      try {
-        const built = buildExample(def)
-        json = built.json
-        win = built.window
-      } catch {
-        showToast('That example could not be built.')
-        return false
-      }
+  /**
+   * Open a built document (stored JSON) as a NEW document named `name`, framed
+   * to `win` on this screen — an example's copy, or a board built from an item
+   * bank record (src/ui/itemBank.ts). The open board is saved first. False
+   * when nothing was opened.
+   */
+  const openBuilt = useCallback(
+    (json: string, win: ExampleWindow, name: string, message: string): boolean => {
       const res = deserializeDoc(json, { resolve: resolveName, singularities: singularOf })
       if (!res.meta || !res.board) {
-        showToast('That example could not be opened.')
+        showToast('That document could not be opened.')
         return false
       }
       // The board it replaces must be safely on disk first.
       if (!saveBeforeSwitch()) return false
-      const name = exampleCopyName(def, listDocs().map((d) => d.name))
       const fresh = createDoc(name, emptyBoard())
       const meta: DocMeta = { id: fresh.id, name, createdAt: fresh.createdAt, modifiedAt: fresh.modifiedAt }
       applyHydrated(meta, res.board)
       setConflict(null)
       setLoadNotice(res.problems.length > 0 ? { problems: res.problems, fatal: false } : null)
-      // The window the example was written for, framed on THIS screen.
+      // The window it was written for, framed on THIS screen.
       const y = win.y ?? [-0.5, 0.5]
       frameBox({ min: { x: win.x[0], y: y[0] }, max: { x: win.x[1], y: y[1] } })
       const doc = docFromBoard(meta, currentBoardInput())
@@ -97,11 +90,33 @@ export function useExamples({ docState, refs, derived, notices, persistence, vie
       }
       setCurrentDoc(meta.id)
       setDocs(listDocs())
-      setGalleryOpen(false)
-      showToast(`Opened “${name}” — a copy in your documents, yours to change.`, { ms: 4500 })
+      showToast(message, { ms: 4500 })
       return true
     },
     [applyHydrated, currentBoardInput, frameBox, resolveName, saveBeforeSwitch, showToast, singularOf],
+  )
+
+  /** Open example `id` as a new document copy. False when nothing was opened. */
+  const openExample = useCallback(
+    (id: string): boolean => {
+      const def = exampleById(id)
+      if (!def) return false
+      let json: string
+      let win: ReturnType<typeof buildExample>['window']
+      try {
+        const built = buildExample(def)
+        json = built.json
+        win = built.window
+      } catch {
+        showToast('That example could not be built.')
+        return false
+      }
+      const name = exampleCopyName(def, listDocs().map((d) => d.name))
+      if (!openBuilt(json, win, name, `Opened “${name}” — a copy in your documents, yours to change.`)) return false
+      setGalleryOpen(false)
+      return true
+    },
+    [openBuilt, showToast],
   )
 
   const setNoteFolded = useCallback((docId: string, folded: boolean): void => {
@@ -114,7 +129,7 @@ export function useExamples({ docState, refs, derived, notices, persistence, vie
     })
   }, [])
 
-  return { galleryOpen, openGallery, closeGallery, openExample, foldedNotes, setNoteFolded }
+  return { galleryOpen, openGallery, closeGallery, openExample, openBuilt, foldedNotes, setNoteFolded }
 }
 
 export type ExamplesApi = ReturnType<typeof useExamples>

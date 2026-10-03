@@ -27,6 +27,8 @@ interface Props {
   onWorksheet?(): void
   /** Open the examples gallery: ready-made boards, opened as copies. */
   onExamples?(): void
+  /** Open "Graph from item…": paste an item bank record, graph what it defines. */
+  onGraphFromItem?(): void
   /** Open the share dialog: this document as a link (or a QR code). */
   onShare?(): void
   /**
@@ -103,6 +105,7 @@ export function DocMenu({
   onImport,
   onWorksheet,
   onExamples,
+  onGraphFromItem,
   onShare,
   shared = null,
   onMakeCopy,
@@ -287,6 +290,17 @@ export function DocMenu({
                 onClick={pick(onExamples)}
               >
                 Examples…
+              </button>
+            )}
+            {onGraphFromItem && (
+              <button
+                className="doc-item"
+                role="menuitem"
+                title="Paste an item bank stem or %%% ITEM record — its definitions open as a new graph"
+                data-testid="open-graph-from-item"
+                onClick={pick(onGraphFromItem)}
+              >
+                Graph from item…
               </button>
             )}
             {!shared && (

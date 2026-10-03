@@ -24,6 +24,7 @@ import { toPgfplots } from '../src/ui/pgfplotsExport'
 import { buildSheet, sheetLatex } from '../src/ui/worksheetExport'
 import { newRelatedRates } from '../src/ui/relatedRatesLinks'
 import { newUnitCircle } from '../src/ui/unitCircleLinks'
+import { bankFigure, buildItemDoc, planItem } from '../src/ui/itemBank'
 
 export const STYLES: readonly FigureStyleId[] = ['screen', 'textbook', 'sat', 'ap']
 
@@ -389,7 +390,7 @@ export function corpusDocs(): CorpusDoc[] {
 export interface CorpusTex {
   /** A file-safe name: doc-style-format. */
   name: string
-  format: 'tikz' | 'pgfplots' | 'sheet-tikz' | 'sheet-pgfplots'
+  format: 'tikz' | 'pgfplots' | 'sheet-tikz' | 'sheet-pgfplots' | 'bank-stem' | 'bank-key'
   tex: string
 }
 
@@ -532,4 +533,71 @@ export function declaredPreamble(tex: string): string[] {
     out.push(m[1].replace(/\s+%.*$/, '').trim())
   }
   return out
+}
+
+// ---------------------------------------------------------------------------
+// The AP item bank: "Copy for item bank" blocks, pasted into a record
+// ---------------------------------------------------------------------------
+
+/** The graphs whose bank blocks are compiled (every family a stem figure can be). */
+export const BANK_DOCS: readonly string[] = [
+  'explicit', 'caption', 'sketch', 'piecewise', 'piaxes', 'areas', 'tangent', 'secant', 'signchart',
+  'slopefield', 'polar', 'param', 'series', 'shapes', 'implicit', 'data', 'lp',
+]
+
+/** Stems as the bank holds them, graphed by "Graph from item" and copied back. */
+export const BANK_STEMS: readonly { id: string; src: string }[] = [
+  {
+    id: 'AB-0044',
+    src: [
+      '%%% ITEM AB-0044',
+      '%%% figure=needed',
+      "\\begin{stem} The graph of $f'$, the derivative of $f$, is shown above for $-3 \\le x \\le 4$, where $f(x) = x^3 - 3x$. \\end{stem}",
+      '%%% END',
+    ].join('\n'),
+  },
+  {
+    id: 'AB-0050',
+    src: "Let $f(x)=\\begin{cases} x^2+1 & x<1 \\\\ 3-x & x\\ge 1\\end{cases}$. Is $f$ continuous at $x=1$?",
+  },
+  { id: 'BC-0007', src: 'The polar curve $r = 2 + \\cos\\theta$ for $0\\le\\theta\\le 2\\pi$ is shown.' },
+  { id: 'BC-0012', src: 'A particle moves with $x(t) = t^2 - 1$ and $y(t) = 2t$ for $0 \\le t \\le 3$.' },
+  { id: 'AB-0061', src: 'Consider the differential equation $\\frac{dy}{dx} = x - y$.' },
+]
+
+/**
+ * Every bank block to compile: the student figure (house style, TikZ and
+ * pgfplots) of each graph, its key figure, a few without house style, and the
+ * documents "Graph from item" builds from BANK_STEMS. 'bank-stem' blocks are
+ * pasted inside a stem, 'bank-key' blocks inside a key.
+ */
+export function bankExports(models: Map<string, DocModel>, widthCm = 7): CorpusTex[] {
+  const out: CorpusTex[] = []
+  const add = (tag: string, m: DocModel): void => {
+    out.push({ name: `bank-${tag}-tikz`, format: 'bank-stem', tex: bankFigure(m, { format: 'tikz', answers: false, widthCm, house: true }).block })
+    out.push({ name: `bank-${tag}-pgfplots`, format: 'bank-stem', tex: bankFigure(m, { format: 'pgfplots', answers: false, widthCm, house: true }).block })
+    out.push({ name: `bank-${tag}-key-tikz`, format: 'bank-key', tex: bankFigure(m, { format: 'tikz', answers: true, widthCm, house: true }).block })
+  }
+  for (const id of BANK_DOCS) {
+    const m = models.get(id)
+    if (!m) throw new Error(`bank corpus: no document ${id}`)
+    add(id, m)
+  }
+  for (const id of ['explicit', 'areas']) {
+    const m = models.get(id)!
+    out.push({ name: `bank-${id}-plain-pgfplots`, format: 'bank-key', tex: bankFigure(m, { format: 'pgfplots', answers: true, widthCm: 9, house: false }).block })
+  }
+  for (const st of BANK_STEMS) {
+    const plan = planItem(st.src)
+    const m = docModelFromJSON(buildItemDoc(plan, st.id).json)
+    if (!m) throw new Error(`bank corpus: ${st.id} did not load`)
+    add(st.id.toLowerCase(), m)
+  }
+  return out
+}
+
+/** The packages a bank block's comment line names (its preamble). */
+export function bankPreamble(tex: string): string[] {
+  const line = tex.split('\n').find((l) => /^% Grapher figure .* — preamble:/.test(l)) ?? ''
+  return [...line.matchAll(/\\(?:usepackage|pgfplotsset|usepgfplotslibrary)\{[^}]*\}/g)].map((m) => m[0])
 }

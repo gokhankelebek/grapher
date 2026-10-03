@@ -127,6 +127,8 @@ export interface CommandActions {
   openWorksheet(): void
   /** The examples gallery (Document menu → Examples…). */
   openExamples(): void
+  /** Document menu → Graph from item…: paste an item bank record, graph what it defines. */
+  graphFromItem(): void
   share(): void
   backup(): void
   importFile(): void
@@ -136,6 +138,8 @@ export interface CommandActions {
   downloadAs(format: ExportFormat): void
   copyPng(): void
   copyLatex(): void
+  /** Download ▾ → Copy for item bank…: the figure as a block for an item bank record. */
+  copyForBank(): void
   setFigure(style: FigureStyleId): void
   setPreview(on: boolean): void
   // ---- view
@@ -827,6 +831,19 @@ export const COMMANDS: readonly Command[] = [
     run: (ctx) => ctx.actions.openExamples(),
   },
   {
+    id: 'doc-graph-from-item',
+    title: 'Graph from item…',
+    description: 'Paste an item bank stem or %%% ITEM record; its definitions open as a new graph',
+    keywords: [
+      'graph from item', 'item bank', 'bank', 'stem', 'mathpix', 'latex', 'paste latex', 'import latex',
+      'ap classroom', 'free response', 'frq', 'figure needed', 'bank.tex', 'record', 'figuredesc', 'tikz',
+    ],
+    group: 'Document',
+    path: 'Document menu → Graph from item…',
+    when: always,
+    run: (ctx) => ctx.actions.graphFromItem(),
+  },
+  {
     id: 'doc-share',
     title: 'Share link / QR code…',
     description: 'A link or QR code that opens exactly this graph, no account needed',
@@ -906,6 +923,20 @@ export const COMMANDS: readonly Command[] = [
     when: always,
     blocked: (ctx) => (ctx.hasContent ? null : 'The board is empty'),
     run: (ctx) => ctx.actions.copyLatex(),
+  },
+  {
+    id: 'export-item-bank',
+    title: 'Copy for item bank…',
+    description: 'The figure as a block for a bank.tex record: %%% figure=tikz, the figuredesc, the TikZ or pgfplots picture',
+    keywords: [
+      'item bank', 'bank', 'figuredesc', 'tikz', 'pgfplots', 'stem', 'mathpix', 'bank.tex', 'record',
+      'figure=tikz', 'figure described', 'house style', 'ap item', 'copy for bank', 'latex',
+    ],
+    group: 'Export',
+    path: 'Download ▾ (caret) → Copy for item bank…',
+    when: graph,
+    blocked: (ctx) => (ctx.hasContent ? null : 'The board is empty'),
+    run: (ctx) => ctx.actions.copyForBank(),
   },
   figureStyle('screen', 'The figure as the board looks on screen', ['screen', 'default style', 'neon', 'plain', 'no style', 'reset style']),
   figureStyle('textbook', 'Black on white, grid every unit, labels every 5', ['textbook', 'book', 'black and white', 'print style', 'clean']),
@@ -1614,6 +1645,10 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     { id: 'style-ap' },
     { id: 'style-preview' },
     { title: 'Size, margin, caption, window', text: 'Width, aspect, framing, the caption under the figure, the TI window', how: 'Download ▾ (caret)' },
+  ] },
+  { id: 'itembank', course: 'Exports & worksheets', title: 'AP item bank', entries: [
+    { id: 'export-item-bank', note: 'AP item bank: copy a figure — a ready-to-paste %%% figure=tikz block with its figuredesc, student or key, in house style' },
+    { id: 'doc-graph-from-item', note: 'Graph from an item — paste a stem or a %%% ITEM record; “graph of f′ is shown”, intervals and domains are read for you' },
   ] },
   { id: 'docs', course: 'Exports & worksheets', title: 'Documents and worksheets', entries: [
     { id: 'doc-examples' },

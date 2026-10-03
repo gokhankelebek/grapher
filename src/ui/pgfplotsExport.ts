@@ -78,6 +78,18 @@ import { PX_PER_CM } from './vectorExport'
 // Expression translation
 // ---------------------------------------------------------------------------
 
+/**
+ * A curve's dash pattern as a pgfplots style. Two dashed curves must stay two
+ * different dashes on paper (the item bank's house rule tells curves apart by
+ * dash, not colour), so the Curve ⋯ → Line presets keep their kind: a short
+ * "on" is dotted, an on-off-on-off is dash-dot, anything else dashed.
+ */
+export function pgfDash(dash: readonly number[]): string {
+  if (dash.length >= 4 && dash[2] < dash[0]) return 'dash dot'
+  if (dash[0] <= 3) return 'dotted'
+  return 'dashed'
+}
+
 /** pgfmath expression tree: what gets written, and what gets checked. */
 type Pgf =
   | { t: 'num'; v: number }
@@ -1234,7 +1246,8 @@ export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): strin
     const w = style?.width ?? (fig ? fig.curveWidth : c.strokeWidth)
     o.push(w > 3.2 ? 'very thick' : 'thick')
     const ineq = inequalityOf(c, scene.models)
-    if ((style?.dash && style.dash.length > 0) || (ineq && ineq.parts.length > 0 && ineq.parts.every((p) => p.strict))) o.push('dashed')
+    if (style?.dash && style.dash.length > 0) o.push(pgfDash(style.dash))
+    else if (ineq && ineq.parts.length > 0 && ineq.parts.every((p) => p.strict)) o.push('dashed')
     if (ineq && ineq.parts.some((p) => p.strict) && ineq.parts.some((p) => !p.strict)) {
       notExported.push('a compound inequality with one dashed and one solid boundary (both drawn solid)')
     }

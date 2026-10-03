@@ -45,6 +45,7 @@ import type { ExportApi } from './useExport'
 import type { FigureSettingsApi } from './useFigureSettings'
 import type { SidebarEditorsApi } from './useSidebarEditors'
 import type { ExamplesApi } from './useExamples'
+import type { ItemBankApi } from './useItemBank'
 
 /** What useCommands reads from the hooks App calls before it. */
 export interface CommandsDeps {
@@ -73,9 +74,10 @@ export interface CommandsDeps {
   figureSettings: FigureSettingsApi
   editors: SidebarEditorsApi
   examples: ExamplesApi
+  itemBank: ItemBankApi
 }
 
-export function useCommands({ board, docState, session, refs, derived, notices, history, docActions, editing, calc, fieldsApi, typed, tables, domain, numberLine, viewport, unitCircle, rates, overlaysApi, naming, revealMode, exporter, figureSettings, editors, examples }: CommandsDeps) {
+export function useCommands({ board, docState, session, refs, derived, notices, history, docActions, editing, calc, fieldsApi, typed, tables, domain, numberLine, viewport, unitCircle, rates, overlaysApi, naming, revealMode, exporter, figureSettings, editors, examples, itemBank }: CommandsDeps) {
   const {
     curves, kind, items, selectedId, setSelectedId, sidebarOpen, setSidebarOpen, lens, fields,
     shapes, dataSets, sequences, boardGrid, figureStyle, previewFigure, setPreviewFigure,
@@ -216,6 +218,7 @@ export function useCommands({ board, docState, session, refs, derived, notices, 
     duplicateDocument,
     openWorksheet,
     openExamples: examples.openGallery,
+    graphFromItem: itemBank.openGraphFromItem,
     share: openShareDialog,
     backup: exportDocument,
     importFile: pickImportFile,
@@ -224,6 +227,7 @@ export function useCommands({ board, docState, session, refs, derived, notices, 
     downloadAs: (f) => (f === 'png' ? exportPNG() : exportVector(f)),
     copyPng: copyPNG,
     copyLatex,
+    copyForBank: itemBank.openBankCopy,
     setFigure: chooseFigureStyle,
     setPreview: setPreviewFigure,
     setAxisUnitX: (choice) => setAxisUnit('x', choice),

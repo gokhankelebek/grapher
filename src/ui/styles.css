@@ -9119,3 +9119,105 @@ button.calc-field-btn {
 .tnote-chip:focus-visible {
   background: rgba(249, 168, 37, 0.12);
 }
+
+/* ============================================================
+   AP item bank (src/ui/ItemBankDialogs.tsx): Copy for item bank…
+   and Graph from item…, on the share dialog's frame.
+   ============================================================ */
+
+.ib-dialog { width: min(680px, 100%); }
+.ib-dialog code { font-family: var(--font-mono); font-size: var(--fs-sm); }
+
+.ib-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+}
+.ib-label { color: var(--muted); font-size: var(--fs-sm); font-weight: 600; }
+.ib-width { display: inline-flex; align-items: center; gap: var(--sp-2); color: var(--muted); }
+.ib-num {
+  width: 72px;
+  height: 32px;
+  padding: 0 var(--sp-2);
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+}
+
+.ib-notes,
+.ib-warnings {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3) var(--sp-2) var(--sp-6);
+  border-radius: var(--radius);
+  line-height: 1.45;
+  font-size: var(--fs-sm);
+}
+.ib-notes { background: var(--accent-soft); border: 1px solid var(--accent); }
+.ib-warnings { border: 1px solid rgba(249, 95, 98, 0.5); background: rgba(249, 95, 98, 0.1); }
+
+.ib-desc { font-size: var(--fs-sm); line-height: 1.45; color: var(--text); }
+.ib-pre {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius);
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  white-space: pre;
+}
+.ib-fine { max-width: none; text-align: left; }
+.ib-fine-left { max-width: 360px; text-align: left; }
+
+.ib-src {
+  width: 100%;
+  min-height: 140px;
+  resize: vertical;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius);
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+}
+.ib-preview { display: flex; flex-direction: column; gap: var(--sp-2); }
+.ib-item-id { display: flex; align-items: center; gap: var(--sp-2); }
+.ib-tag {
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+.ib-needs {
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius);
+  border: 1px solid rgba(249, 168, 37, 0.6);
+  background: rgba(249, 168, 37, 0.12);
+  font-weight: 600;
+}
+.ib-defs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-2); }
+.ib-def {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  border: 1px solid var(--border-soft);
+}
+.ib-def-tex { overflow-x: auto; }
+.ib-def-line { color: var(--text); overflow-wrap: anywhere; }
+.ib-def-kind { color: var(--muted); font-size: var(--fs-xs); }
+.ib-follow { cursor: pointer; }
