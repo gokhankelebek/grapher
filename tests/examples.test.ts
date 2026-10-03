@@ -33,6 +33,18 @@ import { safeReadPiecewise } from '../src/ui/piecewiseLinks'
 import { safeReadSinusoid } from '../src/ui/sinLinks'
 import { safeReadTransform } from '../src/ui/transformLinks'
 import { heavyJSON } from './heavyDoc'
+import { MODELS } from '../src/core/fit/models'
+import { readTransform } from '../src/core/transform'
+import { readFactored } from '../src/core/factored'
+import { fitRegression } from '../src/core/data'
+import { boardIntersections } from '../src/ui/intersections'
+import { compileShapes } from '../src/ui/shapeLinks'
+import { compareCard } from '../src/ui/shapeXform'
+import { dataPlotCard } from '../src/ui/dataPlotLinks'
+import { probCard } from '../src/ui/probLinks'
+import { readSequence } from '../src/ui/seqLinks'
+import { dataColumns } from '../src/ui/dataLinks'
+import { classify } from '../src/core/sequences'
 
 const sentences = (s: string): number => s.split(/[.?!](?:\s|$)/).filter((t) => t.trim() !== '').length
 
@@ -100,7 +112,9 @@ describe('every example', () => {
             (sc.fields?.length ?? 0) +
             (sc.scatter?.length ?? 0) +
             (sc.unitCircles?.length ?? 0) +
-            (sc.relatedRates?.length ?? 0)
+            (sc.relatedRates?.length ?? 0) +
+            (sc.shapes?.filter((x) => x.visible).length ?? 0) +
+            (sc.stats?.filter((x) => x.visible).length ?? 0)
           expect(drawn).toBeGreaterThan(0)
           const list = recordFigure(f)
           expect(list.items.length).toBeGreaterThan(3)
@@ -131,6 +145,7 @@ describe('every example', () => {
           sequences: b.sequences,
           unitCircles: b.unitCircles,
           relatedRates: b.relatedRates,
+          stats: b.stats,
           system: b.system,
           grid: b.grid,
           figure: b.figure,
@@ -265,13 +280,207 @@ describe('what the examples put on the board', () => {
   })
 })
 
+describe('NC Math 1 and NC Math 2', () => {
+  const r3 = (v: number): number => Math.round(v * 1000) / 1000
+  /** Where the visible curves meet, rounded and sorted by x. */
+  const meets = (id: string): [number, number][] => {
+    const { board } = load(id)
+    const models = { ...MODELS, ...board.extraModels }
+    return boardIntersections(board.curves, models, [-20, 20])
+      .map((m): [number, number] => [r3(m.point.pos.x), r3(m.point.pos.y)])
+      .sort((a, b) => a[0] - b[0])
+  }
+  const shapesOf = (id: string) => {
+    const { board } = load(id)
+    return { board, compiled: compileShapes(board.shapes) }
+  }
+
+  it('every NC Math 1 and NC Math 2 help section has an example, and every example is tagged M1 / M2', () => {
+    for (const s of HELP_SECTIONS.filter((h) => h.course === 'NC Math 1' || h.course === 'NC Math 2')) {
+      expect(examplesForSection(s.id).length, s.id).toBeGreaterThan(0)
+    }
+    for (const d of EXAMPLE_DEFS) {
+      if (d.course === 'math1') expect(d.unit).toBe('M1')
+      if (d.course === 'math2') expect(d.unit).toBe('M2')
+      if (d.course === 'math1') for (const h of d.help) expect(h.startsWith('m1-'), `${d.id} → ${h}`).toBe(true)
+      if (d.course === 'math2') for (const h of d.help) expect(h.startsWith('m2-'), `${d.id} → ${h}`).toBe(true)
+    }
+    expect(EXAMPLE_DEFS.filter((d) => d.course === 'math1').length).toBeGreaterThanOrEqual(8)
+    expect(EXAMPLE_DEFS.filter((d) => d.course === 'math2').length).toBeGreaterThanOrEqual(8)
+  })
+
+  it('M1: 3x + 5 adds 3, 2ˣ doubles, and 2ˣ passes 3x + 5 between x = 4 and 5', () => {
+    const { board } = load('m1-linear-vs-exponential')
+    const [f, g] = board.curves
+    expect(board.curveViews[f.id]?.table).toMatchObject({ cols: ['d1'], vs: g.id, fig: true })
+    expect(board.curveViews[g.id]?.table).toMatchObject({ cols: ['ratio'] })
+    const m = meets('m1-linear-vs-exponential')
+    expect(m).toHaveLength(2)
+    expect(m[1][0]).toBeGreaterThan(4)
+    expect(m[1][0]).toBeLessThan(5)
+  })
+
+  it('M1: the sequences are arithmetic (d = 4) and geometric (r = 1.5)', () => {
+    const [a, b] = load('m1-sequences').board.sequences
+    const terms = (src: string): number[] => {
+      const p = readSequence(src)
+      if (!p.ok) throw new Error(src)
+      return [1, 2, 3, 4, 5].map((n) => p.seq.term(p.seq.defaultParams, n))
+    }
+    expect(classify(terms(a.src))).toMatchObject({ kind: 'arithmetic', d: 4 })
+    expect(classify(terms(b.src))).toMatchObject({ kind: 'geometric', r: 1.5 })
+    expect([a.showPartner, b.showPartner]).toEqual([true, true])
+  })
+
+  it('M1: −x² + 2x + 8 has its vertex at (1, 9) and its axis x = 1 drawn', () => {
+    const { board } = load('m1-quadratic-features')
+    const src = Object.values(board.exprSources)
+    expect(src).toContain('x = 1')
+    const t = readTransform('f(x) = -x^2 + 2x + 8')!
+    expect([t.parent, t.a, t.h, t.k]).toEqual(['quadratic', '-1', '1', '9'])
+    const f = board.curves[1]
+    const y = (x: number): number => ({ ...MODELS, ...board.extraModels })[f.modelId].evalExplicit!(f.params, x)
+    expect([y(-2), y(4), y(0), y(1)]).toEqual([0, 0, 8, 9])
+  })
+
+  it('M1: the two lines meet at (2, 3); |x − 1| − 2 = 1 at x = −2 and 4', () => {
+    expect(meets('m1-system-of-lines')).toEqual([[2, 3]])
+    expect(meets('m1-absolute-value')).toEqual([[-2, 1], [4, 1]])
+  })
+
+  it('M1: the inequality system shades the overlap, with the test point at the origin', () => {
+    const { board } = load('m1-inequality-system')
+    expect(board.system).toEqual({ solution: true, test: { x: 0, y: 0 } })
+    expect(Object.values(board.exprSources)).toEqual(['y > 2x - 3', 'y <= -x/2 + 2'])
+  })
+
+  it('M1: ABCD is a parallelogram by slopes, perimeter 2√26 + 4√5, area 18', () => {
+    const { board, compiled } = shapesOf('m1-parallelogram')
+    expect(board.shapes[0].measure?.show).toEqual(['lengths', 'slopes', 'area', 'classify'])
+    const poly = compiled.get(board.shapes[0].id)!.reports!.poly!
+    expect(poly.classification.name).toBe('parallelogram')
+    expect(poly.sides.map((s) => s.slope.text)).toEqual(['1/5', '2', '1/5', '2'])
+    expect(poly.area.area.value).toBe(18)
+    expect(poly.perimeter.value).toBeCloseTo(2 * Math.sqrt(26) + 4 * Math.sqrt(5), 9)
+    expect(poly.right).toBeNull()
+    expect(poly.pairs.filter((p) => p.rel === 'parallel')).toHaveLength(2)
+  })
+
+  it('M1: Period 1 has one outlier (42) and Period 4 none', () => {
+    const p = load('m1-box-plots').board.stats[0]
+    expect(p.type).toBe('data')
+    if (p.type !== 'data') return
+    const card = dataPlotCard(p)
+    expect(card.sets.map((s) => s.fences?.outliers)).toEqual([['42'], []])
+  })
+
+  it('M1: the least squares line has slope ≈ 3.78, r ≈ 0.996, and its residual plot is on', () => {
+    const d = load('m1-scatter-residuals').board.data[0]
+    expect(d.regressions).toHaveLength(1)
+    expect(d.regressions[0]).toMatchObject({ kind: 'linear', residualPlot: true, residuals: false })
+    const cols = dataColumns(d.rows)
+    const fit = fitRegression('linear', cols.xs, cols.ys)
+    expect(fit.ok).toBe(true)
+    if (!fit.ok) return
+    expect(fit.coef.a).toBeCloseTo(311.5 / 82.5, 9)
+    expect(fit.coef.b).toBeCloseTo(76.5 - (311.5 / 82.5) * 5.5, 9)
+    expect(fit.r).toBeCloseTo(311.5 / Math.sqrt(82.5 * 1184.5), 9)
+    expect(fit.r!).toBeGreaterThan(0.99)
+  })
+
+  it('M2: the three forms are one function: zeros 4 and −2, vertex (1, −9); only f is drawn', () => {
+    const { board } = load('m2-quadratic-forms')
+    expect(board.curves.map((c) => c.visible)).toEqual([true, false, false])
+    const src = Object.values(board.exprSources)
+    const fac = readFactored(src[1])!
+    expect(fac.num.map((r) => r.root)).toEqual(['-2', '4'])
+    for (const s of src) {
+      const t = readTransform(s)!
+      expect([t.parent, t.a, t.h, t.k]).toEqual(['quadratic', '1', '1', '-9'])
+    }
+    expect(meets('m2-quadratic-forms')).toEqual([])
+  })
+
+  it('M2: the line meets the parabola at (−1, 0) and (4, 5)', () => {
+    expect(meets('m2-line-parabola')).toEqual([[-1, 0], [4, 5]])
+  })
+
+  it('M2: the square root starts at (−3, −1); inverse variation has xy = 12 down its table', () => {
+    const t = readTransform('f(x) = 2sqrt(x + 3) - 1')!
+    expect([t.parent, t.a, t.h, t.k]).toEqual(['sqrt', '2', '-3', '-1'])
+    expect(load('m2-square-root').board.curveViews).toMatchObject({ [load('m2-square-root').board.curves[0].id]: { showParent: true } })
+    const { board } = load('m2-inverse-variation')
+    const f = board.curves[0]
+    const ev = { ...MODELS, ...board.extraModels }[f.modelId].evalExplicit!
+    const xs = board.curveViews[f.id]!.table!.list!.split(',').map(Number)
+    expect(xs).toEqual([1, 2, 3, 4, 6, 12])
+    for (const x of xs) expect(x * ev(f.params, x)).toBeCloseTo(12, 12)
+  })
+
+  it('M2: −2|x − 3| + 1 is the parent |x| reflected, stretched by 2, right 3 and up 1', () => {
+    const src = Object.values(load('m2-function-transformations').board.exprSources)[0]
+    const t = readTransform(src)!
+    expect([t.parent, t.a, t.b, t.h, t.k]).toEqual(['absolute', '-2', '1', '3', '1'])
+  })
+
+  it('M2: a rotation then a reflection compose to the reflection across y = x', () => {
+    const { board, compiled } = shapesOf('m2-rotate-reflect')
+    expect(board.shapes.map((s) => s.xform?.op.t ?? null)).toEqual([null, 'rotate', 'reflect'])
+    const rot = compiled.get(board.shapes[1].id)!
+    expect(rot.xform!.rule.text).toBe('(x, y) → (−y, x)')
+    const two = compiled.get(board.shapes[2].id)!
+    expect(two.xform!.chain!.single).toBe('a reflection across the line y = x')
+    const sh = two.shape!
+    expect(sh.kind === 'polygon' && sh.pts.map((p) => [r3(p.x), r3(p.y)])).toEqual([[1, 2], [1, 5], [3, 2]])
+  })
+
+  it('M2: the dilation by 2 is similar to ABC with scale factor 2, not congruent', () => {
+    const { board, compiled } = shapesOf('m2-dilation-similarity')
+    const [abc, img] = board.shapes
+    expect(abc.compare).toBe(img.id)
+    const list = [...compiled.values()].map((c) => ({ id: c.id, shape: c.shape }))
+    const card = compareCard(compiled.get(abc.id)!.shape!, abc.id, list, abc.compare)
+    const tri = card.result!.triangle!
+    expect([tri.similar, tri.congruent]).toEqual([true, false])
+    expect(tri.k).toBeCloseTo(2, 12)
+  })
+
+  it('M2: the 3-4-5 triangle: right angle at B, sin A = 3/5, cos A = 4/5, tan A = 3/4', () => {
+    const { board, compiled } = shapesOf('m2-right-triangle-trig')
+    const rt = compiled.get(board.shapes[0].id)!.reports!.poly!.right!
+    expect(rt.right).toBe(1)
+    const a = rt.trig.find((t) => t.name === 'A')!
+    expect([a.sin.value.text, a.cos.value.text, a.tan.value.text]).toEqual(['3/5', '4/5', '3/4'])
+    expect(r3(a.angle.deg)).toBe(36.87)
+  })
+
+  it('M2: junior and driving are independent; at least one green in two draws is 2/3', () => {
+    const [t] = load('m2-two-way-table').board.stats
+    expect(t.type === 'prob' && t.view).toBe('table')
+    if (t.type !== 'prob') return
+    const c = probCard(t)
+    expect(c.table.indep?.independent).toBe(true)
+    expect(c.table.indep?.conditional).toBe('P(A|B) = 3/5 = 0.60 = P(A) = 3/5 = 0.60')
+    const [tr] = load('m2-tree-without-replacement').board.stats
+    if (tr.type !== 'prob') throw new Error('not a probability object')
+    expect(tr.view).toBe('tree')
+    expect(tr.tree.replace).toBe(false)
+    const e = probCard(tr).tree.event!
+    expect(e.name).toBe('at least one Green')
+    expect(e.numbers).toBe('2/15 + 4/15 + 4/15 = 2/3')
+    expect(e.complement).toBe('1 − P(YY) = 1 − 1/3 = 2/3')
+  })
+})
+
 describe('the gallery', () => {
   it('groups by course in order, units in catalog order', () => {
     const g = galleryGroups()
-    expect(g.map((x) => x.course)).toEqual(['calc', 'precalc', 'math3'])
+    expect(g.map((x) => x.course)).toEqual(['calc', 'precalc', 'math1', 'math2', 'math3'])
     expect(g[0].units[0].id).toBe('calc-1')
     expect(g[0].units[0].title).toMatch(/^Unit 1 · Limits/)
-    expect(g[2].units.map((u) => u.id)).toEqual(['m3-ineq', 'm3-functions', 'm3-geo'])
+    expect(g[2].units.map((u) => u.id)).toEqual(['m1-linexp', 'm1-quad', 'm1-systems', 'm1-functions', 'm1-coord', 'm1-stats', 'm1-bivariate'])
+    expect(g[3].units.map((u) => u.id)).toEqual(['m2-quad', 'm2-radical', 'm2-functions', 'm2-xform', 'm2-trig', 'm2-prob'])
+    expect(g[4].units.map((u) => u.id)).toEqual(['m3-ineq', 'm3-functions', 'm3-geo'])
     expect(g.flatMap((x) => x.units.flatMap((u) => u.examples)).length).toBe(EXAMPLE_DEFS.length)
   })
 

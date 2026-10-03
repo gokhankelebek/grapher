@@ -16,7 +16,11 @@
 //   - a slope field is read by readField, a sequence by readSequence, a
 //     regression fitted by fitRegression and written by regressionSource, a
 //     unit circle and a related-rates problem start from newUnitCircle /
-//     newRelatedRates, an inequality on the number line is solved first.
+//     newRelatedRates, an inequality on the number line is solved first;
+//   - a shape's image is the App's addImageCommand ("rotate ABC 90° about
+//     (0, 0)": parseXformCommand, the target found by name, resolveOp), and a
+//     data plot or a probability object starts from newDataPlot / newProb and
+//     is framed the way Build ▾ frames it (statsBox).
 //
 // What comes out is a BoardInput, stored with docFromBoard → serializeDoc —
 // the bytes the App would write — and every example is loaded back through
@@ -70,7 +74,20 @@ import {
   cleanSignRows,
   docFromBoard,
 } from '../core/persist'
-import type { FigureStyleId, NLItem } from '../core/types'
+import type { FigureStyleId, MeasureFlag, NLItem, XformAid } from '../core/types'
+import { MEASURE_FLAGS } from '../core/types'
+import { cleanXform } from '../core/persist'
+import type { ShapeMeasureSettings } from '../core/persist'
+import { parseXformCommand, resolveOp } from '../core/parse/xform'
+import type { BoardStat, DataDist, DataPlotSet } from '../core/statsPersist'
+import { newProb } from '../core/probPersist'
+import type { ProbTable, ProbTree, ProbVenn, ProbView } from '../core/probPersist'
+import { newDataPlot } from '../ui/dataPlotLinks'
+import { probCard, settleProb } from '../ui/probLinks'
+import { statsBox } from '../ui/statsLinks'
+import { compileShapes, namedPointMap } from '../ui/shapeLinks'
+import { imageSrc, shapeByName } from '../ui/shapeXform'
+import { dataBox } from '../ui/dataLinks'
 import { typedName } from '../render/curveNames'
 import { accumColor } from '../ui/calcLinks'
 import { dataColumns } from '../ui/dataLinks'
@@ -127,6 +144,7 @@ export class ExampleBoard {
   private readonly sequences: BoardSequence[] = []
   private readonly unitCircles: BoardUnitCircle[] = []
   private readonly relatedRates: BoardRelatedRates[] = []
+  private readonly stats: BoardStat[] = []
   private readonly items: NLItem[] = []
   private readonly views: Record<string, CurveView> = {}
   private systemSettings: BoardIneqSystem | null = null
@@ -668,7 +686,16 @@ export class ExampleBoard {
   table(
     name: string,
     rows: [number | string, number | string][],
-    o: { xLabel?: string; yLabel?: string; regressions?: RegressionKind[]; color?: string } = {},
+    o: {
+      xLabel?: string
+      yLabel?: string
+      regressions?: RegressionKind[]
+      color?: string
+      /** Draw each point's residual to this fit (one per table). */
+      residuals?: RegressionKind
+      /** The residual plot of this fit, in a panel under the scatter plot — framed with it, as the App frames it. */
+      residualPlot?: RegressionKind
+    } = {},
   ): string {
     this.requireGraph('a data table')
     const id = this.id()
@@ -692,8 +719,24 @@ export class ExampleBoard {
       const src = regressionSource(res, REG_DIGITS_DEFAULT)
       if (!src) throw new Error(`example: the ${kind} regression could not be written out`)
       const curveId = this.typed(src, { strokeWidth: 2 }, color)
-      const reg: DataRegression = { id: this.id(), kind, curveId, digits: REG_DIGITS_DEFAULT, residuals: false }
+      const reg: DataRegression = {
+        id: this.id(),
+        kind,
+        curveId,
+        digits: REG_DIGITS_DEFAULT,
+        residuals: o.residuals === kind,
+        ...(o.residualPlot === kind ? { residualPlot: true as const } : {}),
+      }
       table.regressions.push(reg)
+    }
+    for (const want of [o.residuals, o.residualPlot]) {
+      if (want && !table.regressions.some((r) => r.kind === want)) {
+        throw new Error(`example: residuals of a ${want} fit the table does not have`)
+      }
+    }
+    if (o.residualPlot && !this.win) {
+      const box = dataBox(table)
+      if (box) this.win = { x: [box.min.x, box.max.x], y: [box.min.y, box.max.y], independent: true }
     }
     this.selected = id
     return id
@@ -806,22 +849,136 @@ export class ExampleBoard {
     return this
   }
 
-  /** A point, segment, vector or polygon, as typed. */
-  shape(src: string, o: { fill?: boolean; color?: string } = {}): string {
+  /**
+   * A point, segment, vector or polygon, as typed — with the Measurements
+   * toggles the lesson switches on (`measure`), and a polygon's symmetry
+   * overlay (`sym`).
+   */
+  shape(src: string, o: { fill?: boolean; color?: string; measure?: MeasureFlag[]; sym?: boolean } = {}): string {
     this.requireGraph(src)
     const outcome = readShape(src)
     if (!outcome.ok) throw new Error(`example: “${src}” is not a shape: ${outcome.error}`)
     const id = this.id()
-    this.shapes.push({
+    const shape: BoardShape = {
       id,
       src,
       params: outcome.defaultParams.slice(),
       color: o.color ?? this.nextColor(),
       fill: o.fill === true,
       visible: true,
-    })
+    }
+    const measure = measureOf(o.measure)
+    if (measure) shape.measure = measure
+    if (o.sym) {
+      if (outcome.kind !== 'polygon') throw new Error(`example: only a polygon has a symmetry overlay (“${src}”)`)
+      shape.sym = true
+    }
+    this.shapes.push(shape)
     this.selected = id
     return id
+  }
+
+  /**
+   * A figure's image, typed as the + box takes it — "rotate ABC 90° about
+   * (0, 0)", "reflect ABC across y = x", "dilate ABC by 2 about (0, 0)" —
+   * the App's addImageCommand: the figure found by name, the parameters
+   * checked against the board's named points. Returns the image's id.
+   */
+  image(src: string, o: { aids?: XformAid[]; color?: string; measure?: MeasureFlag[] } = {}): string {
+    this.requireGraph(src)
+    const cmd = parseXformCommand(src)
+    if ('error' in cmd) throw new Error(`example: “${src}” is not a transformation: ${cmd.error}`)
+    const compiled = compileShapes(this.shapes)
+    const list = [...compiled.values()].map((c) => ({ id: c.id, shape: c.shape }))
+    const parentId = shapeByName(cmd.target, list)
+    if (!parentId) throw new Error(`example: “${src}” — there is no figure named ${cmd.target} on the board`)
+    const ok = resolveOp(cmd.op, namedPointMap(this.shapes, compiled))
+    if ('error' in ok) throw new Error(`example: “${src}” — ${ok.error}`)
+    const parent = compiled.get(parentId)?.shape ?? null
+    const id = this.id()
+    const xform = cleanXform({ of: parentId, op: cmd.op, ...(o.aids ? { aids: o.aids } : {}) })
+    if (!xform) throw new Error(`example: “${src}” could not be stored`)
+    const shape: BoardShape = {
+      id,
+      src: imageSrc(cmd.op, parent),
+      params: [],
+      color: o.color ?? this.nextColor(),
+      fill: false,
+      visible: true,
+      xform,
+    }
+    const measure = measureOf(o.measure)
+    if (measure) shape.measure = measure
+    this.shapes.push(shape)
+    if (compileShapes(this.shapes).get(id)?.error) throw new Error(`example: “${src}” — the image cannot be drawn`)
+    this.selected = id
+    return id
+  }
+
+  /** Shape card → Compare: this figure against another (congruent? similar? by what?). */
+  compare(shapeId: string, otherId: string): this {
+    const s = this.shapes.find((x) => x.id === shapeId)
+    if (!s || !this.shapes.some((x) => x.id === otherId)) throw new Error('example: compare needs two shapes on the board')
+    s.compare = otherId
+    this.selected = shapeId
+    return this
+  }
+
+  // ------------------------------------------------------------ statistics objects (Build ▾)
+
+  /** Framed as Build ▾ frames a new statistics panel, unless the example says otherwise. */
+  private addStat(s: BoardStat): string {
+    this.requireGraph('a statistics panel')
+    const index = this.stats.length
+    this.stats.push(s)
+    if (!this.win) {
+      const box = statsBox(index)
+      this.win = { x: [box.min.x, box.max.x], y: [box.min.y, box.max.y] }
+    }
+    this.selected = s.id
+    return s.id
+  }
+
+  /** Build ▾ → One-variable data: the lists, a dot plot or histogram, and the box plot. */
+  dataPlot(
+    sets: DataPlotSet[],
+    o: { dist?: DataDist; box?: boolean; binWidth?: number; dropOutliers?: boolean } = {},
+  ): string {
+    if (sets.length === 0 || sets.some((x) => x.values.length === 0)) throw new Error('example: a data plot needs its lists')
+    const p = newDataPlot(this.id())
+    p.sets = sets.map((x) => ({ name: x.name, values: x.values.slice(), ...(x.off ? { off: x.off.slice() } : {}) }))
+    if (o.dist) p.dist = o.dist
+    if (o.box !== undefined) p.box = o.box
+    if (o.binWidth !== undefined) p.binWidth = o.binWidth
+    if (o.dropOutliers) p.dropOutliers = true
+    return this.addStat(p)
+  }
+
+  /**
+   * Build ▾ → Probability, showing `view`: the two-way table, the Venn
+   * diagram or the tree, each from the lesson's own numbers (the card's
+   * examples where none are given). A tree's named event follows its
+   * definition, as the card settles it.
+   */
+  probability(
+    view: ProbView,
+    o: { table?: Partial<ProbTable>; venn?: Partial<ProbVenn>; tree?: Partial<ProbTree> } = {},
+  ): string {
+    const base = newProb(this.id())
+    const tree: ProbTree = { ...base.tree, ...o.tree }
+    // the card's ready-made event belongs to the card's ready-made bag
+    if (o.tree && o.tree.event === undefined) delete tree.event
+    const p = settleProb({
+      ...base,
+      view,
+      table: { ...base.table, ...o.table },
+      venn: { ...base.venn, ...o.venn },
+      tree,
+    })
+    const card = probCard(p)
+    if (view === 'venn' && card.venn.error) throw new Error(`example: the Venn diagram cannot be read: ${card.venn.error}`)
+    if (view === 'tree' && card.tree.problems.length > 0) throw new Error(`example: the tree cannot be read: ${card.tree.problems.join('; ')}`)
+    return this.addStat(p)
   }
 
   // ------------------------------------------------------------ the number line
@@ -884,6 +1041,7 @@ export class ExampleBoard {
       sequences: this.sequences.slice(),
       unitCircles: this.unitCircles.slice(),
       relatedRates: this.relatedRates.slice(),
+      stats: this.stats.slice(),
       system: this.systemSettings,
       grid: this.ruling,
       figure: this.figureStyle,
@@ -899,4 +1057,10 @@ export class ExampleBoard {
   toDoc(id: string, name: string, note?: string): StoredDoc {
     return docFromBoard({ id, name, createdAt: 0, modifiedAt: 0 }, this.toInput(note), 0)
   }
+}
+
+/** The Measurements toggles as the document keeps them (canonical order), or nothing. */
+function measureOf(flags: readonly MeasureFlag[] | undefined): ShapeMeasureSettings | undefined {
+  if (!flags || flags.length === 0) return undefined
+  return { show: MEASURE_FLAGS.filter((f) => flags.includes(f)) }
 }

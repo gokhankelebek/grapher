@@ -1872,11 +1872,39 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     { id: 'axis-pi' },
   ] },
   // ---------------------------------------------------- NC Math 1
-  { id: 'm1-functions', course: 'NC Math 1', title: 'Functions: notation, tables and comparing (F-IF.2, F-IF.9, F-LE.1, F-LE.3)', entries: [
+  { id: 'm1-functions', course: 'NC Math 1', title: 'Functions: notation, domain, piecewise and comparing (F-IF.1, 2, 5, 9; F-LE.3)', entries: [
     { id: 'curve-evaluate', note: 'Function notation: f(2.5), f(−1/3), f(−3) + g(2) — the exact value, its decimal, and the point on the graph (F-IF.2)' },
     { id: 'curve-table', note: 'A table from a start by a step (0.5, π/6) or a list; Δy constant means linear, the ratio constant means exponential (F-LE.1)' },
     { id: 'curve-compare', note: 'Two functions side by side; where an exponential passes a linear or quadratic one and stays ahead (F-IF.9, F-LE.3)' },
+    { id: 'domain-range', note: 'Domain and range in interval notation or set-builder (F-IF.1, F-IF.5)' },
+    { id: 'build-piecewise', note: 'Piece by piece, with open and closed dots where the pieces meet' },
+    { id: 'build-transform', note: 'Absolute value a|x − h| + k: the vertex, and the V of the parent |x| as a ghost' },
     { title: 'Table to data', text: 'Turn the table into a data table for a scatter plot or a regression', how: 'Curve card → Table → Copy to a data table' },
+  ] },
+  { id: 'm1-linexp', course: 'NC Math 1', title: 'Linear and exponential functions, sequences (F-IF.3, 6; F-BF.2; F-LE.1, 2, 5)', entries: [
+    { id: 'build-segment', note: 'The line through two points: its slope, and y = mx + b from Equation on its card (F-LE.2)' },
+    { id: 'build-exp', note: 'y = a·bˣ from a starting value and a growth or decay rate, or through two points (F-LE.2, F-LE.5)' },
+    { id: 'curve-table', note: 'Equal steps in x: Δy constant for a linear function, the ratio constant for an exponential one (F-LE.1)' },
+    { id: 'calc-secant', note: 'Average rate of change over an interval, as the slope of the secant (F-IF.6)' },
+    { id: 'build-seq', note: 'Arithmetic and geometric sequences, explicit and recursive, with the linear or exponential function behind the dots drawn dashed (F-IF.3, F-BF.2)' },
+    { id: 'view-analysis', note: 'Intercepts and asymptotes marked on the graph (F-IF.4)' },
+  ] },
+  { id: 'm1-quad', course: 'NC Math 1', title: 'Quadratic functions (F-IF.4, 7, 8; A-SSE.3)', entries: [
+    { id: 'view-analysis', note: 'The vertex (maximum or minimum), the zeros and the y-intercept marked on the graph (F-IF.4)' },
+    { id: 'build-transform', note: 'Vertex form a(x − h)² + k; a quadratic typed in standard form is read in vertex form on its card' },
+    { id: 'build-roots', note: 'Factored form from the zeros; a typed (x − 4)(x + 2) is read back as its roots on the card (A-SSE.3)' },
+    { id: 'curve-table', note: 'Δ²y is constant: the table of a quadratic' },
+    { id: 'domain-range' },
+  ] },
+  { id: 'm1-systems', course: 'NC Math 1', title: 'Equations, inequalities and systems (A-REI.3, 6, 10–12)', entries: [
+    { title: 'Intersections', text: 'Where two graphs meet, exact where it can be: the solution of a system of equations (A-REI.6, A-REI.11)', how: 'Type both equations: the points are marked on the board and listed on each curve’s card' },
+    { id: 'build-inequality', note: 'y > 2x − 3: the boundary dashed for < and >, solid for ≤ and ≥; several at once shade the solution of the system, with a test point (A-REI.12)' },
+    { id: 'nl-solve', note: 'Linear and absolute value inequalities in one variable, the solution on a number line (A-REI.3)' },
+  ] },
+  { id: 'm1-coord', course: 'NC Math 1', title: 'Coordinate geometry: distance, midpoint, slope, polygons (G-GPE.4–6)', entries: [
+    { id: 'build-segment', note: 'AB = (1,2) (4,6): the exact length, the midpoint and the slope (G-GPE.6)' },
+    { id: 'build-shape', note: 'Side lengths and slopes, perimeter and area (shoelace), and what the figure is with the reason: “AB ∥ DC and AD ∥ BC, so ABCD is a parallelogram” (G-GPE.4)' },
+    { id: 'build-parallel-line', note: 'The line through a point parallel or perpendicular to a side: equal slopes, or opposite reciprocals (G-GPE.5)' },
   ] },
   { id: 'm1-stats', course: 'NC Math 1', title: 'Statistics: one-variable data (S-ID.1–3)', entries: [
     { id: 'build-data-plot', note: 'Paste a list for a dot plot or histogram (bin width editable) and a box plot with outliers as separate points (S-ID.1)' },
@@ -1884,16 +1912,44 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     { id: 'build-data-plot', note: 'Shape (roughly symmetric / skewed) and which measures fit it: median and IQR for skewed data or outliers, mean and SD otherwise' },
     { id: 'build-data-plot', note: 'Outliers by the 1.5·IQR fences: leave them out, or click dots, and compare before and after (S-ID.3)' },
   ] },
-  { id: 'm1-bivariate', course: 'NC Math 1', title: 'Statistics: two-variable data (S-ID.6–8)', entries: [
-    { id: 'build-data', note: 'Paste (x, y) data for a scatter plot, then Regression ▾ → Linear for the line of best fit' },
+  { id: 'm1-bivariate', course: 'NC Math 1', title: 'Statistics: two-variable data (S-ID.6–9)', entries: [
+    { id: 'build-data', note: 'Paste (x, y) data for a scatter plot, then Regression ▾ → Linear for the line of best fit (S-ID.6a)' },
     { title: 'Residual plot', text: 'Residuals vs x under the scatter plot, the residuals in the table, and whether a linear model appears appropriate (S-ID.6b)', how: 'Data table → select a regression → residual plot' },
-    { title: 'Correlation coefficient', text: 'r and its meaning in words — strong / moderate / weak, positive / negative — and that correlation is not causation (S-ID.8)', how: 'Data table → Regression ▾ → Linear' },
+    { id: 'build-data', note: 'Regression ▾ → Exponential for data that grows by a factor (S-ID.6c)' },
+    { title: 'Correlation coefficient', text: 'r and its meaning in words — strong / moderate / weak, positive / negative — and that correlation is not causation (S-ID.8, S-ID.9)', how: 'Data table → Regression ▾ → Linear' },
   ] },
   // ---------------------------------------------------- NC Math 2
-  { id: 'm2-functions', course: 'NC Math 2', title: 'Functions: comparing representations (F-IF.9)', entries: [
+  { id: 'm2-quad', course: 'NC Math 2', title: 'Quadratics: forms, equations and systems (F-IF.7, 8; A-SSE.3; A-REI.4, 7)', entries: [
+    { id: 'build-transform', note: 'Vertex form a(x − h)² + k; a quadratic typed in standard form is read in vertex form on its card (completing the square, A-SSE.3)' },
+    { id: 'build-roots', note: 'Factored form: the zeros and their multiplicities; a typed (x − 4)(x + 2) is read back as its roots (F-IF.8)' },
+    { id: 'view-analysis', note: 'Vertex, zeros and y-intercept on the graph — the solutions of f(x) = 0 (A-REI.4)' },
+    { title: 'Line and parabola', text: 'Type the parabola and the line: their intersections — none, one or two — are marked, exact where they can be (A-REI.7)', how: 'Each curve’s card → Intersection' },
+    { id: 'nl-solve', note: 'Quadratic inequalities such as x² − 2x − 3 ≤ 0, with critical values and a sign chart (A-CED.1)' },
+  ] },
+  { id: 'm2-radical', course: 'NC Math 2', title: 'Square root and inverse variation functions (F-IF.7, F-BF.3)', entries: [
+    { id: 'build-transform', note: 'Square root a√(x − h) + k and inverse variation a/(x − h) + k from the parent gallery, with the parent ghost and its key points mapped' },
+    { id: 'domain-range', note: 'Domain and range: √(x + 3) needs x ≥ −3; 12/x is undefined at x = 0' },
+    { id: 'view-analysis', note: 'The asymptotes of y = k/x and the intercepts' },
+    { id: 'curve-table', note: 'A list of x’s (1, 2, 3, 4, 6, 12) for y = 12/x: double x and y halves' },
+  ] },
+  { id: 'm2-functions', course: 'NC Math 2', title: 'Functions: transformations and comparing representations (F-BF.3, F-IF.9)', entries: [
+    { id: 'build-transform', note: 'a·f(b(x − h)) + k: the steps in order, the parent as a ghost and each key point’s image (F-BF.3)' },
+    { id: 'duplicate-curve', note: 'A copy of f to transform beside the original' },
     { id: 'curve-table', note: 'A quadratic’s table: Δ²y is constant; a table on the figure for a worksheet' },
     { id: 'curve-compare', note: 'A quadratic beside a linear or exponential function, given by equation, graph or table' },
     { id: 'curve-evaluate' },
+  ] },
+  { id: 'm2-xform', course: 'NC Math 2', title: 'Transformations, congruence and similarity (G-CO.2–8, G-SRT.1–3)', entries: [
+    { id: 'build-shape', note: 'Type the figure: ABC = (1,2) (4,2) (4,6)' },
+    { id: 'shape-transform', note: 'Translate, reflect, rotate or dilate it: a linked image A′B′C′ with R_{90°, O}: (x, y) → (−y, x), rigid or not, and ✓ for what is preserved' },
+    { id: 'shape-transform', note: 'Chain them: transform the image to get A″B″C″ and the composite rule; or type reflect A′B′C′ across y = x' },
+    { id: 'shape-compare', note: 'Congruent or similar, the motion that maps one onto the other, and SSS / SAS / ASA / AAS / HL or AA / SAS~ / SSS~ (never SSA)' },
+    { id: 'shape-symmetry', note: 'The lines of symmetry and the rotation symmetry of a triangle, quadrilateral or regular polygon' },
+  ] },
+  { id: 'm2-trig', course: 'NC Math 2', title: 'Right triangle trigonometry (G-SRT.6–8, 12)', entries: [
+    { id: 'build-shape', note: 'ABC = (0,0) (4,0) (4,3): the right angle, 4² + 3² = 5², and sin, cos and tan of each acute angle as side ratios (G-SRT.6–8)' },
+    { id: 'build-shape', note: 'A 45-45-90 or 30-60-90 triangle is recognised, with its side ratio (G-SRT.12)' },
+    { id: 'shape-compare', note: 'Two right triangles with an equal acute angle are similar (AA), so their trig ratios match (G-SRT.6)' },
   ] },
   { id: 'm2-prob', course: 'NC Math 2', title: 'Probability (S-CP.1, 3–8)', entries: [
     { id: 'build-probability', note: 'Two-way table: type the counts; the totals, P(A and B), P(A), P(B) and P(A | B) as the fraction of B’s outcomes, with B’s column and the cell highlighted (S-CP.3a, 6)' },
@@ -1901,13 +1957,6 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     { id: 'build-probability', note: 'Joint, row and column percentages (Show → Joint % / Row % / Column %)' },
     { id: 'build-probability', note: 'Venn diagram: two or three sets; shade A ∪ B, A ∩ Bᶜ, (A ∪ B)ᶜ … and read P by the Addition Rule P(A ∪ B) = P(A) + P(B) − P(A ∩ B) (S-CP.1, 7)' },
     { id: 'build-probability', note: 'Tree diagram: draw 2 from 3 red and 2 blue with or without replacement, or type the stages; path products by the Multiplication Rule and an event as a sum of paths (S-CP.4, 8)' },
-  ] },
-  { id: 'm2-xform', course: 'NC Math 2', title: 'Transformations, congruence and similarity', entries: [
-    { id: 'build-shape', note: 'Type the figure: ABC = (1,2) (4,2) (4,6)' },
-    { id: 'shape-transform', note: 'Translate, reflect, rotate or dilate it: a linked image A′B′C′ with R_{90°, O}: (x, y) → (−y, x), rigid or not, and ✓ for what is preserved' },
-    { id: 'shape-transform', note: 'Chain them: transform the image to get A″B″C″ and the composite rule; or type reflect A′B′C′ across y = x' },
-    { id: 'shape-compare', note: 'Congruent or similar, the motion that maps one onto the other, and SSS / SAS / ASA / AAS / HL or AA / SAS~ / SSS~ (never SSA)' },
-    { id: 'shape-symmetry', note: 'The lines of symmetry and the rotation symmetry of a triangle, quadrilateral or regular polygon' },
   ] },
   { id: 'm3-geo', course: 'NC Math 3', title: 'Circles, conics and shapes', entries: [
     { id: 'build-conic' },

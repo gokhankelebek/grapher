@@ -23,21 +23,23 @@
 import type { BoardKind } from '../core/types'
 import type { ExampleBoard } from './builder'
 
-export type ExampleCourse = 'calc' | 'precalc' | 'math3'
+export type ExampleCourse = 'calc' | 'precalc' | 'math1' | 'math2' | 'math3'
 
 export const COURSE_NAMES: Record<ExampleCourse, string> = {
   calc: 'AP Calculus AB / BC',
   precalc: 'AP Precalculus',
+  math1: 'NC Math 1',
+  math2: 'NC Math 2',
   math3: 'NC Math 3',
 }
 
-export const COURSE_ORDER: readonly ExampleCourse[] = ['calc', 'precalc', 'math3']
+export const COURSE_ORDER: readonly ExampleCourse[] = ['calc', 'precalc', 'math1', 'math2', 'math3']
 
 export interface ExampleDef {
   /** Stable id (a gallery link and a test name). Never rename one. */
   id: string
   course: ExampleCourse
-  /** The unit tag in the document name: U5, PC2, M3. */
+  /** The unit tag in the document name: U5, PC2, M1, M2, M3. */
   unit: string
   /** The help sheet sections (HELP_SECTIONS ids) that link here; the first is its home unit. */
   help: readonly string[]
@@ -531,6 +533,349 @@ export const EXAMPLE_DEFS: readonly ExampleDef[] = [
       b.piAxis()
       b.frame([-2 * PI, 2 * PI], [-5, 5])
       b.line('f(x) = tan(x)')
+    },
+  },
+
+  // ======================================================== NC Math 1
+  {
+    id: 'm1-linear-vs-exponential',
+    course: 'math1',
+    unit: 'M1',
+    help: ['m1-linexp', 'm1-functions'],
+    title: 'Linear or exponential? Reading the table',
+    short: '3x + 5 against 2ˣ',
+    note:
+      'Both tables step x by 1: f(x) = 3x + 5 adds 3 every step (Δy = 3), while g(x) = 2ˣ multiplies by 2 (ratio 2). Ask the class which function is ahead at x = 4 and at x = 5, then why the exponential passes the linear one and never falls behind again.',
+    keywords: ['linear', 'exponential', 'table of values', 'common difference', 'common ratio', 'constant rate', 'growth factor', 'compare', 'F-LE.1', 'F-LE.3'],
+    build: (b) => {
+      b.frame([-4, 7], [-30, 66], { independent: true })
+      const f = b.line('f(x) = 3x + 5')
+      const g = b.line('g(x) = 2^x')
+      b.view(g, { table: { n: 7, cols: ['ratio'] } })
+      b.view(f, { table: { n: 7, cols: ['d1'], vs: g, fig: true } })
+      b.select(f)
+    },
+  },
+  {
+    id: 'm1-sequences',
+    course: 'math1',
+    unit: 'M1',
+    help: ['m1-linexp'],
+    title: 'Arithmetic and geometric sequences',
+    short: 'arithmetic and geometric sequences',
+    note:
+      'aₙ = 3 + 4(n − 1) adds 4 each term and bₙ = 2(1.5)ⁿ⁻¹ multiplies by 1.5; the dashed curves are the linear and exponential functions the dots sit on. Ask the class for the recursive rule of each, then which sequence is larger at n = 10 and how they know without computing every term.',
+    keywords: ['sequence', 'arithmetic', 'geometric', 'common difference', 'common ratio', 'explicit', 'recursive', 'F-BF.2', 'F-IF.3'],
+    build: (b) => {
+      b.frame([-0.5, 9.5], [-3, 40], { independent: true })
+      b.sequence('a_n = 3 + 4(n - 1)', { n0: 1, count: 8, partner: true })
+      b.sequence('b_n = 2(1.5)^(n - 1)', { n0: 1, count: 8, partner: true })
+    },
+  },
+  {
+    id: 'm1-quadratic-features',
+    course: 'math1',
+    unit: 'M1',
+    help: ['m1-quad'],
+    title: 'Key features of a quadratic',
+    short: 'vertex, zeros and axis of −x² + 2x + 8',
+    note:
+      'f(x) = −x² + 2x + 8 opens down, with its vertex at (1, 9), zeros at x = −2 and x = 4, y-intercept 8, and the dashed axis of symmetry x = 1. Ask the class to find the vertex from x = −b/(2a) and the zeros by factoring before you point at the marks, then why the axis sits halfway between the zeros.',
+    keywords: ['quadratic', 'parabola', 'vertex', 'zeros', 'roots', 'x-intercepts', 'y-intercept', 'axis of symmetry', 'maximum', 'standard form', 'F-IF.4', 'F-IF.7'],
+    build: (b) => {
+      b.frame([-5, 7], [-5, 11])
+      b.line('x = 1', { dash: [6, 5], color: '#9aa4b2', strokeWidth: 1.5 })
+      const f = b.line('f(x) = -x^2 + 2x + 8')
+      b.view(f, { table: { start: '-2', n: 7, cols: ['d1', 'd2'] } })
+      b.select(f)
+    },
+  },
+  {
+    id: 'm1-system-of-lines',
+    course: 'math1',
+    unit: 'M1',
+    help: ['m1-systems'],
+    title: 'A system of two linear equations',
+    short: 'the system y = 2x − 1, y = −x + 5',
+    note:
+      'The lines y = 2x − 1 and y = −x + 5 meet at (2, 3), the one solution of the system; the point is listed on both cards. Have the class solve by substitution first, then check that (2, 3) makes both equations true and ask what the graphs would look like if the system had no solution.',
+    keywords: ['system of equations', 'linear system', 'intersection', 'solution', 'substitution', 'elimination', 'A-REI.6', 'A-REI.11'],
+    build: (b) => {
+      b.frame([-4, 7], [-3, 7])
+      b.line('y = 2x - 1')
+      b.line('y = -x + 5')
+    },
+  },
+  {
+    id: 'm1-inequality-system',
+    course: 'math1',
+    unit: 'M1',
+    help: ['m1-systems'],
+    title: 'A system of linear inequalities',
+    short: 'y > 2x − 3 and y ≤ −x/2 + 2',
+    note:
+      'Only the overlap is shaded: points above the dashed line y = 2x − 3 and on or below the solid line y = −x/2 + 2. The test point (0, 0) satisfies both inequalities — drag it into each region and ask the class why the corner (2, 1) belongs to one boundary and not the other.',
+    keywords: ['system of inequalities', 'linear inequality', 'shading', 'half-plane', 'test point', 'dashed', 'solid', 'A-REI.12'],
+    build: (b) => {
+      b.frame([-5, 6], [-5, 5])
+      b.line('y > 2x - 3')
+      b.line('y <= -x/2 + 2')
+      b.system({ solution: true, test: { x: 0, y: 0 } })
+    },
+  },
+  {
+    id: 'm1-absolute-value',
+    course: 'math1',
+    unit: 'M1',
+    help: ['m1-functions', 'm1-systems'],
+    title: 'Absolute value as a piecewise function',
+    short: '|x − 1| − 2 and |x − 1| − 2 = 1',
+    note:
+      'f(x) = |x − 1| − 2 is the parent V moved right 1 and down 2, so its vertex is (1, −2); the line y = 1 meets it at x = −2 and x = 4, the solutions of |x − 1| − 2 = 1. Ask the class to write f piecewise (−x − 1 for x < 1, x − 3 for x ≥ 1) and to read the domain and range from the graph.',
+    keywords: ['absolute value', 'piecewise', 'vertex', 'absolute value equation', 'transformation', 'domain', 'range', 'intersection'],
+    build: (b) => {
+      b.frame([-5, 7], [-4, 5])
+      const f = b.line('f(x) = |x - 1| - 2')
+      b.view(f, { showParent: true })
+      b.line('y = 1', { color: '#9aa4b2', strokeWidth: 2 })
+      b.select(f)
+    },
+  },
+  {
+    id: 'm1-parallelogram',
+    course: 'math1',
+    unit: 'M1',
+    help: ['m1-coord'],
+    title: 'Prove it is a parallelogram with slopes',
+    short: 'ABCD is a parallelogram',
+    note:
+      'Opposite sides have equal slopes, AB ∥ DC (slope 1/5) and AD ∥ BC (slope 2), so ABCD is a parallelogram; its perimeter is 2√26 + 4√5 ≈ 19.14 and its area 18. Ask the class why it is not a rectangle (1/5 · 2 ≠ −1), then to show that both diagonals have the midpoint (1/2, 3/2).',
+    keywords: ['parallelogram', 'coordinate proof', 'slope', 'parallel', 'perpendicular', 'distance', 'perimeter', 'area', 'shoelace', 'quadrilateral', 'G-GPE.4', 'G-GPE.5'],
+    build: (b) => {
+      b.frame([-5, 6], [-3, 6])
+      b.shape('ABCD = (-3,-1) (2,0) (4,4) (-1,3)', { fill: true, measure: ['lengths', 'slopes', 'area', 'classify'] })
+    },
+  },
+  {
+    id: 'm1-box-plots',
+    course: 'math1',
+    unit: 'M1',
+    help: ['m1-stats'],
+    title: 'Comparing two classes with box plots',
+    short: 'two classes, one outlier',
+    note:
+      'The same test in two classes: Period 1 is tightly clustered except for one score of 42, an outlier beyond the lower 1.5·IQR fence, and Period 4 is more spread out. Ask the class which measures of centre and spread are fair to compare here and why, then leave the outlier out and watch which numbers change.',
+    keywords: ['box plot', 'dot plot', 'outlier', 'iqr', 'median', 'mean', 'compare data sets', 'parallel box plots', 'five-number summary', 'S-ID.1', 'S-ID.2', 'S-ID.3'],
+    build: (b) => {
+      b.dataPlot(
+        [
+          { name: 'Period 1', values: [78, 82, 85, 74, 88, 91, 79, 84, 86, 80, 77, 83, 90, 87, 81, 76, 89, 85, 42, 84] },
+          { name: 'Period 4', values: [65, 92, 71, 88, 58, 95, 77, 83, 69, 90, 74, 86, 62, 98, 80, 73, 91, 67, 85, 79] },
+        ],
+        { dist: 'dots', box: true },
+      )
+    },
+  },
+  {
+    id: 'm1-scatter-residuals',
+    course: 'math1',
+    unit: 'M1',
+    help: ['m1-bivariate'],
+    title: 'Line of best fit and its residual plot',
+    short: 'study hours and scores: residuals',
+    note:
+      'Ten students’ study hours and test scores, with the least squares line and its residual plot underneath. Ask the class to interpret the slope in context and to read r, then decide from the residual plot whether a linear model is appropriate — and whether the data show that studying causes higher scores.',
+    keywords: ['scatter plot', 'regression', 'line of best fit', 'least squares', 'residual', 'residual plot', 'correlation', 'r', 'causation', 'S-ID.6', 'S-ID.8'],
+    build: (b) => {
+      b.table(
+        'Study time',
+        [[1, 60], [2, 62], [3, 68], [4, 71], [5, 73], [6, 80], [7, 82], [8, 86], [9, 90], [10, 93]],
+        { xLabel: 'hours', yLabel: 'score', regressions: ['linear'], residualPlot: 'linear' },
+      )
+    },
+  },
+
+  // ======================================================== NC Math 2
+  {
+    id: 'm2-quadratic-forms',
+    course: 'math2',
+    unit: 'M2',
+    help: ['m2-quad'],
+    title: 'One parabola, three forms',
+    short: 'standard, factored and vertex form',
+    note:
+      'f(x) = x² − 2x − 8 is in standard form, which shows the y-intercept −8; g and h, hidden in the sidebar, are the same function in factored form (x − 4)(x + 2), which shows the zeros 4 and −2, and vertex form (x − 1)² − 9, which shows the vertex (1, −9). Ask the class to factor f and complete the square by hand, then select g and h to check against their cards.',
+    keywords: ['quadratic', 'standard form', 'factored form', 'vertex form', 'completing the square', 'zeros', 'vertex', 'y-intercept', 'equivalent forms', 'A-SSE.3', 'F-IF.8'],
+    build: (b) => {
+      b.frame([-5, 7], [-11, 5])
+      const f = b.line('f(x) = x^2 - 2x - 8')
+      b.line('g(x) = (x - 4)(x + 2)', { hidden: true })
+      b.line('h(x) = (x - 1)^2 - 9', { hidden: true })
+      b.select(f)
+    },
+  },
+  {
+    id: 'm2-line-parabola',
+    course: 'math2',
+    unit: 'M2',
+    help: ['m2-quad'],
+    title: 'A system of a line and a parabola',
+    short: 'y = x² − 2x − 3 and y = x + 1',
+    note:
+      'The parabola y = x² − 2x − 3 and the line y = x + 1 meet at (−1, 0) and (4, 5). Ask the class to set the two equal, solve x² − 3x − 4 = 0 by factoring, and say how a different line could meet the parabola once or not at all.',
+    keywords: ['system', 'linear and quadratic', 'intersection', 'parabola', 'line', 'substitution', 'A-REI.7'],
+    build: (b) => {
+      b.frame([-4, 7], [-5, 9])
+      b.line('f(x) = x^2 - 2x - 3')
+      b.line('g(x) = x + 1')
+    },
+  },
+  {
+    id: 'm2-square-root',
+    course: 'math2',
+    unit: 'M2',
+    help: ['m2-radical'],
+    title: 'A square root function and its domain',
+    short: '2√(x + 3) − 1',
+    note:
+      'f(x) = 2√(x + 3) − 1 is √x stretched by 2, shifted left 3 and down 1, so it starts at (−3, −1): its domain is x ≥ −3 and its range y ≥ −1. Ask the class to map the parent’s key points (0, 0), (1, 1) and (4, 2), then why nothing is drawn to the left of x = −3.',
+    keywords: ['square root', 'radical function', 'domain', 'range', 'starting point', 'transformation', 'parent function', 'F-IF.7', 'F-BF.3'],
+    build: (b) => {
+      b.frame([-5, 8], [-3, 7])
+      const f = b.line('f(x) = 2sqrt(x + 3) - 1')
+      b.view(f, { showParent: true })
+    },
+  },
+  {
+    id: 'm2-inverse-variation',
+    course: 'math2',
+    unit: 'M2',
+    help: ['m2-radical'],
+    title: 'Inverse variation: y = 12/x',
+    short: 'inverse variation y = 12/x',
+    note:
+      'y = 12/x: in the table on the figure every x times its y is 12, so doubling x halves y; both axes are asymptotes. Ask the class for the constant of variation, then what happens to y as x grows and as x approaches 0 from either side.',
+    keywords: ['inverse variation', 'varies inversely', 'reciprocal', 'k/x', 'constant of variation', 'asymptote', 'hyperbola', 'A-CED.1', 'F-IF.7'],
+    build: (b) => {
+      b.frame([-13, 13], [-9, 14])
+      const f = b.line('f(x) = 12/x')
+      b.view(f, { table: { list: '1, 2, 3, 4, 6, 12', fig: true } })
+    },
+  },
+  {
+    id: 'm2-function-transformations',
+    course: 'math2',
+    unit: 'M2',
+    help: ['m2-functions'],
+    title: 'Transforming f(x) = |x|: −2f(x − 3) + 1',
+    short: '−2f(x − 3) + 1 for f(x) = |x|',
+    note:
+      'g(x) = −2|x − 3| + 1 is −2f(x − 3) + 1 for the parent f(x) = |x|, drawn as a ghost: reflected across the x-axis, stretched by 2, shifted right 3 and up 1. Ask the class where the parent’s points (0, 0), (1, 1) and (−1, 1) land, then which steps change the vertex and which change the slopes.',
+    keywords: ['transformation', 'parent function', 'reflection', 'vertical stretch', 'shift', 'absolute value', 'F-BF.3'],
+    build: (b) => {
+      b.frame([-3, 8], [-6, 4])
+      const g = b.line('g(x) = -2|x - 3| + 1')
+      b.view(g, { showParent: true })
+    },
+  },
+  {
+    id: 'm2-rotate-reflect',
+    course: 'math2',
+    unit: 'M2',
+    help: ['m2-xform'],
+    title: 'A rotation, then a reflection',
+    short: 'rotate ABC, then reflect',
+    note:
+      'ABC is rotated 90° about the origin, (x, y) → (−y, x), and its image A′B′C′ is reflected across the y-axis to A″B″C″. Ask the class for each image’s coordinates from the mapping rules before you reveal them, then for one transformation that takes ABC straight to A″B″C″ (the card names it).',
+    keywords: ['rotation', 'reflection', 'composition', 'mapping notation', 'image', 'prime', 'rigid motion', 'G-CO.2', 'G-CO.5'],
+    build: (b) => {
+      b.frame([-5, 7], [-1, 6])
+      b.shape('ABC = (2,1) (5,1) (2,3)', { fill: true })
+      b.image('rotate ABC 90° about (0, 0)')
+      b.image('reflect A′B′C′ across the y-axis')
+    },
+  },
+  {
+    id: 'm2-dilation-similarity',
+    course: 'math2',
+    unit: 'M2',
+    help: ['m2-xform'],
+    title: 'A dilation and similar triangles',
+    short: 'dilate by 2: similar, not congruent',
+    note:
+      'A′B′C′ is ABC dilated by 2 about the origin, (x, y) → (2x, 2y): every side doubles and every angle stays the same. The comparison on ABC’s card says the triangles are similar with scale factor 2 — ask the class which criterion proves it and why they are not congruent.',
+    keywords: ['dilation', 'scale factor', 'similar', 'similarity', 'center of dilation', 'proportional sides', 'AA', 'SSS similarity', 'G-SRT.1', 'G-SRT.2'],
+    build: (b) => {
+      b.frame([-1.5, 9], [-1, 9])
+      const abc = b.shape('ABC = (1,1) (3,1) (1,4)', { fill: true, measure: ['lengths'] })
+      const img = b.image('dilate ABC by 2 about (0, 0)', { measure: ['lengths'] })
+      b.compare(abc, img)
+    },
+  },
+  {
+    id: 'm2-right-triangle-trig',
+    course: 'math2',
+    unit: 'M2',
+    help: ['m2-trig'],
+    title: 'Trigonometric ratios in a right triangle',
+    short: 'sin, cos and tan in a 3-4-5 triangle',
+    note:
+      'ABC has its right angle at B, legs 4 and 3 and hypotenuse 5, so sin A = 3/5, cos A = 4/5 and tan A = 3/4, and ∠A ≈ 36.87°. Ask the class to write the three ratios for ∠C as well and explain why sin A = cos C.',
+    keywords: ['right triangle', 'trigonometry', 'sine', 'cosine', 'tangent', 'sohcahtoa', 'pythagorean theorem', 'complementary angles', 'G-SRT.6', 'G-SRT.8'],
+    build: (b) => {
+      b.frame([-1, 6], [-1, 4])
+      b.shape('ABC = (0,0) (4,0) (4,3)', { fill: true, measure: ['lengths', 'angles', 'right'] })
+    },
+  },
+  {
+    id: 'm2-two-way-table',
+    course: 'math2',
+    unit: 'M2',
+    help: ['m2-prob'],
+    title: 'A two-way table: are the events independent?',
+    short: 'two-way table and independence',
+    note:
+      'In this survey of 100 students, P(Junior | drives) = 24/40 = 3/5 and P(Junior) = 60/100 = 3/5, so being a junior and driving to school are independent here. Ask the class to check with P(A and B) = P(A)·P(B), then change one count and watch the verdict change.',
+    keywords: ['two-way table', 'conditional probability', 'independent', 'independence', 'joint', 'marginal', 'S-CP.4', 'S-CP.5', 'S-CP.6'],
+    build: (b) => {
+      b.probability('table', {
+        table: {
+          rows: ['Junior', 'Senior'],
+          cols: ['Drives', 'Doesn’t drive'],
+          counts: [
+            [24, 36],
+            [16, 24],
+          ],
+          a: 0,
+          b: 0,
+        },
+      })
+    },
+  },
+  {
+    id: 'm2-tree-without-replacement',
+    course: 'math2',
+    unit: 'M2',
+    help: ['m2-prob'],
+    title: 'A tree diagram: drawing without replacement',
+    short: 'two draws without replacement',
+    note:
+      'A bag holds 4 green and 6 yellow marbles and two are drawn without replacement, so the second-stage branches change: P(both green) = 4/10 · 3/9 = 2/15. The event shown is at least one green, 2/3 — ask the class to find it from the paths, then as 1 − P(no green).',
+    keywords: ['tree diagram', 'without replacement', 'dependent events', 'multiplication rule', 'conditional probability', 'complement', 'marbles', 'S-CP.8'],
+    build: (b) => {
+      b.probability('tree', {
+        tree: {
+          mode: 'bag',
+          bag: [
+            { name: 'Green', count: 4 },
+            { name: 'Yellow', count: 6 },
+          ],
+          draws: 2,
+          replace: false,
+          pick: [],
+          event: 'at least one Green',
+        },
+      })
     },
   },
 

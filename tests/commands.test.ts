@@ -227,6 +227,11 @@ describe('the registry', () => {
     const pc = HELP_SECTIONS.filter((s) => s.course === 'AP Precalculus').map((s) => s.title)
     expect(pc.map((t) => t.slice(0, 6))).toEqual(['Unit 1', 'Unit 2', 'Unit 3'])
     expect(HELP_SECTIONS.some((s) => s.course === 'NC Math 3')).toBe(true)
+    for (const course of ['NC Math 1', 'NC Math 2']) {
+      const n = HELP_SECTIONS.filter((s) => s.course === course).length
+      expect(n, course).toBeGreaterThanOrEqual(4)
+      expect(n, course).toBeLessThanOrEqual(7)
+    }
   })
 })
 
@@ -691,6 +696,10 @@ describe('the palette and the help sheet render accessibly', () => {
       'AP Calculus AB / BC',
       'Unit 10 · Infinite sequences and series (BC)',
       'AP Precalculus',
+      'NC Math 1',
+      'Coordinate geometry: distance, midpoint, slope, polygons (G-GPE.4–6)',
+      'NC Math 2',
+      'Right triangle trigonometry (G-SRT.6–8, 12)',
       'NC Math 3',
       'Drawing &amp; editing',
       'Exports &amp; worksheets',
