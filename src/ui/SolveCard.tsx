@@ -35,6 +35,8 @@ import {
   workingSteps,
   workingText,
 } from './nlSolve'
+import { useInk } from './inkContext'
+import { equationLabel } from '../core/mathSpeech'
 
 interface Props {
   item: NLSolveItem
@@ -116,6 +118,7 @@ export function SolveCard({
   onStyleEditStart,
   onStyleEditEnd,
 }: Props) {
+  const ink = useInk()
   const outcome = useMemo(() => solveCached(item.src), [item.src])
   const result = outcome.ok ? outcome : null
   const show = solveShow(item)
@@ -175,9 +178,10 @@ export function SolveCard({
   return (
     <div
       className={`card nl-card solve-card${selected ? ' card-selected' : ''}`}
-      role="button"
+      role="group"
+      aria-roledescription="card"
       tabIndex={0}
-      aria-pressed={selected}
+      aria-current={selected ? 'true' : undefined}
       aria-label={`Inequality ${item.src}`}
       data-item-id={item.id}
       data-testid="solve-card"
@@ -193,7 +197,7 @@ export function SolveCard({
       <div className="card-head">
         <button
           className="color-dot"
-          style={{ background: item.color }}
+          style={{ background: ink(item.color) }}
           title="Change colour"
           aria-label="Change item colour"
           onClick={(e) => {
@@ -232,6 +236,7 @@ export function SolveCard({
             type="button"
             className="card-formula card-formula-btn"
             title="Click to retype the inequality"
+            aria-label={result ? equationLabel(inputTex(result), 'Inequality') : `Inequality: ${item.src}`}
             onClick={(e) => {
               e.stopPropagation()
               onSelect()

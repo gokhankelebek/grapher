@@ -309,6 +309,7 @@ export function DomainSection({ panel, actions, notation }: Props) {
                 className={`dr-verdict ${hlt.verdict.fails ? 'dr-fails' : 'dr-passes'}`}
                 data-testid="hlt-verdict"
               >
+                <span aria-hidden="true">{hlt.verdict.glyph} </span>
                 {hlt.verdict.chip}
               </span>
             )}

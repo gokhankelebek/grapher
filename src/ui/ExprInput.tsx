@@ -76,6 +76,8 @@ export function ExprInput({ onSubmit, onClose, placeholder, names, initial }: Pr
         spellCheck={false}
         autoComplete="off"
         placeholder={placeholder ?? 'y = 2sin(3x) + 1'}
+        aria-label={placeholder && /[<>≤≥]|\|/.test(placeholder) ? 'Type an inequality' : 'Type an equation'}
+        aria-invalid={error ? true : undefined}
         value={text}
         onChange={(e) => {
           setText(e.target.value)
@@ -88,6 +90,12 @@ export function ExprInput({ onSubmit, onClose, placeholder, names, initial }: Pr
           } else if (e.key === 'Escape') {
             e.preventDefault()
             onClose()
+            // Back to the + that opened the box, not to nowhere.
+            window.setTimeout(() => {
+              if (document.activeElement === document.body) {
+                document.querySelector<HTMLElement>('.sidebar .add-btn')?.focus()
+              }
+            }, 0)
           }
         }}
       />
@@ -108,7 +116,11 @@ export function ExprInput({ onSubmit, onClose, placeholder, names, initial }: Pr
           ))}
         </div>
       )}
-      {error && <div className="expr-error">{error}</div>}
+      {error && (
+        <div className="expr-error" role="alert">
+          {error}
+        </div>
+      )}
     </div>
   )
 }

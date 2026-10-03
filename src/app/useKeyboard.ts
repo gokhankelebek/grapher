@@ -19,6 +19,7 @@ import type { CalcLinksApi } from './useCalcLinks'
 import type { RevealModeApi } from './useRevealMode'
 import type { FigureSettingsApi } from './useFigureSettings'
 import type { SidebarEditorsApi } from './useSidebarEditors'
+import type { ViewportApi } from './useViewport'
 
 /** What useKeyboard reads from the hooks App calls before it. */
 export interface KeyboardDeps {
@@ -32,9 +33,10 @@ export interface KeyboardDeps {
   revealMode: RevealModeApi
   figureSettings: FigureSettingsApi
   editors: SidebarEditorsApi
+  viewport: ViewportApi
 }
 
-export function useKeyboard({ board, docState, session, refs, history, editing, calc, revealMode, figureSettings, editors }: KeyboardDeps) {
+export function useKeyboard({ board, docState, session, refs, history, editing, calc, revealMode, figureSettings, editors, viewport }: KeyboardDeps) {
   const { setSidebarOpen, armedBetweenRef } = board
   const { sharedRef } = docState
   const { setShowAnalysis, revealRef, setPresentMode, setPalette, setHelpOpen } = session
@@ -45,6 +47,7 @@ export function useKeyboard({ board, docState, session, refs, history, editing, 
   const { revealStep, toggleReveal } = revealMode
   const { cycleAxisUnitX } = figureSettings
   const { deleteSelection } = editors
+  const { zoomBy } = viewport
 
   // ---------------------------------------------------------------- keyboard
   useEffect(() => {
@@ -108,6 +111,13 @@ export function useKeyboard({ board, docState, session, refs, history, editing, 
         const [ux, uy] = NUDGE[e.key]
         const step = e.shiftKey ? 1 : 0.1
         if (nudgeSelected(ux * step, uy * step)) e.preventDefault()
+      } else if ((e.key === '+' || e.key === '=') && !meta && !e.altKey) {
+        // Zoom from the keyboard, about the centre — the corner's + and −.
+        e.preventDefault()
+        zoomBy(1.25)
+      } else if (e.key === '-' && !meta && !e.altKey) {
+        e.preventDefault()
+        zoomBy(1 / 1.25)
       } else if (e.key === '\\' && !meta) {
         // The sidebar is half the app and had no key at all.
         e.preventDefault()
@@ -162,5 +172,6 @@ export function useKeyboard({ board, docState, session, refs, history, editing, 
     cycleAxisUnitX,
     toggleReveal,
     revealStep,
+    zoomBy,
   ])
 }

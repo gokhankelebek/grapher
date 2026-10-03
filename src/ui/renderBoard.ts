@@ -35,7 +35,10 @@ import type {
   Vec2,
   Viewport,
 } from '../core/types'
-import { FIGURE_STYLES, LIGHT_THEME, ppuX, ppuY, toPrintColor, toScreen } from '../core/types'
+import { FIGURE_STYLES, LIGHT_THEME, ppuX, ppuY, toScreen } from '../core/types'
+import type { CurvePalette } from '../core/a11yPalette'
+import { inkMapper } from '../core/a11yPalette'
+import { paletteDashes } from './dashes'
 import type { StyleMap } from '../core/persist'
 import type { AxisUnit, AxisUnits, PaintScale } from '../render/grid'
 import { SCREEN_GRID, drawGrid, labelFont as figureFont, paintScale } from '../render/grid'
@@ -273,6 +276,16 @@ export interface BoardScene {
    * disagree -- that was the bug.
    */
   printColors?: boolean
+  /**
+   * The person's curve palette (Board & export settings → Curve colours).
+   * Absent or 'standard' draws exactly what the board always drew. 'safe'
+   * maps every curve-palette colour to the colour-blind-safe palette
+   * (src/core/a11yPalette.ts — its screen or print half, by the same ground
+   * rule as the print palette) AND gives every visible curve a distinct dash
+   * pattern (src/ui/dashes.ts), so no meaning rides on colour alone. The
+   * document's own colours and styles are never changed.
+   */
+  inkPalette?: CurvePalette
   /**
    * Presentation scaling, for a board projected across a classroom.
    *
@@ -1169,7 +1182,17 @@ export function sceneInk(scene: BoardScene): (color: string) => string {
   const fig = figureOf(scene)
   if (fig?.curveInk === 'mono') return () => scene.theme.axis
   const print = scene.printColors === true || !isDarkGround(scene.theme)
-  return (c: string): string => (print ? toPrintColor(c) : c)
+  return inkMapper(print, scene.inkPalette)
+}
+
+/**
+ * The scene as drawn under its palette: under 'safe', every visible curve with
+ * a dash pattern of its own (a teacher's own dash is kept). Same scene object
+ * otherwise, so the standard path is untouched.
+ */
+export function withPaletteStyles<S extends BoardScene>(scene: S): S {
+  if (scene.inkPalette !== 'safe' || scene.kind === 'number-line') return scene
+  return { ...scene, styles: paletteDashes(scene.curves, scene.styles) }
 }
 
 export function intersectionInk(theme: Theme, mono = false): string {
@@ -2069,7 +2092,8 @@ export function domainEnds(
  * markers go UNDER the handles — handles are interactive and must stay visually
  * dominant wherever the two coincide.
  */
-export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): void {
+export function renderBoard(ctx: CanvasRenderingContext2D, sceneIn: BoardScene): void {
+  const scene = withPaletteStyles(sceneIn)
   const { vp, models } = scene
   const chrome = scene.chrome ?? null
   const scale = paintScale(scene.present)
@@ -2091,7 +2115,9 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
   // construction; `printColors` survives only as a force-on.
   const lightGround = !isDarkGround(theme)
   const print = scene.printColors === true || lightGround
-  const paint = (c: string): string => (print ? toPrintColor(c) : c)
+  const paint = inkMapper(print, scene.inkPalette)
+  /** Curves are repainted when the ground is paper OR the person chose the safe palette. */
+  const remap = print || scene.inkPalette === 'safe'
 
   // Mono ink: one black for every curve, polyline, field, shape and overlay
   // outline. A printed figure is photocopied, faxed and scanned to grey; the
@@ -2245,7 +2271,7 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
       const c =
         fig !== null
           ? { ...curve, color: ink(curve.color), strokeWidth: typeof w === 'number' && w > 0 ? w : fig.curveWidth }
-          : print
+          : remap
             ? { ...curve, color: paint(curve.color) }
             : curve
       drawInequalityBoundaries(ctx, c, info, models, vp, {
@@ -2289,7 +2315,7 @@ export function renderBoard(ctx: CanvasRenderingContext2D, scene: BoardScene): v
               color: ink(curve.color),
               strokeWidth: typeof w === 'number' && w > 0 ? w : fig.curveWidth,
             }
-          : print
+          : remap
           ? { ...curve, color: paint(curve.color) }
           : curve
       // Where the formula breaks. Both lists come from src/core/holes.ts, and

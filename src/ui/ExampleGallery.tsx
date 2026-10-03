@@ -20,6 +20,7 @@ import type { DisplayList } from '../render/vectorCtx'
 import { replayList } from '../render/vectorPage'
 import { docFigure, docModelFromJSON, recordFigure } from './docScene'
 import { PX_PER_CM } from './vectorExport'
+import { prefersReducedMotion } from './motionPref'
 
 interface Props {
   /** Scroll to (and highlight) the examples of this help-sheet unit. */
@@ -171,7 +172,7 @@ export function ExampleGallery({ focusSection = null, onOpen, onClose }: Props) 
   }
 
   const jump = (course: string): void => {
-    rootRef.current?.querySelector<HTMLElement>(`[data-course="${course}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+    rootRef.current?.querySelector<HTMLElement>(`[data-course="${course}"]`)?.scrollIntoView({ block: 'start', behavior: prefersReducedMotion() ? 'auto' : 'smooth' })
   }
 
   const titleId = `${uid}-title`

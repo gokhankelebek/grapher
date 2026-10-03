@@ -25,6 +25,7 @@ import { toPdfPages } from '../render/vectorPdf'
 import { replayList } from '../render/vectorPage'
 import { itemLabel } from './worksheetLayout'
 import { PX_PER_CM } from './vectorExport'
+import { useDialogFocus } from './useDialogFocus'
 
 interface Props {
   docs: DocMeta[]
@@ -148,6 +149,7 @@ export function WorksheetEditor({ docs, screen: screenIn, onClose, toast }: Prop
   const rootRef = useRef<HTMLDivElement>(null)
   const closeRef = useRef(onClose)
   closeRef.current = onClose
+  useDialogFocus(rootRef, onClose, { escape: false, autoFocus: false })
   useEffect(() => {
     rootRef.current?.focus()
     const trap = (e: KeyboardEvent): void => {

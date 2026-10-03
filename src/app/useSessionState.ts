@@ -12,6 +12,7 @@
 
 import { useCallback, useRef, useState } from 'react'
 import { AUTO_AXIS_UNITS } from '../core/persist'
+import type { CurvePalette } from '../core/a11yPalette'
 import type { AxisUnitChoices } from '../core/persist'
 import type { SetNotation } from '../ui/domainLinks'
 import type { FitExportSettings } from '../ui/exportFit'
@@ -64,6 +65,12 @@ export function useSessionState() {
   const setWheelPref = useCallback((next: WheelPref): void => {
     setWheelPrefState(next)
     updatePrefs({ wheel: next })
+  }, [])
+  /** Curve colours: standard, or colour-blind safe with a dash per curve. A person's need, kept in prefs. */
+  const [curvePalette, setCurvePaletteState] = useState<CurvePalette>(() => readPrefs().curvePalette)
+  const setCurvePalette = useCallback((next: CurvePalette): void => {
+    setCurvePaletteState(next)
+    updatePrefs({ curvePalette: next })
   }, [])
   /** Domain / range rows: interval notation or set-builder. A person's habit, remembered like `wheel`. */
   const [setNotation, setSetNotationState] = useState<SetNotation>(() => readPrefs().setNotation)
@@ -133,7 +140,7 @@ export function useSessionState() {
   return {
     showAnalysis, setShowAnalysis, reveal, setReveal, revealRef, revealByDocRef, revealFreshRef,
     markersOn, canvasTheme, setCanvasTheme, exportFormat, changeExportFormat, latexWidthCm,
-    changeLatexWidth, wheelPref, setWheelPref, setNotation, changeSetNotation, axisUnitChoice,
+    changeLatexWidth, wheelPref, setWheelPref, curvePalette, setCurvePalette, setNotation, changeSetNotation, axisUnitChoice,
     setAxisUnitChoice, exportSettings, setExportSettings, presentMode, setPresentMode, presentType,
     setPresentType, palette, setPalette, helpOpen, setHelpOpen, recentCommands, setRecentCommands,
     exprSeed, setExprSeed, legendCorner, setLegendCorner, copyState, setCopyState, highlight,

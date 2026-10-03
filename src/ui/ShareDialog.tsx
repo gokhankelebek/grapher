@@ -9,6 +9,7 @@
 // ============================================================================
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useDialogFocus } from './useDialogFocus'
 import type { ShareFlags } from '../core/share'
 import { SHARE_WARN_LENGTH, buildShareLink, shareLengthVerdict } from '../core/share'
 import type { QrCode } from '../core/qr'
@@ -67,6 +68,7 @@ export function ShareDialog({ name, json, baseHref, onClose }: Props) {
     }
   }, [baseHref, json, flags])
 
+  useDialogFocus(dialogRef, onClose, { escape: false, autoFocus: false })
   useEffect(() => {
     dialogRef.current?.focus()
     // Captured at the window and stopped: while the dialog is up, the board's

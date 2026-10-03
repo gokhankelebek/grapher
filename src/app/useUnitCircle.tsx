@@ -31,6 +31,7 @@ import type { NoticesApi } from './useNotices'
 import type { HistoryApi } from './useHistory'
 import type { CalcLinksApi } from './useCalcLinks'
 import type { ViewportApi } from './useViewport'
+import { playClock } from '../ui/motionPref'
 
 /** What useUnitCircle reads from the hooks App calls before it. */
 export interface UnitCircleDeps {
@@ -198,10 +199,14 @@ export function useUnitCircle({ board, refs, derived, notices, history, calc, vi
   useEffect(() => {
     if (!ucPlaying) return
     let raf = 0
-    let last = performance.now()
+    // Reduced motion: Play advances in half-second steps instead of gliding.
+    const clock = playClock(performance.now())
     const tick = (now: number): void => {
-      const dt = Math.min(0.1, Math.max(0, (now - last) / 1000))
-      last = now
+      const dt = clock(now)
+      if (dt === null) {
+        raf = requestAnimationFrame(tick)
+        return
+      }
       const cur = ucPlayRef.current
       if (!cur) return
       if (!ucRef.current.some((c) => c.id === cur.id)) {

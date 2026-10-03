@@ -30,6 +30,7 @@ import {
 } from './commands'
 import type { Command, CommandContext, HelpEntry } from './commands'
 import { examplesForSection } from '../examples'
+import { prefersReducedMotion } from './motionPref'
 
 interface Props {
   ctx: CommandContext
@@ -178,7 +179,7 @@ export function HelpSheet({ ctx, mac, onDo, onPalette, onExample, onClose }: Pro
 
   const jump = (course: string): void => {
     const el = rootRef.current?.querySelector<HTMLElement>(`[data-course="${course}"]`)
-    el?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+    el?.scrollIntoView({ block: 'start', behavior: prefersReducedMotion() ? 'auto' : 'smooth' })
   }
 
   const doButton = (line: Line): JSX.Element | null => {

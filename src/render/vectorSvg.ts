@@ -109,6 +109,8 @@ export interface SvgOptions {
   pixelWidth?: number
   pixelHeight?: number
   title?: string
+  /** The figure in words (a screen reader's description): written as <desc>. */
+  desc?: string
 }
 
 /** The whole figure as a standalone SVG document. */
@@ -119,10 +121,16 @@ export function toSvg(list: DisplayList, opts: SvgOptions = {}): string {
   const ph = opts.pixelHeight ?? H
   const out: string[] = []
   out.push('<?xml version="1.0" encoding="UTF-8"?>')
+  // Named for assistive technology: role="img", labelled by <title> and
+  // described by <desc> — an SVG pasted into a page or an LMS carries both.
+  const a11y = opts.title || opts.desc
+    ? ` role="img"${opts.title ? ' aria-labelledby="fig-title"' : ''}${opts.desc ? ' aria-describedby="fig-desc"' : ''}`
+    : ''
   out.push(
-    `<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="${num(pw)}" height="${num(ph)}" viewBox="0 0 ${num(W)} ${num(H)}">`,
+    `<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="${num(pw)}" height="${num(ph)}" viewBox="0 0 ${num(W)} ${num(H)}"${a11y}>`,
   )
-  if (opts.title) out.push(`<title>${escapeXml(opts.title)}</title>`)
+  if (opts.title) out.push(`<title id="fig-title">${escapeXml(opts.title)}</title>`)
+  if (opts.desc) out.push(`<desc id="fig-desc">${escapeXml(opts.desc)}</desc>`)
   if (list.clips.length > 0) {
     out.push('<defs>')
     for (const c of list.clips) {

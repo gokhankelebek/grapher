@@ -9,6 +9,7 @@ import type { BoardRelatedRates, RelatedRatesCardData, RRSpeed } from './related
 import { RR_SPEEDS } from './relatedRatesLinks'
 import { RR_DEFS, RR_SCENARIOS, dec } from '../core/relatedRates'
 import type { RRScenario } from '../core/relatedRates'
+import { useInk } from './inkContext'
 
 // ============================================================================
 // src/ui/RelatedRatesCard.tsx — the related-rates object in the sidebar list.
@@ -58,6 +59,7 @@ const SHORT: Record<RRScenario, string> = {
 }
 
 export function RelatedRatesCard(props: Props) {
+  const ink = useInk()
   const { rr, card, selected, playing, speed } = props
   const def = card.def
   /** Reveal mode: the unknown rate (and any rate derived from it) is one answer. */
@@ -166,10 +168,11 @@ export function RelatedRatesCard(props: Props) {
   return (
     <div
       className={`card field-card rr-card${selected ? ' card-selected' : ''}${visible ? '' : ' card-hidden'}`}
-      style={{ '--curve': rr.color } as CSSProperties}
-      role="button"
+      style={{ '--curve': ink(rr.color) } as CSSProperties}
+      role="group"
+      aria-roledescription="card"
       tabIndex={0}
-      aria-pressed={selected}
+      aria-current={selected ? 'true' : undefined}
       aria-label={`Related rates: ${def.title}${visible ? '' : ', hidden'}`}
       data-testid="rr-card"
       onClick={props.onSelect}
@@ -184,7 +187,7 @@ export function RelatedRatesCard(props: Props) {
       <div className="card-head">
         <button
           className="color-dot"
-          style={{ background: rr.color }}
+          style={{ background: ink(rr.color) }}
           title="Change colour"
           aria-label="Change colour"
           onClick={(e) => {

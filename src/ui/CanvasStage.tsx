@@ -6,7 +6,10 @@ import {
   useRef,
   useState,
 } from 'react'
-import type { MutableRefObject } from 'react'
+import type { KeyboardEvent as ReactKeyboardEvent, MutableRefObject } from 'react'
+import type { CurvePalette } from '../core/a11yPalette'
+import { boardKeyAction, handleWords } from './boardKeys'
+import { prefersReducedMotion } from './motionPref'
 import type {
   CurveHandle,
   FitResult,
@@ -305,6 +308,12 @@ interface Props {
    * reveal mode still work, so the board can be explored but not changed.
    */
   readOnly?: boolean
+  /** Curve colours (src/core/a11yPalette.ts): 'safe' maps colours and dashes every curve. */
+  inkPalette?: CurvePalette
+  /** The board's accessible name: a one-line summary of what is on it. */
+  a11yLabel?: string
+  /** Space-separated ids of the elements that describe the board (the long description). */
+  describedBy?: string
 }
 
 const FADE_MS = 250
@@ -346,6 +355,28 @@ function asCurveHandles(extra: readonly ExtraHandle[]): CurveHandle[] {
  * disc with a ground rim and a ground core ring — because it means the same
  * thing: a point on the figure you can put a finger on.
  */
+/** The keyboard's focus ring around a handle: two rings, so it reads on any ground. */
+function drawKeyboardRing(ctx: CanvasRenderingContext2D, at: Vec2, theme: Theme): void {
+  if (!Number.isFinite(at.x) || !Number.isFinite(at.y)) return
+  ctx.save()
+  ctx.lineWidth = 2
+  ctx.setLineDash([])
+  ctx.strokeStyle = theme.bg
+  ctx.beginPath()
+  ctx.arc(at.x, at.y, KB_RING_R + 2, 0, Math.PI * 2)
+  ctx.stroke()
+  ctx.strokeStyle = KB_RING_COLOR
+  ctx.setLineDash([4, 3])
+  ctx.beginPath()
+  ctx.arc(at.x, at.y, KB_RING_R, 0, Math.PI * 2)
+  ctx.stroke()
+  ctx.restore()
+}
+
+/** The keyboard handle ring: the app's focus colour, outside the largest handle glyph. */
+const KB_RING_R = 14
+const KB_RING_COLOR = '#ffd166'
+
 function drawOwnedPoints(
   ctx: CanvasRenderingContext2D,
   vp: Viewport,
@@ -571,6 +602,9 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     reveal,
     onRevealMark,
     readOnly,
+    inkPalette,
+    a11yLabel,
+    describedBy,
   },
   handle,
 ) {
@@ -616,6 +650,14 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   onRevealMarkRef.current = onRevealMark
   const readOnlyRef = useRef(readOnly === true)
   readOnlyRef.current = readOnly === true
+  const inkPaletteRef = useRef<CurvePalette | undefined>(inkPalette)
+  inkPaletteRef.current = inkPalette
+  /** The handle the keyboard is on (src/ui/boardKeys.ts), by id; null when none. */
+  const kbHandleRef = useRef<string | null>(null)
+  /** A keyboard handle edit is open (an arrow is held): one undo entry per press-and-release. */
+  const kbEditRef = useRef<string | null>(null)
+  /** What the board's polite live region last said (keyboard handle moves). */
+  const [kbSay, setKbSay] = useState('')
   /** The "?" marks of the last frame drawn: what a press can hit. */
   const revealMarksRef = useRef<readonly RevealMark[]>([])
   /** A reveal's ring is animating: keep drawing frames until it is done. */
@@ -723,6 +765,9 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
     const now = performance.now()
+    const reduced = prefersReducedMotion()
+    // Reduced motion: a recognised stroke becomes its curve at once, no fade.
+    if (reduced && fadeRef.current) fadeRef.current = null
     let fade = fadeRef.current
     let fadeT = 1
     if (fade) {
@@ -783,6 +828,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       ...(relatedRatesRef.current && relatedRatesRef.current.length > 0 ? { relatedRates: relatedRatesRef.current } : {}),
       ...(signChartsRef.current && signChartsRef.current.length > 0 ? { signCharts: signChartsRef.current } : {}),
       ...(ineqSolutionRef.current ? { inequalitySolution: true } : {}),
+      ...(inkPaletteRef.current === 'safe' ? { inkPalette: 'safe' as const } : {}),
       grid: gridRef.current ?? undefined,
       figure: figureRef.current ?? undefined,
       caption: captionRef.current ?? undefined,
@@ -802,7 +848,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
         activeHandleId:
           g?.type === 'dragHandle'
             ? g.handleId
-            : (handleEditRef.current?.handleId ?? hoverRef.current?.handleId ?? null),
+            : (handleEditRef.current?.handleId ?? hoverRef.current?.handleId ?? kbHandleRef.current ?? null),
         highlight: highlightRef.current,
         openIdx,
         hoverIdx: hoverRef.current?.markerIndex ?? null,
@@ -818,9 +864,19 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
         curveAlpha: fade ? { id: fade.curveId, alpha: fadeT } : null,
       },
     }, revealNow ? { ...revealNow, now } : null)
+    // Reduced motion: a reveal shows its answer without the expanding ring.
+    if (reduced && scene.revealPulses) delete scene.revealPulses
     revealMarksRef.current = scene.revealMarks ?? []
     revealAnimRef.current = (scene.revealPulses?.length ?? 0) > 0
     renderBoard(ctx, scene)
+
+    // The keyboard's handle: a focus ring around it, drawn only while the
+    // board has keyboard focus (it is chrome, never part of an export).
+    const kbId = kbHandleRef.current
+    if (kbId && sel && !busy && canvasRef.current && document.activeElement === canvasRef.current) {
+      const kh = handles.find((h) => h.id === kbId)
+      if (kh) drawKeyboardRing(ctx, toScreen(kh.pos, vp), themeRef.current)
+    }
 
     // renderBoard paints chrome.handles only for the selected curve. When the
     // selected object is not a curve at all — a slope field — its points have
@@ -888,6 +944,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     highlightRef.current = analysisHighlight
     scheduleRender()
   }, [
+    inkPalette,
     curves,
     styles,
     models,
@@ -1475,6 +1532,167 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     setEditor(null)
     scheduleRender()
   }, [scheduleRender, setEditor])
+
+  // An editor the KEYBOARD opened hands focus back to the board when it closes.
+  const kbEditorRef = useRef(false)
+  useEffect(() => {
+    if (handleEdit || !kbEditorRef.current) return
+    kbEditorRef.current = false
+    const c = canvasRef.current
+    if (c && (document.activeElement === document.body || !document.activeElement)) c.focus({ preventScroll: true })
+    // …and says where the handle is now.
+    window.setTimeout(() => {
+      const { handles } = keyboardHandles()
+      const h = handles.find((x) => x.id === kbHandleRef.current)
+      if (h) sayHandle(h, true)
+    }, 0)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handleEdit])
+
+  // ---------------------------------------------------------- keyboard board
+  //
+  // The decision lives in src/ui/boardKeys.ts; this carries it out. Keys the
+  // board does not take fall through to the App's global shortcuts (a
+  // selected curve's arrow nudge, + / − zoom, R, F …).
+  const keyboardHandles = useCallback((): { sel: FittedCurve | null; handles: CurveHandle[] } => {
+    const sel = curvesRef.current.find((c) => c.id === selectedRef.current && c.visible) ?? null
+    if (!sel) return { sel: null, handles: [] }
+    try {
+      return { sel, handles: getHandles(sel, modelsRef.current) }
+    } catch {
+      return { sel, handles: [] }
+    }
+  }, [])
+
+  const sayHandle = useCallback((h: CurveHandle, moved: boolean): void => {
+    const at = `(${formatCoord(h.pos.x)}, ${formatCoord(h.pos.y)})`
+    setKbSay(
+      moved
+        ? `${handleWords(h.label, h.id)} at ${at}`
+        : `${handleWords(h.label, h.id)}, at ${at}. Arrow keys move it, Shift moves it further, Enter types an exact value, Escape returns to the curve.`,
+    )
+  }, [])
+
+  const endKeyboardEdit = useCallback(
+    (skipSnap: boolean): void => {
+      const id = kbEditRef.current
+      if (!id) return
+      kbEditRef.current = null
+      onCurveEditEnd(id, skipSnap)
+      // Say where the handle came to rest — after the snap has run.
+      window.setTimeout(() => {
+        const { handles } = keyboardHandles()
+        const h = handles.find((x) => x.id === kbHandleRef.current)
+        if (h) sayHandle(h, true)
+        scheduleRender()
+      }, 0)
+    },
+    [keyboardHandles, onCurveEditEnd, sayHandle, scheduleRender],
+  )
+
+  const onBoardKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLCanvasElement>): void => {
+      const { sel, handles } = keyboardHandles()
+      const idx = kbHandleRef.current ? handles.findIndex((h) => h.id === kbHandleRef.current) : -1
+      const act = boardKeyAction(e, {
+        hasSelection: sel !== null && !readOnlyRef.current,
+        handleCount: readOnlyRef.current ? 0 : handles.length,
+        handleIndex: idx >= 0 ? idx : null,
+      })
+      if (!act) return
+      switch (act.type) {
+        case 'focus-handle': {
+          e.preventDefault()
+          e.stopPropagation()
+          const h = handles[act.index]
+          kbHandleRef.current = h.id
+          sayHandle(h, false)
+          scheduleRender()
+          return
+        }
+        case 'clear-handle':
+          kbHandleRef.current = null
+          if (!act.leave) {
+            e.preventDefault()
+            e.stopPropagation()
+            setKbSay(sel ? 'Back on the curve. Arrow keys nudge it.' : '')
+          }
+          scheduleRender()
+          return
+        case 'pan': {
+          e.preventDefault()
+          e.stopPropagation()
+          panBy(vpRef.current, -act.dx, act.dy)
+          reanchorEditor()
+          viewportChangeRef.current?.()
+          scheduleRender()
+          return
+        }
+        case 'deselect':
+          e.preventDefault()
+          e.stopPropagation()
+          endKeyboardEdit(false)
+          onSelect(null)
+          setKbSay('Nothing selected. Arrow keys move the view.')
+          return
+        case 'edit-handle': {
+          const h = handles[idx]
+          if (!sel || !h) return
+          e.preventDefault()
+          e.stopPropagation()
+          kbEditorRef.current = true
+          openHandleEditor(h, sel, toScreen(h.pos, vpRef.current))
+          return
+        }
+        case 'move-handle': {
+          const h = handles[idx]
+          if (!sel || !h) return
+          e.preventDefault()
+          e.stopPropagation()
+          let res: { params: number[]; domain: [number, number] | null }
+          try {
+            res = applyHandleDrag(sel, modelsRef.current, h.id, { x: h.pos.x + act.dx, y: h.pos.y + act.dy })
+          } catch {
+            return
+          }
+          // The same bracket a drag opens: one undo entry for a held arrow,
+          // and snapParams on release unless Alt is down — exactly a drag.
+          if (kbEditRef.current !== sel.id) {
+            if (kbEditRef.current) onCurveEditEnd(kbEditRef.current, true)
+            onCurveEditStart()
+            kbEditRef.current = sel.id
+          }
+          onHandleDrag(sel.id, res.params, res.domain)
+          scheduleRender()
+          return
+        }
+      }
+    },
+    [endKeyboardEdit, keyboardHandles, onCurveEditEnd, onCurveEditStart, onHandleDrag, onSelect, openHandleEditor, reanchorEditor, sayHandle, scheduleRender, vpRef],
+  )
+
+  const onBoardKeyUp = useCallback(
+    (e: ReactKeyboardEvent<HTMLCanvasElement>): void => {
+      if (!e.key.startsWith('Arrow') || !kbEditRef.current) return
+      // The App's own arrow keyup commits a curve NUDGE; this was a handle.
+      e.stopPropagation()
+      endKeyboardEdit(e.altKey)
+    },
+    [endKeyboardEdit],
+  )
+
+  const onBoardBlur = useCallback((): void => {
+    endKeyboardEdit(false)
+    scheduleRender()
+  }, [endKeyboardEdit, scheduleRender])
+
+  // A new selection starts with no handle focused.
+  useEffect(() => {
+    if (kbHandleRef.current) {
+      kbHandleRef.current = null
+      setKbSay('')
+    }
+  }, [selectedId])
 
   // ------------------------------------------------------------ stroke finish
   const finishStroke = useCallback(
@@ -2307,8 +2525,21 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     <div ref={wrapRef} className="stage">
       <canvas
         ref={canvasRef}
+        id="board-canvas"
         className="stage-canvas"
         style={{ cursor }}
+        // The board is a picture with a name and a long description, and it
+        // takes the keyboard: Tab to it, arrows pan, Tab steps through the
+        // selected curve's handles (src/ui/boardKeys.ts).
+        tabIndex={0}
+        role="img"
+        aria-roledescription="interactive graph"
+        aria-label={a11yLabel ?? 'Graph'}
+        aria-describedby={describedBy}
+        onKeyDown={onBoardKeyDown}
+        onKeyUp={onBoardKeyUp}
+        onFocus={scheduleRender}
+        onBlur={onBoardBlur}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={(e) => endPointer(e, false)}
@@ -2361,6 +2592,9 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
           </div>
         )
       )}
+      <div className="sr-only" aria-live="polite" data-testid="board-live">
+        {kbSay}
+      </div>
       {handleEdit && (
         <HandleInput
           key={`${handleEdit.curveId}:${handleEdit.handleId}`}

@@ -1,4 +1,6 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { useMenuKeys } from './useMenuKeys'
 
 interface Props {
   sidebarOpen: boolean
@@ -18,6 +20,92 @@ interface Props {
   onRedo(): void
   /** "?": the help sheet — everything Grapher can do (src/ui/HelpSheet.tsx). */
   onHelp?(): void
+  /** ⋯ → Describe this graph: the board in words, with Copy. */
+  onDescribe?(): void
+  /** ⋯ → Colour-blind-safe curve colours (a preference). */
+  curvePalette?: 'standard' | 'safe'
+  onCurvePalette?(next: 'standard' | 'safe'): void
+}
+
+/**
+ * The toolbar's ⋯: the accessibility tools, one click from anywhere —
+ * "Describe this graph" and the colour-blind-safe palette (both also in ⌘K).
+ */
+function MoreMenu({
+  onDescribe,
+  curvePalette,
+  onCurvePalette,
+  onHelp,
+}: Pick<Props, 'onDescribe' | 'curvePalette' | 'onCurvePalette' | 'onHelp'>) {
+  const [open, setOpen] = useState(false)
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const close = useCallback((): void => setOpen(false), [])
+  useMenuKeys(open, menuRef, btnRef, close)
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: PointerEvent): void => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    window.addEventListener('pointerdown', onDown)
+    return () => window.removeEventListener('pointerdown', onDown)
+  }, [open])
+  const pick = (fn?: () => void) => (): void => {
+    setOpen(false)
+    fn?.()
+    // Back to ⋯ — unless what ran opened a dialog that took focus.
+    window.setTimeout(() => {
+      if (document.activeElement === document.body || !document.activeElement) btnRef.current?.focus()
+    }, 0)
+  }
+  const safe = curvePalette === 'safe'
+  return (
+    <div className="tb-more" ref={wrapRef}>
+      <button
+        ref={btnRef}
+        className="tb-btn tb-icon"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="More: accessibility"
+        title="More — describe this graph, colour-blind-safe colours"
+        data-testid="toolbar-more"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <circle cx="3.2" cy="8" r="1.35" fill="currentColor" />
+          <circle cx="8" cy="8" r="1.35" fill="currentColor" />
+          <circle cx="12.8" cy="8" r="1.35" fill="currentColor" />
+        </svg>
+      </button>
+      {open && (
+        <div className="doc-menu tb-more-menu" role="menu" aria-label="More" ref={menuRef}>
+          {onDescribe && (
+            <button className="doc-item" role="menuitem" data-testid="more-describe" onClick={pick(onDescribe)}>
+              Describe this graph…
+            </button>
+          )}
+          {onCurvePalette && (
+            <button
+              className="doc-item"
+              role="menuitemcheckbox"
+              aria-checked={safe}
+              data-testid="more-colour-safe"
+              onClick={pick(() => onCurvePalette(safe ? 'standard' : 'safe'))}
+            >
+              <span className="tb-more-check" aria-hidden="true">{safe ? '✓' : ''}</span>
+              Colour-blind-safe colours
+            </button>
+          )}
+          {onHelp && (
+            <button className="doc-item" role="menuitem" onClick={pick(onHelp)}>
+              Keyboard and help…
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }
 
 /**
@@ -46,6 +134,9 @@ export function Toolbar({
   onUndo,
   onRedo,
   onHelp,
+  onDescribe,
+  curvePalette,
+  onCurvePalette,
 }: Props) {
   return (
     <div className="toolbar">
@@ -137,6 +228,10 @@ export function Toolbar({
       <div className="tb-sep" />
 
       {exportMenu}
+
+      {(onDescribe || onCurvePalette) && (
+        <MoreMenu onDescribe={onDescribe} curvePalette={curvePalette} onCurvePalette={onCurvePalette} onHelp={onHelp} />
+      )}
 
       {onHelp && (
         <button

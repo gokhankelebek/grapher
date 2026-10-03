@@ -16,6 +16,8 @@ import type { DocCounts, DocMeta, StoredDoc, Worksheet } from '../core/persist'
 import { countBoard, deserializeWorksheets, serializeDoc, serializeWorksheets } from '../core/persist'
 import { DEFAULT_EXPORT } from './renderBoard'
 import type { FitExportSettings } from './exportFit'
+import type { CurvePalette } from '../core/a11yPalette'
+import { isCurvePalette } from '../core/a11yPalette'
 import { clampFitSettings, defaultFit, isAspect } from './exportFit'
 import type { WheelPref } from './gestures'
 import type { ExportFormat } from './vectorExport'
@@ -385,6 +387,12 @@ export interface Prefs {
    * id the registry no longer knows is simply never shown.
    */
   recentCommands: string[]
+  /**
+   * Curve colours: the standard neon palette, or the colour-blind-safe one
+   * (src/core/a11yPalette.ts) with a dash pattern per curve. A person's need,
+   * not a lesson's, so it lives here and never in a document.
+   */
+  curvePalette: CurvePalette
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -399,6 +407,7 @@ export const DEFAULT_PREFS: Prefs = {
   latexWidthCm: DEFAULT_LATEX_WIDTH_CM,
   sections: {},
   recentCommands: [],
+  curvePalette: 'standard',
 }
 
 /** Never trust what came back from storage: a bad value falls back silently. */
@@ -445,6 +454,7 @@ export function readPrefs(): Prefs {
         parsed.latexWidthCm === undefined ? DEFAULT_PREFS.latexWidthCm : clampLatexWidth(parsed.latexWidthCm),
       sections: sectionsOf(parsed.sections),
       recentCommands: recentOf(parsed.recentCommands),
+      curvePalette: isCurvePalette(parsed.curvePalette) ? parsed.curvePalette : DEFAULT_PREFS.curvePalette,
     }
   } catch {
     return { ...DEFAULT_PREFS, exportByDoc: {}, sections: {}, recentCommands: [] }

@@ -50,6 +50,7 @@ import type { MotionPlayState, MotionScales } from '../ui/motionLinks'
 import type { Polyline, Shape } from '../ui/renderBoard'
 import { midlinePolyline, safeReadSinusoid, sinKeyMarks, withKeyMarks } from '../ui/sinLinks'
 import { snapCoord } from '../ui/snap'
+import { playClock } from '../ui/motionPref'
 import {
   ghostInk,
   keyPointArrows,
@@ -315,10 +316,14 @@ export function useSelectionMarks({ board, docState, session, refs, derived, fie
   useEffect(() => {
     if (!playingId) return
     let raf = 0
-    let last = performance.now()
+    // Reduced motion: Play advances in half-second steps instead of gliding.
+    const clock = playClock(performance.now())
     const tick = (now: number): void => {
-      const dt = Math.min(0.1, Math.max(0, (now - last) / 1000))
-      last = now
+      const dt = clock(now)
+      if (dt === null) {
+        raf = requestAnimationFrame(tick)
+        return
+      }
       const curve = curvesRef.current.find((c) => c.id === playingId)
       if (!curve) return
       const interval = motionInterval(curve)

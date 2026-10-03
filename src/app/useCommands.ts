@@ -46,6 +46,7 @@ import type { FigureSettingsApi } from './useFigureSettings'
 import type { SidebarEditorsApi } from './useSidebarEditors'
 import type { ExamplesApi } from './useExamples'
 import type { ItemBankApi } from './useItemBank'
+import type { GraphDescriptionApi } from './useGraphDescription'
 
 /** What useCommands reads from the hooks App calls before it. */
 export interface CommandsDeps {
@@ -75,9 +76,10 @@ export interface CommandsDeps {
   editors: SidebarEditorsApi
   examples: ExamplesApi
   itemBank: ItemBankApi
+  describer: GraphDescriptionApi
 }
 
-export function useCommands({ board, docState, session, refs, derived, notices, history, docActions, editing, calc, fieldsApi, typed, tables, domain, numberLine, viewport, unitCircle, rates, overlaysApi, naming, revealMode, exporter, figureSettings, editors, examples, itemBank }: CommandsDeps) {
+export function useCommands({ board, docState, session, refs, derived, notices, history, docActions, editing, calc, fieldsApi, typed, tables, domain, numberLine, viewport, unitCircle, rates, overlaysApi, naming, revealMode, exporter, figureSettings, editors, examples, itemBank, describer }: CommandsDeps) {
   const {
     curves, kind, items, selectedId, setSelectedId, sidebarOpen, setSidebarOpen, lens, fields,
     shapes, dataSets, sequences, boardGrid, figureStyle, previewFigure, setPreviewFigure,
@@ -85,7 +87,8 @@ export function useCommands({ board, docState, session, refs, derived, notices, 
   const { shared, exprSources, brokenExpr, displaySources, inverses } = docState
   const {
     showAnalysis, reveal, canvasTheme, exportFormat, axisUnitChoice, presentMode, setPresentMode,
-    palette, setPalette, helpOpen, setHelpOpen, recentCommands, setRecentCommands,
+    palette, setPalette, helpOpen, setHelpOpen, recentCommands, setRecentCommands, curvePalette,
+    setCurvePalette,
   } = session
   const { undoRef, redoRef } = refs
   const { models } = derived
@@ -244,6 +247,16 @@ export function useCommands({ board, docState, session, refs, derived, notices, 
     zoomOut: () => zoomBy(1 / 1.25),
     resetView,
     help: () => setHelpOpen(true),
+    describe: describer.openDescribe,
+    setCurvePalette: (p) => {
+      setCurvePalette(p)
+      showToast(
+        p === 'safe'
+          ? 'Colour-blind-safe colours on — every curve has its own dash pattern too.'
+          : 'Standard curve colours.',
+        { ms: 2200 },
+      )
+    },
   }
 
   const commandCtx: CommandContext | null = !commandsLive
@@ -307,6 +320,7 @@ export function useCommands({ board, docState, session, refs, derived, notices, 
         exportFormat,
         axisX: kind === 'cartesian' ? axisUnitChoice.x : null,
         grid: kind === 'cartesian' ? boardGrid : null,
+        curvePalette,
         actions: commandActions,
       }
 

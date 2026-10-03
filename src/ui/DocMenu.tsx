@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useMenuKeys } from './useMenuKeys'
 import type { BoardKind } from '../core/types'
 import type { DocMeta } from '../core/persist'
 import { describeCounts } from './docName'
@@ -118,6 +119,14 @@ export function DocMenu({
   const wrapRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const caretRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const closeMenu = useCallback((): void => {
+    setOpen(false)
+    setConfirmId(null)
+    setConfirmClear(false)
+  }, [])
+  useMenuKeys(open, menuRef, caretRef, closeMenu)
 
   useEffect(() => {
     if (renaming) {
@@ -230,6 +239,7 @@ export function DocMenu({
       )}
 
       <button
+        ref={caretRef}
         className={`doc-caret${open ? ' doc-caret-open' : ''}`}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -247,7 +257,7 @@ export function DocMenu({
       </button>
 
       {open && (
-        <div className="doc-menu" role="menu">
+        <div className="doc-menu" role="menu" aria-label="Document menu" ref={menuRef}>
           <div className="doc-menu-actions">
             {shared && onMakeCopy && (
               <button

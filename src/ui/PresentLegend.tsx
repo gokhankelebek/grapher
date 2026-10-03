@@ -1,6 +1,7 @@
 import type { CSSProperties } from 'react'
 import { Latex } from './Latex'
 import type { LegendEntry } from './present'
+import { useInk } from './inkContext'
 
 interface Props {
   entries: readonly LegendEntry[]
@@ -30,6 +31,7 @@ interface Props {
  * hiding the cards leaves four anonymous coloured lines.
  */
 export function PresentLegend({ entries, type, corner, onCycleCorner }: Props) {
+  const ink = useInk()
   if (entries.length === 0) return null
   return (
     <div
@@ -46,7 +48,7 @@ export function PresentLegend({ entries, type, corner, onCycleCorner }: Props) {
           role="listitem"
           className="present-chip"
           data-curve-color={e.color}
-          style={{ '--curve': e.color } as CSSProperties}
+          style={{ '--curve': ink(e.color) } as CSSProperties}
         >
           <span className="present-chip-swatch" aria-hidden="true" />
           <Latex tex={e.tex} className="present-chip-tex" />

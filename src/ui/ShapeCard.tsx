@@ -5,6 +5,8 @@ import { ParamRow } from './CurveCard'
 import { parseNumeric } from './numeric'
 import { coord } from './fieldLinks'
 import type { BoardShape, ShapeCardData } from './shapeLinks'
+import { useInk } from './inkContext'
+import { equationLabel } from '../core/mathSpeech'
 
 // ============================================================================
 // src/ui/ShapeCard.tsx — a point, segment, vector or polygon in the sidebar.
@@ -67,6 +69,7 @@ export function ShapeCard({
   onEquationCommit,
   onCoordSet,
 }: Props) {
+  const ink = useInk()
   // ---- the ⋯ menu (identical behaviour to a curve's, deliberately)
   const [menuOpen, setMenuOpen] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -222,10 +225,11 @@ export function ShapeCard({
       className={`card field-card shape-card${selected ? ' card-selected' : ''}${
         shape.visible ? '' : ' card-hidden'
       }${data.error ? ' card-broken-state' : ''}`}
-      style={{ '--curve': shape.color } as CSSProperties}
-      role="button"
+      style={{ '--curve': ink(shape.color) } as CSSProperties}
+      role="group"
+      aria-roledescription="card"
       tabIndex={0}
-      aria-pressed={selected}
+      aria-current={selected ? 'true' : undefined}
       aria-label={`${data.noun}${shape.visible ? '' : ', hidden'}`}
       onClick={onSelect}
       onKeyDown={(e) => {
@@ -239,7 +243,7 @@ export function ShapeCard({
       <div className="card-head">
         <button
           className="color-dot"
-          style={{ background: shape.color }}
+          style={{ background: ink(shape.color) }}
           title="Change colour"
           aria-label="Change shape colour"
           onClick={(e) => {
@@ -318,6 +322,7 @@ export function ShapeCard({
             type="button"
             className="card-formula card-formula-btn card-eq"
             title="Click to retype this shape"
+            aria-label={data.error ? `Shape: ${shape.src}` : equationLabel(data.latex, 'Shape')}
             onClick={(e) => {
               e.stopPropagation()
               onSelect()

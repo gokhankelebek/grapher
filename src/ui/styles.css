@@ -16,13 +16,22 @@
   --track: #3a4362;
   --text: #e6eaf5;
   /* Contrast floors (worst case = on --panel-3, the lightest surface):
-     --muted 4.74:1, --faint 4.09:1. --faint is reserved for icons and for
+     --muted 4.87:1, --faint 4.58:1 (was #8d95b3, 4.20:1). --faint is kept for icons and for
      hints on the dark surfaces (>=5.4:1 there); readable text uses --muted. */
   --muted: #9aa1bd;
-  --faint: #8d95b3;
+  --faint: #949cb9;
   --accent: #4f9cf9;
   --accent-soft: rgba(79, 156, 249, 0.14);
   --danger: #f95f62;
+  /* Text in the accent / danger hue. The fills stay curve #1 and #2 exactly;
+     as TEXT they are a step lighter so they clear 4.5:1 on the lightest
+     surface (a hovered card, --panel-3): accent 4.42 → 4.78, danger 4.06 →
+     4.55. On --panel-2 both are above 5.7:1. */
+  --accent-text: #5aa3fa;
+  --danger-text: #fb7073;
+  /* A filled accent button with WHITE text: #4f9cf9 under white is 2.82:1;
+     this step darker is 4.58:1. */
+  --accent-strong: #2f74d6;
   --radius: 8px;
 
   /* ---- spacing scale: 4 / 8 / 12 / 16 / 24.
@@ -118,6 +127,41 @@ button.param-value:focus-visible {
 
 .expr-input:focus-visible {
   outline: none; /* has its own focus treatment */
+}
+
+/* The board: a full-bleed canvas, so its ring is drawn INSIDE the edge (an
+   outside ring would be clipped by the stage). */
+.stage-canvas:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+  border-radius: 0;
+}
+
+/* Fields that drop the outline keep a visible focus of their own. */
+.param-edit:focus,
+.fe-mult-input:focus {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+/* "Skip to board": the first Tab stop, out of sight until it has focus. */
+.skip-link {
+  position: absolute;
+  left: var(--sp-3);
+  top: -60px;
+  z-index: 100;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+  box-shadow: var(--shadow);
+}
+
+.skip-link:focus,
+.skip-link:focus-visible {
+  top: var(--sp-3);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -370,7 +414,7 @@ input[type='range']:focus-visible::-moz-range-thumb {
 }
 
 .board-kind-on .board-kind-icon {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .board-kind-label {
@@ -569,7 +613,7 @@ button.card-formula:hover {
 
 .icon-btn.del:hover {
   background: rgba(249, 95, 98, 0.12);
-  color: var(--danger);
+  color: var(--danger-text);
 }
 
 /* The one badge that persists without hover: "this curve is hidden". It was
@@ -877,7 +921,7 @@ button.card-formula:hover {
 
 .seg-on .seg-glyph {
   opacity: 1;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 /* ------------------------------------------------------------ zoom controls */
@@ -942,7 +986,7 @@ button.card-formula:hover {
 
 .empty-glyph {
   font-size: 40px;
-  color: var(--accent);
+  color: var(--accent-text);
   opacity: 0.6;
   line-height: 1;
   margin-bottom: var(--sp-1);
@@ -1006,7 +1050,7 @@ button.card-formula:hover {
 }
 
 .add-open {
-  color: var(--accent);
+  color: var(--accent-text);
   border-color: rgba(79, 156, 249, 0.45);
   background: var(--accent-soft);
   transform: rotate(45deg);
@@ -1053,7 +1097,7 @@ button.card-formula:hover {
 
 .expr-error {
   margin-top: var(--sp-2);
-  color: var(--danger);
+  color: var(--danger-text);
   font-size: var(--fs-sm);
   line-height: 1.4;
 }
@@ -1712,7 +1756,7 @@ button.param-value:hover {
 }
 
 .doc-save-error {
-  color: var(--danger);
+  color: var(--danger-text);
   font-weight: 600;
 }
 
@@ -1878,7 +1922,7 @@ button.param-value:hover {
 
 .doc-del:hover {
   background: rgba(249, 95, 98, 0.12);
-  color: var(--danger);
+  color: var(--danger-text);
 }
 
 .doc-confirm {
@@ -2153,7 +2197,7 @@ button.param-value:hover {
 }
 
 .empty-glyph-error {
-  color: var(--danger);
+  color: var(--danger-text);
   font-size: 34px;
 }
 
@@ -2177,7 +2221,7 @@ button.param-value:hover {
 
 .tb-toggle-on svg {
   opacity: 1;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .tb-toggle-on:hover:not(:disabled) {
@@ -3197,6 +3241,9 @@ button.an-value {
   --faint: #626a86;
   --accent: #1f6dc8;
   --accent-soft: rgba(31, 109, 200, 0.12);
+  /* text in those hues, on paper-white chrome (5.1:1 and 6.1:1 on white) */
+  --accent-text: #1f6dc8;
+  --danger-text: #c01c28;
   --shadow: 0 4px 24px rgba(23, 30, 54, 0.16), 0 1px 3px rgba(23, 30, 54, 0.14);
   background: rgba(252, 253, 255, 0.92);
   border-color: var(--border);
@@ -3381,7 +3428,7 @@ button.an-value {
 }
 
 .card-menu-danger {
-  color: var(--danger);
+  color: var(--danger-text);
 }
 
 .card-menu-danger:hover {
@@ -3931,7 +3978,7 @@ button.card-eq {
 }
 
 .doc-row-current .doc-open-icon {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 /* --------------------------------------- number line: copy the notation */
@@ -4004,7 +4051,7 @@ button.card-eq {
 
 .handle-pop-ok {
   border-color: var(--accent);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 /* ------------------------------------------------------- touch layer --- */
@@ -4811,12 +4858,12 @@ button.calc-field-btn {
 }
 
 .data-cell-bad {
-  color: var(--danger);
+  color: var(--danger-text);
   text-decoration: underline dotted;
 }
 
 .data-row-skipped .data-idx {
-  color: var(--danger);
+  color: var(--danger-text);
 }
 
 .data-row-new .data-cell::placeholder {
@@ -5007,7 +5054,7 @@ button.calc-field-btn {
 }
 
 .factor-open {
-  color: var(--accent);
+  color: var(--accent-text);
   border-color: rgba(79, 156, 249, 0.45);
   background: var(--accent-soft);
 }
@@ -5298,7 +5345,7 @@ button.calc-field-btn {
 }
 
 .build-item-on {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .build-item-on::after {
@@ -5790,7 +5837,7 @@ button.calc-field-btn {
 
 /* An overlap is a mistake in the definition; a gap or an end is just a fact. */
 .pw-verdicts li[data-kind='overlap'] {
-  color: var(--danger);
+  color: var(--danger-text);
 }
 
 .pw-verdicts li[data-kind='gap'],
@@ -6173,7 +6220,7 @@ button.calc-field-btn {
 }
 
 .series-verdict-diverges .series-verdict-word {
-  color: var(--danger);
+  color: var(--danger-text);
 }
 
 .series-verdict-unknown .series-verdict-word {
@@ -6390,7 +6437,7 @@ button.calc-field-btn {
 }
 
 .secant-hyp-bad .secant-mark {
-  color: var(--danger);
+  color: var(--danger-text);
 }
 
 .secant-verdict-bad {
@@ -6938,7 +6985,7 @@ button.calc-field-btn {
 
 .card-menu-tick {
   flex: 0 0 auto;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .card-menu-item:focus-visible {
@@ -7061,11 +7108,11 @@ button.calc-field-btn {
 }
 
 .uc-v-sin {
-  color: #f95f62;
+  color: var(--danger-text);
 }
 
 .uc-v-cos {
-  color: #4f9cf9;
+  color: var(--accent-text);
 }
 
 .uc-v-tan {
@@ -7260,7 +7307,7 @@ button.calc-field-btn {
 }
 
 .ineq-lp-table tr.ineq-best td {
-  color: #f95f62;
+  color: var(--danger-text);
   font-weight: 700;
 }
 
@@ -7469,7 +7516,7 @@ button.calc-field-btn {
 }
 
 .signchart-sign.is-neg {
-  color: var(--danger);
+  color: var(--danger-text);
 }
 
 .signchart-mark {
@@ -7557,7 +7604,7 @@ button.calc-field-btn {
 .ws-btn:hover:not(:disabled) { background: var(--panel-3); }
 .ws-btn:disabled { opacity: 0.45; cursor: default; }
 .ws-btn.ws-primary { border-color: var(--accent); background: var(--accent-soft); }
-.ws-btn.ws-danger { border-color: var(--danger); color: var(--danger); }
+.ws-btn.ws-danger { border-color: var(--danger); color: var(--danger-text); }
 .ws-btn.ws-close { font-size: var(--fs-xl); line-height: 1; width: 32px; padding: 0; }
 .ws-select,
 .ws-name,
@@ -7608,7 +7655,7 @@ button.calc-field-btn {
   cursor: pointer;
 }
 .ws-seg button + button { border-left: 1px solid var(--border-strong); }
-.ws-seg button.on { background: var(--accent); color: #fff; }
+.ws-seg button.on { background: var(--accent-strong); color: #fff; }
 .ws-picker {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
@@ -7812,7 +7859,7 @@ button.calc-field-btn {
 }
 
 .solve-table .solve-yes td:last-child {
-  color: var(--accent);
+  color: var(--accent-text);
   font-weight: 700;
 }
 
@@ -7851,7 +7898,7 @@ button.calc-field-btn {
   border: 1px dashed var(--accent);
   border-radius: 999px;
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-text);
   font-family: var(--font);
   font-size: var(--fs-xs);
   font-weight: 600;
@@ -7948,21 +7995,21 @@ button.calc-field-btn {
   cursor: default;
 }
 .reveal-btn-primary {
-  background: var(--accent);
+  background: var(--accent-strong);
   color: #fff;
 }
 .reveal-btn-primary:hover:not(:disabled) {
-  background: var(--accent);
+  background: var(--accent-strong);
   color: #fff;
   filter: brightness(1.1);
 }
 .reveal-btn-on {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .tb-toggle.reveal-toggle-on {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 /* In presentation: the same controls, sized for a clicker and a room. */
@@ -8084,7 +8131,7 @@ button.calc-field-btn {
 .share-primary { border-color: var(--accent); background: var(--accent-soft); min-width: 76px; }
 
 .share-meta { display: flex; gap: var(--sp-3); color: var(--muted); font-size: var(--fs-sm); margin-top: -4px; }
-.share-warn-inline { color: var(--danger); }
+.share-warn-inline { color: var(--danger-text); }
 .share-warn {
   padding: var(--sp-2) var(--sp-3);
   border-radius: var(--radius);
@@ -8255,7 +8302,7 @@ button.calc-field-btn {
   padding: 2px var(--sp-2);
   border-radius: 999px;
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-text);
   font-size: var(--fs-sm);
   font-weight: 600;
   white-space: nowrap;
@@ -8323,7 +8370,7 @@ button.calc-field-btn {
 .cmdk-on {
   font-size: var(--fs-xs);
   font-weight: 600;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .cmdk-ask {
@@ -8568,7 +8615,7 @@ button.calc-field-btn {
 .hs-course-title {
   font-size: var(--fs-lg);
   font-weight: 700;
-  color: var(--accent);
+  color: var(--accent-text);
   padding-bottom: var(--sp-1);
   border-bottom: 1px solid var(--border);
 }
@@ -8636,7 +8683,7 @@ button.calc-field-btn {
   padding: 2px var(--sp-2);
   border-radius: 999px;
   border: 1px solid var(--accent);
-  color: var(--accent);
+  color: var(--accent-text);
   font-size: var(--fs-xs);
   font-weight: 600;
   white-space: nowrap;
@@ -8902,7 +8949,7 @@ button.calc-field-btn {
   flex: 1 0 100%;
   font-size: var(--fs-lg);
   font-weight: 700;
-  color: var(--accent);
+  color: var(--accent-text);
   padding-bottom: var(--sp-1);
   border-bottom: 1px solid var(--border);
 }
@@ -8983,7 +9030,7 @@ button.calc-field-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #667;
+  color: var(--muted);
   font-size: var(--fs-sm);
 }
 
@@ -9038,7 +9085,7 @@ button.calc-field-btn {
   padding: 1px var(--sp-2);
   border-radius: 999px;
   border: 1px solid var(--border-strong);
-  color: var(--accent);
+  color: var(--accent-text);
   font-size: var(--fs-xs);
   font-weight: 600;
 }
@@ -9221,3 +9268,63 @@ button.calc-field-btn {
 .ib-def-line { color: var(--text); overflow-wrap: anywhere; }
 .ib-def-kind { color: var(--muted); font-size: var(--fs-xs); }
 .ib-follow { cursor: pointer; }
+
+/* ------------------------------------------------------------ accessibility */
+
+/* The toolbar's ⋯: Describe this graph, colour-blind-safe colours. */
+.tb-more {
+  position: relative;
+  display: flex;
+}
+
+.tb-more-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  left: auto;
+  min-width: 240px;
+}
+
+.tb-more-check {
+  display: inline-block;
+  width: 16px;
+  color: var(--accent-text);
+}
+
+/* "Describe this graph": the board in words, readable and copyable. */
+.describe-dialog {
+  width: min(620px, 100%);
+}
+
+.describe-body {
+  max-height: min(48vh, 420px);
+  overflow: auto;
+  padding: var(--sp-3);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--fs-lg);
+  line-height: 1.55;
+  user-select: text;
+}
+
+.describe-body p + p {
+  margin-top: var(--sp-2);
+}
+
+.describe-alt {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.describe-alt-label {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.describe-alt-text {
+  color: var(--text);
+  user-select: text;
+}

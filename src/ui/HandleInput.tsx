@@ -76,14 +76,20 @@ export function HandleInput({
     setPlaced({ left, top })
   }, [anchor.x, anchor.y, bounds.w, bounds.h])
 
-  // Focus + select the first field so typing replaces the current value.
+  // Focus + select the first field so typing replaces the current value —
+  // once the popover is PLACED: until then it is visibility:hidden, and a
+  // hidden field cannot take focus (the keyboard's Enter on a handle opened
+  // it with focus left on the board).
+  const focusedRef = useRef(false)
   useLayoutEffect(() => {
+    if (!placed || focusedRef.current) return
     const first = inputsRef.current[0]
     if (first) {
+      focusedRef.current = true
       first.focus()
       first.select()
     }
-  }, [])
+  }, [placed])
 
   const commit = (skipSnap: boolean): void => {
     const parsed = texts.map(parseNumeric)

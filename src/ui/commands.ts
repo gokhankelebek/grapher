@@ -157,6 +157,11 @@ export interface CommandActions {
   zoomOut(): void
   resetView(): void
   help(): void
+  // ---- accessibility
+  /** "Describe this graph": the board in words, with Copy. */
+  describe(): void
+  /** Curve colours: standard, or colour-blind safe (a preference). */
+  setCurvePalette(palette: 'standard' | 'safe'): void
 }
 
 /** A snapshot of the board, for deciding what is on offer. */
@@ -186,6 +191,8 @@ export interface CommandContext {
   /** The x axis' unit choice, or null on a board with no axes (a number line). */
   axisX: AxisUnitChoice | null
   grid: BoardGrid | null
+  /** Curve colours (Board & export settings → Curve colours). Absent: standard. */
+  curvePalette?: 'standard' | 'safe'
   actions: CommandActions
 }
 
@@ -982,6 +989,35 @@ export const COMMANDS: readonly Command[] = [
     run: (ctx) => ctx.actions.toggleTheme(),
   },
   {
+    id: 'view-describe',
+    title: 'Describe this graph',
+    description: 'The board in words, as a screen reader hears it — copy it as alt text',
+    keywords: [
+      'describe', 'description', 'alt text', 'alternative text', 'screen reader', 'accessibility', 'a11y',
+      'blind', 'low vision', 'read aloud', 'words', 'text version', 'accommodation', 'iep', '504',
+    ],
+    group: 'View',
+    path: 'Toolbar → ⋯ → Describe this graph',
+    when: always,
+    run: (ctx) => ctx.actions.describe(),
+  },
+  {
+    id: 'view-colour-safe',
+    title: 'Colour-blind-safe curve colours',
+    label: (ctx) =>
+      ctx.curvePalette === 'safe' ? 'Standard curve colours' : 'Colour-blind-safe curve colours',
+    description: 'Okabe–Ito colours and a dash pattern per curve, on screen and in exports',
+    keywords: [
+      'colour blind', 'color blind', 'colourblind', 'colorblind', 'cvd', 'deuteranopia', 'protanopia',
+      'tritanopia', 'palette', 'colours', 'colors', 'accessible colours', 'okabe ito', 'dashes',
+      'accessibility', 'a11y', 'contrast',
+    ],
+    group: 'View',
+    path: 'Download ▾ (caret) → Curve colours',
+    when: always,
+    run: (ctx) => ctx.actions.setCurvePalette(ctx.curvePalette === 'safe' ? 'standard' : 'safe'),
+  },
+  {
     id: 'view-present',
     title: 'Presentation mode',
     label: (ctx) => (ctx.presentMode ? 'Leave presentation mode' : 'Presentation mode'),
@@ -1056,6 +1092,7 @@ export const COMMANDS: readonly Command[] = [
     keywords: ['zoom in', 'closer', 'magnify', 'bigger', 'enlarge'],
     group: 'View',
     path: 'Board corner → +',
+    shortcuts: ['+', '='],
     when: always,
     run: (ctx) => ctx.actions.zoomIn(),
   },
@@ -1066,6 +1103,7 @@ export const COMMANDS: readonly Command[] = [
     keywords: ['zoom out', 'further', 'smaller', 'wider view'],
     group: 'View',
     path: 'Board corner → −',
+    shortcuts: ['-'],
     when: always,
     run: (ctx) => ctx.actions.zoomOut(),
   },
@@ -1401,17 +1439,27 @@ export function filterTargets(targets: readonly TargetFacts[], query: string): T
  */
 export const RESERVED_KEYS: readonly { keys: string; what: string }[] = [
   { keys: 'Space', what: 'Hold and drag to pan the board' },
-  { keys: 'ArrowLeft', what: 'Nudge the selected curve 0.1 (with Shift: 1)' },
+  { keys: 'ArrowLeft', what: 'Nudge the selected curve 0.1 (with Shift: 1); on the focused board with nothing selected, pan' },
   { keys: 'ArrowRight', what: 'Nudge the selected curve 0.1 (with Shift: 1); in reveal mode, the next answer' },
   { keys: 'ArrowUp', what: 'Nudge the selected curve up' },
   { keys: 'ArrowDown', what: 'Nudge the selected curve down' },
-  { keys: 'Escape', what: 'Close a box, cancel a pick, leave presentation mode' },
+  { keys: 'Escape', what: 'Close a box, cancel a pick, leave presentation mode; on the focused board, let go of the selected curve' },
   { keys: 'Alt', what: 'Hold while dragging to skip snapping' },
+  { keys: 'Tab', what: 'On the focused board with a curve selected: the next handle (Shift+Tab: the previous); arrows then move it' },
+  { keys: 'Enter', what: 'On a focused handle: type its exact value; on a card: select its curve' },
 ]
+
+/**
+ * A key spec's parts: modifiers, then the key. '+' joins them, and a '+' with
+ * nothing after it IS the key ('+', 'Shift++'), so the plus key can be named.
+ */
+export function keyParts(spec: string): string[] {
+  return spec.split(/\+(?=.)/)
+}
 
 /** A key spec in canonical form ('Shift+Mod+Z'), for comparing. */
 export function canonicalKey(spec: string): string {
-  const parts = spec.split('+')
+  const parts = keyParts(spec)
   const key = parts.pop() ?? ''
   const mods = parts.map((m) => m.trim()).sort()
   return [...mods, key.length === 1 ? key.toUpperCase() : key].join('+')
@@ -1439,7 +1487,7 @@ const KEY_GLYPHS: Record<string, string> = {
 
 /** A key spec as a person reads it: ⌘K / Ctrl+K, ⇧P / Shift+P. */
 export function formatShortcut(spec: string, mac: boolean = isMacPlatform()): string {
-  const parts = spec.split('+')
+  const parts = keyParts(spec)
   const key = parts.pop() ?? ''
   const shown = KEY_GLYPHS[key] ?? (key.length === 1 ? key.toUpperCase() : key)
   const mods = parts.map((m) => {
@@ -1458,7 +1506,7 @@ export function matchesKey(
   e: { key: string; metaKey?: boolean; ctrlKey?: boolean; shiftKey?: boolean; altKey?: boolean },
   spec: string,
 ): boolean {
-  const parts = spec.split('+')
+  const parts = keyParts(spec)
   const key = parts.pop() ?? ''
   const wantMod = parts.includes('Mod')
   const wantShift = parts.includes('Shift')
@@ -1671,6 +1719,12 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     { id: 'view-zoom-fit' },
     { id: 'view-sidebar' },
     { id: 'palette' },
+  ] },
+  { id: 'a11y', course: 'In class', title: 'Accessibility', entries: [
+    { id: 'view-describe', note: 'The board in words for a screen reader — copy it as alt text for a worksheet or an LMS' },
+    { id: 'view-colour-safe', note: 'For colour-vision deficiency: Okabe–Ito colours, a dash pattern per curve, on screen and on paper' },
+    { title: 'Keyboard only', text: 'Everything is reachable without a mouse', how: 'Tab to “Skip to board”; Tab onto the board; arrows pan; + / − zoom; select a curve on its card with Enter; on the board Tab steps through its handles, arrows move one (Shift: further), Enter types an exact value', keys: 'Tab' },
+    { title: 'Bigger and calmer', text: 'Presentation mode for large type; the system’s reduced-motion setting stops the animations', how: 'F, or Toolbar → ▭' },
   ] },
 ]
 

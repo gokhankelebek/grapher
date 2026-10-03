@@ -12,6 +12,7 @@ import type { BoardKind } from '../core/types'
 import { signBandHeight } from '../render/signChart'
 import { toPdf } from '../render/vectorPdf'
 import { toSvg } from '../render/vectorSvg'
+import type { GraphDescriptionApi } from './useGraphDescription'
 import { toTikz } from '../render/vectorTikz'
 import { drawContextMarkers } from '../ui/AnalysisOverlay'
 import { constructionPoints } from '../ui/conicLinks'
@@ -81,12 +82,18 @@ export interface ExportDeps {
   naming: CurveNamesApi
   lookApi: BoardLookApi
   revealMode: RevealModeApi
+  /** The board in words: an SVG's <desc>. */
+  describer?: GraphDescriptionApi
 }
 
-export function useExport({ board, docState, session, refs, derived, notices, calc, fieldsApi, shapesApi, tables, unitCircle, rates, system, overlaysApi, marks, naming, lookApi, revealMode }: ExportDeps) {
+export function useExport({ board, docState, session, refs, derived, notices, calc, fieldsApi, shapesApi, tables, unitCircle, rates, system, overlaysApi, marks, naming, lookApi, revealMode, describer }: ExportDeps) {
   const { kind } = board
   const { docMeta } = docState
-  const { setExportSettings, setCopyState } = session
+  const { setExportSettings, setCopyState, curvePalette } = session
+  const curvePaletteRef = useRef(curvePalette)
+  curvePaletteRef.current = curvePalette
+  const describeNowRef = useRef(describer?.describeNow)
+  describeNowRef.current = describer?.describeNow
   const {
     curvesRef, itemsRef, kindRef, stylesRef, selectedRef, exprSourcesRef, dataRef, seqRef, ucRef,
     rrRef, boardCurveNamesRef, boardGridRef, figureStyleRef, docMetaRef,
@@ -237,6 +244,9 @@ export function useExport({ board, docState, session, refs, derived, notices, ca
       // (amber lands near 1.7:1 — a copier renders it as nothing), so a light
       // export swaps every curve for its print counterpart.
       printColors: figure ? true : settings.theme === 'light',
+      // The person's curve palette reaches the file too: a colour-blind
+      // reader's handout needs the safe colours and the dashes most of all.
+      ...(curvePaletteRef.current === 'safe' ? { inkPalette: 'safe' as const } : {}),
       // The PNG is measured the way the screen is. This is the whole point of
       // there being one scene type: a π axis a teacher set for a trig lesson
       // has to be π in the file they paste into the worksheet.
@@ -511,6 +521,16 @@ export function useExport({ board, docState, session, refs, derived, notices, ca
   // the display list is written out. pgfplots is the mathematics instead,
   // built from the scene and the typed equations (src/ui/pgfplotsExport.ts).
 
+  /** An SVG's <desc>: the board in words (the screen reader's long description). */
+  const svgDesc = (): string | undefined => {
+    try {
+      const d = describeNowRef.current?.()
+      return d ? d.long || d.figuredesc : undefined
+    } catch {
+      return undefined
+    }
+  }
+
   /** The source text / bytes of a vector format, or null when there is nothing to draw. */
   const buildVectorExport = useCallback(
     (format: Exclude<ExportFormat, 'png'>): { data: string | Uint8Array; mime: string } | null => {
@@ -522,7 +542,7 @@ export function useExport({ board, docState, session, refs, derived, notices, ca
           const list = recordScene(scene, settings.margin, (ctx) => paintExportExtras(ctx, scene, settings))
           const geo = exportGeometry(scene.vp, settings)
           return {
-            data: toSvg(list, { pixelWidth: geo.w, pixelHeight: geo.h, title }),
+            data: toSvg(list, { pixelWidth: geo.w, pixelHeight: geo.h, title, desc: svgDesc() }),
             mime: 'image/svg+xml',
           }
         }

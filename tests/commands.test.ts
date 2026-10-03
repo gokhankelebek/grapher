@@ -25,6 +25,7 @@ import {
   RESERVED_KEYS,
   availability,
   canonicalKey,
+  keyParts,
   filterTargets,
   formatShortcut,
   matchesKey,
@@ -612,7 +613,7 @@ describe('keys: one owner each, no clashes', () => {
       for (const m of src.matchAll(/e\.key === '([^a-zA-Z'\\]|\\\\)'/g)) handled.add(m[1] === '\\\\' ? '\\' : m[1])
     }
     const owned = new Set(
-      all.map(({ key }) => key.split('+').pop() as string).filter((k) => k.length === 1),
+      all.map(({ key }) => keyParts(key).pop() as string).filter((k) => k.length === 1),
     )
     for (const k of handled) expect(owned.has(k), `App handles “${k}” but no command owns it`).toBe(true)
     for (const k of owned) expect(handled.has(k), `“${k}” is a command shortcut the App never handles`).toBe(true)

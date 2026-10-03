@@ -23,6 +23,7 @@ import type {
   RegressionKind,
   RegressionRow,
 } from './dataLinks'
+import { useInk } from './inkContext'
 
 // ============================================================================
 // src/ui/DataCard.tsx — a data table in the sidebar.
@@ -102,6 +103,7 @@ export function DataCard({
   onResiduals,
   onRefit,
 }: Props) {
+  const ink = useInk()
   const rootRef = useRef<HTMLDivElement>(null)
 
   // ---- the ⋯ menu (identical behaviour to a curve's, deliberately)
@@ -300,10 +302,11 @@ export function DataCard({
       className={`card field-card data-card${selected ? ' card-selected' : ''}${
         data.visible ? '' : ' card-hidden'
       }`}
-      style={{ '--curve': data.color } as CSSProperties}
-      role="button"
+      style={{ '--curve': ink(data.color) } as CSSProperties}
+      role="group"
+      aria-roledescription="card"
       tabIndex={0}
-      aria-pressed={selected}
+      aria-current={selected ? 'true' : undefined}
       aria-label={`${data.name}, ${count} point${count === 1 ? '' : 's'}${data.visible ? '' : ', hidden'}`}
       data-testid="data-card"
       onClick={onSelect}
@@ -319,7 +322,7 @@ export function DataCard({
       <div className="card-head">
         <button
           className="color-dot"
-          style={{ background: data.color }}
+          style={{ background: ink(data.color) }}
           title="Change colour"
           aria-label="Change table colour"
           onClick={(e) => {

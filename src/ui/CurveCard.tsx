@@ -62,6 +62,8 @@ import { setRowText } from './domainLinks'
 import { Answer, AnswerTex, AnswerText, RevealPill, useReveal } from './RevealAnswer'
 import { asymKey, calcKey, domainKey, rangeKey } from './reveal'
 import type { DomainActions, DomainPanel, SetNotation } from './domainLinks'
+import { useInk } from './inkContext'
+import { equationLabel, speakLatex } from '../core/mathSpeech'
 
 interface Props {
   curve: FittedCurve
@@ -678,7 +680,8 @@ export function ParamRow({
         max={max}
         step={step}
         value={value}
-        aria-label={name}
+        aria-label={`Parameter ${speakLatex(name)}`}
+        aria-valuetext={`${speakLatex(name)} = ${text}`}
         style={fillStyle(value, min, max)}
         onPointerDown={onEditStart}
         onPointerUp={onCommit}
@@ -694,7 +697,7 @@ export function ParamRow({
           type="text"
           inputMode="decimal"
           spellCheck={false}
-          aria-label={`${name} exact value`}
+          aria-label={`${speakLatex(name)} exact value`}
           value={editing.text}
           onChange={(e) => setEditing({ text: e.target.value, bad: false })}
           onKeyDown={(e) => {
@@ -714,6 +717,7 @@ export function ParamRow({
           key={snapped ? snapKey : 0}
           className={`param-value${snapped ? ' param-snap' : ''}`}
           title="Click to type an exact value"
+          aria-label={`${speakLatex(name)} = ${text}. Type an exact value`}
           onClick={() => setEditing({ text: String(value), bad: false })}
         >
           {text}
@@ -814,6 +818,7 @@ export function CurveCard({
   setNotation,
   depKey,
 }: Props) {
+  const ink = useInk()
   const spec: ModelSpec | undefined = models[curve.modelId]
   const isExpression = curve.modelId.startsWith('expr_')
   /** Reveal mode: which computed answers on this card stand as pills (src/ui/reveal.ts). */
@@ -1492,6 +1497,28 @@ export function CurveCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected])
 
+  // Keyboard: the open menu takes focus on its first item; a closed menu gives
+  // it back to ⋯ when the item that had it went away with the menu (a calculus
+  // item opens a section; focus must not fall to the page).
+  const menuWasOpenRef = useRef(false)
+  useEffect(() => {
+    if (menuOpen) {
+      menuWasOpenRef.current = true
+      const first = menuRef.current?.querySelector<HTMLElement>('[role^="menuitem"]:not([disabled])')
+      if (first && !menuRef.current?.querySelector('[role="menu"]')?.contains(document.activeElement)) {
+        first.focus({ preventScroll: true })
+      }
+      return
+    }
+    if (!menuWasOpenRef.current) return
+    menuWasOpenRef.current = false
+    window.setTimeout(() => {
+      if ((document.activeElement === document.body || !document.activeElement) && menuBtnRef.current?.isConnected) {
+        menuBtnRef.current.focus({ preventScroll: true })
+      }
+    }, 0)
+  }, [menuOpen])
+
   const copyLatex = (): void => {
     const text = latexStr
     try {
@@ -2028,11 +2055,12 @@ export function CurveCard({
       className={`card${selected ? ' card-selected' : ''}${curve.visible ? '' : ' card-hidden'}${
         shaking ? ' card-shake' : ''
       }${broken || linkError ? ' card-broken-state' : ''}`}
-      style={{ '--curve': curve.color } as CSSProperties}
-      role="button"
+      style={{ '--curve': ink(curve.color) } as CSSProperties}
+      role="group"
+      aria-roledescription="card"
       tabIndex={0}
-      aria-pressed={selected}
-      aria-label={`${modelName} curve${curve.visible ? '' : ', hidden'}`}
+      aria-current={selected ? 'true' : undefined}
+      aria-label={`${name ? `${name}: ` : ''}${broken ? 'Equation' : modelName} curve${curve.visible ? '' : ', hidden'}${selected ? ', selected' : ''}`}
       onClick={onSelect}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return
@@ -2048,7 +2076,7 @@ export function CurveCard({
       <div className="card-head">
         <button
           className="color-dot"
-          style={{ background: curve.color }}
+          style={{ background: ink(curve.color) }}
           title="Change colour"
           aria-label="Change curve colour"
           onClick={(e) => {
@@ -2101,7 +2129,9 @@ export function CurveCard({
               {name}
             </span>
           ))}
-        <span className="model-name">{broken ? 'Equation' : modelName}</span>
+        <span className="model-name" role="heading" aria-level={3}>
+          {broken ? 'Equation' : modelName}
+        </span>
         {broken ? (
           <span className="err-badge err-badge-bad" title={brokenReason}>
             can’t restore
@@ -2364,6 +2394,7 @@ export function CurveCard({
             type="button"
             className="card-formula card-formula-btn card-eq"
             title="Click to edit this equation"
+            aria-label={equationLabel(latexStr)}
             onClick={(e) => {
               e.stopPropagation()
               onSelect()

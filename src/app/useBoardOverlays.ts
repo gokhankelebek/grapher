@@ -50,7 +50,7 @@ export interface BoardOverlaysDeps {
 export function useBoardOverlays({ board, docState, session, derived, calc, tables, domain, system }: BoardOverlaysDeps) {
   const { curves, kind, motionPlay, motionPlayRef, lens, calcLinks, sequences, playEpoch } = board
   const { exprSources, displaySources, names, calls, inverses } = docState
-  const { markersOn, canvasTheme, exportFormat, latexWidthCm, exportSettings } = session
+  const { markersOn, canvasTheme, exportFormat, latexWidthCm, exportSettings, curvePalette } = session
   const { models, depKeys, contextAnalysis } = derived
   const { curveLabel, crossSpan, implicitBox } = calc
   const { seqCompiled } = tables
@@ -163,8 +163,16 @@ export function useBoardOverlays({ board, docState, session, derived, calc, tabl
           xs = []
         }
         const v = hltVerdict(xs)
-        marks.push({ kind: 'hline', curveId: c.id, y: l.hlt, color: v.color })
+        // Colour-blind-safe palette: pass / fail is not left to orange vs
+        // green — a failing line is dashed, and both say ✓ / ✗ in words.
+        const safe = curvePalette === 'safe'
+        marks.push({ kind: 'hline', curveId: c.id, y: l.hlt, color: v.color, ...(safe && v.fails ? { dashed: true } : {}) })
         for (const x of xs) marks.push({ kind: 'dot', curveId: c.id, at: { x, y: l.hlt }, color: v.color })
+        if (safe && Number.isFinite(crossSpan[0]) && Number.isFinite(crossSpan[1])) {
+          // the middle of the (padded) search span is about the middle of the view
+          const at = { x: (crossSpan[0] + crossSpan[1]) / 2, y: l.hlt }
+          marks.push({ kind: 'label', curveId: c.id, at, text: `${v.glyph} ${v.chip}`, dir: { x: 0, y: -1 }, color: v.color })
+        }
       }
       if (l.reflect !== undefined) {
         const f = explicitF(c, models)
@@ -179,7 +187,7 @@ export function useBoardOverlays({ board, docState, session, derived, calc, tabl
     return out.length + marks.length === 0 ? [] : [...out, ...marks]
     // depKeys: a line that calls f moves when f does.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kind, lens, curves, models, crossSpan, ghostFunctionOf, depKeys])
+  }, [kind, lens, curves, models, crossSpan, ghostFunctionOf, depKeys, curvePalette])
 
   /** Σ aₙ on the board: staircase bars, the joined sums, the band, y = S. */
   const seriesMarks = useMemo<Overlay[]>(

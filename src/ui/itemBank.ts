@@ -57,6 +57,9 @@ import type { DocModel } from './docScene'
 import { docFigure, docModelFromJSON, recordFigure } from './docScene'
 import { PGFPLOTS_FILLBETWEEN, PGFPLOTS_PREAMBLE, toPgfplots } from './pgfplotsExport'
 import { clampLatexWidth } from './vectorExport'
+import { houseDashes } from './dashes'
+
+export { HOUSE_DASHES, houseDashes } from './dashes'
 
 // ============================================================================
 // The record
@@ -129,13 +132,6 @@ export interface BankOptions {
 
 export const DEFAULT_BANK_OPTIONS: BankOptions = { format: 'tikz', answers: false, widthCm: 7, house: true }
 
-/**
- * Dash patterns, in the order curves take them under house style: solid,
- * dashed, dotted, dash-dot — the Curve ⋯ → Line presets first, so a curve the
- * teacher dashed by hand reads the same as one dashed here.
- */
-export const HOUSE_DASHES: readonly (readonly number[])[] = [[], [8, 6], [2, 5], [10, 4, 2, 4]]
-
 /** The figure style house rules draw in: a textbook or SAT figure keeps its look, anything else is AP. */
 export function houseStyleId(style: FigureStyleId): FigureStyleId {
   return style === 'textbook' || style === 'sat' ? style : 'ap'
@@ -161,48 +157,6 @@ export function houseFigure(style: FigureStyleId): FigureStyle {
     curveInk: 'mono',
     axisNames: true,
   }
-}
-
-const sameDash = (a: readonly number[] | undefined, b: readonly number[]): boolean =>
-  (a?.length ?? 0) === b.length && (a ?? []).every((v, i) => v === b[i])
-
-/**
- * One dash pattern per visible curve: a curve the teacher dashed keeps its
- * dash; every other takes the next house pattern nobody has yet. With more
- * curves than patterns the cycle repeats (and the curves' names tell them apart).
- */
-export function houseDashes(curves: readonly FittedCurve[], styles: StyleMap): StyleMap {
-  const out: StyleMap = { ...styles }
-  const shown = curves.filter((c) => c.visible)
-  const used: (readonly number[])[] = []
-  for (const c of shown) {
-    const d = styles[c.id]?.dash
-    if (d && d.length > 0) used.push(d)
-  }
-  let next = 0
-  for (const c of shown) {
-    const own = styles[c.id]?.dash
-    if (own && own.length > 0) continue
-    let pick: readonly number[] | null = null
-    for (let k = 0; k < HOUSE_DASHES.length; k++) {
-      const cand = HOUSE_DASHES[(next + k) % HOUSE_DASHES.length]
-      if (!used.some((u) => sameDash(u, cand))) {
-        pick = cand
-        next = (next + k + 1) % HOUSE_DASHES.length
-        break
-      }
-    }
-    if (!pick) {
-      pick = HOUSE_DASHES[next % HOUSE_DASHES.length]
-      next++
-    }
-    used.push(pick)
-    const style: CurveStyle = { ...(styles[c.id] ?? {}) }
-    if (pick.length > 0) style.dash = pick.slice()
-    else delete style.dash
-    out[c.id] = style
-  }
-  return out
 }
 
 /** Apply the house rules to a figure's scene (a new scene; the input is not changed). */

@@ -579,9 +579,19 @@ export function Sidebar({
   useEffect(() => {
     if (bodyRef.current) bodyRef.current.inert = readOnly
   }, [readOnly])
+  // A closed sidebar is 0 px wide but its controls are still in the DOM: inert
+  // keeps Tab and a screen reader out of what nobody can see.
+  const asideRef = useRef<HTMLElement>(null)
+  useEffect(() => {
+    if (asideRef.current) asideRef.current.inert = !open
+  }, [open])
 
   return (
-    <aside className={`sidebar${open ? '' : ' sidebar-closed'}${readOnly ? ' sidebar-readonly' : ''}`}>
+    <aside
+      ref={asideRef}
+      className={`sidebar${open ? '' : ' sidebar-closed'}${readOnly ? ' sidebar-readonly' : ''}`}
+      aria-label={numberLine ? 'Solution set' : 'Curves and objects'}
+    >
       <div className="sidebar-inner">
         {topNote}
         <div className="sidebar-head">
@@ -593,7 +603,7 @@ export function Sidebar({
             <BoardKindSwitch kind={kind} onSetKind={onSetKind} />
           )}
           <div className="sidebar-head-row">
-            <span className="sidebar-title">{numberLine ? 'Solution set' : 'Curves'}</span>
+            <h2 className="sidebar-title">{numberLine ? 'Solution set' : 'Curves'}</h2>
             <span className="sidebar-count">
               {numberLine
                 ? items.length

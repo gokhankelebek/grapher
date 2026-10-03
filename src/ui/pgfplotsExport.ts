@@ -29,12 +29,13 @@
 // ============================================================================
 
 import type { FittedCurve, ModelSpec, SpecialPoint, Vec2, Viewport } from '../core/types'
-import { ppuX, ppuY, toMath, toPrintColor } from '../core/types'
+import { ppuX, ppuY, toMath } from '../core/types'
+import { inkMapper } from '../core/a11yPalette'
 import type { ExprNode } from '../core/parse'
 import { parseAst, piecewiseParts } from '../core/parse'
 import { findAsymptotes, findHoles } from '../core/holes'
 import type { BoardScene } from './renderBoard'
-import { MONO_FILL_ALPHA, captionHeight, keyLineTokens, renderBoard } from './renderBoard'
+import { MONO_FILL_ALPHA, captionHeight, keyLineTokens, renderBoard, withPaletteStyles } from './renderBoard'
 import { drawCurve } from '../render/curves'
 import { curveEndPoints, resolveEnds } from '../render/endCaps'
 import { holeRange } from '../render/holes'
@@ -685,7 +686,8 @@ export const PGFPLOTS_FILLBETWEEN = '\\usepgfplotslibrary{fillbetween}'
 /** Coordinates per line in a coordinates {…} block. */
 const PER_LINE = 6
 
-export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): string {
+export function toPgfplots(sceneIn: BoardScene, opts: PgfplotsOptions = {}): string {
+  const scene = withPaletteStyles(sceneIn)
   const notExported: string[] = []
   const vp = scene.vp
   const ppx = ppuX(vp)
@@ -711,7 +713,8 @@ export function toPgfplots(scene: BoardScene, opts: PgfplotsOptions = {}): strin
   const lightGround = bgLum > 0.5
   const print = scene.printColors === true || lightGround
   const mono = fig?.curveInk === 'mono'
-  const ink = (c: string): string => (mono ? theme.axis : print ? toPrintColor(c) : c)
+  const paint = inkMapper(print, scene.inkPalette)
+  const ink = (c: string): string => (mono ? theme.axis : paint(c))
   const fillAlpha = (a?: number): number => (mono ? MONO_FILL_ALPHA : a ?? OVERLAY_FILL_ALPHA)
   const P = (x: number, y: number): string => `(${pgfNum(round(x))},${pgfNum(round(y))})`
   const round = (v: number): number => Math.round(v * 1e5) / 1e5

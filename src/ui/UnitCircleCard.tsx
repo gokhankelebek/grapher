@@ -7,6 +7,7 @@ import type { BoardUnitCircle, UnitCircleCardData, UnitCircleShow, PlaySpeed } f
 import { PLAY_SPEEDS, invValueText } from './unitCircleLinks'
 import type { InvFn, UnwrapFn } from '../core/trig'
 import { parseAngle, parseTrigValue, specialIndex, specialRows } from '../core/trig'
+import { useInk } from './inkContext'
 
 // ============================================================================
 // src/ui/UnitCircleCard.tsx — the unit circle in the sidebar list.
@@ -71,6 +72,7 @@ export function UnitCircleCard({
   onPlay,
   onSpeed,
 }: Props) {
+  const ink = useInk()
   /** Reveal mode: this circle's exact values are one answer (src/ui/reveal.ts). */
   const revealApi = useReveal()
   const ak = ucKey(uc.id)
@@ -177,10 +179,11 @@ export function UnitCircleCard({
   return (
     <div
       className={`card field-card uc-card${selected ? ' card-selected' : ''}${visible ? '' : ' card-hidden'}`}
-      style={{ '--curve': uc.color } as CSSProperties}
-      role="button"
+      style={{ '--curve': ink(uc.color) } as CSSProperties}
+      role="group"
+      aria-roledescription="card"
       tabIndex={0}
-      aria-pressed={selected}
+      aria-current={selected ? 'true' : undefined}
       aria-label={`Unit circle${visible ? '' : ', hidden'}`}
       data-testid="uc-card"
       onClick={onSelect}
@@ -195,7 +198,7 @@ export function UnitCircleCard({
       <div className="card-head">
         <button
           className="color-dot"
-          style={{ background: uc.color }}
+          style={{ background: ink(uc.color) }}
           title="Change colour"
           aria-label="Change unit circle colour"
           onClick={(e) => {

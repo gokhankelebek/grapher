@@ -1,5 +1,8 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import type { MutableRefObject } from 'react'
+import type { CurvePalette } from '../core/a11yPalette'
+import { prefersReducedMotion } from './motionPref'
+import { panBy } from './viewScale'
 import type { FigureStyle, NLItem, Theme, Vec2, Viewport } from '../core/types'
 import type { StyleMap } from '../core/persist'
 import {
@@ -67,6 +70,11 @@ interface Props {
   /** Reveal mode: a solved inequality's set hides until revealed (src/ui/reveal.ts). */
   reveal?: SceneReveal | null
   onRevealMark?(key: string): void
+  /** Curve colours (src/core/a11yPalette.ts). */
+  inkPalette?: CurvePalette
+  /** The board's accessible name and the ids of its long description. */
+  a11yLabel?: string
+  describedBy?: string
 }
 
 const MIN_PPU = 0.001
@@ -126,6 +134,9 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
       onViewportChange,
       reveal,
       onRevealMark,
+      inkPalette,
+      a11yLabel,
+      describedBy,
     },
     handle,
   ) {
@@ -158,6 +169,8 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
     const revealAnimRef = useRef(false)
     const viewportChangeRef = useRef(onViewportChange)
     viewportChangeRef.current = onViewportChange
+    const inkPaletteRef = useRef(inkPalette)
+    inkPaletteRef.current = inkPalette
 
     const [cursor, setCursor] = useState('crosshair')
     /**
@@ -210,6 +223,7 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
         models: {},
         ...(presentRef.current ? { present: paintScale(presentRef.current) } : {}),
         ...(figureRef.current ? { figure: figureRef.current } : {}),
+        ...(inkPaletteRef.current === 'safe' ? { inkPalette: 'safe' as const } : {}),
         chrome: {
           selectedId: selectedRef.current,
           handles: [],
@@ -221,6 +235,7 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
           pending: pendingRef.current,
         },
       }, rv ? { ...rv, now: performance.now() } : null)
+      if (prefersReducedMotion() && scene.revealPulses) delete scene.revealPulses
       revealMarksRef.current = scene.revealMarks ?? []
       revealAnimRef.current = (scene.revealPulses?.length ?? 0) > 0
       renderBoard(ctx, scene)
@@ -249,7 +264,7 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
       figureRef.current = figure
       revealRef.current = reveal
       scheduleRender()
-    }, [items, styles, theme, selectedId, mode, inkColor, present, figure, reveal, scheduleRender])
+    }, [items, styles, theme, selectedId, mode, inkColor, present, figure, reveal, inkPalette, scheduleRender])
 
     useEffect(() => () => window.clearTimeout(tipTimerRef.current), [])
 
@@ -624,8 +639,26 @@ export const NumberLineStage = forwardRef<NumberLineStageHandle, Props>(
       <div ref={wrapRef} className="stage">
         <canvas
           ref={canvasRef}
+          id="board-canvas"
           className="stage-canvas"
           style={{ cursor }}
+          tabIndex={0}
+          role="img"
+          aria-roledescription="interactive number line"
+          aria-label={a11yLabel ?? 'Number line'}
+          aria-describedby={describedBy}
+          onKeyDown={(e) => {
+            // ← → move along the line (Shift: further); everything else is the App's.
+            if (e.metaKey || e.ctrlKey || e.altKey) return
+            if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+            if (selectedRef.current) return
+            e.preventDefault()
+            e.stopPropagation()
+            const step = (e.shiftKey ? 160 : 40) * (e.key === 'ArrowRight' ? 1 : -1)
+            panBy(vpRef.current, -step, 0)
+            viewportChangeRef.current?.()
+            scheduleRender()
+          }}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={(e) => endPointer(e, false)}

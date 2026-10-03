@@ -441,3 +441,133 @@ describe('light canvas', () => {
     ).toBeGreaterThanOrEqual(4.5)
   })
 })
+
+// ---------------------------------------------------------- accessibility pass
+
+/** A token declared inside a rule (a scoped re-declaration, like the light chrome's). */
+function scopedToken(selector: string, name: string): string {
+  const m = rule(selector).match(new RegExp(`${name}:\\s*([^;]+);`))
+  if (!m) throw new Error(`${selector} does not declare ${name}`)
+  return m[1].trim()
+}
+
+/** An opaque colour for a CSS colour value: hex, a token, or rgba over --bg. */
+function solid(value: string, over: string = BG): string | null {
+  const v = value.trim()
+  if (/^#[0-9a-f]{3,6}$/i.test(v)) return v
+  const tok = /^var\((--[\w-]+)\)$/.exec(v)
+  if (tok) {
+    try {
+      return solid(token(tok[1]), over)
+    } catch {
+      return null
+    }
+  }
+  const rgba = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)$/.exec(v)
+  if (rgba) {
+    const a = rgba[4] === undefined ? 1 : Number(rgba[4])
+    const [br, bgc, bb] = hex(over)
+    const mix = (c: string, b: number): number => Math.round(Number(c) * a + b * (1 - a))
+    return `#${[mix(rgba[1], br), mix(rgba[2], bgc), mix(rgba[3], bb)].map((n) => n.toString(16).padStart(2, '0')).join('')}`
+  }
+  return null
+}
+
+describe('accessibility: contrast of the colour tokens (WCAG 2.2 AA)', () => {
+  it('text in the accent and danger hues clears 4.5:1 on every dark surface, a hovered card included', () => {
+    for (const t of ['--accent-text', '--danger-text']) {
+      for (const [name, surface] of Object.entries(SURFACES)) {
+        expect(contrast(token(t), surface), `${t} on --${name}`).toBeGreaterThanOrEqual(4.5)
+      }
+    }
+  })
+
+  it('…and on the light chrome, where the tokens are re-declared for paper-white menus', () => {
+    const scope = '.canvas-light .toolbar,\n.canvas-light .zoom-controls'
+    const paper = scopedToken(scope, '--bg')
+    for (const t of ['--accent-text', '--danger-text', '--text', '--muted']) {
+      expect(contrast(scopedToken(scope, t), paper), `${t} on light chrome`).toBeGreaterThanOrEqual(4.5)
+    }
+  })
+
+  it('no rule paints text in the bare --accent or --danger (their text forms are the ones that pass)', () => {
+    expect(CSS).not.toMatch(/(?:^|[;{\s])color:\s*var\(--accent\)/)
+    expect(CSS).not.toMatch(/(?:^|[;{\s])color:\s*var\(--danger\)/)
+  })
+
+  it('the focus ring (the accent) clears 3:1 against every surface it can sit on (WCAG 1.4.11)', () => {
+    for (const [name, surface] of Object.entries(SURFACES)) {
+      expect(contrast(token('--accent'), surface), `focus ring on --${name}`).toBeGreaterThanOrEqual(3)
+    }
+  })
+
+  it('every hard-coded text colour clears 4.5:1 on the surface it is drawn on', () => {
+    // Rules on the light canvas sit on paper; their own test above covers the chrome.
+    const failures: string[] = []
+    const re = /([^{}]+)\{([^{}]*)\}/g
+    let m: RegExpExecArray | null
+    while ((m = re.exec(CSS))) {
+      const selector = m[1].trim().split('\n').filter((l) => !l.trim().startsWith('/*') && !l.trim().startsWith('*')).join(' ').trim()
+      if (!selector || selector.startsWith('@') || /canvas-light|:root|::selection|::placeholder/.test(selector)) continue
+      const body = m[2]
+      const colour = /(?:^|[;\s])color:\s*(#[0-9a-f]{3,6})\s*;/i.exec(body)
+      if (!colour) continue
+      // A state rule (:hover, :focus…) without a background sits on its base rule's.
+      let bgDecl = /(?:^|[;\s])background(?:-color)?:\s*([^;]+);/i.exec(body)
+      if (!bgDecl) {
+        const base = selector.replace(/:(?:hover|focus|focus-visible|active|disabled|not\([^)]*\))+/g, '')
+        if (base !== selector) {
+          try {
+            bgDecl = /(?:^|[;\s])background(?:-color)?:\s*([^;]+);/i.exec(rule(base))
+          } catch {
+            /* no base rule */
+          }
+        }
+      }
+      const ground = bgDecl ? solid(bgDecl[1]) : null
+      const grounds = ground ? [ground] : [BG, PANEL, PANEL_2]
+      for (const g of grounds) {
+        const c = contrast(colour[1], g)
+        if (c < 4.5) failures.push(`${selector}: ${colour[1]} on ${g} = ${c.toFixed(2)}`)
+      }
+    }
+    expect(failures).toEqual([])
+  })
+
+  it('the toolbar text on its translucent panel over the dark board clears 7:1', () => {
+    const tb = solid(declaration('.toolbar', 'background'), BG)
+    expect(tb).not.toBeNull()
+    expect(contrast(token('--text'), tb as string)).toBeGreaterThanOrEqual(7)
+    expect(contrast(token('--muted'), tb as string)).toBeGreaterThanOrEqual(4.5)
+  })
+
+  it('placeholders (--faint) clear 4.5:1 on every surface now, the hovered card included', () => {
+    for (const [name, surface] of Object.entries(SURFACES)) {
+      expect(contrast(token('--faint'), surface), `--faint on --${name}`).toBeGreaterThanOrEqual(4.5)
+    }
+  })
+})
+
+describe('accessibility: focus is always visible', () => {
+  it('the board shows its ring inside its own edge', () => {
+    expect(declaration('.stage-canvas:focus-visible', 'outline')).toBe('2px solid var(--accent)')
+    expect(declaration('.stage-canvas:focus-visible', 'outline-offset')).toBe('-3px')
+  })
+
+  it('the fields that drop the outline draw a ring of their own', () => {
+    expect(CSS).toMatch(/\.param-edit:focus,\n\.fe-mult-input:focus \{\n  box-shadow: 0 0 0 2px var\(--accent\);/)
+  })
+
+  it('“Skip to board” is off-screen until it has focus, then on screen', () => {
+    expect(declaration('.skip-link', 'top')).toBe('-60px')
+    expect(rule('.skip-link:focus,\n.skip-link:focus-visible')).toContain('top: var(--sp-3)')
+  })
+
+  it('motion is cut for people who ask the system for less', () => {
+    const at = CSS.indexOf('@media (prefers-reduced-motion: reduce)')
+    expect(at).toBeGreaterThan(0)
+    const block = CSS.slice(at, CSS.indexOf('}\n}', at))
+    expect(block).toContain('animation-duration: 0.01ms !important')
+    expect(block).toContain('transition-duration: 0.01ms !important')
+  })
+})

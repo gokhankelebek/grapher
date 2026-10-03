@@ -1,4 +1,10 @@
+import { useMemo } from 'react'
 import type { CSSProperties } from 'react'
+import { inkMapper } from './core/a11yPalette'
+import { InkContext } from './ui/inkContext'
+import { DescribeDialog } from './ui/DescribeDialog'
+import { useSliderShiftSteps } from './ui/sliderKeys'
+import { BOARD_DESC_ID, useGraphDescription } from './app/useGraphDescription'
 import { MODE } from './app/constants'
 import { FIGURE_STYLES } from './core/types'
 import { AnalysisOverlay } from './ui/AnalysisOverlay'
@@ -127,9 +133,12 @@ export default function App() {
     board, docState, session, derived, editing, system, overlaysApi, panel, lookApi,
   })
   const cardCrossings = useCardCrossings({ refs, calc, naming, lookApi })
+  const describer = useGraphDescription({
+    board, session, refs, derived, notices, persistence, overlaysApi,
+  })
   const exporter = useExport({
     board, docState, session, refs, derived, notices, calc, fieldsApi, shapesApi, tables,
-    unitCircle, rates, system, overlaysApi, marks, naming, lookApi, revealMode,
+    unitCircle, rates, system, overlaysApi, marks, naming, lookApi, revealMode, describer,
   })
   const figureSettings = useFigureSettings({
     board, docState, session, refs, derived, notices, history, viewport, lookApi,
@@ -145,11 +154,13 @@ export default function App() {
   const commandsApi = useCommands({
     board, docState, session, refs, derived, notices, history, docActions, editing, calc, fieldsApi,
     typed, tables, domain, numberLine, viewport, unitCircle, rates, overlaysApi, naming, revealMode,
-    exporter, figureSettings, editors, examples: examplesApi, itemBank,
+    exporter, figureSettings, editors, examples: examplesApi, itemBank, describer,
   })
   useKeyboard({
     board, docState, session, refs, history, editing, calc, revealMode, figureSettings, editors,
+    viewport,
   })
+  useSliderShiftSteps()
   const presentation = usePresentation({
     board, docState, session, refs, derived, fieldsApi, shapesApi, tables,
   })
@@ -171,7 +182,7 @@ export default function App() {
     changeLatexWidth, wheelPref, setWheelPref, setNotation, axisUnitChoice, exportSettings,
     presentMode, setPresentMode, presentType, palette, setPalette, helpOpen, setHelpOpen,
     recentCommands, exprSeed, legendCorner, setLegendCorner, copyState, highlight, setHighlight,
-    featureNote, setFeatureNote,
+    featureNote, setFeatureNote, curvePalette, setCurvePalette,
   } = session
   const {
     models, depKeys, analysis, editedIds, axisUnits, vpRef, stageRef, nlStageRef, overlayRef,
@@ -263,6 +274,11 @@ export default function App() {
   const {
     canUndo, canRedo, present, legendShown, changePresentType, hasBoardContent, answerBoard,
   } = presentation
+  const { description, describeOpen, openDescribe, closeDescribe, copyText, copyAltText } = describer
+  /** The colour a card shows: the board's palette (the sidebar is dark in every theme). */
+  const cardInk = useMemo(() => inkMapper(false, curvePalette), [curvePalette])
+  /** What the board's live region says: the latest toast or "moved" note. */
+  const liveText = toast?.msg ?? (featureNote?.kind === 'moved' ? featureNote.text : '')
 
   return (
     <div
@@ -271,6 +287,19 @@ export default function App() {
       }${helpOpen ? ' help-open' : ''}`}
       data-present={presentMode ? 'on' : 'off'}
     >
+      {/* Keyboard: the first Tab stop jumps over the sidebar to the board. */}
+      <a
+        className="skip-link"
+        href="#board-canvas"
+        data-testid="skip-to-board"
+        onClick={(e) => {
+          e.preventDefault()
+          document.getElementById('board-canvas')?.focus()
+        }}
+      >
+        Skip to board
+      </a>
+      <InkContext.Provider value={cardInk}>
       <RevealContext.Provider value={revealApi}>
       <AnswerContext.Provider value={answerBoard}>
       <Sidebar
@@ -527,6 +556,9 @@ export default function App() {
             onEditCancel={editCancel}
             onViewportChange={viewportChanged}
             present={present}
+            inkPalette={curvePalette}
+            a11yLabel={description.summary}
+            describedBy={BOARD_DESC_ID}
           />
         ) : (
         <CanvasStage
@@ -578,8 +610,21 @@ export default function App() {
           reveal={sceneReveal}
           onRevealMark={revealKey}
           readOnly={shared?.viewOnly === true}
+          inkPalette={curvePalette}
+          a11yLabel={description.summary}
+          describedBy={BOARD_DESC_ID}
         />
         )}
+
+        {/* The board in words (src/app/useGraphDescription.ts): what the
+            canvas's aria-describedby reads, kept current a moment after the
+            board stops changing. Polite and not atomic, so a screen reader
+            says the paragraph that changed, not the whole board again. */}
+        <div id={BOARD_DESC_ID} className="sr-only" aria-live="polite" data-testid="board-description">
+          {description.long.split(/\n\n+/).map((p, i) => (
+            <p key={i}>{p}</p>
+          ))}
+        </div>
 
         {/* A shared document says so on the board, with the one thing to do
             about it. DOM, so it never reaches an export. */}
@@ -765,6 +810,11 @@ export default function App() {
                 onCaption={setCaption}
                 onCaptionAuto={resetCaption}
                 onPreview={setPreviewFigure}
+                curvePalette={curvePalette}
+                onCurvePalette={setCurvePalette}
+                onCopyAltText={() => {
+                  void copyAltText()
+                }}
               />
             </>
           }
@@ -775,6 +825,9 @@ export default function App() {
             setPalette(null)
             setHelpOpen(true)
           }}
+          onDescribe={openDescribe}
+          curvePalette={curvePalette}
+          onCurvePalette={setCurvePalette}
         />
         )}
 
@@ -797,8 +850,15 @@ export default function App() {
           />
         )}
 
+        {/* One live region that is always there, so a screen reader hears
+            every toast and note: a region mounted together with its text is
+            often not announced at all. The visible toast is its picture. */}
+        <div className="sr-only" role="status" aria-live="polite" aria-atomic="true" data-testid="live-status">
+          {liveText}
+        </div>
+
         {toast && (
-          <div key={toast.key} className="toast" role="status">
+          <div key={toast.key} className="toast">
             <span className="toast-text">{toast.msg}</span>
             {toast.action && (
               <button
@@ -840,7 +900,7 @@ export default function App() {
             className={`feature-note${
               featureNote.kind === 'refused' ? ' feature-note-refused' : ''
             }`}
-            role={featureNote.kind === 'refused' ? 'alert' : 'status'}
+            role={featureNote.kind === 'refused' ? 'alert' : undefined}
           >
             <span className="feature-note-text">
               {featureNote.kind === 'refused' ? featureNote.reason : featureNote.text}
@@ -1022,6 +1082,17 @@ export default function App() {
         )}
         {itemOpen && <GraphFromItemDialog graph={graphItem} onClose={closeGraphFromItem} />}
 
+        {describeOpen && (
+          <DescribeDialog
+            description={description}
+            studentCopy={reveal.on}
+            onCopy={(text, what) => {
+              void copyText(text, what)
+            }}
+            onClose={closeDescribe}
+          />
+        )}
+
         {shareDialog && (
           <ShareDialog
             name={docMeta.name}
@@ -1084,6 +1155,7 @@ export default function App() {
         </div>
       </main>
       </RevealContext.Provider>
+      </InkContext.Provider>
 
       {/* ⌘K and ?: outside <main>, so the help sheet can print on its own. */}
       {palette && commandCtx && (

@@ -7,6 +7,8 @@ import { seriesKey } from './reveal'
 import { SeriesSection } from './SeriesSection'
 import { seriesColor, subscript } from './seqLinks'
 import type { BoardSequence, SeqSeriesView, SequenceCardData } from './seqLinks'
+import { useInk } from './inkContext'
+import { equationLabel } from '../core/mathSpeech'
 
 // ============================================================================
 // src/ui/SequenceCard.tsx — a sequence in the sidebar list.
@@ -77,6 +79,7 @@ export function SequenceCard({
   onToggleSeries = () => {},
   onSeriesChange = () => {},
 }: Props) {
+  const ink = useInk()
   // ---- the ⋯ menu (identical behaviour to a curve's, deliberately)
   const [menuOpen, setMenuOpen] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -213,10 +216,11 @@ export function SequenceCard({
       className={`card field-card seq-card${selected ? ' card-selected' : ''}${
         seq.visible ? '' : ' card-hidden'
       }${card.error ? ' card-broken-state' : ''}`}
-      style={{ '--curve': seq.color } as CSSProperties}
-      role="button"
+      style={{ '--curve': ink(seq.color) } as CSSProperties}
+      role="group"
+      aria-roledescription="card"
       tabIndex={0}
-      aria-pressed={selected}
+      aria-current={selected ? 'true' : undefined}
       aria-label={`Sequence ${L}${seq.visible ? '' : ', hidden'}`}
       data-testid="seq-card"
       onClick={onSelect}
@@ -231,7 +235,7 @@ export function SequenceCard({
       <div className="card-head">
         <button
           className="color-dot"
-          style={{ background: seq.color }}
+          style={{ background: ink(seq.color) }}
           title="Change colour"
           aria-label="Change sequence colour"
           onClick={(e) => {
@@ -308,6 +312,7 @@ export function SequenceCard({
             type="button"
             className="card-formula card-formula-btn card-eq"
             title="Click to edit this sequence"
+            aria-label={equationLabel(card.latex, 'Sequence')}
             data-testid="seq-def"
             onClick={(e) => {
               e.stopPropagation()

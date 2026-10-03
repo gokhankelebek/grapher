@@ -21,6 +21,7 @@ import type { DataTablesApi } from './useDataTables'
 import type { NumberLineApi } from './useNumberLine'
 import type { UnitCircleApi } from './useUnitCircle'
 import type { RelatedRatesApi } from './useRelatedRates'
+import { prefersReducedMotion } from '../ui/motionPref'
 
 /** What useSidebarEditors reads from the hooks App calls before it. */
 export interface SidebarEditorsDeps {
@@ -144,7 +145,7 @@ export function useSidebarEditors({ board, session, refs, notices, docActions, e
           if (++tries < 20) window.setTimeout(find, 40)
           return
         }
-        rows.scrollIntoView({ block: 'center', behavior: 'smooth' })
+        rows.scrollIntoView({ block: 'center', behavior: prefersReducedMotion() ? 'auto' : 'smooth' })
         rows.classList.remove('cmdk-flash')
         void rows.offsetWidth
         rows.classList.add('cmdk-flash')

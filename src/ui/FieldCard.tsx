@@ -9,6 +9,8 @@ import { eulerKey } from './reveal'
 import { EulerSection } from './EulerSection'
 import { CardSection } from './CardSection'
 import type { RunPatch } from './eulerLinks'
+import { useInk } from './inkContext'
+import { equationLabel } from '../core/mathSpeech'
 
 // ============================================================================
 // src/ui/FieldCard.tsx — a slope field in the sidebar list.
@@ -82,6 +84,7 @@ export function FieldCard({
   onEulerPatch,
   onEulerRemove,
 }: Props) {
+  const ink = useInk()
   // ---- the ⋯ menu (identical behaviour to a curve's, deliberately)
   const [menuOpen, setMenuOpen] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -230,10 +233,11 @@ export function FieldCard({
       className={`card field-card${selected ? ' card-selected' : ''}${
         field.visible ? '' : ' card-hidden'
       }${data.error ? ' card-broken-state' : ''}`}
-      style={{ '--curve': field.color } as CSSProperties}
-      role="button"
+      style={{ '--curve': ink(field.color) } as CSSProperties}
+      role="group"
+      aria-roledescription="card"
       tabIndex={0}
-      aria-pressed={selected}
+      aria-current={selected ? 'true' : undefined}
       aria-label={`Slope field${field.visible ? '' : ', hidden'}`}
       onClick={onSelect}
       onKeyDown={(e) => {
@@ -247,7 +251,7 @@ export function FieldCard({
       <div className="card-head">
         <button
           className="color-dot"
-          style={{ background: field.color }}
+          style={{ background: ink(field.color) }}
           title="Change colour"
           aria-label="Change field colour"
           onClick={(e) => {
@@ -342,6 +346,7 @@ export function FieldCard({
             type="button"
             className="card-formula card-formula-btn card-eq"
             title="Click to edit this differential equation"
+            aria-label={data.error ? `Differential equation: ${field.src}` : equationLabel(data.latex, 'Differential equation')}
             onClick={(e) => {
               e.stopPropagation()
               onSelect()

@@ -10,7 +10,9 @@
 // in a 704px canvas, and the second one was pressed far less than the first.
 // ============================================================================
 
-import { useEffect, useId, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { useMenuKeys } from './useMenuKeys'
+import type { CurvePalette } from '../core/a11yPalette'
 import { EXPORT_SCALES, MAX_EXPORT_MARGIN, MAX_EXPORT_WIDTH, MIN_EXPORT_WIDTH } from './renderBoard'
 import { ASPECTS, ASPECT_LABELS } from './exportFit'
 import type { AspectKey, FitExportSettings } from './exportFit'
@@ -155,7 +157,17 @@ interface Props {
   latexCopyState?: CopyState
   /** Open "Copy for item bank…" (a graph only). */
   onItemBank?(): void
+  /** Curve colours: standard, or colour-blind safe (a global preference). */
+  curvePalette?: CurvePalette
+  onCurvePalette?(next: CurvePalette): void
+  /** Copy the figure's one-line description, for an image's alt text. */
+  onCopyAltText?(): void
 }
+
+const CURVE_PALETTE_CHOICES: { value: CurvePalette; label: string; title: string }[] = [
+  { value: 'standard', label: 'Standard', title: 'The board’s own neon colours' },
+  { value: 'safe', label: 'Colour-blind safe', title: 'Okabe–Ito colours and a dash pattern per curve, so no curve is told apart by colour alone' },
+]
 
 /** The three states, in the order the segment shows them. */
 const UNIT_CHOICES: ReadonlyArray<{ value: AxisUnitChoice; label: string; title: string }> = [
@@ -198,6 +210,9 @@ export function ExportMenu({
   onCopyLatex,
   latexCopyState = { kind: 'idle' },
   onItemBank,
+  curvePalette = 'standard',
+  onCurvePalette,
+  onCopyAltText,
 }: Props) {
   const [open, setOpen] = useState(false)
   const size = sizeOf(settings)
@@ -238,6 +253,10 @@ export function ExportMenu({
   const groundLocked = figure !== null && fixesBackground(figure)
   const [widthDraft, setWidthDraft] = useState<string>('')
   const wrapRef = useRef<HTMLDivElement>(null)
+  const caretRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const closeMenu = useCallback((): void => setOpen(false), [])
+  useMenuKeys(open, menuRef, caretRef, closeMenu, { arrows: false })
   const uid = useId()
 
   useEffect(() => {
@@ -316,8 +335,9 @@ export function ExportMenu({
       </button>
 
       <button
+        ref={caretRef}
         className={`exp-caret${open ? ' exp-caret-open' : ''}`}
-        aria-haspopup="menu"
+        aria-haspopup="dialog"
         aria-expanded={open}
         aria-label="Board and export settings"
         title={`Figure style, format, copy to clipboard, axis units, ruling, axes and window, export settings — ${sizeText}`}
@@ -330,7 +350,7 @@ export function ExportMenu({
       </button>
 
       {open && (
-        <div className="exp-menu" role="dialog" aria-label="Board and export settings">
+        <div className="exp-menu" role="dialog" aria-label="Board and export settings" ref={menuRef}>
           {figure && (
             <>
               <FigurePicker
@@ -430,6 +450,22 @@ export function ExportMenu({
             </svg>
             {latex && copyState.kind === 'idle' ? 'Copy as picture' : copyLabel}
           </button>
+
+          {onCopyAltText && (
+            <button
+              className="exp-item"
+              onClick={onCopyAltText}
+              disabled={!hasContent}
+              data-testid="export-copy-alt"
+              title="Copy a one-line description of the figure, to paste as its alt text in a document or an LMS"
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <rect x="2.2" y="3" width="11.6" height="10" rx="1.6" stroke="currentColor" strokeWidth="1.4" />
+                <path d="M4.8 10.4 7 6.2l2.2 4.2M5.6 9h2.8M10.6 6.2v4.2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              Copy alt text
+            </button>
+          )}
 
           {onItemBank && (
             <button
@@ -562,6 +598,38 @@ export function ExportMenu({
             or ⌘-wheel always zooms both axes. On the graph, ⇧-wheel stretches x and ⌥-wheel
             stretches y; on a number line ⇧-wheel scrolls.
           </div>
+
+          {onCurvePalette && (
+            <>
+              <div className="exp-menu-sep" />
+              <div className="exp-title" id={`${uid}-palette`}>Curve colours</div>
+              <div
+                className="seg exp-seg"
+                role="group"
+                aria-labelledby={`${uid}-palette`}
+                data-testid="curve-palette"
+                data-palette={curvePalette}
+              >
+                {CURVE_PALETTE_CHOICES.map((p) => (
+                  <button
+                    key={p.value}
+                    className={`seg-btn${curvePalette === p.value ? ' seg-on' : ''}`}
+                    data-testid={`curve-palette-${p.value}`}
+                    aria-pressed={curvePalette === p.value}
+                    onClick={() => onCurvePalette(p.value)}
+                    title={p.title}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+              <div className="exp-note">
+                Colour-blind safe uses the Okabe–Ito colours, readable on the dark board and on paper,
+                and gives every curve its own dash pattern — on screen and in every export. Your
+                documents keep their colours.
+              </div>
+            </>
+          )}
 
           <div className="exp-menu-sep" />
           <div className="exp-title">Output size</div>

@@ -16,6 +16,8 @@ import {
   nlNotation,
 } from './nlText'
 import { AnswerContext } from './answerContext'
+import { useInk } from './inkContext'
+import { equationLabel } from '../core/mathSpeech'
 
 // Re-exported so the two notations keep one importable home while callers
 // that already knew them here carry on working.
@@ -205,6 +207,7 @@ export function NLCard({
   onStyleEditStart,
   onStyleEditEnd,
 }: Props) {
+  const ink = useInk()
   const [labelDraft, setLabelDraft] = useState<string | null>(null)
 
   // Click the notation to restate the whole set — the same gesture as a curve
@@ -290,9 +293,10 @@ export function NLCard({
   return (
     <div
       className={`card nl-card${selected ? ' card-selected' : ''}`}
-      role="button"
+      role="group"
+      aria-roledescription="card"
       tabIndex={0}
-      aria-pressed={selected}
+      aria-current={selected ? 'true' : undefined}
       aria-label={`${item.kind === 'point' ? 'Point' : 'Interval'} ${nlNotation(item)}`}
       data-item-id={item.id}
       onClick={onSelect}
@@ -307,7 +311,7 @@ export function NLCard({
       <div className="card-head">
         <button
           className="color-dot"
-          style={{ background: item.color }}
+          style={{ background: ink(item.color) }}
           title="Change colour"
           aria-label="Change item colour"
           onClick={(e) => {
@@ -346,6 +350,7 @@ export function NLCard({
             type="button"
             className="card-formula card-formula-btn"
             title="Click to restate this set — an inequality, an interval or a set of points"
+            aria-label={equationLabel(nlNotation(item), 'Set')}
             onClick={(e) => {
               e.stopPropagation()
               onSelect()

@@ -19,6 +19,7 @@ import type { BankFigure, BankOptions, ItemPlan } from './itemBank'
 import { DEFAULT_BANK_OPTIONS, bankFileName, planItem } from './itemBank'
 import { clampLatexWidth } from './vectorExport'
 import { Latex } from './Latex'
+import { useDialogFocus } from './useDialogFocus'
 
 type CopyStatus = 'idle' | 'copied' | 'downloaded'
 
@@ -32,6 +33,7 @@ type CopyStatus = 'idle' | 'copied' | 'downloaded'
 function useDialogKeys(onClose: () => void, ref: React.RefObject<HTMLElement>): (e: React.KeyboardEvent) => void {
   const closeRef = useRef(onClose)
   closeRef.current = onClose
+  useDialogFocus(ref, onClose, { escape: false, autoFocus: false })
   useEffect(() => {
     ref.current?.focus()
     const trap = (e: KeyboardEvent): void => {

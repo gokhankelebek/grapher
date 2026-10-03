@@ -411,6 +411,8 @@ export interface HltVerdict {
   /** "2 points — not one-to-one", "1 point", "no points" */
   chip: string
   color: string
+  /** ✓ one-to-one so far, ✗ not: the verdict without colour. */
+  glyph: '✓' | '✗'
 }
 
 export function hltVerdict(xs: readonly number[]): HltVerdict {
@@ -421,7 +423,7 @@ export function hltVerdict(xs: readonly number[]): HltVerdict {
     : count === 1
       ? '1 point'
       : 'no points'
-  return { count, fails, chip, color: fails ? HLT_FAIL_COLOR : HLT_PASS_COLOR }
+  return { count, fails, chip, color: fails ? HLT_FAIL_COLOR : HLT_PASS_COLOR, glyph: fails ? '✗' : '✓' }
 }
 
 /**
