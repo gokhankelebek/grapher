@@ -23,6 +23,7 @@ import { areaOverlayFor, motionKindOf } from '../ui/motionLinks'
 import type { Overlay } from '../ui/renderBoard'
 import { seriesOverlays } from '../ui/seqLinks'
 import { signRange } from '../ui/signChartLinks'
+import { tableOverlays } from '../ui/valueTableLinks'
 import { keepStableEntries } from '../ui/stableProps'
 import type { ExportFormat } from '../ui/vectorExport'
 import { betweenCardInfo } from './between'
@@ -48,7 +49,7 @@ export interface BoardOverlaysDeps {
 }
 
 export function useBoardOverlays({ board, docState, session, derived, calc, tables, domain, system }: BoardOverlaysDeps) {
-  const { curves, kind, motionPlay, motionPlayRef, lens, calcLinks, sequences, playEpoch } = board
+  const { curves, kind, motionPlay, motionPlayRef, lens, calcLinks, sequences, playEpoch, valueTables } = board
   const { exprSources, displaySources, names, calls, inverses } = docState
   const { markersOn, canvasTheme, exportFormat, latexWidthCm, exportSettings, curvePalette } = session
   const { models, depKeys, contextAnalysis } = derived
@@ -189,6 +190,23 @@ export function useBoardOverlays({ board, docState, session, derived, calc, tabl
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind, lens, curves, models, crossSpan, ghostFunctionOf, depKeys, curvePalette])
 
+  /**
+   * The Table section's Evaluate field on the board: the dot at (a, f(a)),
+   * dashed guides to both axes and the value's chip (an answer). FIGURE: it
+   * exports, like the horizontal line test.
+   */
+  const tableMarks = useMemo<Overlay[]>(() => {
+    if (kind !== 'cartesian') return []
+    if (!Object.values(valueTables).some((v) => v.ev && v.dot !== false)) return []
+    try {
+      return tableOverlays(curves, valueTables, { curves, models, letters: names })
+    } catch {
+      return []
+    }
+    // depKeys: f(2) on g(x) = f(x) + 1 moves when f does.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind, valueTables, curves, models, names, depKeys])
+
   /** Σ aₙ on the board: staircase bars, the joined sums, the band, y = S. */
   const seriesMarks = useMemo<Overlay[]>(
     () => (kind === 'cartesian' && sequences.some((q) => q.series) ? seriesOverlays(sequences, seqCompiled) : []),
@@ -218,13 +236,14 @@ export function useBoardOverlays({ board, docState, session, derived, calc, tabl
       kind === 'cartesian'
         ? overlaysFor(calcLinks, curves, models, bandSpan, { sources: implicitSources, box: implicitBox }, depKeys)
         : []
-    const more = motionAreaOverlays.length + domainOverlays.length + sysOverlays.length + seriesMarks.length
+    const more =
+      motionAreaOverlays.length + domainOverlays.length + sysOverlays.length + seriesMarks.length + tableMarks.length
     if (more === 0) return base
     // The ghost goes first (under everything else); the marks sort themselves
     // onto the curves by kind.
-    return [...domainOverlays, ...base, ...motionAreaOverlays, ...sysOverlays, ...seriesMarks]
+    return [...domainOverlays, ...base, ...motionAreaOverlays, ...sysOverlays, ...seriesMarks, ...tableMarks]
     // depKeys: a secant, limit or volume on p(x) = h(x) + 1 moves when h is retyped.
-  }, [kind, calcLinks, curves, models, motionAreaOverlays, bandSpan, domainOverlays, sysOverlays, seriesMarks, implicitSources, implicitBox, depKeys])
+  }, [kind, calcLinks, curves, models, motionAreaOverlays, bandSpan, domainOverlays, sysOverlays, seriesMarks, tableMarks, implicitSources, implicitBox, depKeys])
   const overlaysRef = useRef<Overlay[]>(overlays)
   overlaysRef.current = overlays
 

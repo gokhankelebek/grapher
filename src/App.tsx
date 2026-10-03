@@ -56,6 +56,7 @@ import { useExtraHandles } from './app/useExtraHandles'
 import { useSelectionMarks } from './app/useSelectionMarks'
 import { useCurveNames } from './app/useCurveNames'
 import { useDomainPanel } from './app/useDomainPanel'
+import { useValueTables } from './app/useValueTables'
 import { useBoardLook } from './app/useBoardLook'
 import { useRevealMode } from './app/useRevealMode'
 import { useCardCrossings } from './app/useCardCrossings'
@@ -130,6 +131,7 @@ export default function App() {
   })
   const naming = useCurveNames({ board, docState, session, refs, derived, history, overlaysApi })
   const panel = useDomainPanel({ board, docState, refs, derived, calc, domain, naming })
+  const valueTablesApi = useValueTables({ board, docState, derived, notices, tables, naming })
   const lookApi = useBoardLook({ board, session, refs, derived, calc, marks, naming })
   const revealMode = useRevealMode({
     board, docState, session, derived, editing, system, overlaysApi, panel, lookApi, shapesApi,
@@ -141,6 +143,7 @@ export default function App() {
   const exporter = useExport({
     board, docState, session, refs, derived, notices, calc, fieldsApi, shapesApi, tables,
     unitCircle, rates, system, overlaysApi, marks, naming, lookApi, revealMode, describer, statsApi,
+    valueTablesApi,
   })
   const figureSettings = useFigureSettings({
     board, docState, session, refs, derived, notices, history, viewport, lookApi,
@@ -257,6 +260,7 @@ export default function App() {
     inverseNotes, signFigures, signBandPx,
   } = naming
   const { domainPanelFor, logInverseSources } = panel
+  const { tablePanelFor, tableActions, tableFigs } = valueTablesApi
   const {
     captionText, screenTheme, look, boardFigure, boardCaption, boardTheme, lightBoard,
     boardCrossings,
@@ -449,6 +453,8 @@ export default function App() {
         domainPanelFor={domainPanelFor}
         domainActions={domainActions}
         setNotation={setNotation}
+        tablePanelFor={tablePanelFor}
+        tableActions={tableActions}
         depKeys={depKeys}
         exprNames={exprNames}
         onExpBuild={buildExponential}
@@ -618,6 +624,7 @@ export default function App() {
           relatedRates={rrFigures}
           stats={statsFigs}
           signCharts={signFigures}
+          valueTables={tableFigs}
           inequalitySolution={ineqSolution}
           grid={boardGrid}
           figure={boardFigure}

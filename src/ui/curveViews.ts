@@ -12,6 +12,9 @@
 //     lens           curveId -> the Domain section's board switches: the
 //                               cut-off part's ghost, the horizontal line
 //                               test's height, the reflected point's a
+//     table          curveId -> the Table section's settings (what was typed:
+//                               start, step, rows, columns, Evaluate, compare,
+//                               divide, "on the figure")
 //
 // and the document stores them as one CurveViews map. This file is the whole
 // translation, both ways, plus the two history rules:
@@ -30,8 +33,8 @@
 // ============================================================================
 
 import type { FittedCurve, Vec2 } from '../core/types'
-import type { CurveView, CurveViews } from '../core/persist'
-import { normalizeCurveView } from '../core/persist'
+import type { CurveView, CurveViews, ValueTableView } from '../core/persist'
+import { normalizeCurveView, normalizeTableView } from '../core/persist'
 import type { MotionPlayState } from './motionLinks'
 import { defaultPlay, motionInterval } from './motionLinks'
 
@@ -48,6 +51,7 @@ export interface ViewStates {
   factorThrough: Record<string, Vec2>
   motion: Record<string, MotionPlayState>
   lens: Record<string, DomainLens>
+  table: Record<string, ValueTableView>
 }
 
 export const emptyViewStates = (): ViewStates => ({
@@ -56,7 +60,38 @@ export const emptyViewStates = (): ViewStates => ({
   factorThrough: {},
   motion: {},
   lens: {},
+  table: {},
 })
+
+/** Same settings, field for field (the order a normaliser writes them in). */
+function sameTable(a: ValueTableView | undefined, b: ValueTableView | null): boolean {
+  if (!a || !b) return !a && !b
+  return JSON.stringify(a) === JSON.stringify(b)
+}
+
+/**
+ * One curve's Table settings, patched: a field set to `undefined` (or a
+ * default) is dropped. The same map when nothing changed, so a re-typed
+ * identical value schedules no save.
+ */
+export function patchTableView(
+  m: Record<string, ValueTableView>,
+  id: string,
+  patch: Partial<Record<keyof ValueTableView, unknown>>,
+): Record<string, ValueTableView> {
+  const cur = m[id]
+  const next: Record<string, unknown> = { ...(cur ?? {}) }
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === undefined || v === null) delete next[k]
+    else next[k] = v
+  }
+  const norm = normalizeTableView(next)
+  if (sameTable(cur, norm)) return m
+  const out = { ...m }
+  if (norm) out[id] = norm
+  else delete out[id]
+  return out
+}
 
 /** A lens with its defaults dropped, or null when nothing is left. */
 export function normalizeLens(l: DomainLens | undefined | null): DomainLens | null {
@@ -120,6 +155,8 @@ export function curveViewOf(s: ViewStates, id: string): CurveView | null {
     if (l.hlt !== undefined) v.hlt = l.hlt
     if (l.reflect !== undefined) v.reflect = l.reflect
   }
+  const t = s.table[id]
+  if (t) v.table = t
   return normalizeCurveView(v)
 }
 
@@ -131,6 +168,7 @@ export function collectCurveViews(s: ViewStates): CurveViews {
     ...Object.keys(s.factorThrough),
     ...Object.keys(s.motion),
     ...Object.keys(s.lens),
+    ...Object.keys(s.table),
   ])
   const out: CurveViews = {}
   for (const id of ids) {
@@ -168,6 +206,8 @@ function put(s: ViewStates, id: string, v: CurveView, curve: FittedCurve | undef
   if (v.area || v.accel || v.exportParticle) s.motion[id] = playFrom(v, curve)
   const l = normalizeLens({ ghost: v.ghost, hlt: v.hlt, reflect: v.reflect })
   if (l) s.lens[id] = l
+  const t = normalizeTableView(v.table)
+  if (t) s.table[id] = t
 }
 
 /** The four maps a freshly loaded document opens with. */
@@ -207,16 +247,18 @@ export function pruneViewStates(s: ViewStates, live: ReadonlySet<string>): ViewS
   const factorThrough = keepLive(s.factorThrough, live)
   const motion = keepLive(s.motion, live)
   const lens = keepLive(s.lens, live)
+  const table = keepLive(s.table, live)
   if (
     construction === s.construction &&
     showParent === s.showParent &&
     factorThrough === s.factorThrough &&
     motion === s.motion &&
-    lens === s.lens
+    lens === s.lens &&
+    table === s.table
   ) {
     return s
   }
-  return { construction, showParent, factorThrough, motion, lens }
+  return { construction, showParent, factorThrough, motion, lens, table }
 }
 
 /**
@@ -244,6 +286,7 @@ export function restoreViewStates(
         factorThrough: { ...pruned.factorThrough },
         motion: { ...pruned.motion },
         lens: { ...pruned.lens },
+        table: { ...pruned.table },
       }
     }
     // An arriving curve starts from what it recorded, not from anything
@@ -253,6 +296,7 @@ export function restoreViewStates(
     delete out.factorThrough[c.id]
     delete out.motion[c.id]
     delete out.lens[c.id]
+    delete out.table[c.id]
     put(out, c.id, v, c)
   }
   return out ?? pruned

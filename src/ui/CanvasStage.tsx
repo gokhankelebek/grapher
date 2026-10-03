@@ -1,3 +1,4 @@
+import type { ValueTableFigure } from './valueTableLinks'
 import {
   forwardRef,
   useCallback,
@@ -192,6 +193,8 @@ interface Props {
   stats?: readonly StatsFigure[] | null
   /** Sign-chart strips along the bottom — straight into the scene, like the unit circle. */
   signCharts?: readonly SignChartFigure[] | null
+  /** Tables of values on the figure — straight into the scene, like the unit circle. */
+  valueTables?: readonly ValueTableFigure[] | null
   /**
    * The inequality system's "solution region": shade only what every visible
    * inequality shares (BoardScene.inequalitySolution). Threaded like the
@@ -603,6 +606,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     relatedRates,
     stats,
     signCharts,
+    valueTables,
     inequalitySolution,
     grid,
     figure,
@@ -650,6 +654,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   const relatedRatesRef = useRef<readonly RelatedRatesFigure[] | null | undefined>(relatedRates)
   const statsRef = useRef<readonly StatsFigure[] | null | undefined>(stats)
   const signChartsRef = useRef<readonly SignChartFigure[] | null | undefined>(signCharts)
+  const valueTablesRef = useRef<readonly ValueTableFigure[] | null | undefined>(valueTables)
   const ineqSolutionRef = useRef<boolean>(inequalitySolution === true)
   const gridRef = useRef<BoardGrid | null | undefined>(grid)
   const figureRef = useRef<FigureStyle | null | undefined>(figure)
@@ -840,6 +845,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
       ...(relatedRatesRef.current && relatedRatesRef.current.length > 0 ? { relatedRates: relatedRatesRef.current } : {}),
       ...(statsRef.current && statsRef.current.length > 0 ? { stats: statsRef.current } : {}),
       ...(signChartsRef.current && signChartsRef.current.length > 0 ? { signCharts: signChartsRef.current } : {}),
+      ...(valueTablesRef.current && valueTablesRef.current.length > 0 ? { valueTables: valueTablesRef.current } : {}),
       ...(ineqSolutionRef.current ? { inequalitySolution: true } : {}),
       ...(inkPaletteRef.current === 'safe' ? { inkPalette: 'safe' as const } : {}),
       grid: gridRef.current ?? undefined,
@@ -944,6 +950,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     relatedRatesRef.current = relatedRates
     statsRef.current = stats
     signChartsRef.current = signCharts
+    valueTablesRef.current = valueTables
     ineqSolutionRef.current = inequalitySolution === true
     gridRef.current = grid
     figureRef.current = figure
@@ -975,6 +982,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
     relatedRates,
     stats,
     signCharts,
+    valueTables,
     inequalitySolution,
     grid,
     figure,

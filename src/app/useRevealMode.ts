@@ -6,6 +6,7 @@
 // memo and effect on the board, so a new hook goes where its inputs exist.
 // ============================================================================
 
+import { tableKeysOf } from '../ui/valueTableLinks'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { asymptoteTexts } from '../ui/CurveCard'
 import { solveCached, solveXs } from '../ui/nlSolve'
@@ -65,7 +66,7 @@ export interface RevealModeDeps {
 export function useRevealMode({ board, docState, session, derived, editing, system, overlaysApi, panel, lookApi, shapesApi }: RevealModeDeps) {
   const {
     curves, kind, items, selectedId, calcLinks, fields, sequences, unitCircles, relatedRates, stats, shapes,
-    dataSets,
+    dataSets, valueTables,
   } = board
   const shapeCompiled = shapesApi?.shapeCompiled
   const { docMeta } = docState
@@ -136,6 +137,8 @@ export function useRevealMode({ board, docState, session, derived, editing, syst
           domain: c.id === selectedId && domainPanel !== undefined,
           inverse: domainPanel?.role === 'function',
           calc: calcLinks.filter((l) => l.parentId === c.id).map((l) => l.id),
+          // The Table section's answers, for a table the teacher set up.
+          extra: c.kind === 'explicit' ? tableKeysOf(c.id, valueTables[c.id]) : [],
         }
       }),
       crossings,
@@ -143,7 +146,7 @@ export function useRevealMode({ board, docState, session, derived, editing, syst
     })
     // depKeys: a curve that calls another moves when it does.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reveal.on, kind, items, curves, selectedId, models, analysis, analysisFor, domainPanel, calcLinks, crossings, sequences, fields, unitCircles, relatedRates, stats, sysCard, depKeys, shapes, shapeCompiled, dataSets])
+  }, [reveal.on, kind, items, curves, selectedId, models, analysis, analysisFor, domainPanel, calcLinks, crossings, sequences, fields, unitCircles, relatedRates, stats, sysCard, depKeys, shapes, shapeCompiled, dataSets, valueTables])
   const revealInvRef = useRef(revealInv)
   revealInvRef.current = revealInv
 

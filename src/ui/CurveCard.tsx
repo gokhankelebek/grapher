@@ -58,6 +58,9 @@ import { DomainSection } from './DomainSection'
 import { ImplicitSection } from './ImplicitSection'
 import { CardSection } from './CardSection'
 import { InequalitySection } from './InequalitySection'
+import { TableSection } from './TableSection'
+import type { TableActions } from './TableSection'
+import type { TablePanel } from './valueTableLinks'
 import { setRowText } from './domainLinks'
 import { Answer, AnswerTex, AnswerText, RevealPill, useReveal } from './RevealAnswer'
 import { asymKey, calcKey, domainKey, rangeKey } from './reveal'
@@ -276,6 +279,13 @@ interface Props {
   domainActions?: DomainActions
   /** Interval notation or set-builder (a global preference). */
   setNotation?: SetNotation
+  /**
+   * The Table section (src/ui/TableSection.tsx): a table of values, Evaluate,
+   * compare, divide by (x − a). Only the selected explicit card is handed
+   * one; absent = no section.
+   */
+  tablePanel?: TablePanel
+  tableActions?: TableActions
 }
 
 /**
@@ -817,6 +827,8 @@ export function CurveCard({
   domainActions,
   setNotation,
   depKey,
+  tablePanel,
+  tableActions,
 }: Props) {
   const ink = useInk()
   const spec: ModelSpec | undefined = models[curve.modelId]
@@ -2849,6 +2861,9 @@ export function CurveCard({
               </div>
             </CardSection>
           )}
+
+          {/* The table of values: what f does at the x's a class picks. */}
+          {tablePanel && tableActions && <TableSection panel={tablePanel} actions={tableActions} />}
 
           {(calcTools.length > 0 || betweenNotes.length > 0) && (
             <div className="calc-section">

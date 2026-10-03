@@ -31,6 +31,10 @@
 //   series:<id>:value            a series' verdict and sum
 //   euler:<fieldId>:value        a field's Euler approximations
 //   system:value                 the inequality system's corners / optimum
+//   table:<curveId>:<part>       a curve's Table section: values (f(x) and the
+//                                differences, ratios and pattern), eval (the
+//                                Evaluate field), compare (the overtake point),
+//                                divide (synthetic division and the remainder)
 //   shape:<id>:<part>            a shape's measurements: lengths, slopes,
 //                                angles, marks (congruence ticks / arcs),
 //                                midpoints, area (perimeter and area), class
@@ -56,6 +60,7 @@ import type { UnitCircleFigure } from '../render/unitCircle'
 import type { RelatedRatesFigure } from '../render/relatedRates'
 import type { StatsFigure } from '../render/stats'
 import type { SignChartFigure } from '../render/signChart'
+import type { ValueTableFigure } from '../render/valueTable'
 
 // ---------------------------------------------------------------------------
 // Keys
@@ -87,6 +92,9 @@ export const statKey = (id: string): string => `stat:${id}:value`
 export const seriesKey = (id: string): string => `series:${id}:value`
 export const eulerKey = (fieldId: string): string => `euler:${fieldId}:value`
 export const SYSTEM_KEY = 'system:value'
+/** The parts of a curve's Table section that are answers, each revealed on its own. */
+export type TablePart = 'values' | 'eval' | 'compare' | 'divide'
+export const tableKey = (curveId: string, part: TablePart): string => `table:${curveId}:${part}`
 
 /** The parts of a shape's measurements that are answers, each revealed on its own. */
 export type ShapePart =
@@ -166,6 +174,8 @@ export interface RevealSource {
     inverse?: boolean
     /** The calculus tools on this curve's card, in card order. */
     calc?: readonly string[]
+    /** Other answer keys on this card, after its calculus tools (the Table section's). */
+    extra?: readonly string[]
   }[]
   crossings: readonly BoardIntersection[]
   /** Every other answer key, in the order they should come last. */
@@ -222,6 +232,7 @@ export function buildInventory(src: RevealSource): RevealInventory {
       if (c.inverse) order.push(oneToOneKey(c.id), inverseKey(c.id))
     }
     for (const id of c.calc ?? []) calc.push(calcKey(id))
+    for (const k of c.extra ?? []) calc.push(k)
   }
 
   const cross = crossingKeys(src.crossings)
@@ -623,6 +634,11 @@ export function maskSignChart(f: SignChartFigure): SignChartFigure {
   }
 }
 
+/** A table on the figure as a student copy prints it: the x's, and "?" for every value. */
+export function maskValueTable(f: ValueTableFigure): ValueTableFigure {
+  return { ...f, rows: f.rows.map((row) => row.map((t, j) => (j >= f.answerFrom && t !== '' ? '?' : t))) }
+}
+
 /**
  * The scene as reveal mode shows it: every hidden answer taken out, and a
  * "?" mark (BoardScene.revealMarks) where it sat. The SAME filter runs on the
@@ -751,6 +767,11 @@ export function applyReveal(scene: BoardScene, r: SceneReveal | null | undefined
   // ---- sign charts: a blank chart until revealed
   if (scene.signCharts && scene.signCharts.length > 0) {
     out.signCharts = scene.signCharts.map((f) => (r.hidden(calcKey(f.id)) ? maskSignChart(f) : f))
+  }
+
+  // ---- tables of values on the figure: "?" for every value until revealed
+  if (scene.valueTables && scene.valueTables.length > 0) {
+    out.valueTables = scene.valueTables.map((f) => (r.hidden(tableKey(f.id, 'values')) ? maskValueTable(f) : f))
   }
 
   // ---- number line: a solved inequality draws its bare line until revealed

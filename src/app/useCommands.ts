@@ -6,6 +6,7 @@
 // memo and effect on the board, so a new hook goes where its inputs exist.
 // ============================================================================
 
+import { polyOf } from '../ui/valueTableLinks'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { NL_SOLVE_DEFAULTS } from '../core/types'
 import { availability, COMMAND_BY_ID, isMacPlatform, pushRecent } from '../ui/commands'
@@ -177,6 +178,9 @@ export function useCommands({ board, docState, session, refs, derived, notices, 
           typeof spec?.inequality !== 'function' &&
           !inverses.some((l) => l.curveId === c.id),
         hlt: typeof lens[c.id]?.hlt === 'number',
+        // the Table section: any function of x that is not a region
+        table: c.kind === 'explicit' && !broken && typeof spec?.inequality !== 'function',
+        poly: c.kind === 'explicit' && !broken && typeof spec?.inequality !== 'function' && polyOf(c, models) !== null,
       }
     })
   }, [
@@ -224,6 +228,23 @@ export function useCommands({ board, docState, session, refs, derived, notices, 
     toggleSeqSeries,
     toggleSeqSums,
     solveShow: setSolveShow,
+    openTableTool: (id, tool) => {
+      revealSidebar()
+      rememberSection('table', true)
+      setSelectedId(id)
+      // a card already open keeps its sections' state: tell this one to open,
+      // then put the cursor where the tool is
+      window.requestAnimationFrame(() => {
+        window.dispatchEvent(new CustomEvent(OPEN_SECTION_EVENT, { detail: 'table' }))
+        const field = tool === 'evaluate' ? 'table-eval' : tool === 'compare' ? 'table-compare' : tool === 'divide' ? 'table-divide' : null
+        if (field) {
+          window.setTimeout(() => {
+            const el = document.querySelector<HTMLElement>(`[data-testid="${field}"]`)
+            el?.focus()
+          }, 60)
+        }
+      })
+    },
     openShapeTool: (id, tool) => {
       revealSidebar()
       const section = tool === 'transform' ? 'shape-transform' : tool === 'compare' ? 'shape-compare' : 'shape-symmetry'

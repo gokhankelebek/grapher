@@ -57,6 +57,7 @@ import type { UnitCircleApi } from './useUnitCircle'
 import type { RelatedRatesApi } from './useRelatedRates'
 import type { InequalitySystemApi } from './useInequalitySystem'
 import type { BoardOverlaysApi } from './useBoardOverlays'
+import type { ValueTablesApi } from './useValueTables'
 import type { SelectionMarksApi } from './useSelectionMarks'
 import type { CurveNamesApi } from './useCurveNames'
 import type { BoardLookApi } from './useBoardLook'
@@ -88,9 +89,11 @@ export interface ExportDeps {
   describer?: GraphDescriptionApi
   /** Statistics panels: their figures for the scene, their frames for a fitted export. */
   statsApi?: StatsApi
+  /** Tables of values a card put on the figure. */
+  valueTablesApi?: ValueTablesApi
 }
 
-export function useExport({ board, docState, session, refs, derived, notices, calc, fieldsApi, shapesApi, tables, unitCircle, rates, system, overlaysApi, marks, naming, lookApi, revealMode, describer, statsApi }: ExportDeps) {
+export function useExport({ board, docState, session, refs, derived, notices, calc, fieldsApi, shapesApi, tables, unitCircle, rates, system, overlaysApi, marks, naming, lookApi, revealMode, describer, statsApi, valueTablesApi }: ExportDeps) {
   const { kind } = board
   const { docMeta } = docState
   const { setExportSettings, setCopyState, curvePalette } = session
@@ -111,6 +114,7 @@ export function useExport({ board, docState, session, refs, derived, notices, ca
   const { ucFiguresRef } = unitCircle
   const { rrFiguresRef } = rates
   const statsFiguresRef = statsApi?.statsFiguresRef ?? null
+  const tableFigsRef = valueTablesApi?.tableFigsRef ?? null
   const { ineqSolutionRef } = system
   const {
     exportSettingsRef, exportFormatRef, latexWidthRef, showAnalysisRef, contextAnalysisRef,
@@ -313,6 +317,10 @@ export function useExport({ board, docState, session, refs, derived, notices, ca
       // And the sign charts' strips, along the bottom of the figure.
       ...(kindRef.current === 'cartesian' && signFiguresRef.current.length > 0
         ? { signCharts: signFiguresRef.current }
+        : {}),
+      // And the tables of values a card put on the figure.
+      ...(kindRef.current === 'cartesian' && tableFigsRef && tableFigsRef.current.length > 0
+        ? { valueTables: tableFigsRef.current }
         : {}),
       // And the inequality system's solution region, as the screen shows it.
       ...(ineqSolutionRef.current ? { inequalitySolution: true } : {}),

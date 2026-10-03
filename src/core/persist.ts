@@ -1451,8 +1451,79 @@ export interface CurveView {
    * linked reflection, an exact typed curve, or not drawn at all.
    */
   reflect?: number
+  /** The Table section's settings (see ValueTableView). Absent = every default. */
+  table?: ValueTableView
 }
 export type CurveViews = Record<string, CurveView>
+
+/** A table column beyond x and f(x): Δy, Δ²y, the ratio, the average rate of change. */
+export type ValueTableCol = 'd1' | 'd2' | 'ratio' | 'avg'
+export const VALUE_TABLE_COLS: readonly ValueTableCol[] = ['d1', 'd2', 'ratio', 'avg']
+export const VALUE_TABLE_N_MIN = 2
+export const VALUE_TABLE_N_MAX = 25
+export const VALUE_TABLE_N_DEFAULT = 6
+export const VALUE_TABLE_START_DEFAULT = '0'
+export const VALUE_TABLE_STEP_DEFAULT = '1'
+
+/**
+ * The Table section of an explicit curve's card (src/ui/TableSection.tsx):
+ * what the teacher TYPED, never a computed value. Every field absent at its
+ * default, so a curve whose table nobody touched stores nothing.
+ */
+export interface ValueTableView {
+  /** x from (typed exactly: "0", "-2", "pi/6"). Default "0". */
+  start?: string
+  /** by (typed: "0.5", "pi/6"). Default "1". */
+  step?: string
+  /** rows. Default 6. */
+  n?: number
+  /** A custom list of x's, as typed ("−2, −1, 0, 1/2, π"). Present = list mode. */
+  list?: string
+  /** The extra columns shown, in VALUE_TABLE_COLS order. Absent = none. */
+  cols?: ValueTableCol[]
+  /** The Evaluate field as typed: "f(2.5)", "f(-3) + g(2)". */
+  ev?: string
+  /** The evaluated point's dot and dashed guides are OFF (absent = shown). */
+  dot?: false
+  /** Compare with this curve (its id): a side-by-side table and the overtake point. */
+  vs?: string
+  /** Remainder Theorem: divide by (x − a), a as typed ("-2", "x + 2", "1/3"). */
+  div?: string
+  /** The table is drawn on the figure (and so exported and printed). */
+  fig?: true
+}
+
+/** A typed table setting longer than this is not one anybody typed. */
+const MAX_TABLE_TEXT = 200
+
+/** One table's settings with every default dropped, or null when nothing is left. */
+export function normalizeTableView(v: unknown): ValueTableView | null {
+  if (!isObj(v)) return null
+  const out: ValueTableView = {}
+  const text = (t: unknown): string | null =>
+    typeof t === 'string' && t.trim() !== '' && t.length <= MAX_TABLE_TEXT ? t : null
+  const start = text(v.start)
+  if (start !== null && start.trim() !== VALUE_TABLE_START_DEFAULT) out.start = start
+  const step = text(v.step)
+  if (step !== null && step.trim() !== VALUE_TABLE_STEP_DEFAULT) out.step = step
+  if (isNum(v.n)) {
+    const n = Math.round(Math.max(VALUE_TABLE_N_MIN, Math.min(VALUE_TABLE_N_MAX, v.n)))
+    if (n !== VALUE_TABLE_N_DEFAULT) out.n = n
+  }
+  if (typeof v.list === 'string' && v.list.length <= MAX_TABLE_TEXT) out.list = v.list
+  if (Array.isArray(v.cols)) {
+    const cols = VALUE_TABLE_COLS.filter((c) => (v.cols as unknown[]).includes(c))
+    if (cols.length > 0) out.cols = cols
+  }
+  const ev = text(v.ev)
+  if (ev !== null) out.ev = ev
+  if (v.dot === false) out.dot = false
+  if (typeof v.vs === 'string' && v.vs !== '' && v.vs.length <= MAX_TABLE_TEXT) out.vs = v.vs
+  const div = text(v.div)
+  if (div !== null) out.div = div
+  if (v.fig === true) out.fig = true
+  return Object.keys(out).length > 0 ? out : null
+}
 
 /** The same, as JSON: the point flat, like a stroke. */
 export interface StoredCurveView {
@@ -1465,6 +1536,7 @@ export interface StoredCurveView {
   ghost?: true
   hlt?: number
   reflect?: number
+  table?: ValueTableView
 }
 
 /** A typed θ-bound longer than this is not a bound anybody typed. */
@@ -1496,6 +1568,8 @@ export function normalizeCurveView(v: CurveView | undefined | null): CurveView |
   if (v.ghost === true) out.ghost = true
   if (isNum(v.hlt)) out.hlt = v.hlt
   if (isNum(v.reflect)) out.reflect = v.reflect
+  const table = normalizeTableView(v.table)
+  if (table) out.table = table
   return Object.keys(out).length > 0 ? out : null
 }
 
@@ -2393,6 +2467,7 @@ export function boardToStored(input: BoardInput): StoredBoard {
       if (v.ghost) st.ghost = true
       if (v.hlt !== undefined) st.hlt = v.hlt
       if (v.reflect !== undefined) st.reflect = v.reflect
+      if (v.table) st.table = { ...v.table, ...(v.table.cols ? { cols: v.table.cols.slice() } : {}) }
       views[c.id] = st
       any = true
     }
@@ -4384,6 +4459,11 @@ function readStoredCurveView(raw: Record<string, unknown>): { view: CurveView | 
   if (raw.reflect !== undefined) {
     if (isNum(raw.reflect)) v.reflect = raw.reflect
     else damaged = true
+  }
+  if (raw.table !== undefined) {
+    const t = normalizeTableView(raw.table)
+    if (t) v.table = t
+    else if (!isObj(raw.table)) damaged = true
   }
   return { view: normalizeCurveView(v), damaged }
 }

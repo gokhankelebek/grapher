@@ -1,3 +1,5 @@
+import type { TablePanel } from './valueTableLinks'
+import type { TableActions } from './TableSection'
 import type {
   BoardKind,
   EndCap,
@@ -390,6 +392,9 @@ interface Props {
   domainPanelFor?(id: string): DomainPanel | undefined
   domainActions?: DomainActions
   setNotation?: SetNotation
+  /** The selected explicit card's Table section (src/ui/TableSection.tsx). */
+  tablePanelFor?(id: string): TablePanel | undefined
+  tableActions?: TableActions
 }
 
 const NO_DATA: BoardData[] = []
@@ -604,6 +609,8 @@ export function Sidebar({
   domainActions,
   setNotation,
   exprNames,
+  tablePanelFor,
+  tableActions,
 }: Props) {
   const numberLine = kind === 'number-line'
   // `inert` on a display:contents wrapper: everything inside stops taking
@@ -888,6 +895,8 @@ export function Sidebar({
               domainPanel={curve.id === selectedId ? domainPanelFor?.(curve.id) : undefined}
               domainActions={domainActions}
               setNotation={setNotation}
+              tablePanel={curve.id === selectedId ? tablePanelFor?.(curve.id) : undefined}
+              tableActions={tableActions}
             />
           ))}
           {!numberLine && systemCard}

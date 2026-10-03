@@ -466,6 +466,23 @@ export function corpusDocs(): CorpusDoc[] {
     )
   }
 
+  // ---- tables of values on the figure (Δy, ratios, a compared function, an
+  // evaluated point), and synthetic division on a card
+  {
+    const l = lines({ f: 'y = 3*2^x', g: 'y = x^2 - 1/3', p: 'y = x^3 - 2x + 4' })
+    out.push(
+      doc('valuetable', 'Tables of values', input({
+        ...l, names: { f: 'f', g: 'g', p: 'p' }, selectedId: 'p',
+        viewport: { center: { x: 1, y: 4 }, pxPerUnit: 40 },
+        curveViews: {
+          f: { table: { start: '-1', step: '0.5', n: 5, cols: ['d1', 'ratio'], vs: 'g', fig: true } },
+          g: { table: { list: '−2, −1/2, 0, π/6, √2', cols: ['d1', 'd2', 'avg'], fig: true } },
+          p: { table: { ev: 'p(1.5)', div: 'x + 1/2', fig: true } },
+        },
+      })),
+    )
+  }
+
   return out
 }
 

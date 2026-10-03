@@ -9675,3 +9675,118 @@ button.calc-field-btn {
 .data-reg-thresholds {
   font-size: var(--fs-xs);
 }
+
+/* ------------------------------------------------------- Table of values */
+/*
+ * The Table section (src/ui/TableSection.tsx) borrows the limit table's
+ * compact mono grid and the calc-* controls. What it adds: a wrapper that
+ * scrolls sideways when the columns outgrow a 272px card, the rounded
+ * values set quieter than the exact ones, the leading function's value in
+ * bold with the row where the lead changes ruled, and the synthetic
+ * division tableau (the a beside a bar, the product row ruled underneath,
+ * the remainder boxed).
+ */
+.vt-section .calc-controls + .calc-controls {
+  margin-top: var(--sp-1);
+}
+
+.vt-field .calc-input::placeholder {
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.vt-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  margin-top: var(--sp-1);
+}
+
+.vt-table th,
+.vt-table td {
+  padding: 1px var(--sp-1);
+  white-space: nowrap;
+}
+
+.vt-table thead th {
+  text-align: right;
+  border-bottom: 1px solid var(--border);
+}
+
+.vt-table td.vt-diff {
+  color: var(--muted);
+}
+
+.vt-approx {
+  color: var(--muted);
+}
+
+.vt-q {
+  color: var(--muted);
+}
+
+.vt-lead {
+  font-weight: 700;
+}
+
+.vt-flip td {
+  border-top: 1px solid var(--accent);
+}
+
+.vt-pattern {
+  margin-top: var(--sp-1);
+}
+
+.vt-pattern::first-letter {
+  text-transform: uppercase;
+}
+
+.vt-eval,
+.vt-compare .calc-fact {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.vt-division {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.vt-synth {
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.vt-synth td {
+  padding: 1px var(--sp-2);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.vt-synth td.vt-synth-a {
+  border-right: 1.5px solid var(--border-strong);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.vt-synth .vt-synth-products td {
+  border-bottom: 1.5px solid var(--border-strong);
+}
+
+.vt-synth .vt-synth-products td.vt-synth-a,
+.vt-synth td.vt-synth-blank {
+  border-bottom: none;
+}
+
+.vt-synth td.vt-synth-rem {
+  outline: 1.5px solid var(--accent);
+  outline-offset: -2px;
+  font-weight: 700;
+}
+
+.vt-footer {
+  margin-top: var(--sp-2);
+}

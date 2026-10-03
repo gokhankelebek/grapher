@@ -1674,6 +1674,21 @@ export function toPgfplots(sceneIn: BoardScene, opts: PgfplotsOptions = {}): str
     add(`\\node[circle, draw=${col}, fill=white, inner sep=0.6pt, minimum size=9pt, font=\\scriptsize\\bfseries, text=${col}] at (axis cs:${pgfNum(round(m.pos.x))},${pgfNum(round(m.pos.y))}) {?};`)
   }
 
+  // The tables of values a card put on the figure, in the bottom-left corner as
+  // the board draws them: a ruled tabular on the ground colour, side by side.
+  ;(scene.valueTables ?? []).forEach((t, i) => {
+    if (t.heads.length === 0) return
+    const cols = `|${'r|'.repeat(t.heads.length)}`
+    const cellTex = (c: string): string => (c === '' ? '' : texLabel(c))
+    const head = t.heads.map(cellTex).join(' & ')
+    const body = t.rows.map((r) => t.heads.map((_, j) => cellTex(r[j] ?? '')).join(' & ')).join(' \\\\ ')
+    const at = i === 0 ? '(rel axis cs:0.01,0.01)' : `([xshift=4pt]vt${i - 1}.south east)`
+    add(
+      `\\node[anchor=south west, inner sep=1pt, fill=${colour(theme.bg)}, draw=${colour(ink(t.color))}, font=\\scriptsize] (vt${i}) at ${at} ` +
+        `{\\begin{tabular}{${cols}}\\hline ${head} \\\\ \\hline ${body} \\\\ \\hline\\end{tabular}};`,
+    )
+  })
+
   // ---- axis ------------------------------------------------------------------
   const st = fig ?? null
   const spacing = st?.spacing ?? 'auto'

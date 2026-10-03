@@ -77,6 +77,8 @@ import { drawStats } from '../render/stats'
 import { drawScatter } from '../render/scatter'
 import type { SignChartFigure } from '../render/signChart'
 import { drawSignGuides, drawSignStrips, signBandHeight } from '../render/signChart'
+import type { ValueTableFigure } from '../render/valueTable'
+import { drawValueTables } from '../render/valueTable'
 import { drawNLItem, drawNumberLineAxis, nlLanes } from '../render/numberline'
 import { drawSolveFigure } from '../render/nlSolve'
 import { solveBlocks } from './nlSolve'
@@ -451,6 +453,18 @@ export interface BoardScene {
    */
   signCharts?: readonly SignChartFigure[]
   /**
+   * Tables of values a curve's card put on the figure ("show table on
+   * figure"): boxed tables in the bottom-left corner of the plot, on an opaque
+   * backing (src/render/valueTable.ts). Painted after every other figure
+   * layer, before the caption.
+   *
+   * FIGURE, not chrome: it exports, and goes mono under SAT / AP. Absent or
+   * empty draws exactly what the board drew before this field existed.
+   *
+   * Cartesian only; a number-line board ignores it.
+   */
+  valueTables?: readonly ValueTableFigure[]
+  /**
    * The LOOK of the whole board: the screen, a textbook worksheet, an SAT
    * item, an AP free-response figure. See FigureStyle in core/types.
    *
@@ -531,6 +545,7 @@ export type { UnitCircleFigure } from '../render/unitCircle'
 export type { RelatedRatesFigure } from '../render/relatedRates'
 export type { StatsFigure } from '../render/stats'
 export type { SignChartFigure } from '../render/signChart'
+export type { ValueTableFigure } from '../render/valueTable'
 
 /**
  * Trig by name, at a word boundary, so `sinh`/`cosh`/`tanh` (not periodic) and
@@ -2763,6 +2778,24 @@ export function renderBoard(ctx: CanvasRenderingContext2D, sceneIn: BoardScene):
       drawSignStrips(ctx, signs, signOpts)
     } catch {
       /* a strip that could not be drawn must not take the figure with it */
+    }
+  }
+
+  // Tables of values in the top-left corner, on their own backing.
+  if (scene.valueTables && scene.valueTables.length > 0) {
+    try {
+      drawValueTables(ctx, scene.valueTables, {
+        vp,
+        theme,
+        paint: ink,
+        mono,
+        text: textColor(theme),
+        scale,
+        font: fig?.font ?? null,
+        bottomInset: capInset + signBand,
+      })
+    } catch {
+      /* a table that could not be drawn must not take the figure with it */
     }
   }
 

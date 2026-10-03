@@ -154,6 +154,31 @@ export function useDataTables({ board, docState, refs, derived, notices, history
     setSelectedId(table.id)
   }, [commitState, pickColor])
 
+  /**
+   * A table holding rows that came from somewhere else — a curve's Table
+   * section ("Copy to a data table"). One undo step; the new table is
+   * selected (not framed: its points sit on the curve already in view).
+   * Returns its name.
+   */
+  const addDataTableFrom = useCallback(
+    (rows: { x: string; y: string }[], labels: { xLabel: string; yLabel: string }): string => {
+      const table: BoardData = {
+        id: nextId(),
+        name: nextTableName(dataRef.current),
+        xLabel: labels.xLabel,
+        yLabel: labels.yLabel,
+        rows: rows.map((r) => ({ x: r.x, y: r.y })),
+        color: pickColor(),
+        visible: true,
+        regressions: [],
+      }
+      commitState({ data: [...dataRef.current, table] }, 'copy table to a data table')
+      setSelectedId(table.id)
+      return table.name
+    },
+    [commitState, pickColor],
+  )
+
   const setDataCellText = useCallback(
     (id: string, row: number, col: 'x' | 'y', text: string): void => {
       const d = dataRef.current.find((t) => t.id === id)
@@ -643,7 +668,7 @@ export function useDataTables({ board, docState, refs, derived, notices, history
   )
 
   return {
-    addDataTable, setDataCellText, setDataLabel, removeDataRowAt, pasteData, toggleDataVisible,
+    addDataTable, addDataTableFrom, setDataCellText, setDataLabel, removeDataRowAt, pasteData, toggleDataVisible,
     cycleDataColor, setDataMarker, deleteData, duplicateData, addRegression, removeRegression,
     setRegressionDigits, toggleResiduals, toggleResidualPlot, refitRegression, seqCompiled, seqCompiledRef,
     scatterScene, scatterSceneRef, dataCardFor, seqCardFor, seqDefaultName, refreshPartnerSpan,

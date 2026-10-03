@@ -40,6 +40,9 @@ export const GROUP_ORDER: readonly CommandGroup[] = ['Actions', 'Calculus', 'Bui
 /** What a command acts on, when it acts on one object. */
 export type TargetKind = 'curve' | 'field' | 'sequence' | 'solve' | 'shape'
 
+/** Where the Table section's commands land: the table, Evaluate, Compare, Divide. */
+export type TableTool = 'table' | 'evaluate' | 'compare' | 'divide'
+
 /** The builders under Build ▾ (plus the + box itself, 'expr'). */
 export type BuilderKey =
   | 'expr'
@@ -80,6 +83,10 @@ export interface CurveFacts extends TargetFacts {
   domain: boolean
   /** The horizontal line test is currently drawn on it. */
   hlt: boolean
+  /** A function of x with a Table section (absent: not known, read as no). */
+  table?: boolean
+  /** A polynomial: its Table section can divide by (x − a). */
+  poly?: boolean
 }
 
 export interface SequenceFacts extends TargetFacts {
@@ -128,6 +135,8 @@ export interface CommandActions {
   solveShow(itemId: string, patch: { signs?: boolean; tests?: boolean }): void
   /** A shape's card, with one of its sections opened (Transform, Compare, Symmetry). */
   openShapeTool?(shapeId: string, tool: 'transform' | 'compare' | 'symmetry'): void
+  /** A function's card with its Table section open, at one of its tools. */
+  openTableTool?(curveId: string, tool: TableTool): void
   solveGraph(itemId: string): void
   // ---- history
   undo(): void
@@ -587,6 +596,66 @@ export const COMMANDS: readonly Command[] = [
     when: graph,
     accepts: (ctx, id) => !!curveOf(ctx, id)?.domain,
     run: (ctx, id) => id && ctx.actions.showDomain(id, false),
+  },
+  {
+    id: 'curve-table',
+    title: 'Table of values',
+    description: 'f(x) from a start by a step, or at a list of x’s — exact where exact; Δy, Δ²y, ratios and average rates of change',
+    keywords: [
+      'table', 'table of values', 't-table', 't chart', 'input output table', 'function table', 'x y table',
+      'first differences', 'second differences', 'common difference', 'common ratio', 'ratio', 'rate of change',
+      'linear or exponential', 'copy to data table', 'table on figure',
+    ],
+    group: 'Calculus',
+    path: 'Curve card → Table',
+    target: 'curve',
+    when: graph,
+    accepts: (ctx, id) => curveOf(ctx, id)?.table === true,
+    run: (ctx, id) => id && ctx.actions.openTableTool?.(id, 'table'),
+  },
+  {
+    id: 'curve-evaluate',
+    title: 'Evaluate f(a)',
+    description: 'f(2.5), f(π/6) or f(−3) + g(2): the exact value and its decimal, and the point (a, f(a)) on the graph',
+    keywords: ['evaluate', 'function notation', 'f(2)', 'f of', 'plug in', 'substitute', 'input', 'output', 'find f(a)', 'value of f'],
+    group: 'Calculus',
+    path: 'Curve card → Table → Evaluate',
+    target: 'curve',
+    when: graph,
+    accepts: (ctx, id) => curveOf(ctx, id)?.table === true,
+    run: (ctx, id) => id && ctx.actions.openTableTool?.(id, 'evaluate'),
+  },
+  {
+    id: 'curve-compare',
+    title: 'Compare two functions',
+    description: 'Two functions side by side in one table, and where one overtakes the other for good (2ˣ passes x³)',
+    keywords: [
+      'compare', 'compare functions', 'side by side', 'overtake', 'exceeds', 'eventually exceeds', 'end behavior',
+      'end behaviour', 'exponential vs polynomial', 'grows faster', 'which is bigger', 'linear vs exponential',
+    ],
+    group: 'Calculus',
+    path: 'Curve card → Table → Compare',
+    target: 'curve',
+    when: graph,
+    accepts: (ctx, id) => curveOf(ctx, id)?.table === true,
+    blocked: (ctx) =>
+      ctx.curves.filter((c) => c.table === true).length >= 2 ? null : 'Needs a second function on the board',
+    run: (ctx, id) => id && ctx.actions.openTableTool?.(id, 'compare'),
+  },
+  {
+    id: 'curve-remainder',
+    title: 'Divide by (x − a): Remainder Theorem',
+    description: 'Synthetic division of a polynomial by (x − a): the tableau, the quotient, f(a) = remainder, and whether (x − a) is a factor',
+    keywords: [
+      'remainder theorem', 'synthetic division', 'divide', 'division', 'factor theorem', 'is a factor',
+      'quotient', 'remainder', 'polynomial division', 'x - a',
+    ],
+    group: 'Calculus',
+    path: 'Curve card → Table → Divide by (x − a)',
+    target: 'curve',
+    when: graph,
+    accepts: (ctx, id) => curveOf(ctx, id)?.poly === true,
+    run: (ctx, id) => id && ctx.actions.openTableTool?.(id, 'divide'),
   },
   {
     id: 'domain-restrict',
@@ -1770,6 +1839,7 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
   ] },
   { id: 'm3-poly', course: 'NC Math 3', title: 'Polynomial and rational functions', entries: [
     { id: 'build-roots' },
+    { id: 'curve-remainder', note: 'Synthetic division by (x − a), exact with a fraction a: f(a) = remainder, and (x − a) is a factor when it is 0 (A-APR.2)' },
     { id: 'view-analysis' },
     { id: 'nl-solve', note: 'Polynomial and rational inequalities, with a sign chart' },
   ] },
@@ -1777,6 +1847,7 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     { id: 'build-exp' },
     { id: 'build-log' },
     { id: 'build-data' },
+    { id: 'curve-compare', note: 'Compare two functions given different ways, and show an exponential eventually exceeds a polynomial (F-IF.9, F-LE.3)' },
   ] },
   { id: 'm3-trig', course: 'NC Math 3', title: 'Trigonometric functions', entries: [
     { id: 'build-unit-circle' },
@@ -1784,6 +1855,12 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     { id: 'axis-pi' },
   ] },
   // ---------------------------------------------------- NC Math 1
+  { id: 'm1-functions', course: 'NC Math 1', title: 'Functions: notation, tables and comparing (F-IF.2, F-IF.9, F-LE.1, F-LE.3)', entries: [
+    { id: 'curve-evaluate', note: 'Function notation: f(2.5), f(−1/3), f(−3) + g(2) — the exact value, its decimal, and the point on the graph (F-IF.2)' },
+    { id: 'curve-table', note: 'A table from a start by a step (0.5, π/6) or a list; Δy constant means linear, the ratio constant means exponential (F-LE.1)' },
+    { id: 'curve-compare', note: 'Two functions side by side; where an exponential passes a linear or quadratic one and stays ahead (F-IF.9, F-LE.3)' },
+    { title: 'Table to data', text: 'Turn the table into a data table for a scatter plot or a regression', how: 'Curve card → Table → Copy to a data table' },
+  ] },
   { id: 'm1-stats', course: 'NC Math 1', title: 'Statistics: one-variable data (S-ID.1–3)', entries: [
     { id: 'build-data-plot', note: 'Paste a list for a dot plot or histogram (bin width editable) and a box plot with outliers as separate points (S-ID.1)' },
     { id: 'build-data-plot', note: 'Paste two or more sets: parallel box plots, a table of mean, median, SD, IQR, and the sentence comparing centre and spread (S-ID.2)' },
@@ -1796,6 +1873,11 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     { title: 'Correlation coefficient', text: 'r and its meaning in words — strong / moderate / weak, positive / negative — and that correlation is not causation (S-ID.8)', how: 'Data table → Regression ▾ → Linear' },
   ] },
   // ---------------------------------------------------- NC Math 2
+  { id: 'm2-functions', course: 'NC Math 2', title: 'Functions: comparing representations (F-IF.9)', entries: [
+    { id: 'curve-table', note: 'A quadratic’s table: Δ²y is constant; a table on the figure for a worksheet' },
+    { id: 'curve-compare', note: 'A quadratic beside a linear or exponential function, given by equation, graph or table' },
+    { id: 'curve-evaluate' },
+  ] },
   { id: 'm2-xform', course: 'NC Math 2', title: 'Transformations, congruence and similarity', entries: [
     { id: 'build-shape', note: 'Type the figure: ABC = (1,2) (4,2) (4,6)' },
     { id: 'shape-transform', note: 'Translate, reflect, rotate or dilate it: a linked image A′B′C′ with R_{90°, O}: (x, y) → (−y, x), rigid or not, and ✓ for what is preserved' },

@@ -26,6 +26,8 @@ import { describeInputOf } from './itemBank'
 import { paletteDashes } from './dashes'
 import type { CurvePalette } from '../core/a11yPalette'
 import { solveOf } from './nlSolve'
+import { viewStatesFrom } from './curveViews'
+import { tableSentences } from './valueTableLinks'
 
 export interface BoardDescription extends GraphDescription {
   /** One short sentence for the board's accessible name (aria-label). */
@@ -93,11 +95,25 @@ function cartesian(m: DocModel, o: DescribeBoardOptions): BoardDescription {
   const scene = o.palette === 'safe' ? { ...fig.scene, styles: paletteDashes(fig.scene.curves, fig.scene.styles) } : fig.scene
   const base = describeInputOf(m, scene, null)
   const { calc, hide } = calcOf(m)
+  // The Table sections a teacher set up: the x's always, the values only as answers.
+  const views = viewStatesFrom(m.board.curveViews, m.board.curves)
+  const tables = Object.keys(views.table).length > 0
+    ? tableSentences(m.board.curves, views.table, {
+        curves: m.board.curves,
+        models: m.models,
+        letters: m.names,
+        names: m.curveNames,
+        sources: m.sources,
+      })
+    : []
   const input: AdapterInput = {
     ...base,
     // The board's cards show every equation, so the description states them.
     curves: base.curves.filter((c) => !hide.has(c.curve.id)).map((c) => ({ ...c, shows: { equation: true } })),
     ...(calc.length > 0 ? { calc } : {}),
+    ...(tables.length > 0
+      ? { extras: [...(base.extras ?? []), ...tables.map((t) => ({ text: t.text, ...(t.answer ? { answer: true } : {}) }))] }
+      : {}),
   }
   const others =
     m.board.fields.length + m.board.shapes.length + m.board.data.length + m.board.sequences.length +

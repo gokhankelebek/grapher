@@ -88,9 +88,10 @@ import { unionBoxes } from './curveState'
 import { physicalViewport, recordScene } from './vectorExport'
 import type { Overlay } from '../render/overlays'
 import { viewStatesFrom } from './curveViews'
+import { tableFigures, tableOverlays } from './valueTableLinks'
 import { partnerPolylines, sequenceFigure } from './seqLinks'
 import { relatedRatesBox, relatedRatesFigure } from './relatedRatesLinks'
-import { maskRelatedRates, maskShapes, maskStats } from './reveal'
+import { maskRelatedRates, maskShapes, maskStats, maskValueTable } from './reveal'
 import { statsBox, statsFigures } from './statsLinks'
 import { systemCard, systemOverlays, systemSolutionShown } from './systemLinks'
 import { constructionConicsOf, constructionFigure } from './conicLinks'
@@ -384,8 +385,18 @@ export function docFigure(m: DocModel, o: FigureOptions): DocFigure {
     : []
   const domain = cartesian ? safe(() => domainOverlaysOf(m, span, views.lens), []) : []
   const polarAreas = cartesian ? safe(() => polarAreaOverlays(curves, models, views.motion), []) : []
+  // The Table sections: Evaluate's point on the board, and the tables a card
+  // put on the figure (a student copy prints "?" for their values).
+  const tableCtx = { curves, models, letters: m.names, names: m.curveNames, sources: m.sources }
+  const tableMarks = cartesian && Object.keys(views.table).length > 0
+    ? safe(() => tableOverlays(curves, views.table, tableCtx), [])
+    : []
+  const valueTablesAll = cartesian && Object.values(views.table).some((v) => v.fig)
+    ? safe(() => tableFigures(curves, views.table, tableCtx), [])
+    : []
+  const valueTables = o.answers ? valueTablesAll : valueTablesAll.map(maskValueTable)
   // The ghost goes first (under everything else), as the App orders them.
-  const allOverlays: Overlay[] = [...domain, ...base, ...polarAreas, ...sysOverlays, ...(seq?.overlays ?? [])]
+  const allOverlays: Overlay[] = [...domain, ...base, ...polarAreas, ...sysOverlays, ...(seq?.overlays ?? []), ...tableMarks]
   // A student copy keeps no chip that states an answer (reveal mode's keys).
   const overlays = o.answers ? allOverlays : allOverlays.filter((ov) => !(ov.kind === 'label' && ov.answer))
   const shapes = cartesian
@@ -449,6 +460,7 @@ export function docFigure(m: DocModel, o: FigureOptions): DocFigure {
     ...(relatedRates.length > 0 ? { relatedRates } : {}),
     ...(stats.length > 0 ? { stats } : {}),
     ...(signs.length > 0 ? { signCharts: signs } : {}),
+    ...(valueTables.length > 0 ? { valueTables } : {}),
     ...(inequalitySolution ? { inequalitySolution: true } : {}),
     grid: board.grid,
     ...(figure ? { figure } : {}),
