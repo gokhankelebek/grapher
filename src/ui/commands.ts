@@ -87,6 +87,8 @@ export interface CurveFacts extends TargetFacts {
   table?: boolean
   /** A polynomial: its Table section can divide by (x − a). */
   poly?: boolean
+  /** A polynomial of degree 2–8 over all of ℝ: its card has Zeros over ℂ. */
+  complex?: boolean
   /** A circle (typed or sketched): its card has the Circle theorems section. */
   circle?: boolean
 }
@@ -144,6 +146,8 @@ export interface CommandActions {
   openCircleTool?(curveId: string, flag: 'angles' | 'tangent' | 'sector' | 'chords' | 'external'): void
   /** A function's card with its Table section open, at one of its tools. */
   openTableTool?(curveId: string, tool: TableTool): void
+  /** A curve's card with one of its sections ('complex-zeros' …) open and in view. */
+  openCardSection?(curveId: string, kind: string): void
   solveGraph(itemId: string): void
   // ---- history
   undo(): void
@@ -414,10 +418,12 @@ export const COMMANDS: readonly Command[] = [
   {
     id: 'nl-solve',
     title: 'Solve an inequality',
-    description: 'Type an inequality on the number line: critical values, test points, sign chart, the set',
+    description: 'Type an inequality (or an equation) on the number line: critical values, test points, sign chart, the set — and for a radical, rational or log equation the algebraic route with every candidate checked',
     keywords: [
       'inequality', 'solve', 'number line', 'interval', 'interval notation', 'test point', 'critical values',
       'absolute value', 'rational inequality', 'polynomial inequality', 'solution set', 'compound', 'and', 'or',
+      'equation', 'extraneous', 'extraneous solution', 'radical equation', 'rational equation', 'square both sides',
+      'log equation', 'exponential equation', 'solve with logarithms', 'check solutions',
     ],
     group: 'Actions',
     path: 'Number line → +',
@@ -648,6 +654,23 @@ export const COMMANDS: readonly Command[] = [
     blocked: (ctx) =>
       ctx.curves.filter((c) => c.table === true).length >= 2 ? null : 'Needs a second function on the board',
     run: (ctx, id) => id && ctx.actions.openTableTool?.(id, 'compare'),
+  },
+  {
+    id: 'curve-complex-zeros',
+    title: 'Zeros over ℂ (complex zeros)',
+    description:
+      'Every zero of a polynomial, real and non-real, counted with multiplicity: the Fundamental Theorem of Algebra count, a ± bi in simplest radical form, and the discriminant',
+    keywords: [
+      'complex zeros', 'complex roots', 'imaginary', 'non-real', 'a + bi', 'a ± bi', 'conjugate', 'conjugate pair',
+      'fundamental theorem of algebra', 'fta', 'number of zeros', 'number of roots', 'multiplicity', 'double root',
+      'discriminant', 'b^2 - 4ac', 'quadratic formula', 'rational root theorem',
+    ],
+    group: 'Calculus',
+    path: 'Curve card → Zeros over ℂ',
+    target: 'curve',
+    when: graph,
+    accepts: (ctx, id) => curveOf(ctx, id)?.complex === true,
+    run: (ctx, id) => id && ctx.actions.openCardSection?.(id, 'complex-zeros'),
   },
   {
     id: 'curve-remainder',
@@ -1929,14 +1952,19 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
   { id: 'm3-poly', course: 'NC Math 3', title: 'Polynomial and rational functions', entries: [
     { id: 'build-roots' },
     { id: 'curve-remainder', note: 'Synthetic division by (x − a), exact with a fraction a: f(a) = remainder, and (x − a) is a factor when it is 0 (A-APR.2)' },
+    { id: 'curve-complex-zeros', note: 'The Fundamental Theorem of Algebra: degree n means n zeros counted with multiplicity, real and non-real; rational zeros by the rational root theorem and synthetic division, the rest exact (x³ − 1: 1 and −1/2 ± (√3/2)i) or ≈ to 4 decimals (N-CN.9)' },
     { id: 'view-analysis' },
     { id: 'nl-solve', note: 'Polynomial and rational inequalities, with a sign chart' },
+    { id: 'nl-solve', note: 'Rational and radical equations: multiply by the LCD or square both sides, then check every candidate in the original — x = 2 in x/(x − 2) = 2/(x − 2) + 5 makes a denominator 0, so it is extraneous (A-REI.2)' },
   ] },
   { id: 'm3-explog', course: 'NC Math 3', title: 'Exponential and logarithmic functions', entries: [
     { id: 'build-exp' },
     { id: 'build-log' },
     { id: 'build-data' },
     { id: 'curve-compare', note: 'Compare two functions given different ways, and show an exponential eventually exceeds a polynomial (F-IF.9, F-LE.3)' },
+    { id: 'nl-solve', note: 'Exponential equations with logarithms: 3·2ˣ = 7 gives x = log₂(7/3) = ln(7/3)/ln 2 ≈ 1.2224, and 5e^(0.2t) = 20 gives t = 5 ln 4 = 10 ln 2 (F-LE.4)' },
+    { title: 'Exact log answers on the graph', text: 'A zero of y = a·b^(cx) + k, or where an exponential meets a constant or another exponential, is written as the logarithm it equals: 2ˣ and 3^(x − 1) meet at x = ln 3/(ln 3 − ln 2) (F-LE.4)', how: 'Type the equations: Curve card → Analysis → Zeros, or → Intersections' },
+    { id: 'nl-solve', note: 'Log equations: combine the logs, solve, and reject a candidate that puts a negative number inside a log — log x + log(x − 3) = 1 gives 5, and −2 is extraneous' },
   ] },
   { id: 'm3-trig', course: 'NC Math 3', title: 'Trigonometric functions', entries: [
     { id: 'build-unit-circle' },
@@ -1996,11 +2024,14 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     { id: 'build-roots', note: 'Factored form: the zeros and their multiplicities; a typed (x − 4)(x + 2) is read back as its roots (F-IF.8)' },
     { id: 'view-analysis', note: 'Vertex, zeros and y-intercept on the graph — the solutions of f(x) = 0 (A-REI.4)' },
     { title: 'Line and parabola', text: 'Type the parabola and the line: their intersections — none, one or two — are marked, exact where they can be (A-REI.7)', how: 'Each curve’s card → Intersection' },
+    { id: 'curve-complex-zeros', note: 'Complex solutions: x² − 4x + 13 has discriminant −36 < 0 and zeros 2 ± 3i; x² + 2x + 4 has −1 ± i√3. The count is the degree, by the Fundamental Theorem of Algebra (A-REI.4b, N-CN.9)' },
+    { title: 'Equivalent forms', text: 'Type one quadratic in two forms, x² − 2x − 8 and (x + 2)(x − 4): the cards say they are the same function, which coincides everywhere, instead of listing crossings (A-SSE.3)', how: 'Each curve’s card → Intersections' },
     { id: 'nl-solve', note: 'Quadratic inequalities such as x² − 2x − 3 ≤ 0, with critical values and a sign chart (A-CED.1)' },
   ] },
   { id: 'm2-radical', course: 'NC Math 2', title: 'Square root and inverse variation functions (F-IF.7, F-BF.3)', entries: [
     { id: 'build-transform', note: 'Square root a√(x − h) + k and inverse variation a/(x − h) + k from the parent gallery, with the parent ghost and its key points mapped' },
     { id: 'domain-range', note: 'Domain and range: √(x + 3) needs x ≥ −3; 12/x is undefined at x = 0' },
+    { id: 'nl-solve', note: 'Radical equations: type √(x + 7) = x − 5 on a number line — square both sides, get x = 2 and x = 9, and the check rejects 2 (√9 = 3 but 2 − 5 = −3); Show on graph draws both sides, which meet only at x = 9 (A-REI.2)' },
     { id: 'view-analysis', note: 'The asymptotes of y = k/x and the intercepts' },
     { id: 'curve-table', note: 'A list of x’s (1, 2, 3, 4, 6, 12) for y = 12/x: double x and y halves' },
   ] },
@@ -2047,6 +2078,7 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
   ] },
   { id: 'm3-ineq', course: 'NC Math 3', title: 'Equations, inequalities and systems', entries: [
     { id: 'nl-solve' },
+    { id: 'nl-solve', note: 'Equations too: type L = R. Radical, rational and log equations show the algebraic route and check every candidate, flagging the extraneous ones (A-REI.2)' },
     { id: 'doc-new-nl' },
     { id: 'build-inequality' },
     { id: 'build-piecewise' },

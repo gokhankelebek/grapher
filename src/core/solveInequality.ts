@@ -85,6 +85,7 @@ import type { ExactForm } from './exact'
 import { exactForm, verifiedExact } from './exact'
 import { analyzeExpr, evalAst, parseAst, type ExprNode } from './parse'
 import { CondError, newCtx, parseCondition, type Piece } from './parse/condition'
+import { expShapeOf, solveExpEquation } from './expSolve'
 
 export type Relation = '<' | '<=' | '>' | '>=' | '=' | '!='
 
@@ -141,6 +142,12 @@ export interface ClauseWork {
    * "(x − 1)/(x + 2)" — else absent / null.
    */
   factored?: { text: string; tex: string } | null
+  /**
+   * (additive) an exponential equation solved by its structure
+   * (./expSolve.ts): the zero's equal exact forms ("log₂(7/3)",
+   * "ln(7/3)/ln 2") and the steps that produce them. Absent otherwise.
+   */
+  exp?: { x: number; forms: { text: string; tex: string }[]; steps: { text: string; tex: string }[] } | null
 }
 
 export interface SolveResult {
@@ -1892,6 +1899,24 @@ function solveRel(
     if (ex) { m.exact = ex; m.x = ex.value }
   }
   marks = dedupeMarks(marks)
+  // An exponential equation a·b^(mx + c) = d (or two powers of x) is solved
+  // by its STRUCTURE (./expSolve.ts): its zero is written as the logarithm
+  // the method produces — log₂(7/3), 5 ln 4 — never as whatever a digit
+  // match proposed (ln 1024). Read only when both sides are such shapes.
+  let expWork: ClauseWork['exp'] = null
+  {
+    const fs = expShapeOf(left, cx.isVar)
+    const gs = fs ? expShapeOf(right, cx.isVar) : null
+    const sol = fs && gs ? solveExpEquation(fs, gs, cx.v) : null
+    if (sol && sol.kind === 'one') {
+      const at = marks.find((m) => m.why === 'zero' && Math.abs(m.x - sol.x) <= 1e-7 * Math.max(1, Math.abs(sol.x)))
+      if (at) {
+        at.x = sol.x
+        at.exact = { text: sol.forms[0].text, tex: sol.forms[0].tex, value: sol.x }
+        expWork = { x: sol.x, forms: sol.forms, steps: sol.steps }
+      }
+    }
+  }
   // a "domain end" with h defined on both sides is an excluded point (a hole)
   for (const m of marks) {
     if (m.why !== 'domain-end') continue
@@ -2018,6 +2043,7 @@ function solveRel(
     distance,
     factored: eng.factored,
   }
+  if (expWork) work.exp = expWork
   const bare = (n: ExprNode): boolean => (n.t === 'var' || n.t === 'param') && cx.isVar(n)
   if ((bare(L) && !hasVarNode(R, cx.isVar)) || (bare(R) && !hasVarNode(L, cx.isVar))) SOLVED.add(work)
   return { work, exactAll }
@@ -2609,4 +2635,18 @@ function givenTex(pieces: Piece[]): string {
       return `\\left${l}${lo}, ${hi}\\right${r}`
     })
     .join(' \\cup ')
+}
+
+// ============================================================================
+// Shared exact machinery — read by ./equationRoute.ts (the algebraic route of
+// an equation: squaring, the LCD, combining logs) so that it solves its
+// polynomial with the SAME rational-root / surd code this solver uses, rather
+// than a second copy of it. Nothing here changes how an inequality is solved.
+// ============================================================================
+
+export type { Q, QP, IsVar, RQ, QRoots, Root as QRoot }
+export {
+  mkQ, Q0, Q1, qadd, qsub, qmul, qdiv, qneg, qabs, qz, qsign, qeq, qnum, qint, qText, qTex, qFromDecimal, qFromNumber,
+  qpTrim, qpDeg, qpLead, qpAdd, qpNeg, qpSub, qpMul, qpScale, qpEq, qpDivmod, qpGcd, qpEval, qpEvalF, qpMonic,
+  polyText as qpText, polyTex as qpTex, qRoots, toRQ, hasVarNode, constValue, compileFn, pretty as prettySource,
 }

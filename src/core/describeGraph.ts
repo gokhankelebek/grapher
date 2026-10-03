@@ -916,7 +916,11 @@ function sceneLong(input: DescribeInput, answers: boolean): string {
 }
 
 function longText(input: DescribeInput, answers: boolean): string {
-  if (isNumberLine(input)) return numberLineLong(input.numberLine!, answers)
+  if (isNumberLine(input)) {
+    // a solved equation's algebraic route (its extraneous candidates) comes after the line
+    const more = (input.extras ?? []).map(extraText).filter((e) => answers || !e.answer).map((e) => sentence(e.text))
+    return [numberLineLong(input.numberLine!, answers), ...more].join(' ')
+  }
   const paras: string[] = [overview(input, answers)]
   for (const c of input.curves) paras.push(curveLong(c, answers))
   const scene = sceneLong(input, answers)

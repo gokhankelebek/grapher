@@ -16,7 +16,8 @@
 // file computes instead of the live one.
 // ============================================================================
 
-import type { BoardKind, FittedCurve, ModelSpec, NLItem, Viewport } from '../core/types'
+import type { BoardKind, FittedCurve, ModelSpec, NLItem, Shape, Vec2, Viewport } from '../core/types'
+import type { Overlay } from '../render/overlays'
 import { isStretched, ppuX, ppuY } from '../core/types'
 import type { ExportSettings } from './renderBoard'
 import { clampExportSettings } from './renderBoard'
@@ -177,6 +178,79 @@ export function contentBounds(input: {
       .filter((c) => c.visible)
       .map((c) => curveBounds(c, input.models[c.modelId], input.window)),
   )
+}
+
+/** The box around a list of points (finite ones only), or null. */
+function pointsBox(pts: Iterable<Vec2>): Box | null {
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const p of pts) {
+    if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) continue
+    if (p.x < minX) minX = p.x
+    if (p.x > maxX) maxX = p.x
+    if (p.y < minY) minY = p.y
+    if (p.y > maxY) maxY = p.y
+  }
+  return minX <= maxX && minY <= maxY ? { min: { x: minX, y: minY }, max: { x: maxX, y: maxY } } : null
+}
+
+/**
+ * The box a set of geometry overlays occupies: a triangle's circumcircle and
+ * incircle (drawn as paths), its medians, bisectors and altitudes (segments),
+ * the centres and their chips (dots, labels), a circle's chords, sector and
+ * tangent points. Whole lines and the curve-bound kinds (areas, bands) have
+ * no extent of their own and are left out — their curves frame them.
+ */
+export function overlaysBox(overlays: readonly Overlay[]): Box | null {
+  const pts: Vec2[] = []
+  for (const o of overlays) {
+    switch (o.kind) {
+      case 'segment':
+        pts.push(o.from, o.to)
+        break
+      case 'dot':
+      case 'label':
+        pts.push(o.at)
+        break
+      case 'path':
+        for (const p of o.points) pts.push(p)
+        break
+      case 'region':
+        for (const p of o.boundary) pts.push(p)
+        break
+      default:
+        break
+    }
+  }
+  return pointsBox(pts)
+}
+
+/** The box the board's shapes occupy (a whole line only by its anchor point). */
+export function shapesBox(shapes: readonly Shape[]): Box | null {
+  const pts: Vec2[] = []
+  for (const s of shapes) {
+    if (!s.visible) continue
+    switch (s.kind) {
+      case 'point':
+        pts.push(s.at)
+        break
+      case 'segment':
+        pts.push(s.a, s.b)
+        break
+      case 'vector':
+        pts.push(s.tail, { x: s.tail.x + s.v.x, y: s.tail.y + s.v.y })
+        break
+      case 'polygon':
+        for (const p of s.pts) pts.push(p)
+        break
+      case 'line':
+        pts.push(s.through)
+        break
+    }
+  }
+  return pointsBox(pts)
 }
 
 /**

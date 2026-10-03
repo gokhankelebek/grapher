@@ -7,6 +7,7 @@
 // ============================================================================
 
 import { polyOf } from '../ui/valueTableLinks'
+import { complexZerosOf } from '../ui/complexLinks'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { NL_SOLVE_DEFAULTS } from '../core/types'
 import { availability, COMMAND_BY_ID, isMacPlatform, pushRecent } from '../ui/commands'
@@ -187,6 +188,7 @@ export function useCommands({ board, docState, session, refs, derived, notices, 
         // the Table section: any function of x that is not a region
         table: c.kind === 'explicit' && !broken && typeof spec?.inequality !== 'function',
         poly: c.kind === 'explicit' && !broken && typeof spec?.inequality !== 'function' && polyOf(c, models) !== null,
+        complex: c.kind === 'explicit' && !broken && typeof spec?.inequality !== 'function' && complexZerosOf(c, models) !== null,
         circle: !broken && circleOf(c, exprSources[c.id]) !== null,
       }
     })
@@ -251,6 +253,14 @@ export function useCommands({ board, docState, session, refs, derived, notices, 
             el?.focus()
           }, 60)
         }
+      })
+    },
+    openCardSection: (id, kind) => {
+      revealSidebar()
+      rememberSection(kind, true)
+      setSelectedId(id)
+      window.requestAnimationFrame(() => {
+        window.dispatchEvent(new CustomEvent(OPEN_SECTION_EVENT, { detail: kind }))
       })
     },
     openShapeTool: (id, tool) => {

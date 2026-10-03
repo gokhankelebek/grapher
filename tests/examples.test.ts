@@ -37,7 +37,7 @@ import { MODELS } from '../src/core/fit/models'
 import { readTransform } from '../src/core/transform'
 import { readFactored } from '../src/core/factored'
 import { fitRegression } from '../src/core/data'
-import { boardIntersections } from '../src/ui/intersections'
+import { boardIntersections, boardMeetings } from '../src/ui/intersections'
 import { compileShapes } from '../src/ui/shapeLinks'
 import { compareCard } from '../src/ui/shapeXform'
 import { dataPlotCard } from '../src/ui/dataPlotLinks'
@@ -388,9 +388,13 @@ describe('NC Math 1 and NC Math 2', () => {
     expect(fit.r!).toBeGreaterThan(0.99)
   })
 
-  it('M2: the three forms are one function: zeros 4 and −2, vertex (1, −9); only f is drawn', () => {
+  it('M2: the three forms are one function: zeros 4 and −2, vertex (1, −9); all drawn, no false crossings', () => {
     const { board } = load('m2-quadratic-forms')
-    expect(board.curves.map((c) => c.visible)).toEqual([true, false, false])
+    expect(board.curves.map((c) => c.visible)).toEqual([true, true, true])
+    const models = { ...MODELS, ...board.extraModels }
+    const same = boardMeetings(board.curves, models, [-20, 20]).coincide
+    expect(same).toHaveLength(3)
+    for (const c of same) expect(c.coincide).toMatchObject({ everywhere: true, exact: true })
     const src = Object.values(board.exprSources)
     const fac = readFactored(src[1])!
     expect(fac.num.map((r) => r.root)).toEqual(['-2', '4'])
@@ -480,7 +484,7 @@ describe('the gallery', () => {
     expect(g[0].units[0].title).toMatch(/^Unit 1 · Limits/)
     expect(g[2].units.map((u) => u.id)).toEqual(['m1-linexp', 'm1-quad', 'm1-systems', 'm1-functions', 'm1-coord', 'm1-stats', 'm1-bivariate'])
     expect(g[3].units.map((u) => u.id)).toEqual(['m2-quad', 'm2-radical', 'm2-functions', 'm2-xform', 'm2-centres', 'm2-trig', 'm2-prob'])
-    expect(g[4].units.map((u) => u.id)).toEqual(['m3-ineq', 'm3-functions', 'm3-geo'])
+    expect(g[4].units.map((u) => u.id)).toEqual(['m3-ineq', 'm3-functions', 'm3-poly', 'm3-explog', 'm3-geo'])
     expect(g.flatMap((x) => x.units.flatMap((u) => u.examples)).length).toBe(EXAMPLE_DEFS.length)
   })
 

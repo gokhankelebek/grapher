@@ -12,14 +12,17 @@ import { namesInOrder } from '../render/curveNames'
 import { defaultCaption, screenLook } from '../ui/figureStyle'
 import { CROSSINGS_THROTTLE, GestureThrottle, timed, useGestureKey } from '../ui/gestureThrottle'
 import {
-  boardIntersections,
+  boardMeetings,
   crossingsClearOf,
   intersectionKey,
   taylorApart,
 } from '../ui/intersections'
-import type { BoardIntersection } from '../ui/intersections'
+import type { BoardCoincidence, BoardIntersection } from '../ui/intersections'
 import { curveSpecSerial } from '../ui/valueKeys'
 import { EMPTY_ANALYSIS, EMPTY_CROSSINGS } from './constants'
+
+/** No meetings: one object, so a memo downstream sees the same value. */
+const EMPTY_MEETINGS: { points: BoardIntersection[]; coincide: BoardCoincidence[] } = { points: [], coincide: [] }
 import type { BoardStateApi } from './useBoardState'
 import type { SessionStateApi } from './useSessionState'
 import type { BoardRefsApi } from './useBoardRefs'
@@ -135,15 +138,18 @@ export function useBoardLook({ board, session, refs, derived, calc, marks, namin
   const modelsForCross = useRef(models)
   modelsForCross.current = models
 
-  const crossings = useMemo<BoardIntersection[]>(() => {
-    if (!crossingsOn) return EMPTY_CROSSINGS
+  const meetings = useMemo<{ points: BoardIntersection[]; coincide: BoardCoincidence[] }>(() => {
+    if (!crossingsOn) return EMPTY_MEETINGS
     const found = timed(crossThrottle, () =>
-      boardIntersections(curvesForCross.current, modelsForCross.current, crossSpan, crossApart),
+      boardMeetings(curvesForCross.current, modelsForCross.current, crossSpan, crossApart),
     )
-    return found.length > 0 ? found : EMPTY_CROSSINGS
+    return found.points.length > 0 || found.coincide.length > 0 ? found : EMPTY_MEETINGS
     // The curve list and the models are tracked through crossKey, not identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [crossingsOn, crossKey, crossSpan, crossApart])
+  const crossings = meetings.points.length > 0 ? meetings.points : EMPTY_CROSSINGS
+  /** Pairs of curves that are the same curve (everywhere, or on an interval): stated on the cards. */
+  const coincidences = meetings.coincide
   const crossingsRef = useRef(crossings)
   crossingsRef.current = crossings
 
@@ -162,7 +168,7 @@ export function useBoardLook({ board, session, refs, derived, calc, marks, namin
 
   return {
     captionText, captionTextRef, autoCaptionRef, screenTheme, look, boardFigure, boardCaption,
-    boardTheme, lightBoard, crossings, crossingsRef, boardCrossings,
+    boardTheme, lightBoard, crossings, crossingsRef, boardCrossings, coincidences,
   }
 }
 

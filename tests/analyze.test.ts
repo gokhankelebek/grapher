@@ -1175,14 +1175,15 @@ describe('analyzeCurve — exact forms', () => {
     expect([infl.pos.x, infl.pos.y]).toEqual([2, 2])
   })
 
-  it('e^x − 2 crosses at ln 2, which is NOT given a form', () => {
-    // ln 2 is deliberately outside the table. The zero is still found and
-    // still drawn; what it must not do is acquire a nearly-right closed form.
+  it('e^x − 2 crosses at ln 2 — read from the FORMULA (e^x = 2), never from the digits', () => {
+    // ln 2 is deliberately outside exact.ts's table, so no digit match can
+    // propose it. It is written only because the typed formula IS e^x − 2,
+    // which src/core/expSolve.ts solves exactly (F-LE.4).
     const pts = typed('y = e^x - 2', [-5, 5])
     const zeros = of(pts, 'zero')
     expect(zeros).toHaveLength(1)
     expect(zeros[0].pos.x).toBeCloseTo(Math.log(2), 9)
-    expect(zeros[0].exactX).toBeUndefined()
+    expect(zeros[0].exactX).toBe('ln 2')
     // the y-intercept of the same curve is a clean −1
     expect(of(pts, 'y-intercept')[0].exactY).toBe(MINUS + '1')
   })

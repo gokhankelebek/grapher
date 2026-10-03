@@ -7981,6 +7981,93 @@ button.calc-field-btn {
   font-size: var(--fs-xs);
 }
 
+/* An equation's algebraic route (src/ui/nlSolve.ts routeOf): the steps, then
+   every candidate checked in the original equation — a solution, or
+   extraneous with the reason. */
+.solve-route .solve-conclusion {
+  margin-left: 0;
+}
+
+.solve-route-method {
+  font-weight: 600;
+}
+
+.solve-candidates {
+  margin: var(--sp-1) 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 2px;
+  font-size: var(--fs-sm);
+}
+
+.solve-candidate.solve-yes .solve-candidate-mark {
+  color: var(--accent-text);
+  font-weight: 700;
+}
+
+.solve-candidate.solve-no .solve-candidate-mark {
+  color: var(--danger-text);
+  font-weight: 700;
+}
+
+.solve-candidate.solve-no strong {
+  text-decoration: line-through;
+  text-decoration-color: var(--danger);
+}
+
+.solve-exact {
+  margin-top: var(--sp-1);
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+/* Zeros over ℂ (src/ui/ComplexZerosSection.tsx) */
+.cz-list {
+  margin: var(--sp-1) 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 2px;
+}
+
+.cz-disc,
+.cz-how {
+  margin-top: var(--sp-1);
+}
+
+.cz-steps {
+  margin-top: var(--sp-1);
+}
+
+.cz-note {
+  margin-top: var(--sp-1);
+}
+
+.cz-x {
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+.cz-disc-eq {
+  color: var(--text);
+}
+
+.cz-muted,
+.solve-candidate-why {
+  color: var(--muted);
+}
+
+/* The other standard way to write the same closed form, and a pair of curves
+   that are one curve. */
+.an-alt {
+  color: inherit;
+}
+
+.an-coincide {
+  font-family: var(--font);
+}
+
 /* ===========================================================================
    Reveal mode (src/ui/reveal.ts, src/ui/RevealAnswer.tsx): a computed answer
    on a card stands as a "Reveal" pill until it is revealed, then fades in.

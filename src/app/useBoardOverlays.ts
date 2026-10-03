@@ -53,6 +53,8 @@ export interface BoardOverlaysDeps {
   shapesApi?: ShapesApi
 }
 
+const EMPTY_MARKS: Overlay[] = []
+
 export function useBoardOverlays({ board, docState, session, derived, calc, tables, domain, system, shapesApi }: BoardOverlaysDeps) {
   const { curves, kind, motionPlay, motionPlayRef, lens, calcLinks, sequences, playEpoch, valueTables, shapes, circleViews } = board
   const shapeCompiled = shapesApi?.shapeCompiled
@@ -283,6 +285,13 @@ export function useBoardOverlays({ board, docState, session, derived, calc, tabl
   }, [kind, calcLinks, curves, models, motionAreaOverlays, bandSpan, domainOverlays, sysOverlays, seriesMarks, tableMarks, circleMarks, centreMarks, implicitSources, implicitBox, depKeys])
   const overlaysRef = useRef<Overlay[]>(overlays)
   overlaysRef.current = overlays
+  /**
+   * The geometry FIGURES a fitted export must frame: a triangle's centres
+   * (circumcircle, incircle, the Euler line's points) and a circle's
+   * theorems. Curves are framed by their own extent; these reach past it.
+   */
+  const geometryMarksRef = useRef<Overlay[]>([])
+  geometryMarksRef.current = centreMarks.length + circleMarks.length > 0 ? [...centreMarks, ...circleMarks] : EMPTY_MARKS
 
   /**
    * The x-range sign charts are analysed over: the view joined with
@@ -430,7 +439,7 @@ export function useBoardOverlays({ board, docState, session, derived, calc, tabl
 
   return {
     exportSettingsRef, exportFormatRef, latexWidthRef, showAnalysisRef, contextAnalysisRef,
-    overlays, overlaysRef, hasSignCharts, signSpan, calcCards, calcFor, betweenCards, betweenFor,
+    overlays, overlaysRef, hasSignCharts, signSpan, calcCards, calcFor, betweenCards, betweenFor, geometryMarksRef,
   }
 }
 

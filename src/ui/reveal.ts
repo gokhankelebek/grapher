@@ -20,7 +20,10 @@
 //   curve:<id>:max:<i>  …min, infl, yint, extreme, tip, hole (same rule)
 //   curve:<id>:asym:<i>          the i-th asymptote, in the order the card lists them
 //   curve:<id>:domain  …range, onetoone, inverse: the Domain rows
+//   curve:<id>:complex           a polynomial's Zeros over ℂ (count, zeros,
+//                                discriminant)
 //   cross:<a>:<b>:<i>            the i-th crossing of a and b (ids sorted), by x
+//   cross:<a>:<b>:same           where a and b coincide (the same function)
 //   calc:<linkId>:value          every value one calculus tool states
 //   solve:<id>:solution          a number-line inequality's solution set
 //   uc:<id>:values               a unit circle's exact values
@@ -101,6 +104,13 @@ export const SYSTEM_KEY = 'system:value'
 /** The parts of a curve's Table section that are answers, each revealed on its own. */
 export type TablePart = 'values' | 'eval' | 'compare' | 'divide'
 export const tableKey = (curveId: string, part: TablePart): string => `table:${curveId}:${part}`
+/** Where two curves coincide (the same function, or an overlap interval) — one answer per pair. */
+export const coincideKey = (a: string, b: string): string => {
+  const [x, y] = a <= b ? [a, b] : [b, a]
+  return `cross:${x}:${y}:same`
+}
+/** A polynomial's Zeros over ℂ: the count, the zeros and the discriminant, revealed together. */
+export const complexKey = (curveId: string): string => `curve:${curveId}:complex`
 /** The parts of a circle's Circle theorems section that are answers. */
 export type CirclePart = 'angles' | 'tangent' | 'sector' | 'chords' | 'external' | 'square'
 export const circleKey = (curveId: string, part: CirclePart): string => `circle:${curveId}:${part}`
@@ -189,6 +199,8 @@ export interface RevealSource {
     extra?: readonly string[]
   }[]
   crossings: readonly BoardIntersection[]
+  /** Pairs of curves that coincide (src/core/analyze.ts curveCoincidence), as [a, b]. */
+  coincide?: readonly (readonly [string, string])[]
   /** Every other answer key, in the order they should come last. */
   after?: readonly string[]
 }
@@ -256,6 +268,8 @@ export function buildInventory(src: RevealSource): RevealInventory {
     crossMap.set(`${a}|${b}|${c.point.pos.x}|${c.point.pos.y}`, key)
     order.push(key)
   }
+
+  for (const [a, b] of src.coincide ?? []) order.push(coincideKey(a, b))
 
   order.push(...calc)
   for (const k of src.after ?? []) order.push(k)

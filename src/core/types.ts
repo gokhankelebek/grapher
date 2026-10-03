@@ -4,6 +4,8 @@
 // "screen" space is canvas pixels (y down). Viewport maps between them.
 // ============================================================================
 
+import type { ExpShape } from './expSolve'
+
 export interface Vec2 { x: number; y: number }
 
 export interface Viewport {
@@ -150,6 +152,15 @@ export interface ModelSpec {
    * boundary. Absent for everything that is not an inequality.
    */
   inequality?(params: number[]): InequalityInfo | null
+  /**
+   * For a typed explicit expression of the shape a·b^(mx + c) + k with every
+   * number EXACT (as typed, or a slider at a short decimal): that shape
+   * (src/core/expSolve.ts), so a zero or a crossing can be written as the
+   * logarithm the equation solves to — log₂(7/3), 5 ln 4 — instead of a
+   * decimal. A constant (y = 7) is the shape with no power, so a crossing
+   * with it is solved too. Null for anything else; absent for library families.
+   */
+  expShape?(params: number[]): ExpShape | null
   latex(params: number[]): string    // KaTeX-renderable string
   paramMeta(params: number[]): ParamMeta[]  // ranges centered on current values
   /** Optional: return params translated by (dx, dy) in math units (for drag-editing).
@@ -384,6 +395,13 @@ export interface SpecialPoint {
    */
   exactX?: string
   exactY?: string
+  /**
+   * Other closed forms EQUAL to exactX, " = "-joined, when the solution has
+   * more than one standard way to be written: "ln(7/3)/ln 2" beside
+   * log₂(7/3), "10 ln 2" beside 5 ln 4 (src/core/expSolve.ts). Absent
+   * otherwise. The card prints it after exactX.
+   */
+  exactAlt?: string
   /**
    * For kind 'intersection': the id of the other curve. Produced by
    * src/core/analyze.ts intersectionPoints(parent, other, models, range),

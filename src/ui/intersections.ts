@@ -18,7 +18,8 @@
 // ============================================================================
 
 import type { FittedCurve, ModelSpec, SpecialPoint } from '../core/types'
-import { intersectionPoints } from '../core/analyze'
+import { pairMeeting } from '../core/analyze'
+import type { Coincidence } from '../core/analyze'
 import type { BoardIntersection } from './renderBoard'
 import type { CalcLink } from '../core/persist'
 
@@ -166,13 +167,37 @@ export function boardIntersections(
   /** pairs never solved (pairKey): see taylorApart */
   apart?: ReadonlySet<string>,
 ): BoardIntersection[] {
+  return boardMeetings(curves, models, span, apart).points
+}
+
+/** Two curves that are the same curve, everywhere or on intervals (no crossing points there). */
+export interface BoardCoincidence {
+  a: string
+  b: string
+  coincide: Coincidence
+}
+
+/**
+ * Every meeting point on the board, and every pair of curves that COINCIDE —
+ * y = x² − 2x − 8 and y = (x + 2)(x − 4) are one function, and are reported
+ * as that rather than as dozens of "crossings" where their difference is
+ * rounding (src/core/analyze.ts pairMeeting).
+ */
+export function boardMeetings(
+  curves: readonly FittedCurve[],
+  models: Record<string, ModelSpec>,
+  span: readonly [number, number],
+  apart?: ReadonlySet<string>,
+): { points: BoardIntersection[]; coincide: BoardCoincidence[] } {
   const range: [number, number] = [span[0], span[1]]
   const out: BoardIntersection[] = []
+  const same: BoardCoincidence[] = []
   for (const [a, b] of intersectionPairs(curves, apart)) {
     let pts: SpecialPoint[] = []
     try {
-      const got = intersectionPoints(a, b, models, range)
-      pts = Array.isArray(got) ? got : []
+      const got = pairMeeting(a, b, models, range)
+      pts = Array.isArray(got.points) ? got.points : []
+      if (got.coincide) same.push({ a: a.id, b: b.id, coincide: got.coincide })
     } catch {
       // A pair the solver cannot do is a pair with no answer, never a board
       // that fails to draw.
@@ -183,7 +208,31 @@ export function boardIntersections(
       out.push({ curveId: a.id, point: p.withId === b.id ? p : { ...p, withId: b.id } })
     }
   }
-  return out
+  return { points: out, coincide: same }
+}
+
+const MINUS = '−'
+function endText(v: number, exact: string | undefined): string {
+  if (exact) return exact
+  const s = String(Number(v.toPrecision(4)))
+  return s.startsWith('-') ? MINUS + s.slice(1) : s
+}
+
+/**
+ * Where two curves coincide, as the card says it: "the same function — they
+ * coincide everywhere", "they coincide for x ≤ 0", "… on 0 ≤ x ≤ 3".
+ */
+export function coincideText(c: Coincidence): string {
+  if (c.everywhere) return 'the same function — they coincide everywhere'
+  const parts = c.intervals.map((iv) => {
+    const lo = Number.isFinite(iv.lo)
+    const hi = Number.isFinite(iv.hi)
+    if (!lo && !hi) return 'everywhere'
+    if (!lo) return `for x ≤ ${endText(iv.hi, iv.hiExact)}`
+    if (!hi) return `for x ≥ ${endText(iv.lo, iv.loExact)}`
+    return `on ${endText(iv.lo, iv.loExact)} ≤ x ≤ ${endText(iv.hi, iv.hiExact)}`
+  })
+  return `they coincide ${parts.join(' and ')}`
 }
 
 /** One other curve, named, and where this curve meets it. */
@@ -193,6 +242,8 @@ export interface CurveIntersections {
   /** What the other curve is called on this board — "g", or its card's label. */
   name: string
   points: SpecialPoint[]
+  /** The two curves are the same curve here (no crossing points are listed there). */
+  coincide?: { everywhere: boolean; text: string }
 }
 
 /**
@@ -207,6 +258,8 @@ export function cardIntersections(
   all: readonly BoardIntersection[],
   nameOf: (id: string) => string,
   order: readonly string[] = [],
+  /** Pairs that coincide: listed as "the same function", with their crossings outside any overlap. */
+  coincide: readonly BoardCoincidence[] = [],
 ): CurveIntersections[] {
   const byOther = new Map<string, SpecialPoint[]>()
   for (const m of all) {
@@ -217,15 +270,24 @@ export function cardIntersections(
     if (list) list.push(m.point)
     else byOther.set(other, [m.point])
   }
+  const sameWith = new Map<string, Coincidence>()
+  for (const c of coincide) {
+    const other = c.a === curveId ? c.b : c.b === curveId ? c.a : null
+    if (other === null || other === curveId) continue
+    sameWith.set(other, c.coincide)
+    if (!byOther.has(other)) byOther.set(other, [])
+  }
   if (byOther.size === 0) return []
   const rank = new Map(order.map((id, i) => [id, i]))
   const out: CurveIntersections[] = []
   for (const [id, points] of byOther) {
+    const same = sameWith.get(id)
     out.push({
       id,
       name: nameOf(id),
       // Left to right, the way every other row of the table reads.
       points: points.slice().sort((p, q) => p.pos.x - q.pos.x),
+      ...(same ? { coincide: { everywhere: same.everywhere, text: coincideText(same) } } : {}),
     })
   }
   out.sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0))

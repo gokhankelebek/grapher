@@ -27,13 +27,13 @@ export function useCardCrossings({ refs, calc, naming, lookApi }: CardCrossingsD
   const { curvesRef } = refs
   const { curveLabel } = calc
   const { boardCurveNames } = naming
-  const { crossings } = lookApi
+  const { crossings, coincidences } = lookApi
 
   /** Per card, the last list handed out — reused while its contents are the same. */
   const crossingsForCacheRef = useRef(new Map<string, readonly CurveIntersections[]>())
   const crossingsFor = useCallback(
     (id: string): readonly CurveIntersections[] | undefined => {
-      if (crossings.length === 0) return undefined
+      if (crossings.length === 0 && coincidences.length === 0) return undefined
       const got = cardIntersections(
         id,
         crossings,
@@ -42,6 +42,7 @@ export function useCardCrossings({ refs, calc, naming, lookApi }: CardCrossingsD
           return boardCurveNames[other] ?? (c ? curveLabel(c) : other)
         },
         curvesRef.current.map((c) => c.id),
+        coincidences,
       )
       if (got.length === 0) return undefined
       const cache = crossingsForCacheRef.current
@@ -49,7 +50,7 @@ export function useCardCrossings({ refs, calc, naming, lookApi }: CardCrossingsD
       cache.set(id, stable)
       return stable
     },
-    [crossings, boardCurveNames, curveLabel],
+    [crossings, coincidences, boardCurveNames, curveLabel],
   )
 
   return {

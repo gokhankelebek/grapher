@@ -25,10 +25,11 @@ import { docFigure } from './docScene'
 import { describeInputOf } from './itemBank'
 import { paletteDashes } from './dashes'
 import type { CurvePalette } from '../core/a11yPalette'
-import { solveOf } from './nlSolve'
+import { routeOf, solveOf } from './nlSolve'
 import { viewStatesFrom } from './curveViews'
 import { tableSentences } from './valueTableLinks'
 import { circleSentences } from './circleLinks'
+import { complexSentences } from './complexLinks'
 
 export interface BoardDescription extends GraphDescription {
   /** One short sentence for the board's accessible name (aria-label). */
@@ -111,7 +112,12 @@ function cartesian(m: DocModel, o: DescribeBoardOptions): BoardDescription {
   const circles = Object.keys(views.circle).length > 0
     ? circleSentences(m.board.curves, m.board.exprSources, views.circle)
     : []
-  const added = [...tables, ...circles]
+  // A polynomial's zeros over ℂ: the non-real ones are not on the graph, so they are said.
+  const complexes = complexSentences(m.board.curves, m.models, (c) => {
+    const n = m.curveNames[c.id] ?? m.names[c.id]
+    return n || 'the polynomial'
+  })
+  const added = [...tables, ...circles, ...complexes]
   const input: AdapterInput = {
     ...base,
     // The board's cards show every equation, so the description states them.
@@ -157,8 +163,17 @@ function numberLineInput(m: DocModel): DescribeNumberLine | null {
 function numberLine(m: DocModel, o: DescribeBoardOptions): BoardDescription {
   const nl = numberLineInput(m)
   if (!nl) return EMPTY_LINE
+  // an equation's algebraic route: which candidates are extraneous
+  const solve = m.board.items.find((i) => i.kind === 'solve')
+  const route = solve && solve.kind === 'solve' ? routeOf(solve.src, solveOf(solve)) : null
   const d = describeScene(
-    { board: 'number-line', window: { xMin: nl.min, xMax: nl.max, yMin: -1, yMax: 1 }, curves: [], numberLine: nl },
+    {
+      board: 'number-line',
+      window: { xMin: nl.min, xMax: nl.max, yMin: -1, yMax: 1 },
+      curves: [],
+      numberLine: nl,
+      ...(route ? { extras: [{ text: `Solved by hand (${route.method.toLowerCase()}): ${route.summary}`, answer: true }] } : {}),
+    },
     { answers: o.answers, maxLength: 300 },
   )
   return { ...d, summary: clip(lead('Number line', d.figuredesc), o.maxSummary ?? 160) }

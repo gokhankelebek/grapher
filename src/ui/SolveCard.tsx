@@ -30,6 +30,7 @@ import {
   builderText,
   graphSources,
   inputTex,
+  routeOf,
   solveCached,
   solveShow,
   workingSteps,
@@ -123,9 +124,14 @@ export function SolveCard({
   const result = outcome.ok ? outcome : null
   const show = solveShow(item)
   const steps = useMemo(() => (result ? workingSteps(result) : []), [result])
+  // An equation solved the way a class does it: square, clear denominators,
+  // combine logs, take logarithms — with every candidate checked.
+  const route = useMemo(() => routeOf(item.src, result), [item.src, result])
   const compound = !!result && result.combine !== 'single' && result.clauses.length > 1
   const hasDistance = !!result && result.clauses.some((c) => c.distance !== null)
-  const canGraph = !!result && (result.variable || 'x') === 'x' && graphSources(item.src) !== null
+  const plan = useMemo(() => graphSources(item.src), [item.src])
+  const canGraph = !!result && (result.variable || 'x') === 'x' && plan !== null
+  const bothSides = !!plan && plan.length === 2 && plan.every((g) => !g.signChart) && !!result && result.clauses.length === 1 && result.clauses[0].relation === '='
 
   const [eqEdit, setEqEdit] = useState<{ text: string; error: string | null } | null>(null)
   const eqInputRef = useRef<HTMLInputElement>(null)
@@ -295,7 +301,7 @@ export function SolveCard({
         <div className="card-eq-foot" onClick={(e) => e.stopPropagation()}>
           {eqEdit.error && <div className="expr-error">{eqEdit.error}</div>}
           <div className="expr-hint">
-            Enter saves · Esc cancels · try “x^2 - 4 &gt; 0”, “|2x - 3| &lt; 5”, “x^2 &gt; 1 and x &lt; 3”
+            Enter saves · Esc cancels · try “x^2 - 4 &gt; 0”, “|2x - 3| &lt; 5”, “sqrt(x+7) = x - 5”
           </div>
         </div>
       )}
@@ -324,6 +330,61 @@ export function SolveCard({
         </div>
       )}
 
+      {result && route && (
+        <div onClick={(e) => e.stopPropagation()}>
+          <CardSection
+            kind="nl-route"
+            title={route.kind === 'exp' ? 'Exact form' : 'Algebraic route'}
+            titleHint={
+              route.kind === 'exp'
+                ? 'Isolate the power and take logarithms: the exact solution, and the same number written with ln'
+                : 'Solve the way it is done by hand, then check every candidate in the original equation: squaring, clearing denominators and combining logs can add extraneous solutions'
+            }
+            summary={route.summary}
+            answerKey={solveKey(item.id)}
+            className="solve-route"
+            testId="solve-route"
+          >
+            <Answer k={solveKey(item.id)} block what="the route">
+              <div className="calc-fact calc-fact-lead solve-route-method">{route.method}</div>
+              <ol className="solve-steps">
+                {route.steps.map((st, i) => (
+                  <li key={i} className="solve-step">
+                    {st.text}
+                  </li>
+                ))}
+              </ol>
+              {route.kind !== 'exp' && route.candidates.length > 0 && (
+                <>
+                  <div className="solve-table-intro">Check each candidate in the original equation:</div>
+                  <ul className="calc-facts solve-candidates">
+                    {route.candidates.map((c, i) => (
+                      <li
+                        key={i}
+                        className={`calc-fact solve-candidate ${c.ok ? 'solve-yes' : 'solve-no'}`}
+                        data-testid="solve-candidate"
+                        data-ok={c.ok ? 'yes' : 'no'}
+                      >
+                        <span className="solve-candidate-mark" aria-hidden="true">{c.ok ? '✓' : '✗'}</span>{' '}
+                        <strong>{`${result.variable || 'x'} = ${c.text}`}</strong>
+                        {c.ok ? ' — a solution: ' : ' — extraneous: '}
+                        <span className="solve-candidate-why">{c.reason}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              {route.exp && (
+                <div className="calc-fact solve-exact" data-testid="solve-exact-forms">
+                  <Latex tex={`${result.variable || 'x'} = ${route.exp.forms.map((f) => f.tex).join(' = ')} \\approx ${route.exp.x.toFixed(4)}`} />
+                </div>
+              )}
+              <div className="solve-conclusion">{route.summary}</div>
+            </Answer>
+          </CardSection>
+        </div>
+      )}
+
       {result && (
         <div className="solve-controls" onClick={(e) => e.stopPropagation()}>
           {chip('signs', 'sign row', 'The + / − row above the line, with 0 and und at the critical values')}
@@ -335,7 +396,11 @@ export function SolveCard({
               type="button"
               className="calc-chip solve-graph"
               data-testid="solve-show-on-graph"
-              title="Graph y = h(x) with its sign chart on the Graph board: the solution is where the graph is above / below the x-axis"
+              title={
+                bothSides
+                  ? 'Graph both sides, y₁ and y₂, on the Graph board: the solutions are where the graphs meet'
+                  : 'Graph y = h(x) with its sign chart on the Graph board: the solution is where the graph is above / below the x-axis'
+              }
               onClick={() => setGraphError(onShowOnGraph())}
             >
               Show on graph

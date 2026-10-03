@@ -12,7 +12,7 @@ import { nextId, ppuX } from '../core/types'
 import { curveBounds, unionBoxes } from '../ui/curveState'
 import { dataBox } from '../ui/dataLinks'
 import { eulerFramePoints } from '../ui/eulerLinks'
-import { fitRange, graphSources, solveCached, solveXs } from '../ui/nlSolve'
+import { fitRange, graphNote, graphSources, solveCached, solveXs } from '../ui/nlSolve'
 import { relatedRatesBox } from '../ui/relatedRatesLinks'
 import { sequenceBox } from '../ui/seqLinks'
 import { unitCircleBox } from '../ui/unitCircleLinks'
@@ -467,9 +467,19 @@ export function useViewport({ board, refs, derived, notices, history, persistenc
         return errors[0] ?? 'Those curves could not be graphed'
       }
       fitToContent()
+      // An equation drawn as its two sides: the solutions are the crossings,
+      // and a candidate the algebra produced that is not one is extraneous.
+      const sides = wanted.length === 2 && wanted.every((g) => !g.signChart) && /=/.test(it.src) && !/[<>≤≥≠!]/.test(it.src)
+      const note = sides ? graphNote(it.src) : null
       showToast(
-        `Graphed ${graphed.join(', ')}${wanted.some((g) => g.signChart) ? ' with its sign chart: the solution is where the graph is above / below the x-axis' : ''}. Number line switches back.`,
-        { ms: 6000 },
+        `Graphed ${graphed.join(', ')}${
+          wanted.some((g) => g.signChart)
+            ? ' with its sign chart: the solution is where the graph is above / below the x-axis'
+            : sides
+              ? ': the solutions are where the two graphs meet'
+              : ''
+        }.${note ? ` ${note}` : ''} Number line switches back.`,
+        { ms: 7000 },
       )
       return null
     },

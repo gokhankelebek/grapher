@@ -704,13 +704,13 @@ export const EXAMPLE_DEFS: readonly ExampleDef[] = [
     title: 'One parabola, three forms',
     short: 'standard, factored and vertex form',
     note:
-      'f(x) = x² − 2x − 8 is in standard form, which shows the y-intercept −8; g and h, hidden in the sidebar, are the same function in factored form (x − 4)(x + 2), which shows the zeros 4 and −2, and vertex form (x − 1)² − 9, which shows the vertex (1, −9). Ask the class to factor f and complete the square by hand, then select g and h to check against their cards.',
-    keywords: ['quadratic', 'standard form', 'factored form', 'vertex form', 'completing the square', 'zeros', 'vertex', 'y-intercept', 'equivalent forms', 'A-SSE.3', 'F-IF.8'],
+      'f(x) = x² − 2x − 8 in standard form shows the y-intercept −8, g(x) = (x − 4)(x + 2) in factored form shows the zeros 4 and −2, and h(x) = (x − 1)² − 9 in vertex form shows the vertex (1, −9). All three are drawn and there is only one parabola: each card’s Intersections says the other two are the same function, which coincides with it everywhere. Ask the class to factor f and complete the square by hand, then select g and h to check against their cards.',
+    keywords: ['quadratic', 'standard form', 'factored form', 'vertex form', 'completing the square', 'zeros', 'vertex', 'y-intercept', 'equivalent forms', 'same function', 'coincide', 'A-SSE.3', 'F-IF.8'],
     build: (b) => {
       b.frame([-5, 7], [-11, 5])
       const f = b.line('f(x) = x^2 - 2x - 8')
-      b.line('g(x) = (x - 4)(x + 2)', { hidden: true })
-      b.line('h(x) = (x - 1)^2 - 9', { hidden: true })
+      b.line('g(x) = (x - 4)(x + 2)')
+      b.line('h(x) = (x - 1)^2 - 9')
       b.select(f)
     },
   },
@@ -728,6 +728,22 @@ export const EXAMPLE_DEFS: readonly ExampleDef[] = [
       b.frame([-4, 7], [-5, 9])
       b.line('f(x) = x^2 - 2x - 3')
       b.line('g(x) = x + 1')
+    },
+  },
+  {
+    id: 'm2-extraneous-radical',
+    course: 'math2',
+    unit: 'M2',
+    help: ['m2-radical', 'm2-quad'],
+    title: 'A radical equation with an extraneous solution',
+    short: '√(x + 7) = x − 5',
+    kind: 'number-line',
+    note:
+      'Squaring both sides of √(x + 7) = x − 5 gives x² − 11x + 18 = 0, so the candidates are x = 2 and x = 9; the card’s Algebraic route checks each one in the original equation and keeps only 9, because at x = 2 the left side is √9 = 3 but the right side is −3. Ask the class where the extra solution came from, then press Show on graph: y = √(x + 7) and y = x − 5 meet only at x = 9.',
+    keywords: ['radical equation', 'extraneous', 'extraneous solution', 'square both sides', 'check', 'candidate', 'A-REI.2'],
+    build: (b) => {
+      b.frame([-8, 12])
+      b.solve('sqrt(x + 7) = x - 5')
     },
   },
   {
@@ -966,6 +982,39 @@ export const EXAMPLE_DEFS: readonly ExampleDef[] = [
       b.frame([-4, 5], [-5, 5])
       const g = b.line('g(x) = -2(x - 1)^2 + 3')
       b.view(g, { showParent: true })
+    },
+  },
+  {
+    id: 'm3-complex-cubic',
+    course: 'math3',
+    unit: 'M3',
+    help: ['m3-poly'],
+    title: 'Complex zeros of a cubic',
+    short: 'x³ − 3x² + 4x − 2',
+    note:
+      'f(x) = x³ − 3x² + 4x − 2 has degree 3, so by the Fundamental Theorem of Algebra it has 3 zeros counted with multiplicity, but the graph crosses the x-axis only once, at x = 1. The card’s Zeros over ℂ finds 1 by the rational root theorem and synthetic division, leaving x² − 2x + 2 with discriminant −4, so the other two zeros are 1 ± i and do not appear on the graph. Ask the class to divide by (x − 1) by hand and finish with the quadratic formula.',
+    keywords: ['complex zeros', 'imaginary', 'conjugate pair', 'fundamental theorem of algebra', 'rational root theorem', 'synthetic division', 'discriminant', 'N-CN.9'],
+    build: (b) => {
+      b.frame([-2, 4], [-6, 6])
+      const f = b.line('f(x) = x^3 - 3x^2 + 4x - 2')
+      b.select(f)
+    },
+  },
+  {
+    id: 'm3-exp-equation',
+    course: 'math3',
+    unit: 'M3',
+    help: ['m3-explog'],
+    title: 'An exponential equation solved with logarithms',
+    short: '3·2ˣ = 7',
+    note:
+      'f(x) = 3·2ˣ meets g(x) = 7 at x = log₂(7/3) = ln(7/3)/ln 2 ≈ 1.2224, and the card writes the exact logarithm beside the decimal. Ask the class to isolate 2ˣ = 7/3 and take logarithms by hand, then evaluate ln(7/3)/ln 2 on a calculator to check the decimal.',
+    keywords: ['exponential equation', 'logarithm', 'solve with logs', 'change of base', 'exact form', 'intersection', 'F-LE.4'],
+    build: (b) => {
+      b.frame([-3, 4], [-1, 12])
+      const f = b.line('f(x) = 3*2^x')
+      b.line('g(x) = 7')
+      b.select(f)
     },
   },
   {

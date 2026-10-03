@@ -67,7 +67,8 @@ import { analyzeCurve } from '../core/analyze'
 import type { BoardScene } from './renderBoard'
 import { captionHeight, keyLineTokens, exportTheme, sceneInk, suggestAxisUnits, unplacedAnswers } from './renderBoard'
 import type { FitExportSettings } from './exportFit'
-import { clampFitSettings, contentBounds, defaultFit, exportViewport } from './exportFit'
+import { clampFitSettings, contentBounds, defaultFit, exportViewport, overlaysBox, shapesBox } from './exportFit'
+import type { Box } from './curveState'
 import { DEFAULT_EXPORT } from './renderBoard'
 import { defaultCaption, exportLook } from './figureStyle'
 import { boardIntersections, crossingsClearOf, intersectionSpan, taylorApart } from './intersections'
@@ -348,6 +349,17 @@ export function docFigure(m: DocModel, o: FigureOptions): DocFigure {
           ...board.unitCircles.filter((u) => u.hidden !== true).map((u) => unitCircleBox(u)),
           ...rrShown.map((r) => safe(() => relatedRatesBox(r), null)),
           ...board.stats.flatMap((st, i) => (st.hidden === true ? [] : [statsBox(i)])),
+          // the geometry: shapes, a triangle's centres (its circumcircle) and a circle's theorems
+          ...safe(() => {
+            const compiled = compileShapes(board.shapes)
+            const marks: Overlay[] = [
+              ...(anyCentres(board.shapes) ? centreOverlays(board.shapes, compiled) : []),
+              ...(Object.values(views.circle).some((v) => v.show && v.show.length > 0)
+                ? circleOverlays(curves, board.exprSources, views.circle)
+                : []),
+            ]
+            return [shapesBox(sceneShapes(board.shapes, compiled)), overlaysBox(marks)]
+          }, [] as (Box | null)[]),
         ])
       : box
   }

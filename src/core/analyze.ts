@@ -32,6 +32,10 @@ import { findHoles } from './holes'
 // is circular by construction — calculus.ts imports analyzeCurve — and safe:
 // both sides are hoisted function declarations, used only from inside bodies.
 import { curveIntersections } from './calculus'
+import { numValue, polynomialCoeffs } from './valueTable'
+import { solveExpEquation } from './expSolve'
+import type { ExpShape } from './expSolve'
+import type { Num } from './valueTable'
 import { exactForm, verifiedExact } from './exact'
 import type { ExactForm } from './exact'
 
@@ -1486,6 +1490,65 @@ function attachExactForms(
   return points
 }
 
+/**
+ * Exponential zeros and crossings in their LOGARITHMIC form (F-LE.4). A
+ * typed y = a·b^(mx + c) + k carries its shape (ModelSpec.expShape, read from
+ * the formula itself by src/core/expSolve.ts); a zero of it — or a crossing
+ * of two such curves, or of one with a constant — is then the solution of an
+ * equation solved exactly: log₂(7/3) = ln(7/3)/ln 2, 5 ln 4 = 10 ln 2,
+ * ln 3/(ln 3 − ln 2). The form is attached only to the point the numeric
+ * search already found there (to 1e-7), and only when the shape was
+ * recognised exactly; nothing is ever guessed from digits here.
+ */
+function attachExpForms(
+  points: SpecialPoint[],
+  curve: FittedCurve,
+  spec: ModelSpec | undefined,
+  other: { curve: FittedCurve; spec: ModelSpec } | null,
+): SpecialPoint[] {
+  if (!spec?.expShape || points.length === 0) return points
+  try {
+    const fs = spec.expShape(curve.params)
+    if (!fs) return points
+    let gs: ExpShape | null = { term: null, k: { n: 0n, d: 1n } } as ExpShape
+    if (other) {
+      gs = other.spec.expShape ? other.spec.expShape(other.curve.params) : null
+      if (!gs) return points
+    }
+    if (!fs.term && !gs.term) return points
+    const sol = solveExpEquation(fs, gs)
+    if (!sol || sol.kind !== 'one') return points
+    const want: SpecialPointKind = other ? 'intersection' : 'zero'
+    for (const p of points) {
+      if (p.kind !== want) continue
+      if (Math.abs(p.pos.x - sol.x) > 1e-7 * Math.max(1, Math.abs(sol.x))) continue
+      if (sol.rational && p.exactX) continue
+      p.exactX = sol.forms[0].text
+      if (sol.forms.length > 1) p.exactAlt = sol.forms.slice(1).map((f) => f.text).join(' = ')
+      else delete p.exactAlt
+      let y = p.pos.y
+      if (want === 'zero') y = 0
+      else {
+        try {
+          const v = spec.evalExplicit?.(curve.params, sol.x)
+          if (typeof v === 'number' && Number.isFinite(v)) y = v
+        } catch {
+          /* keep the y the search found */
+        }
+      }
+      p.pos = { x: sol.x, y }
+      p.exact = true
+      if (want === 'intersection') {
+        delete p.exactY
+        attachY(p, y)
+      }
+    }
+  } catch {
+    /* a shape that cannot be solved leaves the points as they were */
+  }
+  return points
+}
+
 // ---------------------------------------------------------------------------
 // Explicit driver
 // ---------------------------------------------------------------------------
@@ -1554,7 +1617,7 @@ function analyzeExplicit(
     const q = pt('hole', h.x, h.y, 'hole', false)
     if (q) kept.push(q)
   }
-  return attachExactForms(kept, curve, f, lo, hi)
+  return attachExpForms(attachExactForms(kept, curve, f, lo, hi), curve, spec, null)
 }
 
 /** Dedupe within each kind, drop non-finite, sort left to right. */
@@ -2122,16 +2185,269 @@ export function intersectionPoints(
   models: Record<string, ModelSpec>,
   range: readonly [number, number],
 ): SpecialPoint[] {
+  return pairMeeting(parent, other, models, range).points
+}
+
+// ---------------------------------------------------------------------------
+// Coinciding curves — "f and g are the same function".
+//
+// y = x² − 2x − 8, y = (x + 2)(x − 4) and y = (x − 1)² − 9 are ONE function.
+// Their difference is zero everywhere, and a root hunt over a difference that
+// is rounding noise reports dozens of "crossings" — every sign change of the
+// last bit. So before any crossing is looked for, the pair is asked whether it
+// is the same curve:
+//
+//   * two POLYNOMIALS (valueTable.polynomialCoeffs, verified at x's the
+//     interpolation never saw) are compared coefficient by coefficient —
+//     EXACTLY when both are rational, so x² and x² + 10⁻⁹ are different
+//     functions that never meet (no crossing, no coincidence), and within
+//     10⁻¹² of the largest coefficient when one is a fitted decimal;
+//   * anything else is SAMPLED: 512 x's across the span plus 48 far out to
+//     ±1000, f − g compared with a tolerance of 10⁻¹⁰ of the values
+//     themselves (plus 10⁻¹³). Agreeing everywhere sampled is "the same function"; agreeing
+//     on a run of samples is an overlap INTERVAL (a piecewise curve sharing a
+//     piece), its ends bisected to the last bit and snapped to closed forms.
+//     Both undefined (a shared hole or gap) neither breaks nor starts a run.
+//
+// Crossings inside an overlap are dropped — the curves are not crossing there,
+// they are one curve — and crossings outside it are kept.
+// ---------------------------------------------------------------------------
+
+/** Where two curves are the same curve. */
+export interface Coincidence {
+  /** f ≡ g wherever both are drawn (the whole shared domain). */
+  everywhere: boolean
+  /** The overlap intervals (±Infinity for an unbounded side); [] when everywhere. */
+  intervals: { lo: number; hi: number; loExact?: string; hiExact?: string }[]
+  /** Decided by exact polynomial coefficients, not by sampling. */
+  exact: boolean
+}
+
+/** The meeting points of two curves, and where they coincide (null: nowhere). */
+export interface PairMeeting {
+  points: SpecialPoint[]
+  coincide: Coincidence | null
+}
+
+const COINCIDE_SAMPLES = 512
+const COINCIDE_FAR = 48
+const COINCIDE_TOL = 1e-10
+const COINCIDE_FLOOR = 1e-13
+/** A run must hold this many consecutive agreeing samples to be an overlap, not a crossing. */
+const COINCIDE_RUN = 6
+
+function polyCoeffsOf(curve: FittedCurve, models: Record<string, ModelSpec>, f: Fn): Num[] | null {
+  const spec = models[curve.modelId]
+  if (!spec || spec.pieces) return null
+  try {
+    return polynomialCoeffs(f)
+  } catch {
+    return null
+  }
+}
+
+/** Do the two curves coincide, and where? Explicit pairs only; null when they do not. */
+export function curveCoincidence(
+  a: FittedCurve,
+  b: FittedCurve,
+  models: Record<string, ModelSpec>,
+  range: readonly [number, number],
+): Coincidence | null {
+  try {
+    const f = explicitFnOf(a, models)
+    const g = explicitFnOf(b, models)
+    if (!f || !g) return null
+    const span = sharedSpan(a.domain ?? null, b.domain ?? null, range)
+    if (!span) return null
+    return coincidenceOf(a, b, f, g, models, span)
+  } catch {
+    return null
+  }
+}
+
+function coincidenceOf(
+  a: FittedCurve,
+  b: FittedCurve,
+  f: Fn,
+  g: Fn,
+  models: Record<string, ModelSpec>,
+  span: [number, number],
+): Coincidence | null {
+  const domainAll = (): Coincidence => {
+    const da = a.domain
+    const db = b.domain
+    if (!da && !db) return { everywhere: true, intervals: [], exact: true }
+    const lo = Math.max(da ? Math.min(da[0], da[1]) : -Infinity, db ? Math.min(db[0], db[1]) : -Infinity)
+    const hi = Math.min(da ? Math.max(da[0], da[1]) : Infinity, db ? Math.max(db[0], db[1]) : Infinity)
+    return { everywhere: false, intervals: [withExactEnds(lo, hi)], exact: true }
+  }
+  // ---- two polynomials: their coefficients decide
+  const pa = polyCoeffsOf(a, models, f)
+  const pb = pa ? polyCoeffsOf(b, models, g) : null
+  if (pa && pb) {
+    if (pa.length !== pb.length) return null
+    const rational = pa.every((c) => !('d' in c)) && pb.every((c) => !('d' in c))
+    if (rational) {
+      const same = pa.every((c, i) => {
+        const d = pb[i] as { p: number; q: number }
+        const e = c as { p: number; q: number }
+        return e.p === d.p && e.q === d.q
+      })
+      return same ? domainAll() : null
+    }
+    const big = Math.max(...pa.map((c) => Math.abs(numValue(c))), ...pb.map((c) => Math.abs(numValue(c))))
+    const same = pa.every((c, i) => Math.abs(numValue(c) - numValue(pb[i])) <= 1e-12 * Math.max(1, big))
+    return same ? { ...domainAll(), exact: false } : null
+  }
+  // ---- anything else: sampled
+  const [lo, hi] = span
+  const xs: number[] = []
+  for (let i = 0; i < COINCIDE_SAMPLES; i++) xs.push(lo + ((hi - lo) * (i + 0.5)) / COINCIDE_SAMPLES)
+  const domLo = Math.max(a.domain ? Math.min(...a.domain) : -Infinity, b.domain ? Math.min(...b.domain) : -Infinity)
+  const domHi = Math.min(a.domain ? Math.max(...a.domain) : Infinity, b.domain ? Math.max(...b.domain) : Infinity)
+  for (let k = 0; k < COINCIDE_FAR / 2; k++) {
+    const r = Math.pow(1000, (k + 1) / (COINCIDE_FAR / 2)) * 1.0137
+    for (const x of [hi + r * Math.max(1, hi - lo) / 10, lo - r * Math.max(1, hi - lo) / 10]) {
+      if (x > domLo && x < domHi) xs.push(x)
+    }
+  }
+  xs.sort((u, w) => u - w)
+  type St = 0 | 1 | 2 // 0 differ, 1 agree, 2 both undefined
+  const state = (x: number): St => {
+    let u: number
+    let w: number
+    try {
+      u = f(x)
+      w = g(x)
+    } catch {
+      return 0
+    }
+    const fu = Number.isFinite(u)
+    const fw = Number.isFinite(w)
+    if (!fu && !fw) return Number.isNaN(u) && Number.isNaN(w) ? 2 : u === w ? 1 : 0
+    if (!fu || !fw) return 0
+    // Both (nearly) zero says nothing either way — 2ˣ and 3^(x − 1) far to
+    // the left, two curves crossing on the axis — so it is neutral, like a
+    // shared hole. Otherwise the tolerance is relative to the values
+    // themselves: one scaled by the window's largest value would call 2ˣ and
+    // 3^(x − 1) "equal" wherever both are small.
+    if (Math.abs(u) <= COINCIDE_FLOOR && Math.abs(w) <= COINCIDE_FLOOR) return 2
+    return Math.abs(u - w) <= COINCIDE_TOL * Math.max(Math.abs(u), Math.abs(w)) ? 1 : 0
+  }
+  const st = xs.map(state)
+  if (!st.includes(1)) return null
+  if (!st.includes(0)) return { everywhere: !a.domain && !b.domain, intervals: !a.domain && !b.domain ? [] : [withExactEnds(domLo, domHi)], exact: false }
+  // runs of agreement (undefined-both is neutral)
+  const runs: { i0: number; i1: number; n: number }[] = []
+  let i0 = -1
+  let count = 0
+  for (let i = 0; i <= st.length; i++) {
+    const s0 = i < st.length ? st[i] : 0
+    if (s0 === 1) {
+      if (i0 < 0) i0 = i
+      count++
+    } else if (s0 === 0) {
+      if (i0 >= 0) {
+        let i1 = i - 1
+        while (i1 > i0 && st[i1] === 2) i1--
+        runs.push({ i0, i1, n: count })
+      }
+      i0 = -1
+      count = 0
+    }
+  }
+  const edge = (inside: number, outside: number): number => {
+    let p = inside
+    let q = outside
+    for (let k = 0; k < 60; k++) {
+      const m = 0.5 * (p + q)
+      if (m === p || m === q) break
+      if (state(m) === 0) q = m
+      else p = m
+    }
+    return p
+  }
+  const intervals: Coincidence['intervals'] = []
+  for (const r of runs) {
+    if (r.n < COINCIDE_RUN) continue
+    // neutral samples at either end belong to the run
+    while (r.i0 > 0 && st[r.i0 - 1] === 2) r.i0--
+    while (r.i1 < st.length - 1 && st[r.i1 + 1] === 2) r.i1++
+    const L = r.i0 === 0 ? domLo : edge(xs[r.i0], xs[r.i0 - 1])
+    const H = r.i1 === xs.length - 1 ? domHi : edge(xs[r.i1], xs[r.i1 + 1])
+    if (!(H > L)) continue
+    intervals.push(withExactEnds(L, H))
+  }
+  return intervals.length > 0 ? { everywhere: false, intervals, exact: false } : null
+}
+
+function withExactEnds(lo: number, hi: number): Coincidence['intervals'][number] {
+  // an end found by bisection that is within a hair of 0 IS 0 (x and x² part there)
+  if (Math.abs(lo) < 1e-9) lo = 0
+  if (Math.abs(hi) < 1e-9) hi = 0
+  const out: Coincidence['intervals'][number] = { lo, hi }
+  if (Number.isFinite(lo)) {
+    const e = exactForm(lo, { tol: 1e-9 })
+    if (e) {
+      out.lo = e.value
+      out.loExact = e.text
+    }
+  }
+  if (Number.isFinite(hi)) {
+    const e = exactForm(hi, { tol: 1e-9 })
+    if (e) {
+      out.hi = e.value
+      out.hiExact = e.text
+    }
+  }
+  return out
+}
+
+/** Is x inside (or at the end of) one of the overlap intervals? */
+function inOverlap(c: Coincidence, x: number): boolean {
+  if (c.everywhere) return true
+  return c.intervals.some((iv) => x >= iv.lo - 1e-9 * Math.max(1, Math.abs(iv.lo)) && x <= iv.hi + 1e-9 * Math.max(1, Math.abs(iv.hi)))
+}
+
+/**
+ * intersectionPoints, with the pair's coincidence: where the two curves are
+ * the same curve no point is reported (see "Coinciding curves" above).
+ */
+export function pairMeeting(
+  parent: FittedCurve,
+  other: FittedCurve,
+  models: Record<string, ModelSpec>,
+  range: readonly [number, number],
+): PairMeeting {
   try {
     const f = explicitFnOf(parent, models)
     const g = explicitFnOf(other, models)
     // Anything that is not a pair of functions of x — a circle, a typed conic,
     // a polar or parametric curve — goes through the plane solver below.
-    if (!f || !g) return planeIntersections(parent, other, models, range)
+    if (!f || !g) return { points: planeIntersections(parent, other, models, range), coincide: null }
     const span = sharedSpan(parent.domain ?? null, other.domain ?? null, range)
-    if (!span) return []
+    if (!span) return { points: [], coincide: null }
     const [lo, hi] = span
 
+    const coincide = coincidenceOf(parent, other, f, g, models, span)
+    if (coincide && coincide.everywhere) return { points: [], coincide }
+    const points = meetingPoints(parent, other, models, f, g, lo, hi)
+    return { points: coincide ? points.filter((p) => !inOverlap(coincide, p.pos.x)) : points, coincide }
+  } catch {
+    return { points: [], coincide: null }
+  }
+}
+
+function meetingPoints(
+  parent: FittedCurve,
+  other: FittedCurve,
+  models: Record<string, ModelSpec>,
+  f: Fn,
+  g: Fn,
+  lo: number,
+  hi: number,
+): SpecialPoint[] {
+  try {
     const xs = curveIntersections(parent, other, models, [lo, hi])
     if (xs.length === 0) return []
 
@@ -2155,6 +2471,12 @@ export function intersectionPoints(
       if (!Number.isFinite(y) || !Number.isFinite(gy)) continue
       // the assertion: a crossing the curves do not actually share is not one
       if (Math.abs(y - gy) > MEET_ACCEPT * scale) continue
+      // At the very end of the hunted span a "meeting" with no sign change
+      // past it is where two curves merely become small together (2ˣ and
+      // 3^(x − 1) far to the left): kept only when the two values agree
+      // relative to themselves, as a real crossing's do.
+      const atEdge = Math.min(x - lo, hi - x) <= 1e-9 * (hi - lo)
+      if (atEdge && Math.abs(y - gy) > 1e-6 * Math.max(Math.abs(y), Math.abs(gy))) continue
 
       const tol = 1e-9 * Math.max(1, Math.abs(x))
       const exact =
@@ -2170,6 +2492,7 @@ export function intersectionPoints(
       }
 
       attachExactAt(p, f, meets)
+      attachExpForms([p], parent, models[parent.modelId], models[other.modelId] ? { curve: other, spec: models[other.modelId] } : null)
       out.push(p)
     }
     return finish(out)

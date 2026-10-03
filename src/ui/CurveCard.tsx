@@ -37,6 +37,8 @@ import type { FunctionEnv } from '../core/functionEnv'
 import { fitQuality } from '../core/fit/recognize'
 import { findAsymptotes } from '../core/holes'
 import { zeroIntervals } from '../core/analyze'
+import { complexZerosOf } from './complexLinks'
+import { ComplexZerosSection } from './ComplexZerosSection'
 import type { ZeroInterval } from '../core/analyze'
 import { exactForm } from '../core/exact'
 import { Latex } from './Latex'
@@ -66,7 +68,7 @@ import type { TableActions } from './TableSection'
 import type { TablePanel } from './valueTableLinks'
 import { setRowText } from './domainLinks'
 import { Answer, AnswerTex, AnswerText, RevealPill, useReveal } from './RevealAnswer'
-import { asymKey, calcKey, domainKey, rangeKey } from './reveal'
+import { asymKey, calcKey, coincideKey, domainKey, rangeKey } from './reveal'
 import type { DomainActions, DomainPanel, SetNotation } from './domainLinks'
 import { useInk } from './inkContext'
 import { equationLabel, speakLatex } from '../core/mathSpeech'
@@ -1270,6 +1272,18 @@ export function CurveCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, curve, models, depKey])
 
+  /**
+   * Every zero over ℂ, when the formula is a polynomial of degree 2–8 drawn
+   * over all of ℝ (src/ui/complexLinks.ts): the count the Fundamental Theorem
+   * of Algebra promises, the non-real ones as a ± bi, the discriminant.
+   */
+  const complexZeros = useMemo(() => {
+    if (!selected) return null
+    return complexZerosOf(curve, models)
+    // depKey: a line that calls f moves with f while `curve` stands still.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, curve, models, depKey])
+
   // Group the special points by kind, keeping each point's original index so
   // hovering a value can address the right marker on canvas. The Zeros row
   // also carries the zero INTERVALS, merged with the point zeros by x.
@@ -1341,7 +1355,8 @@ export function CurveCard({
    * two chances to print different answers to one question.
    */
   const crossings = useMemo(
-    () => (intersections ?? []).filter((g) => g.points.length > 0),
+    // a pair that coincides is listed even with no crossing points: "the same function"
+    () => (intersections ?? []).filter((g) => g.points.length > 0 || !!g.coincide),
     [intersections],
   )
 
@@ -2752,6 +2767,10 @@ export function CurveCard({
                               >
                                 {parts.exact}
                               </span>
+                              {/* the same number, written the other standard way: log₂(7/3) = ln(7/3)/ln 2 */}
+                              {point.exactAlt && point.kind === 'zero' && (
+                                <span className="an-exact an-alt" data-testid="exact-alt">{` = ${point.exactAlt}`}</span>
+                              )}
                               <span className="an-approx">{` ${APPROX} ${parts.decimal}${comma}`}</span>
                             </>
                           )
@@ -2876,6 +2895,9 @@ export function CurveCard({
             </CardSection>
           )}
 
+          {/* Every zero, real or not: the Fundamental Theorem of Algebra. */}
+          {complexZeros && <ComplexZerosSection curveId={curve.id} zeros={complexZeros} />}
+
           {/* Circle theorems: points on the circle and what they make. */}
           {circlePanel && circleActions && <CircleSection panel={circlePanel} actions={circleActions} />}
 
@@ -2915,8 +2937,8 @@ export function CurveCard({
           {crossings.length > 0 && (
             <CardSection
               kind="intersections"
-              title={crossings.length > 1 || crossings[0].points.length > 1 ? 'Intersections' : 'Intersection'}
-              summary={crossings.map((g) => `with ${g.name} (${g.points.length})`).join(' · ')}
+              title={crossings.length > 1 || crossings[0].points.length > 1 ? 'Intersections' : crossings[0].coincide && crossings[0].points.length === 0 ? 'Intersections' : 'Intersection'}
+              summary={crossings.map((g) => (g.coincide?.everywhere ? `with ${g.name} (same function)` : `with ${g.name} (${g.points.length}${g.coincide ? ' + overlap' : ''})`)).join(' · ')}
               className="an-section an-crossings"
               testId="intersections-section"
             >
@@ -2924,6 +2946,14 @@ export function CurveCard({
                 {crossings.map((g) => (
                   <span className="an-with" key={g.id}>
                     <span className="an-with-name">{`with ${g.name}:`}</span>{' '}
+                    {g.coincide && (
+                      <Answer k={coincideKey(curve.id, g.id)} what="where they coincide">
+                        <span className="an-value an-value-static an-coincide" data-testid="coincide">
+                          {g.coincide.text}
+                          {g.points.length > 0 ? ';' : ''}
+                        </span>
+                      </Answer>
+                    )}
                     {g.points.map((point, n) => {
                       const parts = pointParts(point, { scale, xScale })
                       const comma = n === g.points.length - 1 ? '' : ','
@@ -2942,6 +2972,9 @@ export function CurveCard({
                               </span>
                               <span className="an-approx">{` ${APPROX} ${parts.decimal}${comma}`}</span>
                             </>
+                          )}
+                          {point.exactAlt && (
+                            <span className="an-note an-alt" data-testid="exact-alt">{` x = ${point.exactAlt}`}</span>
                           )}
                         </span>
                         </Answer>

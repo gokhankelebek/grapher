@@ -18,7 +18,7 @@
 import type { Asymptote, FittedCurve, ModelSpec, Shape, SpecialPoint, Vec2 } from './types'
 import { triangleCentres } from './triangleCentres'
 import { pointText as geoPoint, polygonReport, segmentReport, withApprox, distance, slope as geoSlope, midpoint as geoMid } from './geometry'
-import { analyzeCurve, intersectionPoints } from './analyze'
+import { analyzeCurve, pairMeeting } from './analyze'
 import { findAsymptotes, findHoles } from './holes'
 import { curveDomain, curveRange, type RealSet } from './domainRange'
 import { exactForm } from './exact'
@@ -560,11 +560,20 @@ export function describeInputFromCurves(input: AdapterInput): DescribeInput {
   const out: DescribeInput = { window: w, curves: described }
   if (input.board) out.board = input.board
 
+  const sameExtras: DescribeExtra[] = []
   if (input.intersections !== false) {
     const inters: DescribeIntersection[] = []
     for (let i = 0; i < visible.length; i++) {
       for (let j = i + 1; j < visible.length; j++) {
-        const pts = safe(() => intersectionPoints(visible[i].curve, visible[j].curve, input.models, [w.xMin, w.xMax])) ?? []
+        const meet = safe(() => pairMeeting(visible[i].curve, visible[j].curve, input.models, [w.xMin, w.xMax]))
+        const pts = meet?.points ?? []
+        if (meet?.coincide) {
+          const a = label.get(visible[i].curve.id)!
+          const b = label.get(visible[j].curve.id)!
+          sameExtras.push(
+            { text: meet.coincide.everywhere ? `${a} and ${b} are the same function: their graphs coincide everywhere.` : `${a} and ${b} coincide on part of the window.`, answer: true },
+          )
+        }
         for (const p of pts) {
           if (!inWindow(p.pos, w)) continue
           const d: DescribeIntersection = { a: label.get(visible[i].curve.id)!, b: label.get(visible[j].curve.id)!, x: p.pos.x, y: p.pos.y }
@@ -652,7 +661,7 @@ export function describeInputFromCurves(input: AdapterInput): DescribeInput {
   if (sums.length) out.riemann = sums
   if (tangents.length) out.tangents = tangents
   if (input.numberLine) out.numberLine = input.numberLine
-  const extras = [...(input.extras ?? []), ...describeStats(input.stats ?? [])]
+  const extras = [...(input.extras ?? []), ...sameExtras, ...describeStats(input.stats ?? [])]
   if (extras.length) out.extras = extras
   return out
 }

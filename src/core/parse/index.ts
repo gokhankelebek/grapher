@@ -54,6 +54,7 @@ import { prettyMath } from '../ineqText'
 import type { FunctionEnv } from '../functionEnv'
 import { evalExactAt } from './exactEval'
 import { jetAt } from './jets'
+import { expShapeOf } from '../expSolve'
 import {
   CondError,
   compactLatex,
@@ -2000,6 +2001,7 @@ function makePlot(
           const body = exactBody
           spec.evalExact = (params, x) => evalExactAt(body, params, x)
           spec.taylor = (params, a, n) => jetAt(body, params, a, n)
+          spec.expShape = (params) => expShapeOf(body, (n) => n.t === 'var' && n.name === 'x', params)
         }
       } else if (kind === 'polar') {
         spec.evalPolar = (params, theta) => ev(params, theta, 0)

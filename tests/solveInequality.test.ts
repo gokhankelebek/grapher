@@ -305,7 +305,7 @@ describe('transcendental and radical inequalities', () => {
 
   it('more closed forms: 2ˣ < 5, e^(2x) > 3, ln x ≥ 1', () => {
     expect(expectParts('2^x < 5', [[-INF, Math.log2(5), false, false]]).solution.text).toBe('(−∞, log₂ 5)')
-    expect(expectParts('e^(2x) > 3', [[Math.log(3) / 2, INF, false, false]]).solution.text).toBe('(ln(3)/2, ∞)')
+    expect(expectParts('e^(2x) > 3', [[Math.log(3) / 2, INF, false, false]]).solution.text).toBe('((1/2) ln 3, ∞)')
     expect(expectParts('ln(x) >= 1', [[Math.E, INF, true, false]]).solution.text).toBe('[e, ∞)')
   })
 

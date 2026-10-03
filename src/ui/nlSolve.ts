@@ -26,6 +26,9 @@ import type { NLItem, NLSolveItem, NLSolveShow, Viewport } from '../core/types'
 import { NL_SOLVE_DEFAULTS } from '../core/types'
 import type { RealSet } from '../core/domainRange'
 import { solveInequality } from '../core/solveInequality'
+import { equationRoute } from '../core/equationRoute'
+import type { EquationRoute, RouteCandidate } from '../core/equationRoute'
+import { parseAst } from '../core/parse'
 import type { ClauseWork, Relation, SolveOutcome, SolveResult, TestRow } from '../core/solveInequality'
 import { numberLineAxisY } from '../render/numberline'
 import type {
@@ -98,6 +101,7 @@ export function solveCached(src: string): SolveOutcome {
 export function setSolverForTests(fn: ((src: string) => SolveOutcome) | null): void {
   solver = fn ?? ((src) => solveInequality(src))
   cache.clear()
+  routeCache.clear()
 }
 
 /** The result for an item, or null when it does not solve. */
@@ -661,7 +665,130 @@ export function workingText(src: string, result: SolveResult): string {
   }
   lines.push(`Interval notation: ${result.solution.text}`)
   lines.push(`Set-builder: ${builderText(result.solution, result.variable || 'x')}`)
+  const route = routeOf(src, result)
+  if (route) lines.push('', ...routeText(route, result.variable || 'x'))
   return lines.join('\n')
+}
+
+// ---------------------------------------------------------------------------
+// The algebraic route of an EQUATION, and its extraneous solutions
+// ---------------------------------------------------------------------------
+
+/**
+ * How a class would solve this equation by hand — square both sides, clear
+ * the denominators, combine the logs (src/core/equationRoute.ts), or take
+ * logarithms of an exponential equation (src/core/expSolve.ts) — with every
+ * candidate checked in the ORIGINAL equation. The solver's own answer (the
+ * sign of L − R) is unaffected: this is the working beside it.
+ */
+export interface SolveRoute {
+  kind: EquationRoute['kind'] | 'exp'
+  method: string
+  steps: { text: string; tex?: string }[]
+  candidates: RouteCandidate[]
+  identity: boolean
+  summary: string
+  /** for an exponential equation: the solution's equal exact forms and its value */
+  exp?: { forms: { text: string; tex: string }[]; x: number }
+}
+
+const routeCache = new Map<string, SolveRoute | null>()
+
+/** The two sides of a single top-level "=" (no restriction, no compound), or null. */
+function equationSides(src: string): [string, string] | null {
+  const body = src.trim()
+  if (/\{[^{}]*\}\s*$/.test(body) && !/^\{/.test(body)) return null
+  if (splitConnectives(body).length !== 1) return null
+  const parts = splitRelations(body)
+  if (!parts || parts.length !== 2) return null
+  // exactly one relation, and it is "="
+  let depth = 0
+  const ops: string[] = []
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i]
+    if (ch === '(' || ch === '[' || ch === '{') depth++
+    else if (ch === ')' || ch === ']' || ch === '}') depth--
+    else if (depth === 0) {
+      REL_RE.lastIndex = i
+      const m = REL_RE.exec(body)
+      if (m) {
+        ops.push(m[0])
+        i += m[0].length - 1
+      }
+    }
+  }
+  return ops.length === 1 && ops[0] === '=' ? [parts[0], parts[1]] : null
+}
+
+/** The route for a solved line, or null when it is not a single equation the route reads. */
+export function routeOf(src: string, result: SolveResult | null): SolveRoute | null {
+  if (!result || result.combine !== 'single' || result.clauses.length !== 1 || result.universe) return null
+  const clause = result.clauses[0]
+  if (clause.relation !== '=') return null
+  const key = src
+  if (routeCache.has(key)) return routeCache.get(key) ?? null
+  let out: SolveRoute | null = null
+  try {
+    const v = result.variable || 'x'
+    if (clause.exp) {
+      const forms = clause.exp.forms
+      // four decimal places, the way a calculator check is written: ≈ 1.2224
+      const dec = clause.exp.x.toFixed(4).replace(/^-/, MINUS)
+      const shown = `${forms.map((f) => f.text).join(' = ')} ≈ ${dec}`
+      out = {
+        kind: 'exp',
+        method: 'Take logarithms',
+        steps: clause.exp.steps.map((st) => ({ text: st.text, tex: st.tex })),
+        candidates: [
+          { x: clause.exp.x, text: forms[0].text, tex: forms[0].tex, exact: true, ok: true, reason: `${v} = ${shown}` },
+        ],
+        identity: false,
+        summary: `${v} = ${shown}`,
+        exp: { forms, x: clause.exp.x },
+      }
+    } else {
+      const sides = equationSides(src)
+      if (sides) {
+        const fix = (t: string): string => t.replace(/√/g, 'sqrt').replace(/[−–]/g, '-')
+        const L = parseAst(fix(sides[0]))
+        const R = parseAst(fix(sides[1]))
+        if (L.ok && R.ok && L.rhs === null && R.rhs === null) {
+          const name = v === 'θ' ? 'theta' : v
+          const r = equationRoute(L.lhs, R.lhs, name, v)
+          if (r) out = { kind: r.kind, method: r.method, steps: r.steps, candidates: r.candidates, identity: r.identity, summary: r.summary }
+        }
+      }
+    }
+  } catch {
+    out = null
+  }
+  routeCache.set(key, out)
+  if (routeCache.size > CACHE_MAX) routeCache.delete(routeCache.keys().next().value as string)
+  return out
+}
+
+/** The route as plain text lines, for "Copy as text". */
+export function routeText(route: SolveRoute, v = 'x'): string[] {
+  const lines = [`Algebraic route — ${route.method}:`]
+  route.steps.forEach((st, i) => lines.push(`  ${i + 1}. ${st.text}`))
+  if (route.kind !== 'exp' && route.candidates.length > 0) {
+    lines.push('  Check each candidate in the original equation:')
+    for (const c of route.candidates) {
+      lines.push(`   ${c.ok ? '✓' : '✗'} ${v} = ${c.text}${c.ok ? '' : ' (extraneous)'}: ${c.reason}`)
+    }
+  }
+  lines.push(`  ${route.summary}`)
+  return lines
+}
+
+/** A sentence for "Show on graph" about the candidates the graphs do NOT confirm. */
+export function graphNote(src: string): string | null {
+  const r = routeOf(src, solveOf({ kind: 'solve', id: '', src, color: '' } as NLSolveItem))
+  if (!r || r.kind === 'exp') return null
+  const bad = r.candidates.filter((c) => !c.ok)
+  if (bad.length === 0) return null
+  const list = bad.map((c) => `x = ${c.text}`).join(' and ')
+  return `${list} ${bad.length > 1 ? 'are' : 'is'} extraneous — the graphs do not meet there.`
 }
 
 // ---------------------------------------------------------------------------
@@ -722,6 +849,26 @@ function splitConnectives(s: string): string[] {
   return out.filter((p) => p !== '')
 }
 
+/** One top-level relation, and it is "=" (not ≤, ≥, ≠). */
+function isEquation(clause: string): boolean {
+  let depth = 0
+  const ops: string[] = []
+  for (let i = 0; i < clause.length; i++) {
+    const ch = clause[i]
+    if (ch === '(' || ch === '[' || ch === '{') depth++
+    else if (ch === ')' || ch === ']' || ch === '}') depth--
+    else if (depth === 0) {
+      REL_RE.lastIndex = i
+      const m = REL_RE.exec(clause)
+      if (m) {
+        ops.push(m[0])
+        i += m[0].length - 1
+      }
+    }
+  }
+  return ops.length === 1 && ops[0] === '='
+}
+
 const isZero = (s: string): boolean => /^\(?\s*0+(\.0*)?\s*\)?$/.test(s)
 const needsParens = (s: string): boolean => /[+\-−]/.test(s.replace(/^\s*[-−]/, '')) || /^\s*[-−]/.test(s)
 
@@ -747,6 +894,15 @@ export function graphSources(src: string): GraphCurve[] | null {
     if (!parts || parts.length < 2) continue
     if (parts.length === 2) {
       const [L, R] = parts
+      // An EQUATION with x on both sides is pictured as the two sides, y₁ = L
+      // and y₂ = R: its solutions are where the graphs MEET (the board marks
+      // those crossings), and a candidate the algebra produced that is not a
+      // crossing is extraneous for all to see.
+      if (isEquation(clause) && !isZero(R) && !isZero(L)) {
+        out.push({ src: `y = ${L}${restr}`, signChart: false })
+        out.push({ src: `y = ${R}${restr}`, signChart: false })
+        continue
+      }
       let h: string
       if (isZero(R)) h = L
       else if (isZero(L)) h = R
@@ -759,6 +915,8 @@ export function graphSources(src: string): GraphCurve[] | null {
       out.push({ src: `y = ${b}`, signChart: false })
     }
   }
+  // the graph's equation box reads sqrt(…), not the √ a solve line may be typed with
+  for (const c of out) c.src = c.src.replace(/√/g, 'sqrt')
   // the same curve twice is one curve
   const seen = new Set<string>()
   const uniq = out.filter((c) => (seen.has(c.src) ? false : (seen.add(c.src), true)))

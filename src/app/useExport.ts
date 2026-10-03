@@ -18,7 +18,7 @@ import { drawContextMarkers } from '../ui/AnalysisOverlay'
 import { constructionPoints } from '../ui/conicLinks'
 import { unionBoxes } from '../ui/curveState'
 import { dataBox } from '../ui/dataLinks'
-import { clampFitSettings, contentBounds, exportViewport } from '../ui/exportFit'
+import { clampFitSettings, contentBounds, exportViewport, overlaysBox, shapesBox } from '../ui/exportFit'
 import type { FitExportSettings } from '../ui/exportFit'
 import type { CopyState } from '../ui/ExportMenu'
 import { solveSpan } from '../ui/fieldLinks'
@@ -118,7 +118,7 @@ export function useExport({ board, docState, session, refs, derived, notices, ca
   const { ineqSolutionRef } = system
   const {
     exportSettingsRef, exportFormatRef, latexWidthRef, showAnalysisRef, contextAnalysisRef,
-    overlaysRef,
+    overlaysRef, geometryMarksRef,
   } = overlaysApi
   const { constructionSceneRef, constructionConicsRef, motionExportRef, copyTimerRef } = marks
   const { signFiguresRef } = naming
@@ -162,7 +162,10 @@ export function useExport({ board, docState, session, refs, derived, notices, ca
     const ucBoxes = ucRef.current.filter((u) => u.hidden !== true).map((u) => unitCircleBox(u))
     const rrBoxes = rrRef.current.filter((r) => r.hidden !== true).map((r) => relatedRatesBox(r))
     const statBoxes = statsRef.current.flatMap((st, i) => (st.hidden === true ? [] : [statsBox(i)]))
-    return unionBoxes([box, ...dataRef.current.filter((d) => d.visible).map(dataBox), ...construction, ...seqBoxes, ...ucBoxes, ...rrBoxes, ...statBoxes])
+    // …and the geometry: the shapes, a triangle's centres (its circumcircle
+    // reaches well past the triangle) and a circle's theorems.
+    const geometry = [shapesBox(shapeSceneRef.current), overlaysBox(geometryMarksRef.current)]
+    return unionBoxes([box, ...dataRef.current.filter((d) => d.visible).map(dataBox), ...construction, ...seqBoxes, ...ucBoxes, ...rrBoxes, ...statBoxes, ...geometry])
   }, [])
 
   const buildExportScene = useCallback(
