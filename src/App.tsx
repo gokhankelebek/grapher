@@ -156,7 +156,7 @@ export default function App() {
   const commandsApi = useCommands({
     board, docState, session, refs, derived, notices, history, docActions, editing, calc, fieldsApi,
     typed, tables, domain, numberLine, viewport, unitCircle, rates, overlaysApi, naming, revealMode,
-    exporter, figureSettings, editors, examples: examplesApi, itemBank, describer, statsApi,
+    exporter, figureSettings, editors, examples: examplesApi, itemBank, describer, statsApi, shapesApi,
   })
   useKeyboard({
     board, docState, session, refs, history, editing, calc, revealMode, figureSettings, editors,
@@ -217,6 +217,7 @@ export default function App() {
   const {
     setShapeEquation, setShapeParam, setShapeParamExact, toggleShapeVisible, cycleShapeColor,
     toggleShapeFill, deleteShape, setShapeCoord, shapeCardFor, setShapeMeasure, addShape,
+    addImage, setImageOp, setImageAids, toggleSymmetry, setShapeCompare,
   } = shapesApi
   const {
     buildSequence, setSequenceSource, setSeqParam, setSeqParamExact, setSeqWindow, toggleSeqVisible,
@@ -491,6 +492,11 @@ export default function App() {
         onShapeCoord={setShapeCoord}
         onShapeMeasure={setShapeMeasure}
         onShapeAdd={addShape}
+        onShapeImage={addImage}
+        onShapeImageOp={setImageOp}
+        onShapeImageAids={setImageAids}
+        onShapeSymmetry={toggleSymmetry}
+        onShapeCompare={setShapeCompare}
         onDataAdd={() => {
           showBuilder(null, 'open')
           addDataTable()

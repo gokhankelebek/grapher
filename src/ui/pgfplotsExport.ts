@@ -1487,16 +1487,70 @@ export function toPgfplots(sceneIn: BoardScene, opts: PgfplotsOptions = {}): str
       if (m.pair.slope) label(mid, m.pair.slope, col)
     }
   }
+  // A transformation's construction marks and a symmetry overlay, under the figures.
+  const fullLine = (through: Vec2, dir: Vec2): Vec2[] | null => {
+    if (![through.x, through.y, dir.x, dir.y].every(Number.isFinite)) return null
+    const L = Math.hypot(dir.x, dir.y)
+    if (!(L > 0)) return null
+    const big = 4 * (spanX + spanY) + Math.abs(through.x - (xmin + xmax) / 2) + Math.abs(through.y - (ymin + ymax) / 2)
+    return [
+      { x: through.x - (dir.x / L) * big, y: through.y - (dir.y / L) * big },
+      { x: through.x + (dir.x / L) * big, y: through.y + (dir.y / L) * big },
+    ]
+  }
+  for (const sh of scene.shapes ?? []) {
+    if (!sh.visible || sh.kind === 'vector' || !sh.aids) continue
+    const a = sh.aids
+    const c = ink(sh.color)
+    const col = colour(c)
+    for (const l of a.symLines ?? []) {
+      const ends = fullLine(l.through, l.dir)
+      if (ends) for (const path of linePaths(ends)) add(`\\draw[${col}, densely dashed] ${path};`)
+    }
+    if (a.mirror) {
+      const ends = fullLine(a.mirror.through, a.mirror.dir)
+      if (ends) for (const path of linePaths(ends)) add(`\\draw[${col}, dashed, semithick] ${path};`)
+      const mid = { x: Math.max(xmin, Math.min(xmax, a.mirror.through.x)), y: Math.max(ymin, Math.min(ymax, a.mirror.through.y)) }
+      label(mid, a.mirror.label, c)
+    }
+    for (const [p, q] of a.rays ?? []) for (const path of linePaths([p, q])) add(`\\draw[${col}, dashed, thin] ${path};`)
+    for (const [p, q] of a.paths ?? []) for (const path of linePaths([p, q])) add(`\\draw[${col}, dotted, semithick] ${path};`)
+    if (a.arc) {
+      const { center: ce, from, to, deg } = a.arc
+      for (const path of linePaths([ce, from])) add(`\\draw[${col}, dashed, thin] ${path};`)
+      for (const path of linePaths([ce, to])) add(`\\draw[${col}, dashed, thin] ${path};`)
+      const r = Math.hypot(from.x - ce.x, from.y - ce.y) || 0.04 * Math.min(spanX, spanY)
+      const a0 = Math.atan2(from.y - ce.y, from.x - ce.x)
+      const sw = (deg * Math.PI) / 180
+      const arc: Vec2[] = []
+      for (let i = 0; i <= 32; i++) arc.push({ x: ce.x + r * Math.cos(a0 + (sw * i) / 32), y: ce.y + r * Math.sin(a0 + (sw * i) / 32) })
+      for (const path of linePaths(arc)) add(`\\draw[${col}, semithick, ->] ${path};`)
+      const am = a0 + sw / 2
+      label({ x: ce.x + r * Math.cos(am), y: ce.y + r * Math.sin(am) }, a.arc.label, c)
+    }
+    if (a.vector) {
+      const tip = { x: a.vector.tail.x + a.vector.v.x, y: a.vector.tail.y + a.vector.v.y }
+      for (const path of linePaths([a.vector.tail, tip])) add(`\\draw[${col}, semithick, ->] ${path};`)
+      label({ x: (a.vector.tail.x + tip.x) / 2, y: (a.vector.tail.y + tip.y) / 2 }, a.vector.label, c)
+    }
+    if (a.center) {
+      marks([a.center.at], c, true, 1.8)
+      label(a.center.at, a.center.label, c)
+    }
+    if (a.symText) label(a.symText.at, a.symText.text, c)
+  }
   for (const sh of scene.shapes ?? []) {
     if (!sh.visible) continue
+    if (sh.kind !== 'vector' && sh.figureHidden) continue
     const col = colour(ink(sh.color))
+    const dash = sh.kind !== 'vector' && sh.dashed ? ', dashed' : ''
     switch (sh.kind) {
       case 'point':
         marks([sh.at], ink(sh.color), false)
         if (sh.label) label(sh.at, sh.label, ink(sh.color))
         break
       case 'segment':
-        for (const path of linePaths([sh.a, sh.b])) add(`\\draw[${col}, thick] ${path};`)
+        for (const path of linePaths([sh.a, sh.b])) add(`\\draw[${col}, thick${dash}] ${path};`)
         // Its endpoints dotted and named, as the board draws them.
         marks([sh.a, sh.b], ink(sh.color), false, 1.5)
         if (sh.labels?.[0]) label(sh.a, sh.labels[0], ink(sh.color))
@@ -1509,7 +1563,7 @@ export function toPgfplots(sceneIn: BoardScene, opts: PgfplotsOptions = {}): str
       case 'polygon': {
         const fill = sh.fill ? `, fill=${col}, fill opacity=${num(fillAlpha(), 3)}` : ''
         const path = polyPath(sh.pts)
-        if (path) add(`\\draw[${col}, thick${fill}] ${path};`)
+        if (path) add(`\\draw[${col}, thick${dash}${fill}] ${path};`)
         marks(sh.pts, ink(sh.color), false, 1.5)
         sh.labels?.forEach((l, i) => {
           if (l && sh.pts[i]) label(sh.pts[i], l, ink(sh.color))

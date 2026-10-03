@@ -89,7 +89,10 @@ export const eulerKey = (fieldId: string): string => `euler:${fieldId}:value`
 export const SYSTEM_KEY = 'system:value'
 
 /** The parts of a shape's measurements that are answers, each revealed on its own. */
-export type ShapePart = 'lengths' | 'slopes' | 'angles' | 'marks' | 'midpoints' | 'area' | 'class' | 'trig' | 'pair' | 'line'
+export type ShapePart =
+  | 'lengths' | 'slopes' | 'angles' | 'marks' | 'midpoints' | 'area' | 'class' | 'trig' | 'pair' | 'line'
+  /** A transformation's image (the figure itself), its rule and checks, a symmetry overlay, a comparison. */
+  | 'image' | 'map' | 'symmetry' | 'compare'
 export const shapeKey = (id: string, part: ShapePart): string => `shape:${id}:${part}`
 
 const byXY = (a: SpecialPoint, b: SpecialPoint): number =>
@@ -576,11 +579,32 @@ export function maskShapeMeasure(m: ShapeMeasureDraw, hidden: (part: ShapePart) 
   return out
 }
 
-/** Every shape with its hidden measurement answers masked. */
+/**
+ * Every shape with its hidden answers masked: measurement chips say "?"; a
+ * transformation's image is the answer itself, so only what is GIVEN stays
+ * (the mirror line, the centre, the translation vector) and the figure, its
+ * vertex paths, rays and arc go; a symmetry overlay's lines go too.
+ */
 export function maskShapes(shapes: readonly Shape[], hidden: (key: string) => boolean): Shape[] {
   return shapes.map((s) => {
-    if (s.kind === 'vector' || !s.measure) return s
-    return { ...s, measure: maskShapeMeasure(s.measure, (part) => hidden(shapeKey(s.id, part))) } as Shape
+    if (s.kind === 'vector') return s
+    let out: Shape = s
+    if (s.measure) out = { ...out, measure: maskShapeMeasure(s.measure, (part) => hidden(shapeKey(s.id, part))) } as Shape
+    if (s.image && hidden(shapeKey(s.id, 'image'))) {
+      const a = s.aids ?? {}
+      const given = {
+        ...(a.mirror ? { mirror: a.mirror } : {}),
+        ...(a.center ? { center: a.center } : {}),
+        ...(a.vector ? { vector: a.vector } : {}),
+      }
+      out = { ...out, figureHidden: true, aids: given } as Shape
+    }
+    if (s.aids?.symLines && hidden(shapeKey(s.id, 'symmetry'))) {
+      const cur = (out as typeof s).aids ?? {}
+      const { symLines: _l, symText: _t, ...rest } = cur
+      out = { ...out, aids: rest } as Shape
+    }
+    return out
   })
 }
 
@@ -745,10 +769,10 @@ export function applyReveal(scene: BoardScene, r: SceneReveal | null | undefined
   }
 
   // ---- shapes: their measurement chips say "?" until revealed
-  if (scene.shapes && scene.shapes.some((s) => s.kind !== 'vector' && s.measure)) {
+  if (scene.shapes && scene.shapes.some((s) => s.kind !== 'vector' && (s.measure || s.image || s.aids?.symLines))) {
     out.shapes = maskShapes(scene.shapes, (k) => r.hidden(k))
     for (const s of scene.shapes) {
-      if (s.kind === 'vector' || !s.measure || !s.visible) continue
+      if (s.kind === 'vector' || !(s.measure || s.image || s.aids?.symLines) || !s.visible) continue
       for (const { part, pos } of shapeAnswerSpots(s)) {
         const key = shapeKey(s.id, part)
         if (r.hidden(key)) marks.push({ key, pos, color: s.color, ghost: true })
@@ -768,9 +792,18 @@ export function applyReveal(scene: BoardScene, r: SceneReveal | null | undefined
  * the centroid for perimeter / area / classification.
  */
 export function shapeAnswerSpots(s: Shape): { part: ShapePart; pos: Vec2 }[] {
-  if (s.kind === 'vector' || !s.measure) return []
-  const m = s.measure
+  if (s.kind === 'vector') return []
   const out: { part: ShapePart; pos: Vec2 }[] = []
+  const figPts: readonly Vec2[] = s.kind === 'polygon' ? s.pts : s.kind === 'segment' ? [s.a, s.b] : s.kind === 'point' ? [s.at] : []
+  if (s.image && figPts.length > 0) {
+    out.push({
+      part: 'image',
+      pos: { x: figPts.reduce((t, p) => t + p.x, 0) / figPts.length, y: figPts.reduce((t, p) => t + p.y, 0) / figPts.length },
+    })
+  }
+  if (s.aids?.symText) out.push({ part: 'symmetry', pos: s.aids.symText.at })
+  if (!s.measure) return out.filter((o) => Number.isFinite(o.pos.x) && Number.isFinite(o.pos.y))
+  const m = s.measure
   const pts: readonly Vec2[] =
     s.kind === 'polygon' ? s.pts : s.kind === 'segment' ? [s.a, s.b] : s.kind === 'point' ? [s.at, m.pair?.to ?? s.at] : [s.through]
   if (pts.length === 0) return out

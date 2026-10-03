@@ -38,7 +38,7 @@ export type CommandGroup = 'Actions' | 'Calculus' | 'Build' | 'Document' | 'Expo
 export const GROUP_ORDER: readonly CommandGroup[] = ['Actions', 'Calculus', 'Build', 'Document', 'Export', 'View']
 
 /** What a command acts on, when it acts on one object. */
-export type TargetKind = 'curve' | 'field' | 'sequence' | 'solve'
+export type TargetKind = 'curve' | 'field' | 'sequence' | 'solve' | 'shape'
 
 /** The builders under Build ▾ (plus the + box itself, 'expr'). */
 export type BuilderKey =
@@ -87,6 +87,13 @@ export interface SequenceFacts extends TargetFacts {
   sums: boolean
 }
 
+/** A point, segment, polygon (or vector, line) on the board. */
+export interface ShapeFacts extends TargetFacts {
+  kind: 'point' | 'segment' | 'vector' | 'polygon' | 'line' | null
+  /** It is a transformation's image. */
+  image: boolean
+}
+
 export interface SolveFacts extends TargetFacts {
   signs: boolean
   tests: boolean
@@ -118,6 +125,8 @@ export interface CommandActions {
   toggleSeqSeries(seqId: string): void
   toggleSeqSums(seqId: string): void
   solveShow(itemId: string, patch: { signs?: boolean; tests?: boolean }): void
+  /** A shape's card, with one of its sections opened (Transform, Compare, Symmetry). */
+  openShapeTool?(shapeId: string, tool: 'transform' | 'compare' | 'symmetry'): void
   solveGraph(itemId: string): void
   // ---- history
   undo(): void
@@ -178,6 +187,8 @@ export interface CommandContext {
   fields: readonly TargetFacts[]
   sequences: readonly SequenceFacts[]
   solves: readonly SolveFacts[]
+  /** The shapes on the board (absent: none). */
+  shapes?: readonly ShapeFacts[]
   canUndo: boolean
   canRedo: boolean
   hasContent: boolean
@@ -797,6 +808,67 @@ export const COMMANDS: readonly Command[] = [
     'segment', 'distance', 'distance formula', 'midpoint', 'midpoint formula', 'endpoint', 'slope', 'rise over run',
     'line through two points', 'slope-intercept', 'point-slope', 'length',
   ]),
+  {
+    id: 'shape-transform',
+    title: 'Transform a figure',
+    description: 'Translate, reflect, rotate or dilate a figure: a linked image A′B′C′ with its mapping rule, rigid or not, and what is preserved',
+    keywords: [
+      'transformation', 'transformations', 'transform', 'translate', 'translation', 'reflect', 'reflection',
+      'rotate', 'rotation', 'dilate', 'dilation', 'scale factor', 'image', 'pre-image', 'preimage', 'prime',
+      'mapping rule', 'mapping notation', 'rigid motion', 'isometry', 'composition', 'sequence of transformations',
+      'mirror line', 'center of rotation', 'centre of rotation', 'center of dilation', 'enlargement', 'reduction',
+      'glide reflection', 'function notation', 'G-CO', 'G-SRT',
+    ],
+    group: 'Build',
+    path: 'Shape card → Transform (or type rotate ABC 90° about (0, 0))',
+    target: 'shape',
+    when: graphEdit,
+    accepts: (ctx, id) => {
+      const k = ctx.shapes?.find((s) => s.id === id)?.kind
+      return k === 'point' || k === 'segment' || k === 'polygon'
+    },
+    run: (ctx, id) => {
+      if (id) ctx.actions.openShapeTool?.(id, 'transform')
+    },
+  },
+  {
+    id: 'shape-compare',
+    title: 'Compare two figures',
+    description: 'Congruent or similar? The rigid motion (or similarity) that maps one figure onto the other, the criterion and the corresponding parts',
+    keywords: [
+      'compare', 'congruent', 'congruence', 'similar', 'similarity', 'sss', 'sas', 'asa', 'aas', 'hl', 'ssa',
+      'aa', 'aa similarity', 'corresponding parts', 'cpctc', 'find the transformation', 'which transformation',
+      'sequence of rigid motions', 'scale factor', 'proportional sides',
+    ],
+    group: 'Build',
+    path: 'Shape card → Compare',
+    target: 'shape',
+    when: graphEdit,
+    accepts: (ctx, id) => {
+      const k = ctx.shapes?.find((s) => s.id === id)?.kind
+      return k === 'segment' || k === 'polygon'
+    },
+    run: (ctx, id) => {
+      if (id) ctx.actions.openShapeTool?.(id, 'compare')
+    },
+  },
+  {
+    id: 'shape-symmetry',
+    title: 'Lines and rotations of symmetry',
+    description: 'Draw a polygon’s lines of symmetry and state its rotation symmetry: the motions that carry it onto itself',
+    keywords: [
+      'symmetry', 'line symmetry', 'lines of symmetry', 'reflection symmetry', 'rotational symmetry',
+      'rotation symmetry', 'order of rotation', 'point symmetry', 'carry onto itself', 'regular polygon',
+    ],
+    group: 'Build',
+    path: 'Polygon card → Symmetry → Lines of symmetry',
+    target: 'shape',
+    when: graphEdit,
+    accepts: (ctx, id) => ctx.shapes?.find((s) => s.id === id)?.kind === 'polygon',
+    run: (ctx, id) => {
+      if (id) ctx.actions.openShapeTool?.(id, 'symmetry')
+    },
+  },
   seeded('build-parallel-line', 'parallel to ', 'Line parallel or perpendicular through a point', 'Type parallel to AB through P (or perpendicular to …) — a line that follows A, B and P', [
     'parallel', 'perpendicular', 'parallel line', 'perpendicular line', 'through a point', 'slope criteria',
     'negative reciprocal', 'linked line', 'construct',
@@ -1230,6 +1302,8 @@ export function targetsOf(ctx: CommandContext, kind: TargetKind): readonly Targe
       return ctx.sequences
     case 'solve':
       return ctx.solves
+    case 'shape':
+      return ctx.shapes ?? []
   }
 }
 
@@ -1238,6 +1312,7 @@ const TARGET_NOUN: Record<TargetKind, { one: string; first: string }> = {
   field: { one: 'slope field', first: 'Add a slope field first (type dy/dx = …)' },
   sequence: { one: 'sequence', first: 'Build a sequence first' },
   solve: { one: 'solved inequality', first: 'Type an inequality to solve first' },
+  shape: { one: 'figure', first: 'Type a figure first, e.g. ABC = (0,0) (4,0) (4,3)' },
 }
 
 /** "curve", "slope field" … — what the picker asks for. */
@@ -1584,6 +1659,7 @@ export interface HelpSection {
 export const HELP_COURSES: readonly string[] = [
   'AP Calculus AB / BC',
   'AP Precalculus',
+  'NC Math 2',
   'NC Math 3',
   'Drawing & editing',
   'Exports & worksheets',
@@ -1689,6 +1765,14 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     { id: 'build-unit-circle' },
     { id: 'build-sin' },
     { id: 'axis-pi' },
+  ] },
+  // ---------------------------------------------------- NC Math 2
+  { id: 'm2-xform', course: 'NC Math 2', title: 'Transformations, congruence and similarity', entries: [
+    { id: 'build-shape', note: 'Type the figure: ABC = (1,2) (4,2) (4,6)' },
+    { id: 'shape-transform', note: 'Translate, reflect, rotate or dilate it: a linked image A′B′C′ with R_{90°, O}: (x, y) → (−y, x), rigid or not, and ✓ for what is preserved' },
+    { id: 'shape-transform', note: 'Chain them: transform the image to get A″B″C″ and the composite rule; or type reflect A′B′C′ across y = x' },
+    { id: 'shape-compare', note: 'Congruent or similar, the motion that maps one onto the other, and SSS / SAS / ASA / AAS / HL or AA / SAS~ / SSS~ (never SSA)' },
+    { id: 'shape-symmetry', note: 'The lines of symmetry and the rotation symmetry of a triangle, quadrilateral or regular polygon' },
   ] },
   { id: 'm3-geo', course: 'NC Math 3', title: 'Circles, conics and shapes', entries: [
     { id: 'build-conic' },

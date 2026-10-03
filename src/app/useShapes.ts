@@ -14,6 +14,7 @@ import type { Shape } from '../ui/renderBoard'
 import {
   compileShapes,
   moveVertex,
+  namedPointMap,
   readShape,
   replaceCoord,
   scanPairs,
@@ -22,7 +23,10 @@ import {
   shapeVertices,
 } from '../ui/shapeLinks'
 import type { BoardShape, CompiledShape, ShapeCardData } from '../ui/shapeLinks'
-import type { ShapeMeasureSettings } from '../core/persist'
+import type { ShapeMeasureSettings, ShapeXform } from '../core/persist'
+import type { XformAid, XformOp } from '../core/types'
+import { looksLikeXformCommand, parseXformCommand, resolveOp } from '../core/parse/xform'
+import { imageDependents, imageSrc, shapeByName, withAids } from '../ui/shapeXform'
 import { snapPlaced } from '../ui/snap'
 import type { BoardStateApi } from './useBoardState'
 import type { BoardRefsApi } from './useBoardRefs'
@@ -135,11 +139,6 @@ export function useShapes({ board, refs, derived, notices, history, editing, cal
     [applyState, commitState, mapShape, relabelEdit],
   )
 
-  const setShapeEquation = useCallback(
-    (id: string, src: string): string | null => restateShape(id, src, 'edit shape', false),
-    [restateShape],
-  )
-
   /** A constant in flight. Inside the bracket the slider's press opened. */
   const setShapeParam = useCallback(
     (id: string, index: number, value: number): void => {
@@ -213,13 +212,138 @@ export function useShapes({ board, refs, derived, notices, history, editing, cal
     (id: string): void => {
       const shape = shapesRef.current.find((s) => s.id === id)
       if (!shape) return
-      commitState({ shapes: shapesRef.current.filter((s) => s.id !== id) }, 'delete shape')
-      setSelectedId((cur) => (cur === id ? null : cur))
-      showToast('Deleted the shape. Undo brings it back.', {
+      // Its images go with it, in the same commit — an image of nothing is
+      // not a figure the board can draw, and one undo brings all of it back.
+      const deps = imageDependents(shapesRef.current, [id])
+      commitState({ shapes: shapesRef.current.filter((s) => s.id !== id && !deps.has(s.id)) }, 'delete shape')
+      setSelectedId((cur) => (cur === id || (cur !== null && deps.has(cur)) ? null : cur))
+      const took =
+        deps.size === 0
+          ? 'Deleted the shape.'
+          : `Deleted the shape and ${deps.size === 1 ? 'its image' : `the ${deps.size} images that depended on it`}.`
+      showToast(`${took} Undo brings ${deps.size === 0 ? 'it' : 'all of it'} back.`, {
         action: { label: 'Undo', run: () => undo() },
       })
     },
     [commitState, showToast, undo],
+  )
+
+  // ------------------------------------------------ transformations of shapes
+  //
+  // An image is a shape whose `xform` names its pre-image and the
+  // transformation as typed (src/ui/shapeXform.ts). Creating one checks the
+  // parameters against the board's named points first, so a typo is said in
+  // words on the card instead of becoming a broken card.
+
+  const namedNow = (): Map<string, Vec2> => {
+    const compiled = shapeCompiledRef.current
+    return namedPointMap(shapesRef.current, compiled)
+  }
+
+  /** The image of a shape under a transformation; the problem in words, or null. */
+  const addImage = useCallback(
+    (parentId: string, op: XformOp): string | null => {
+      const parent = shapeCompiledRef.current.get(parentId)?.shape
+      if (!parent) return 'That figure cannot be drawn right now, so it has no image'
+      const ok = resolveOp(op, namedNow())
+      if ('error' in ok) return ok.error
+      const shape: BoardShape = {
+        id: nextId(),
+        src: imageSrc(op, parent),
+        params: [],
+        color: pickColor(),
+        fill: false,
+        visible: true,
+        xform: { of: parentId, op },
+      }
+      commitState({ shapes: [...shapesRef.current, shape] }, `${op.t} shape`)
+      setSelectedId(shape.id)
+      return null
+    },
+    [commitState, pickColor],
+  )
+
+  /** "rotate ABC 90° about (0, 0)" typed in the + box. */
+  const addImageCommand = useCallback(
+    (src: string): string | null => {
+      const cmd = parseXformCommand(src)
+      if ('error' in cmd) return cmd.error
+      const list = [...shapeCompiledRef.current.values()].map((c) => ({ id: c.id, shape: c.shape }))
+      const id = shapeByName(cmd.target, list)
+      if (!id) return `There is no figure named ${cmd.target} on the board — name one first, e.g. ABC = (0,0) (4,0) (4,3)`
+      return addImage(id, cmd.op)
+    },
+    [addImage],
+  )
+
+  /** Change an image's transformation (the card's inputs, or its retyped line). */
+  const setImageOp = useCallback(
+    (id: string, op: XformOp, of?: string): string | null => {
+      const now = shapesRef.current.find((s) => s.id === id)
+      if (!now?.xform) return null
+      const ok = resolveOp(op, namedNow())
+      if ('error' in ok) return ok.error
+      const parentId = of ?? now.xform.of
+      const parent = shapeCompiledRef.current.get(parentId)?.shape ?? null
+      const kindChanged = now.xform.op.t !== op.t
+      const xform: ShapeXform = { ...(kindChanged ? {} : now.xform), of: parentId, op }
+      if (kindChanged) delete xform.aids
+      const src = imageSrc(op, parent)
+      commitState({ shapes: mapShape(id, (s) => ({ ...s, src, xform })) }, 'edit transformation')
+      setSelectedId(id)
+      return null
+    },
+    [commitState, mapShape],
+  )
+
+  const setImageAids = useCallback(
+    (id: string, aids: XformAid[]): void => {
+      const now = shapesRef.current.find((s) => s.id === id)
+      if (!now?.xform) return
+      const xform = withAids(now.xform, aids)
+      commitState({ shapes: mapShape(id, (s) => ({ ...s, xform })) }, 'change visual aids')
+    },
+    [commitState, mapShape],
+  )
+
+  /** The symmetry overlay of a polygon: written only while it is on. */
+  const toggleSymmetry = useCallback(
+    (id: string, on?: boolean): void => {
+      const now = shapesRef.current.find((s) => s.id === id)
+      if (!now) return
+      const next = on ?? !now.sym
+      if (next === (now.sym === true)) return
+      commitState(
+        {
+          shapes: mapShape(id, (s) => {
+            const { sym: _old, ...rest } = s
+            return next ? { ...rest, sym: true } : rest
+          }),
+        },
+        next ? 'show symmetry' : 'hide symmetry',
+      )
+      setSelectedId(id)
+    },
+    [commitState, mapShape],
+  )
+
+  /** The figure a card compares its own with (null: none). */
+  const setShapeCompare = useCallback(
+    (id: string, other: string | null): void => {
+      const now = shapesRef.current.find((s) => s.id === id)
+      if (!now || (now.compare ?? null) === other) return
+      commitState(
+        {
+          shapes: mapShape(id, (s) => {
+            const { compare: _old, ...rest } = s
+            return other ? { ...rest, compare: other } : rest
+          }),
+        },
+        'compare figures',
+      )
+      setSelectedId(id)
+    },
+    [commitState, mapShape],
   )
 
   /**
@@ -244,6 +368,25 @@ export function useShapes({ board, refs, derived, notices, history, editing, cal
       setSelectedId(id)
     },
     [commitState, mapShape],
+  )
+
+  const setShapeEquation = useCallback(
+    (id: string, src: string): string | null => {
+      const now = shapesRef.current.find((s) => s.id === id)
+      // An image's line is a transformation: retyping it changes the
+      // transformation (and, when it names another figure, the pre-image).
+      if (now?.xform) {
+        if (!looksLikeXformCommand(src)) return 'An image’s line is a transformation, e.g. rotate ABC 90° about (0, 0)'
+        const cmd = parseXformCommand(src)
+        if ('error' in cmd) return cmd.error
+        const list = [...shapeCompiledRef.current.values()].map((c) => ({ id: c.id, shape: c.shape }))
+        const named = shapeByName(cmd.target, list)
+        if (named === id) return 'A figure cannot be the image of itself'
+        return setImageOp(id, cmd.op, named ?? undefined)
+      }
+      return restateShape(id, src, 'edit shape', false)
+    },
+    [restateShape, setImageOp],
   )
 
   /**
@@ -323,6 +466,7 @@ export function useShapes({ board, refs, derived, notices, history, editing, cal
     addShape, setShapeEquation, setShapeParam, setShapeParamExact, toggleShapeVisible,
     cycleShapeColor, toggleShapeFill, deleteShape, setShapeCoord, dragShapeVertex, shapeCompiled, setShapeMeasure,
     shapeScene, shapeSceneRef, shapeCardFor,
+    addImage, addImageCommand, setImageOp, setImageAids, toggleSymmetry, setShapeCompare,
   }
 }
 

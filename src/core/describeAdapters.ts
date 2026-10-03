@@ -701,11 +701,16 @@ export function describeShapes(list: readonly Shape[]): DescribeExtra[] {
   for (const s of list) {
     if (!s || !s.visible) continue
     try {
+      if (s.kind !== 'vector') {
+        out.push(...xformSentences(s))
+        // a student copy's image is the question: only its given aids are drawn
+        if (s.figureHidden) continue
+      }
       if (s.kind === 'polygon') {
         const r = polygonReport(s.pts, s.labels)
         if (!r) continue
         const what = POLY_WORD[s.pts.length] ?? 'Polygon'
-        out.push({ text: `${what} ${r.names.join('')} has vertices ${vertexList(r.names, s.pts)}.` })
+        out.push({ text: `${what} ${r.names.join('')} has vertices ${vertexList(r.names, s.pts)}.`, ...(s.image ? { answer: true } : {}) })
         const m = s.measure
         if (!m) continue
         if (m.right?.some((x) => x)) {
@@ -748,6 +753,8 @@ export function describeShapes(list: readonly Shape[]): DescribeExtra[] {
           const eq = segmentReport(s.through, q)
           if (eq) out.push({ text: `The line is ${eq.line.slopeIntercept.text}.`, answer: true })
         }
+      } else if (s.kind === 'point' && s.image) {
+        out.push({ text: `${s.label ? `Point ${s.label}` : 'The image point'} is at ${geoPoint(s.at).text}.`, answer: true })
       } else if (s.kind === 'point' && s.measure?.pair) {
         const p = s.measure.pair
         const nm = s.label ? `Point ${s.label}` : `The point ${geoPoint(s.at).text}`
@@ -764,6 +771,29 @@ export function describeShapes(list: readonly Shape[]): DescribeExtra[] {
   }
   return out
 }
+
+/** What a transformation's image, its aids and a symmetry overlay say. */
+function xformSentences(s: Exclude<Shape, { kind: 'vector' }>): DescribeExtra[] {
+  const out: DescribeExtra[] = []
+  const a = s.aids
+  if (s.image) {
+    const im = s.image
+    if (s.figureHidden) {
+      out.push({ text: `The image of ${im.of} under ${im.words} is to be drawn.` })
+    } else {
+      out.push({ text: `${capitalFirst(im.name)} is the image of ${im.of} under ${im.words}, drawn dashed: ${im.notation}: ${im.rule}.`, answer: true })
+    }
+    if (a?.mirror) out.push({ text: `The mirror line ${a.mirror.label} is drawn.` })
+    if (a?.center) out.push({ text: `The centre ${a.center.label === 'O' ? 'O, the origin' : a.center.label} is marked.` })
+    if (a?.vector) out.push({ text: `The translation vector ${a.vector.label} is drawn.` })
+  }
+  if (a?.symLines && a.symText) {
+    out.push({ text: `The symmetry overlay shows ${a.symText.text.replace(' · ', ' of symmetry; rotational symmetry ').replace('no rotation symmetry', 'none')}.`, answer: true })
+  }
+  return out
+}
+
+const capitalFirst = (t: string): string => (t ? t[0].toUpperCase() + t.slice(1) : t)
 
 function lineWords(m: number, b: number): string {
   const num = (v: number) => ex(v) ?? fmtN(v)

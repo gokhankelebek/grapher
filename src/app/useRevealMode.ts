@@ -103,10 +103,13 @@ export function useRevealMode({ board, docState, session, derived, editing, syst
     for (const st of stats) if (st.hidden !== true) after.push(statKey(st.id))
     if (sysCard?.lp) after.push(SYSTEM_KEY)
     for (const s of shapes) {
-      if (!s.visible || !s.measure) continue
+      if (!s.visible) continue
       const c = shapeCompiled?.get(s.id)
       if (!c?.shape) continue
-      for (const part of measureAnswerParts(c.shape.kind, s.measure, c.reports)) after.push(shapeKey(s.id, part))
+      // a transformation's image is the answer to "find the image"
+      if (s.xform) after.push(shapeKey(s.id, 'image'))
+      if (s.measure) for (const part of measureAnswerParts(c.shape.kind, s.measure, c.reports)) after.push(shapeKey(s.id, part))
+      if (s.sym && c.sym) after.push(shapeKey(s.id, 'symmetry'))
     }
     return buildInventory({
       curves: shown.map((c) => {

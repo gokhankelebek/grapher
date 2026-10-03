@@ -667,12 +667,12 @@ export type SlopeFieldOutcome =
 // ============================================================================
 
 export type Shape =
-  | { kind: 'point'; id: string; at: Vec2; color: string; visible: boolean; label?: string; measure?: ShapeMeasureDraw }
-  | { kind: 'segment'; id: string; a: Vec2; b: Vec2; color: string; visible: boolean; labels?: [string, string]; measure?: ShapeMeasureDraw }
+  | ({ kind: 'point'; id: string; at: Vec2; color: string; visible: boolean; label?: string; measure?: ShapeMeasureDraw } & ShapeXformDraw)
+  | ({ kind: 'segment'; id: string; a: Vec2; b: Vec2; color: string; visible: boolean; labels?: [string, string]; measure?: ShapeMeasureDraw } & ShapeXformDraw)
   | { kind: 'vector'; id: string; tail: Vec2; v: Vec2; color: string; visible: boolean; label?: string }
-  | { kind: 'polygon'; id: string; pts: readonly Vec2[]; color: string; visible: boolean; fill?: boolean; labels?: readonly string[]; measure?: ShapeMeasureDraw }
+  | ({ kind: 'polygon'; id: string; pts: readonly Vec2[]; color: string; visible: boolean; fill?: boolean; labels?: readonly string[]; measure?: ShapeMeasureDraw } & ShapeXformDraw)
   /** A whole line through `through` along `dir` — "parallel to AB through P" (a linked line). */
-  | { kind: 'line'; id: string; through: Vec2; dir: Vec2; color: string; visible: boolean; measure?: ShapeMeasureDraw }
+  | ({ kind: 'line'; id: string; through: Vec2; dir: Vec2; color: string; visible: boolean; measure?: ShapeMeasureDraw } & ShapeXformDraw)
 
 /**
  * A line defined by OTHER shapes: "parallel to AB through P". The parser
@@ -760,6 +760,85 @@ export interface ShapeMeasureDraw {
   pair?: { to: Vec2; length: string | null; slope: string | null; midpoint: string | null }
   /** A line's equation chip. */
   equation?: string | null
+}
+
+// ============================================================================
+// Transformations of shapes (NC Math 2 G-CO.2–8, G-SRT.1–3, F-IF.1–2).
+//
+//   src/core/transform2d.ts   translate / reflect / rotate / dilate, exact
+//                             images, mapping notation, compositions, find
+//                             the motion, symmetry, triangle criteria
+//   src/core/parse/xform.ts   "rotate ABC 90° about (0, 0)" and the card's
+//                             exact text inputs (angle, k, a line, a point)
+//   src/ui/shapeXform.ts      an IMAGE is a shape whose BoardShape.xform
+//                             names its pre-image and the transformation (as
+//                             typed); its vertices are recomputed on every
+//                             change, so A′B′C′ follows ABC when A is dragged
+//   render/shapes.ts          images dashed; the visual aids below
+//   reveal mode / student copy: the image itself is the answer (only what is
+//                             GIVEN — the mirror, the centre, the vector —
+//                             stays); the lines of symmetry are an answer too
+// ============================================================================
+
+/** A transformation as the card holds it: every parameter exactly as typed. */
+export type XformOp =
+  /** by ⟨a, b⟩ — the two components as typed: ["3", "-2"]. */
+  | { t: 'translate'; by: [string, string] }
+  /** "y = x", "x-axis", "x = 2", "y = 2x + 1", "(0, 0) (1, 2)", "AB" */
+  | { t: 'reflect'; line: string }
+  /** angle in degrees as typed ("90", "-45"); about "(0, 0)", "O", "C" */
+  | { t: 'rotate'; angle: string; about: string }
+  /** scale factor as typed ("2", "1/2", "-3"); about a point */
+  | { t: 'dilate'; k: string; about: string }
+
+/** The visual aids an image can draw, in the order they are listed and stored. */
+export type XformAid = 'paths' | 'mirror' | 'arc' | 'rays' | 'vector'
+export const XFORM_AIDS: readonly XformAid[] = ['paths', 'mirror', 'arc', 'rays', 'vector']
+
+/** What a transformation's image (or a symmetric figure) draws besides itself. */
+export interface ShapeAidsDraw {
+  /** Dotted connectors from each pre-image vertex to its image. */
+  paths?: readonly (readonly [Vec2, Vec2])[]
+  /** The mirror line, edge to edge, with its equation chip. */
+  mirror?: { through: Vec2; dir: Vec2; label: string }
+  /** A rotation: the arc from `from` about `center` through `deg` (ccw +), labelled. */
+  arc?: { center: Vec2; from: Vec2; to: Vec2; deg: number; label: string }
+  /** Dilation rays: dashed segments along each line through the centre. */
+  rays?: readonly (readonly [Vec2, Vec2])[]
+  /** The centre of a rotation or dilation, named. */
+  center?: { at: Vec2; label: string }
+  /** The translation vector, from a vertex to its image. */
+  vector?: { tail: Vec2; v: Vec2; label: string }
+  /** The symmetry overlay: lines of symmetry, edge to edge. */
+  symLines?: readonly { through: Vec2; dir: Vec2 }[]
+  /** …and the rotation symmetry, in a chip at the centre. */
+  symText?: { at: Vec2; text: string }
+}
+
+/** A transformation's image: what it is the image of, and under what. */
+export interface ShapeImageInfo {
+  /** "△ABC" */
+  of: string
+  /** "△A′B′C′" */
+  name: string
+  /** "a rotation of 90° counterclockwise about the origin" */
+  words: string
+  /** "R_{90°, O}" */
+  notation: string
+  /** "(x, y) → (−y, x)" */
+  rule: string
+}
+
+/** The transformation extras a point, segment or polygon may carry. */
+export interface ShapeXformDraw {
+  /** Drawn dashed: a transformation's image. */
+  dashed?: boolean
+  /** Visual aids (an image's construction marks, the symmetry overlay). */
+  aids?: ShapeAidsDraw
+  /** Set on an image. */
+  image?: ShapeImageInfo
+  /** Reveal mode / student copy: the figure is the answer — draw only its given aids. */
+  figureHidden?: boolean
 }
 
 // ============================================================================

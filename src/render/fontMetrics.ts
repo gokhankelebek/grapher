@@ -69,6 +69,7 @@ export const SYMBOL_GLYPHS: Readonly<Record<string, readonly [number, number]>> 
   '≠': [0xb9, 549], '′': [0xa2, 247], '″': [0xb2, 411], '∫': [0xf2, 274], '→': [0xae, 987],
   '⋅': [0xd7, 250], '∈': [0xce, 713], '∪': [0xc8, 768], '∩': [0xc7, 768], '∠': [0xd0, 768],
   '⇒': [0xde, 987], '∂': [0xb6, 494], '∑': [0xe5, 713], '≡': [0xba, 549], '∅': [0xc6, 823],
+  '⟨': [0xe1, 329], '⟩': [0xf1, 329],
 }
 
 export type FontFace = 'helvetica' | 'helvetica-bold' | 'times' | 'courier'

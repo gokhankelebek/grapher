@@ -24,8 +24,8 @@ import type {
   EndCap,
   Vec2,
 } from './types'
-import { FIGURE_STYLES, MEASURE_FLAGS } from './types'
-import type { MeasureFlag } from './types'
+import { FIGURE_STYLES, MEASURE_FLAGS, XFORM_AIDS } from './types'
+import type { MeasureFlag, XformAid, XformOp } from './types'
 import { namedCallSites, parseExpression } from './parse'
 import type { FunctionEnv } from './functionEnv'
 import { parseSlopeField } from './parse/slopeField'
@@ -621,6 +621,72 @@ export interface BoardShape {
    * all, so a document that never measured anything is byte-identical.
    */
   measure?: ShapeMeasureSettings
+  /**
+   * This shape is the IMAGE of another under a transformation: which shape,
+   * the transformation as typed, and the visual aids drawn with it. Its
+   * vertices are recomputed from the pre-image on every change, so `src` is
+   * only the line it reads as ("rotate ABC 90° about (0, 0)"). Absent on
+   * every ordinary shape, so old documents are byte-identical.
+   */
+  xform?: ShapeXform
+  /** The symmetry overlay is on (polygons). Written only when true. */
+  sym?: true
+  /** The figure this one is compared with on its card (another shape's id). */
+  compare?: string
+}
+
+/** A transformation's image, as the document keeps it. */
+export interface ShapeXform {
+  /** The pre-image's id. */
+  of: string
+  op: XformOp
+  /** The aids drawn; absent means the default for the op (see defaultAids). */
+  aids?: XformAid[]
+}
+
+const MAX_XFORM_TEXT = 120
+const xText = (v: unknown): string | null => (typeof v === 'string' && v.length <= MAX_XFORM_TEXT ? v : null)
+
+/** An op out of an untrusted blob: the right fields, each a string. */
+export function cleanXformOp(raw: unknown): XformOp | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const o = raw as Record<string, unknown>
+  switch (o.t) {
+    case 'translate': {
+      const by = Array.isArray(o.by) ? o.by : null
+      const a = by ? xText(by[0]) : null
+      const b = by ? xText(by[1]) : null
+      return a !== null && b !== null ? { t: 'translate', by: [a, b] } : undefined
+    }
+    case 'reflect': {
+      const line = xText(o.line)
+      return line !== null ? { t: 'reflect', line } : undefined
+    }
+    case 'rotate': {
+      const angle = xText(o.angle)
+      const about = xText(o.about)
+      return angle !== null && about !== null ? { t: 'rotate', angle, about } : undefined
+    }
+    case 'dilate': {
+      const k = xText(o.k)
+      const about = xText(o.about)
+      return k !== null && about !== null ? { t: 'dilate', k, about } : undefined
+    }
+    default:
+      return undefined
+  }
+}
+
+/** A shape's image link out of an untrusted blob; aids in canonical order. */
+export function cleanXform(raw: unknown): ShapeXform | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const o = raw as { of?: unknown; op?: unknown; aids?: unknown }
+  if (typeof o.of !== 'string' || o.of === '') return undefined
+  const op = cleanXformOp(o.op)
+  if (!op) return undefined
+  const out: ShapeXform = { of: o.of, op }
+  if (Array.isArray(o.aids)) out.aids = XFORM_AIDS.filter((a) => (o.aids as unknown[]).includes(a))
+  return out
 }
 
 /** A shape's measurement display toggles, as the document keeps them. */
@@ -1668,6 +1734,12 @@ export interface StoredShape {
   hidden?: true
   /** Written only when a measurement toggle is on (or a point has a partner). */
   measure?: ShapeMeasureSettings
+  /** Written only on a transformation's image. */
+  xform?: ShapeXform
+  /** Written only while the symmetry overlay is on. */
+  sym?: true
+  /** Written only while the card compares it with another figure. */
+  compare?: string
 }
 
 /**
@@ -2354,6 +2426,10 @@ export function shapeToStored(s: BoardShape): StoredShape {
   if (s.visible === false) out.hidden = true
   const m = cleanMeasure(s.measure)
   if (m) out.measure = m
+  const x = cleanXform(s.xform)
+  if (x) out.xform = x
+  if (s.sym === true) out.sym = true
+  if (typeof s.compare === 'string' && s.compare) out.compare = s.compare
   return out
 }
 
@@ -2369,6 +2445,29 @@ export function storedToShape(raw: unknown): { shape: BoardShape } | { error: st
   const { id, src, color } = raw
   if (!isStr(id) || !id) return { error: 'it had no id' }
   if (!isStr(src) || src.trim() === '') return { error: 'it had nothing typed in it' }
+  const extras = {
+    ...(cleanMeasure(raw.measure) ? { measure: cleanMeasure(raw.measure) } : {}),
+    ...(raw.sym === true ? { sym: true as const } : {}),
+    ...(isStr(raw.compare) && raw.compare ? { compare: raw.compare } : {}),
+  }
+  // A transformation's image: its vertices come from its pre-image, so its
+  // line is only what it reads as — there is nothing in it to parse.
+  if (raw.xform !== undefined) {
+    const xform = cleanXform(raw.xform)
+    if (!xform) return { error: 'the transformation it was the image of was unreadable' }
+    return {
+      shape: {
+        id,
+        src,
+        params: [],
+        color: isStr(color) && color ? color : '#4f9cf9',
+        fill: raw.fill === true,
+        visible: raw.hidden !== true,
+        ...extras,
+        xform,
+      },
+    }
+  }
   let outcome: ReturnType<typeof parseShape>
   try {
     outcome = parseShape(src)
@@ -2395,7 +2494,7 @@ export function storedToShape(raw: unknown): { shape: BoardShape } | { error: st
       color: isStr(color) && color ? color : '#4f9cf9',
       fill: raw.fill === true,
       visible: raw.hidden !== true,
-      ...(cleanMeasure(raw.measure) ? { measure: cleanMeasure(raw.measure) } : {}),
+      ...extras,
     },
   }
 }

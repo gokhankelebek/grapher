@@ -46,6 +46,7 @@ import {
 } from '../ui/seqLinks'
 import type { BoardSequence, SeqSeriesView } from '../ui/seqLinks'
 import { looksLikeShape, readShape } from '../ui/shapeLinks'
+import { looksLikeXformCommand } from '../core/parse/xform'
 import type { StatePatch } from './types'
 import type { BoardStateApi } from './useBoardState'
 import type { BoardRefsApi } from './useBoardRefs'
@@ -82,7 +83,7 @@ export function useTypedLines({ board, refs, derived, notices, history, editing,
   const { pickColor } = editing
   const { relabelEdit } = calc
   const { addField } = fieldsApi
-  const { addShape } = shapesApi
+  const { addShape, addImageCommand } = shapesApi
 
   // ------------------------------------------------------- typed expressions
 
@@ -476,6 +477,9 @@ export function useTypedLines({ board, refs, derived, notices, history, editing,
       // starts like a derivative stays on this branch — with the slope-field
       // parser's own positioned complaint — rather than falling through to a
       // second parser that can only be confused by it.
+      // A transformation of a figure on the board: "rotate ABC 90° about (0, 0)".
+      if (looksLikeXformCommand(src)) return addImageCommand(src)
+
       const asField = readField(src)
       if (asField.ok) return addField(src)
       if (looksLikeField(src)) return asField.error
@@ -597,7 +601,7 @@ export function useTypedLines({ board, refs, derived, notices, history, editing,
       }
       return null
     },
-    [addField, addShape, addSequence, commitState, envFor, pickColor, registerModels, reparseLines, showFeatureNote],
+    [addField, addShape, addImageCommand, addSequence, commitState, envFor, pickColor, registerModels, reparseLines, showFeatureNote],
   )
 
   /**

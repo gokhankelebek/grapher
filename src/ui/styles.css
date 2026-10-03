@@ -9499,3 +9499,65 @@ button.calc-field-btn {
 .measure-pair {
   margin-bottom: var(--sp-1);
 }
+
+/* ---- transformations of shapes (src/ui/ShapeXformSection.tsx) ---------------- */
+.xform-row {
+  margin-bottom: var(--sp-1);
+}
+
+.xform-input {
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.xform-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin-bottom: var(--sp-1);
+}
+
+.xform-create {
+  font-weight: 600;
+}
+
+.xform-rule {
+  overflow-x: auto;
+  font-size: var(--fs-sm);
+  padding: 2px 0;
+}
+
+.xform-verts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.xform-checks {
+  margin: 0;
+}
+
+.xform-check {
+  color: var(--text);
+}
+
+.xform-mark {
+  display: inline-block;
+  width: 1.1em;
+  color: var(--accent-text);
+  font-weight: 700;
+}
+
+.xform-check-bad,
+.xform-check-bad .xform-mark {
+  color: var(--danger-text);
+}
+
+.xform-verdict {
+  font-weight: 600;
+}
+
+.xform-alt {
+  white-space: nowrap;
+}

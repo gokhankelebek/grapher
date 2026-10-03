@@ -9,6 +9,8 @@ import { useInk } from './inkContext'
 import { equationLabel } from '../core/mathSpeech'
 import type { ShapeMeasureSettings } from '../core/persist'
 import { ShapeMeasureSection } from './ShapeMeasureSection'
+import type { XformAid, XformOp } from '../core/types'
+import { CompareSection, ImageSection, SymmetrySection, TransformTool } from './ShapeXformSection'
 
 // ============================================================================
 // src/ui/ShapeCard.tsx — a point, segment, vector or polygon in the sidebar.
@@ -57,6 +59,16 @@ interface Props {
   onMeasure?(next: ShapeMeasureSettings | undefined, label: string): void
   /** Add a shape (a linked line, a plotted endpoint); the parser's complaint or null. */
   onAddShape?(src: string): string | null
+  /** Make the image of this shape under a transformation; the problem in words, or null. */
+  onAddImage?(op: XformOp): string | null
+  /** An image: change its transformation. */
+  onSetImageOp?(op: XformOp): string | null
+  /** An image: which visual aids it draws. */
+  onSetImageAids?(aids: XformAid[]): void
+  /** A polygon: the symmetry overlay on / off. */
+  onToggleSymmetry?(): void
+  /** Compare with another figure (null: stop). */
+  onCompare?(other: string | null): void
 }
 
 export function ShapeCard({
@@ -76,6 +88,11 @@ export function ShapeCard({
   onCoordSet,
   onMeasure,
   onAddShape,
+  onAddImage,
+  onSetImageOp,
+  onSetImageAids,
+  onToggleSymmetry,
+  onCompare,
 }: Props) {
   const ink = useInk()
   // ---- the ⋯ menu (identical behaviour to a curve's, deliberately)
@@ -411,6 +428,16 @@ export function ShapeCard({
             </div>
           )}
 
+          {data.image && shape.xform && onSetImageOp && onSetImageAids && (
+            <ImageSection
+              shapeId={shape.id}
+              report={data.image}
+              xform={shape.xform}
+              onSetOp={onSetImageOp}
+              onSetAids={onSetImageAids}
+            />
+          )}
+
           {data.measure && onMeasure && (
             <ShapeMeasureSection
               shapeId={shape.id}
@@ -419,6 +446,18 @@ export function ShapeCard({
               onMeasure={onMeasure}
               onAddShape={(src) => onAddShape?.(src) ?? null}
             />
+          )}
+
+          {data.canTransform && onAddImage && (
+            <TransformTool figure={data.figure} names={data.names} onAddImage={onAddImage} />
+          )}
+
+          {data.symmetry && onToggleSymmetry && (
+            <SymmetrySection shapeId={shape.id} report={data.symmetry} on={shape.sym === true} onToggle={onToggleSymmetry} />
+          )}
+
+          {data.compare && onCompare && (
+            <CompareSection shapeId={shape.id} self={data.figureLabel} data={data.compare} onCompare={onCompare} />
           )}
 
           {data.fillable && (

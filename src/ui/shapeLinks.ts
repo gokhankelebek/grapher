@@ -33,6 +33,11 @@ import { lineRelativeTo } from '../core/geometry'
 import { measureCard, measureDraw, measureReports } from './shapeMeasure'
 import type { MeasureCardData, MeasureReports } from './shapeMeasure'
 import type { BoardShape } from '../core/persist'
+import type { SymmetryReport } from '../core/transform2d'
+import { figureLabel as figureLabelOf } from './shapeXform'
+import { buildImage, compareCard, shapeLabels, shapePoints, symmetryAids, transformable } from './shapeXform'
+import { figureNames } from '../core/transform2d'
+import type { CompareCardData, XformReport } from './shapeXform'
 import { fieldParamMeta } from './fieldLinks'
 import { coord } from './fieldLinks'
 import type { LegendEntry } from './present'
@@ -135,6 +140,10 @@ export interface CompiledShape {
   link?: ShapeLineLink
   /** The geometry the Measurements section states (src/ui/shapeMeasure.ts). */
   reports?: MeasureReports
+  /** A transformation's image: the motion, its rule and what it preserves. */
+  xform?: XformReport
+  /** A polygon with its symmetry overlay on: the lines and turns it draws. */
+  sym?: SymmetryReport | null
 }
 
 /**
@@ -147,6 +156,12 @@ export interface CompiledShape {
 export function compileShapes(shapes: readonly BoardShape[]): Map<string, CompiledShape> {
   const out = new Map<string, CompiledShape>()
   for (const s of shapes) {
+    // A transformation's image is built below, once its pre-image is; the
+    // entry is made now so the map keeps board order.
+    if (s.xform) {
+      out.set(s.id, { id: s.id, shape: null, kind: null, latex: s.src, paramNames: [], error: 'its pre-image could not be drawn' })
+      continue
+    }
     const outcome = readShape(s.src)
     if (!outcome.ok) {
       out.set(s.id, {
@@ -211,6 +226,42 @@ export function compileShapes(shapes: readonly BoardShape[]): Map<string, Compil
     out.set(s.id, { ...c, shape: { ...c.shape, through: res.through, dir: res.dir } })
   }
 
+  // Images, in dependency order: an image of an image waits for its parent.
+  // The centre of a rotation may be a named point ("about C"), so the names
+  // are read again as each round of images lands (A′ is a name too).
+  const pending = shapes.filter((s) => s.xform)
+  const byId = new Map(shapes.map((s) => [s.id, s]))
+  const taken = new Set<string>()
+  for (const v of out.values()) for (const l of v.shape ? shapeLabels(v.shape) ?? [] : []) taken.add(l)
+  // In board order, each as soon as its pre-image is built — so the names
+  // are handed out in the order the images were made (A′, then A″ …).
+  while (pending.length > 0) {
+    const i = pending.findIndex((s) => {
+      const parentBoard = byId.get(s.xform!.of)
+      return !(parentBoard?.xform && pending.includes(parentBoard))
+    })
+    if (i < 0) {
+      for (const s of pending) {
+        out.set(s.id, { id: s.id, shape: null, kind: null, latex: s.src, paramNames: [], error: 'it is an image of itself (the chain of images loops)' })
+      }
+      break
+    }
+    const s = pending.splice(i, 1)[0]
+    const named = namedPointMap(shapes, out)
+    const parent = out.get(s.xform!.of)
+    const built = buildImage(s, parent?.shape ?? null, named, parent?.xform ?? null, taken)
+    for (const l of built.shape ? shapeLabels(built.shape) ?? [] : []) taken.add(l)
+    out.set(s.id, {
+      id: s.id,
+      shape: built.shape,
+      kind: built.shape?.kind ?? parent?.kind ?? null,
+      latex: built.latex,
+      paramNames: [],
+      error: built.error,
+      ...(built.report ? { xform: built.report } : {}),
+    })
+  }
+
   // Measurements: the geometry each card states, and what each shape draws.
   const pointAt = (ref: string): Vec2 | null => resolvePointRef(ref, out)
   for (const s of shapes) {
@@ -218,8 +269,15 @@ export function compileShapes(shapes: readonly BoardShape[]): Map<string, Compil
     if (!c || !c.shape) continue
     const reports = measureReports(c.shape, s.measure, c.link, pointAt, named)
     const draw = measureDraw(c.shape, s.measure, reports)
-    const shape = draw && c.shape.kind !== 'vector' ? ({ ...c.shape, measure: draw } as Shape) : c.shape
-    out.set(s.id, { ...c, shape, reports })
+    let shape = draw && c.shape.kind !== 'vector' ? ({ ...c.shape, measure: draw } as Shape) : c.shape
+    // The symmetry overlay: lines of symmetry and the turns, on the figure.
+    let sym: SymmetryReport | null | undefined
+    if (s.sym && shape.kind === 'polygon') {
+      const got = symmetryAids(shape)
+      sym = got.report
+      if (got.aids) shape = { ...shape, aids: { ...(shape.aids ?? {}), ...got.aids } }
+    }
+    out.set(s.id, { ...c, shape, reports, ...(sym !== undefined ? { sym } : {}) })
   }
   return out
 }
@@ -560,7 +618,7 @@ export function shapeLegend(
     if (!s.visible) continue
     const c = compiled.get(s.id)
     if (!c || !c.shape) continue
-    out.push({ id: s.id, color: s.color, tex: shapeChipTex(c.latex), text: s.src })
+    out.push({ id: s.id, color: s.color, tex: c.xform ? c.latex.split(' = ')[0] : shapeChipTex(c.latex), text: s.src })
   }
   return out
 }
@@ -617,6 +675,20 @@ export interface ShapeCardData {
   fill: boolean
   /** The Measurements section; null for a vector or a shape that cannot be drawn. */
   measure: MeasureCardData | null
+  /** This shape is a transformation's image: the motion and what it preserves. */
+  image: XformReport | null
+  /** A point, segment or polygon that can be transformed (an image too: chaining). */
+  canTransform: boolean
+  /** The name a transformation of it is written with: "ABC". */
+  figure: string | null
+  /** Its vertex names as the card says them (A, B, C… when untyped; A′, B′… on an image). */
+  names: string[]
+  /** "△ABC" */
+  figureLabel: string
+  /** A polygon's symmetry (whether or not the overlay is drawn). */
+  symmetry: SymmetryReport | null
+  /** Compare with another figure (segments and polygons). */
+  compare: CompareCardData | null
 }
 
 export function shapeCard(
@@ -627,7 +699,8 @@ export function shapeCard(
   const names = c?.paramNames ?? []
   const pairs = scanPairs(shape.src)
   const vertices: ShapeVertexRow[] = []
-  if (c?.shape) {
+  // An image's vertices follow its pre-image: nothing in its line to type or drag.
+  if (c?.shape && !shape.xform) {
     for (const v of shapeVertices(c.shape, pairs)) {
       const pair = pairs[v.pair]
       const xSrc = pair?.x.text ?? ''
@@ -647,9 +720,11 @@ export function shapeCard(
       })
     }
   }
+  const built = c?.shape ?? null
+  const fig = built && transformable(built.kind) ? built : null
   return {
     kind: c?.kind ?? null,
-    noun: shapeNoun(c?.kind ?? 'polygon'),
+    noun: shape.xform ? 'Image' : shapeNoun(c?.kind ?? 'polygon'),
     latex: c?.latex ?? shape.src,
     error: c?.error ?? null,
     params: names.map((name, i) => {
@@ -669,6 +744,13 @@ export function shapeCard(
           named: namedPointMap(boardList(compiled), compiled),
         })
       : null,
+    image: c?.xform ?? null,
+    canTransform: fig !== null,
+    figure: fig ? (shapeLabels(fig)?.join('') ?? null) : null,
+    names: c?.xform ? c.xform.primes : fig ? figureNames((shapePoints(fig) ?? []).length, shapeLabels(fig)) : [],
+    figureLabel: c?.xform ? c.xform.imageName : fig ? figureLabelOf(fig) : '',
+    symmetry: fig && fig.kind === 'polygon' ? (c?.sym !== undefined ? c.sym : symmetryAids(fig).report) : null,
+    compare: fig && fig.kind !== 'point' ? compareCard(fig, shape.id, boardList(compiled), shape.compare) : null,
   }
 }
 

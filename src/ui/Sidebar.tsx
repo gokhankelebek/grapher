@@ -16,6 +16,7 @@ import type { ExpSpec } from '../core/exponential'
 import type { LogisticSpec } from '../core/logistic'
 import type { LogSpec } from '../core/logarithmic'
 import type { ShapeMeasureSettings, StyleMap } from '../core/persist'
+import type { XformAid, XformOp } from '../core/types'
 import type { NLPart } from '../render/numberline'
 import type { DomainActions, DomainPanel, SetNotation } from './domainLinks'
 import { StableCurveCard } from './CurveCard'
@@ -335,6 +336,12 @@ interface Props {
   onShapeMeasure?(id: string, next: ShapeMeasureSettings | undefined, label: string): void
   /** Add a new shape from a typed line (a linked line, a plotted endpoint); the parser's error or null. */
   onShapeAdd?(src: string): string | null
+  /** Transformations of shapes: an image, its op and aids, the symmetry overlay, a comparison. */
+  onShapeImage?(id: string, op: XformOp): string | null
+  onShapeImageOp?(id: string, op: XformOp): string | null
+  onShapeImageAids?(id: string, aids: XformAid[]): void
+  onShapeSymmetry?(id: string): void
+  onShapeCompare?(id: string, other: string | null): void
   /** "Build ▾ → Data table". Absent hides the item. */
   onDataAdd?(): void
   /**
@@ -559,6 +566,11 @@ export function Sidebar({
   onShapeCoord,
   onShapeMeasure,
   onShapeAdd,
+  onShapeImage,
+  onShapeImageOp,
+  onShapeImageAids,
+  onShapeSymmetry,
+  onShapeCompare,
   onDataAdd,
   data = NO_DATA,
   dataCardFor,
@@ -927,6 +939,11 @@ export function Sidebar({
                   onCoordSet={(pair, axis, v) => onShapeCoord(shape.id, pair, axis, v)}
                   onMeasure={(next, label) => onShapeMeasure?.(shape.id, next, label)}
                   onAddShape={(src) => onShapeAdd?.(src) ?? null}
+                  onAddImage={onShapeImage ? (op) => onShapeImage(shape.id, op) : undefined}
+                  onSetImageOp={onShapeImageOp ? (op) => onShapeImageOp(shape.id, op) : undefined}
+                  onSetImageAids={onShapeImageAids ? (aids) => onShapeImageAids(shape.id, aids) : undefined}
+                  onToggleSymmetry={onShapeSymmetry ? () => onShapeSymmetry(shape.id) : undefined}
+                  onCompare={onShapeCompare ? (other) => onShapeCompare(shape.id, other) : undefined}
                 />
               )
             })}

@@ -622,7 +622,8 @@ export function useExtraHandles({ board, docState, refs, derived, calc, fieldsAp
     // there (see dragShapeVertex). A point has one, a segment two, a vector
     // its tip and, when the line writes one, its tail.
     const shape = shapes.find((sh) => sh.id === selectedId)
-    if (shape && shape.visible) {
+    // An image follows its pre-image: it has no vertices of its own to drag.
+    if (shape && shape.visible && !shape.xform) {
       const built = shapeCompiled.get(shape.id)
       if (built?.shape) {
         for (const v of shapeVertices(built.shape, scanPairs(shape.src))) {

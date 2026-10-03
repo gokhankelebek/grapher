@@ -399,6 +399,23 @@ export function corpusDocs(): CorpusDoc[] {
     out.push(doc('measure', 'Measurements: ABCD ∥ & △EFG', input({ shapes: shapes.map((x) => ({ ...x, measure: { ...x.measure, show: [...x.measure.show] } })), viewport: { center: { x: 0, y: 0.5 }, pxPerUnit: 45 } })))
   }
 
+  // ---- transformations of shapes: a rotation (arc, centre O), a reflection of
+  // the image (mirror line, primes ″), a dilation by 1/2 (rays, centre), a
+  // translation (vector ⟨a, b⟩) with vertex paths, and a symmetry overlay
+  {
+    const sh = (id: string, src: string, color: string, extra: Record<string, unknown> = {}) => ({ id, src, params: [], color, fill: false, visible: true, ...extra })
+    const shapes = [
+      sh('X1', 'ABC = (1,1) (4,1) (4,3)', '#4f9cf9'),
+      sh('X2', 'rotate ABC 90° about (0, 0)', '#f97316', { xform: { of: 'X1', op: { t: 'rotate', angle: '90', about: '(0, 0)' } } }),
+      sh('X3', 'reflect A′B′C′ across y = x', '#22c55e', { xform: { of: 'X2', op: { t: 'reflect', line: 'y = x' } } }),
+      sh('X4', 'dilate ABC by 1/2 about (1, -1)', '#e879f9', { xform: { of: 'X1', op: { t: 'dilate', k: '1/2', about: '(1, -1)' } } }),
+      sh('X5', 'PQ = (-6,-4) (-4,-2)', '#f43f5e'),
+      sh('X6', 'translate PQ by <3, -2>', '#f43f5e', { xform: { of: 'X5', op: { t: 'translate', by: ['3', '-2'] }, aids: ['paths', 'vector'] } }),
+      sh('X7', 'KLMN = (-6,1) (-4,1) (-4,3) (-6,3)', '#4f9cf9', { sym: true }),
+    ]
+    out.push(doc('xform', 'Transformations: A′B′C′, A″B″C″', input({ shapes: shapes as never, viewport: { center: { x: -0.5, y: 0 }, pxPerUnit: 38 } })))
+  }
+
   // ---- implicit curve with tangent marks, and a conic construction
   {
     const { curves, exprSources } = lines({ P: 'x^2 + y^2 = 25', c1: '(x - 1)^2/25 + (y - 2)^2/9 = 1' })
@@ -573,7 +590,7 @@ export function declaredPreamble(tex: string): string[] {
 /** The graphs whose bank blocks are compiled (every family a stem figure can be). */
 export const BANK_DOCS: readonly string[] = [
   'explicit', 'caption', 'sketch', 'piecewise', 'piaxes', 'areas', 'tangent', 'secant', 'signchart',
-  'slopefield', 'polar', 'param', 'series', 'shapes', 'measure', 'implicit', 'data', 'lp',
+  'slopefield', 'polar', 'param', 'series', 'shapes', 'measure', 'xform', 'implicit', 'data', 'lp',
 ]
 
 /** Stems as the bank holds them, graphed by "Graph from item" and copied back. */

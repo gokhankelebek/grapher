@@ -19,7 +19,7 @@
 // Taylor polynomials on one card do not fold each other.
 // ============================================================================
 
-import { useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { readPrefs, updatePrefs } from './storage'
 import { useMaskedSummary } from './RevealAnswer'
@@ -53,6 +53,12 @@ export function rememberSection(kind: string, open: boolean): void {
     /* a preference that fails to save is not the user's work */
   }
 }
+
+/**
+ * Window event that opens every mounted section of one kind (detail: the kind)
+ * and scrolls it into view — the command palette's "open the Transform tool".
+ */
+export const OPEN_SECTION_EVENT = 'grapher:open-section'
 
 /** Tests only: forget what this page has read, so the next read is fresh. */
 export function resetSectionMemory(): void {
@@ -102,6 +108,23 @@ export function CardSection({
   children,
 }: Props) {
   const [open, setOpen] = useState(() => sectionOpen(kind, defaultOpen))
+  const rootRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const onOpen = (e: Event): void => {
+      if ((e as CustomEvent<string>).detail !== kind) return
+      setOpen(true)
+      // after the body has rendered, so the whole section comes into view
+      window.requestAnimationFrame(() => {
+        try {
+          rootRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+        } catch {
+          /* a scroll that fails is not the user's work */
+        }
+      })
+    }
+    window.addEventListener(OPEN_SECTION_EVENT, onOpen)
+    return () => window.removeEventListener(OPEN_SECTION_EVENT, onOpen)
+  }, [kind])
   const shownSummary = useMaskedSummary(answerKey, summary)
   const bodyId = useId()
   const dataAttrs: Record<string, string> = {}
@@ -109,6 +132,7 @@ export function CardSection({
 
   return (
     <div
+      ref={rootRef}
       className={`cs${open ? ' cs-open' : ' cs-closed'}${className ? ` ${className}` : ''}`}
       data-testid={testId}
       data-section={kind}

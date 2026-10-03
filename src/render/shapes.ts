@@ -33,7 +33,7 @@
 // All drawing units are CSS pixels (ctx is already DPR-scaled by the caller).
 // ============================================================================
 
-import type { Shape, ShapeMeasureDraw, Theme, Vec2, Viewport } from '../core/types'
+import type { Shape, ShapeAidsDraw, ShapeMeasureDraw, Theme, Vec2, Viewport } from '../core/types'
 import { ppuX, ppuY } from '../core/types'
 import { LABEL_PX, gridFont, labelFont, paintScale, type PaintScale } from './grid'
 
@@ -389,7 +389,9 @@ function drawSegment(
   ctx.lineWidth = SHAPE_SEGMENT_WIDTH * st.stroke
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
+  if (s.dashed) setDash(ctx, IMAGE_DASH, st)
   strokePath(ctx, fr, [a, b], false)
+  if (s.dashed) setDash(ctx, [], st)
 
   if (s.measure) segmentMeasure(ctx, fr, a, b, s.measure, st, false)
 
@@ -588,7 +590,9 @@ function drawPolygon(
   ctx.lineWidth = SHAPE_POLYGON_WIDTH * st.stroke
   ctx.lineJoin = 'round'
   ctx.lineCap = 'round'
+  if (s.dashed) setDash(ctx, IMAGE_DASH, st)
   strokePath(ctx, fr, pts, closed)
+  if (s.dashed) setDash(ctx, [], st)
 
   // The measurement marks (arcs, squares, ticks) sit on the figure, under its
   // vertex dots; their chips come last, over everything the polygon drew.
@@ -661,6 +665,174 @@ function drawLine(
     at = { x: p.x + u.x * t, y: p.y + u.y * t }
   }
   label(ctx, fr, at.x, at.y, upperNormal(u), SHAPE_SEGMENT_WIDTH * st.stroke, eq, st)
+}
+
+// ---------------------------------------------------------------------------
+// Transformations — an image's construction marks, and the symmetry overlay
+// ---------------------------------------------------------------------------
+
+/** An image's outline: dashed, so the pre-image and its image never read as one figure. */
+export const IMAGE_DASH: readonly number[] = [7, 5]
+/** The mirror line: long dashes, heavier than a grid line, lighter than a figure. */
+const MIRROR_DASH: readonly number[] = [10, 6]
+/** Vertex paths A → A′: dotted, the quietest mark on the board. */
+const PATH_DASH: readonly number[] = [2, 4]
+/** Dilation rays. */
+const RAY_DASH: readonly number[] = [6, 5]
+/** Lines of symmetry. */
+const SYM_DASH: readonly number[] = [8, 5]
+const AID_WIDTH = 1.5
+/** A rotation arc whose vertex sits (almost) on the centre is drawn at this radius. */
+const ARC_MIN_R = 22
+
+function setDash(ctx: CanvasRenderingContext2D, d: readonly number[], st: Style): void {
+  if (typeof ctx.setLineDash === 'function') ctx.setLineDash(d.map((v) => v * st.stroke))
+}
+
+/** A whole line through a point, edge to edge, in screen space; null when degenerate. */
+function screenLine(fr: Frame, through: Vec2, dir: Vec2): { p: Pt; u: Pt; ends: [Pt, Pt] } | null {
+  if (!finite(through) || !finite(dir)) return null
+  const p = toPx(fr, through)
+  const u = unit(dir.x * fr.ppx, -dir.y * fr.ppy)
+  if (!u) return null
+  const L = 4 * (fr.hw + fr.hh) + Math.abs(p.x - fr.hw) + Math.abs(p.y - fr.hh)
+  return { p, u, ends: [{ x: p.x - u.x * L, y: p.y - u.y * L }, { x: p.x + u.x * L, y: p.y + u.y * L }] }
+}
+
+/** A filled arrowhead at `tip`, pointing along the unit direction `u`. */
+function arrowHead(ctx: CanvasRenderingContext2D, tip: Pt, u: Pt, st: Style, len: number): void {
+  const geo = arrowGeometry({ x: tip.x - u.x * len * 2, y: tip.y - u.y * len * 2 }, tip, len)
+  if (!geo) return
+  ctx.beginPath()
+  ctx.moveTo(tip.x, tip.y)
+  ctx.lineTo(geo.w1.x, geo.w1.y)
+  ctx.lineTo(geo.w2.x, geo.w2.y)
+  ctx.closePath()
+  ctx.fillStyle = st.color
+  ctx.fill()
+}
+
+/** A centre of rotation or dilation: a ring, and its name. */
+function centreMark(ctx: CanvasRenderingContext2D, fr: Frame, at: Vec2, text: string, st: Style): void {
+  if (!finite(at)) return
+  const p = toPx(fr, at)
+  if (!onCanvas(fr, p)) return
+  const r = 3.5 * st.stroke
+  ctx.beginPath()
+  ctx.arc(p.x, p.y, r, 0, TWO_PI)
+  ctx.fillStyle = st.theme.bg
+  ctx.fill()
+  ctx.lineWidth = 1.75 * st.stroke
+  ctx.strokeStyle = st.color
+  ctx.stroke()
+  label(ctx, fr, p.x, p.y, { x: -Math.SQRT1_2, y: Math.SQRT1_2 }, r, text, st)
+}
+
+/**
+ * Everything a transformation draws besides the image: the mirror line, the
+ * rotation's centre and arc, the dilation's rays, the translation vector, the
+ * vertex paths — and a polygon's lines of symmetry. Under the figure, so the
+ * image's own outline and vertex dots read on top.
+ */
+function drawAids(ctx: CanvasRenderingContext2D, a: ShapeAidsDraw, fr: Frame, st: Style): void {
+  ctx.save()
+  ctx.strokeStyle = st.color
+  ctx.lineCap = 'round'
+  ctx.lineJoin = 'round'
+
+  if (a.symLines && a.symLines.length > 0) {
+    ctx.globalAlpha = 0.8
+    ctx.lineWidth = AID_WIDTH * st.stroke
+    setDash(ctx, SYM_DASH, st)
+    for (const l of a.symLines) {
+      const sl = screenLine(fr, l.through, l.dir)
+      if (sl) strokePath(ctx, fr, sl.ends, false)
+    }
+  }
+  if (a.mirror) {
+    ctx.globalAlpha = 0.9
+    ctx.lineWidth = 1.75 * st.stroke
+    setDash(ctx, MIRROR_DASH, st)
+    const sl = screenLine(fr, a.mirror.through, a.mirror.dir)
+    if (sl) strokePath(ctx, fr, sl.ends, false)
+  }
+  if (a.rays && a.rays.length > 0) {
+    ctx.globalAlpha = 0.7
+    ctx.lineWidth = 1.25 * st.stroke
+    setDash(ctx, RAY_DASH, st)
+    for (const [p, q] of a.rays) {
+      if (finite(p) && finite(q)) strokePath(ctx, fr, [toPx(fr, p), toPx(fr, q)], false)
+    }
+  }
+  if (a.paths && a.paths.length > 0) {
+    ctx.globalAlpha = 0.85
+    ctx.lineWidth = 1.5 * st.stroke
+    setDash(ctx, PATH_DASH, st)
+    for (const [p, q] of a.paths) {
+      if (finite(p) && finite(q)) strokePath(ctx, fr, [toPx(fr, p), toPx(fr, q)], false)
+    }
+  }
+  setDash(ctx, [], st)
+  ctx.globalAlpha = 1
+
+  if (a.arc && finite(a.arc.center) && finite(a.arc.from) && finite(a.arc.to)) {
+    const c = toPx(fr, a.arc.center)
+    const f = toPx(fr, a.arc.from)
+    const t = toPx(fr, a.arc.to)
+    // the radii to the vertex and to its image, quietly dashed
+    ctx.globalAlpha = 0.7
+    ctx.lineWidth = 1.25 * st.stroke
+    setDash(ctx, RAY_DASH, st)
+    strokePath(ctx, fr, [c, f], false)
+    strokePath(ctx, fr, [c, t], false)
+    setDash(ctx, [], st)
+    ctx.globalAlpha = 1
+    let r = Math.hypot(f.x - c.x, f.y - c.y)
+    const a0 = r < 1e-9 ? 0 : Math.atan2(f.y - c.y, f.x - c.x)
+    if (r < ARC_MIN_R * st.stroke) r = ARC_MIN_R * st.stroke
+    // screen y points down: a counterclockwise turn in the plane is a
+    // DEcreasing screen angle
+    const sweep = (-a.arc.deg * Math.PI) / 180
+    const a1 = a0 + sweep
+    ctx.lineWidth = 1.75 * st.stroke
+    ctx.beginPath()
+    ctx.arc(c.x, c.y, r, a0, a1, sweep < 0)
+    ctx.stroke()
+    const e = { x: c.x + r * Math.cos(a1), y: c.y + r * Math.sin(a1) }
+    const dir = sweep < 0 ? { x: Math.sin(a1), y: -Math.cos(a1) } : { x: -Math.sin(a1), y: Math.cos(a1) }
+    arrowHead(ctx, e, dir, st, 9 * st.stroke)
+    const am = a0 + sweep / 2
+    label(ctx, fr, c.x + r * Math.cos(am), c.y + r * Math.sin(am), { x: Math.cos(am), y: Math.sin(am) }, 2 * st.stroke, a.arc.label, st)
+  }
+  if (a.vector && finite(a.vector.tail) && finite(a.vector.v)) {
+    const tail = toPx(fr, a.vector.tail)
+    const tip = toPx(fr, { x: a.vector.tail.x + a.vector.v.x, y: a.vector.tail.y + a.vector.v.y })
+    const geo = arrowGeometry(tail, tip, 11 * st.stroke)
+    if (geo) {
+      ctx.lineWidth = 2 * st.stroke
+      strokePath(ctx, fr, [tail, geo.base], false)
+      arrowHead(ctx, tip, geo.u, st, 11 * st.stroke)
+      const n = { x: geo.u.y, y: -geo.u.x }
+      label(ctx, fr, (tail.x + tip.x) / 2, (tail.y + tip.y) / 2, n, st.stroke, a.vector.label, st)
+    }
+  }
+  if (a.mirror) {
+    const sl = screenLine(fr, a.mirror.through, a.mirror.dir)
+    if (sl) {
+      // the equation chip: near the middle of the board, on the line's upper side
+      const t = (fr.hw - sl.p.x) * sl.u.x + (fr.hh - sl.p.y) * sl.u.y
+      const step = 150 * st.type
+      const at = { x: sl.p.x + sl.u.x * (t + step), y: sl.p.y + sl.u.y * (t + step) }
+      const spot = onCanvas(fr, at) ? at : { x: sl.p.x + sl.u.x * t, y: sl.p.y + sl.u.y * t }
+      label(ctx, fr, spot.x, spot.y, upperNormal(sl.u), st.stroke, a.mirror.label, st)
+    }
+  }
+  if (a.center) centreMark(ctx, fr, a.center.at, a.center.label, st)
+  if (a.symText && finite(a.symText.at)) {
+    const p = toPx(fr, a.symText.at)
+    label(ctx, fr, p.x, p.y, { x: 0, y: 1 }, 0, a.symText.text, st)
+  }
+  ctx.restore()
 }
 
 // ---------------------------------------------------------------------------
@@ -1032,6 +1204,8 @@ export function drawShapes(
     if (!s || !s.visible) continue
     const st: Style = { stroke, type, theme, ink, color: paint(s.color), fillAlpha }
     try {
+      if (s.kind !== 'vector' && s.aids) drawAids(ctx, s.aids, fr, st)
+      if (s.kind !== 'vector' && s.figureHidden) continue
       switch (s.kind) {
         case 'point':
           drawPoint(ctx, s, fr, st)

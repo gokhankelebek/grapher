@@ -28,7 +28,7 @@
 const MATH_SYMBOLS: Readonly<Record<string, string>> = {
   '−': '-', '–': '-', 'π': '\\pi', 'θ': '\\theta', '∞': '\\infty', '≈': '\\approx',
   '≤': '\\le', '≥': '\\ge', '≠': '\\ne', '·': '\\cdot', '⋅': '\\cdot', '×': '\\times',
-  '÷': '\\div', '±': '\\pm', '°': '^{\\circ}', '′': "'", '″': "''", 'Δ': '\\Delta',
+  '÷': '\\div', '±': '\\pm', '°': '^{\\circ}', '′': "'", '″': "''", '‴': "'''", 'Δ': '\\Delta',
   'δ': '\\delta', 'ε': '\\varepsilon', 'α': '\\alpha', 'β': '\\beta', 'γ': '\\gamma',
   'λ': '\\lambda', 'μ': '\\mu', 'σ': '\\sigma', 'φ': '\\varphi', 'ω': '\\omega',
   'τ': '\\tau', 'ρ': '\\rho', 'Σ': '\\Sigma', 'Ω': '\\Omega', '∫': '\\int',
@@ -178,7 +178,7 @@ const ATOM = String.raw`(?:\d+(?:\.\d+)?)?(?:√\d+)?π?`
 const FRAC_RE = new RegExp(`(${ATOM})/(${ATOM})`, 'g')
 
 /** What may end / start an operand: a space between two of them is kept in math. */
-const OPERAND_END = /[A-Za-z0-9.)\]#&%πθ∞'′″⁰¹²³⁴⁵⁶⁷⁸⁹₀₁₂₃₄₅₆₇₈₉ₙₓᵢₖₐ✓✔✗✘\u0003\u0005]/
+const OPERAND_END = /[A-Za-z0-9.)\]#&%πθ∞'′″‴⁰¹²³⁴⁵⁶⁷⁸⁹₀₁₂₃₄₅₆₇₈₉ₙₓᵢₖₐ✓✔✗✘\u0003\u0005]/
 const OPERAND_START = /[A-Za-z0-9(#&%πθ√∞✓✔✗✘\u0001\u0004]/
 
 /** Convert a run that is known to be mathematics (no $ around it). */

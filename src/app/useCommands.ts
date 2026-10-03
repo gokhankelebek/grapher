@@ -15,9 +15,12 @@ import type {
   CommandContext,
   CurveFacts,
   SequenceFacts,
+  ShapeFacts,
   SolveFacts,
   TargetFacts,
 } from '../ui/commands'
+import { OPEN_SECTION_EVENT, rememberSection } from '../ui/CardSection'
+import type { ShapesApi } from './useShapes'
 import { curveLegend } from '../ui/present'
 import { MAX_RECENT_COMMANDS, updatePrefs } from '../ui/storage'
 import type { BoardStateApi } from './useBoardState'
@@ -81,9 +84,10 @@ export interface CommandsDeps {
   itemBank: ItemBankApi
   describer: GraphDescriptionApi
   statsApi?: StatsApi
+  shapesApi?: ShapesApi
 }
 
-export function useCommands({ board, docState, session, refs, derived, notices, history, docActions, editing, calc, fieldsApi, typed, tables, domain, numberLine, viewport, unitCircle, rates, overlaysApi, naming, revealMode, exporter, figureSettings, editors, examples, itemBank, describer, statsApi }: CommandsDeps) {
+export function useCommands({ board, docState, session, refs, derived, notices, history, docActions, editing, calc, fieldsApi, typed, tables, domain, numberLine, viewport, unitCircle, rates, overlaysApi, naming, revealMode, exporter, figureSettings, editors, examples, itemBank, describer, statsApi, shapesApi }: CommandsDeps) {
   const {
     curves, kind, items, selectedId, setSelectedId, sidebarOpen, setSidebarOpen, lens, fields,
     shapes, dataSets, sequences, boardGrid, figureStyle, previewFigure, setPreviewFigure,
@@ -218,6 +222,15 @@ export function useCommands({ board, docState, session, refs, derived, notices, 
     toggleSeqSeries,
     toggleSeqSums,
     solveShow: setSolveShow,
+    openShapeTool: (id, tool) => {
+      revealSidebar()
+      const section = tool === 'transform' ? 'shape-transform' : tool === 'compare' ? 'shape-compare' : 'shape-symmetry'
+      rememberSection(section, true)
+      setSelectedId(id)
+      if (tool === 'symmetry') shapesApi?.toggleSymmetry(id, true)
+      // a card already open keeps its sections' state: tell this one to open
+      window.requestAnimationFrame(() => window.dispatchEvent(new CustomEvent(OPEN_SECTION_EVENT, { detail: section })))
+    },
     solveGraph: (id) => {
       const err = graphSolve(id)
       if (err) showToast(err)
@@ -311,6 +324,20 @@ export function useCommands({ board, docState, session, refs, derived, notices, 
                     ]
                   : [],
               )
+            : [],
+        shapes:
+          kind === 'cartesian'
+            ? shapes.map<ShapeFacts>((sh, i) => {
+                const card = shapesApi?.shapeCardFor(sh.id)
+                return {
+                  id: sh.id,
+                  name: card?.figureLabel || `${card?.noun ?? 'Shape'} ${i + 1}`,
+                  text: sh.src,
+                  color: sh.color,
+                  kind: card?.kind ?? null,
+                  image: sh.xform !== undefined,
+                }
+              })
             : [],
         canUndo: undoRef.current.length > 0,
         canRedo: redoRef.current.length > 0,
