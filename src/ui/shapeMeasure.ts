@@ -267,6 +267,9 @@ export function setAllMeasure(
   return out.show || out.to || out.centres ? out : undefined
 }
 
+/** What a point's first partner turns on by itself, so choosing one visibly does something. */
+const PARTNER_SHOW: readonly MeasureFlag[] = ['lengths', 'slopes', 'midpoints']
+
 /** A point's partner set (or cleared). */
 export function setMeasureTo(settings: ShapeMeasureSettings | undefined, to: string | null): ShapeMeasureSettings | undefined {
   const out: ShapeMeasureSettings = {}
@@ -274,7 +277,11 @@ export function setMeasureTo(settings: ShapeMeasureSettings | undefined, to: str
   if (to) {
     out.to = to
     // a fresh partner shows its distance, so choosing one visibly does something
-    if (!settings?.to && !out.show) out.show = ['lengths', 'slopes', 'midpoints']
+    if (!settings?.to && !out.show) out.show = [...PARTNER_SHOW]
+  } else if (settings?.to && out.show && out.show.length === PARTNER_SHOW.length && PARTNER_SHOW.every((f) => out.show!.includes(f))) {
+    // …and clearing the partner takes back what choosing it added (the
+    // toggles draw nothing without one): set-then-clear stores nothing
+    delete out.show
   }
   if (settings?.centres && settings.centres.length > 0) out.centres = [...settings.centres]
   return out.show || out.to || out.centres ? out : undefined
@@ -341,6 +348,12 @@ export interface MeasureCardData {
   summary: string
   /** Its reveal key part. */
   summaryPart: ShapePart
+  /**
+   * What the figure is ("parallelogram"), shown after the summary only while
+   * the classification is not a hidden answer — it has its own key, so
+   * revealing the area does not reveal it.
+   */
+  summaryClass?: string
   reports: MeasureReports
   /** True when the vertices have no typed names (the card calls them A, B, C…). */
   unnamed: boolean
@@ -410,9 +423,9 @@ export function otherRelations(mine: readonly { name: string; a: Vec2; b: Vec2 }
 }
 
 /** The collapsed summary of the Measurements section, and the answer it states. */
-function summaryOf(kind: Shape['kind'], r: MeasureReports): { text: string; part: ShapePart } {
+function summaryOf(kind: Shape['kind'], r: MeasureReports): { text: string; part: ShapePart; cls?: string } {
   if (kind === 'polygon' && r.poly) {
-    return { text: `A = ${withApprox(r.poly.area.area)} · ${r.poly.classification.name}`, part: 'area' }
+    return { text: `A = ${withApprox(r.poly.area.area)}`, part: 'area', cls: r.poly.classification.name }
   }
   if (kind === 'segment' && r.seg) return { text: `length = ${withApprox(r.seg.length)}`, part: 'lengths' }
   if (kind === 'point' && r.pair) return { text: `distance = ${withApprox(r.pair.length)}`, part: 'pair' }
@@ -477,6 +490,7 @@ export function measureCard(args: {
     toggles: measureToggles(shape.kind, settings),
     summary: sum.text,
     summaryPart: sum.part,
+    ...(sum.cls ? { summaryClass: sum.cls } : {}),
     reports,
     unnamed,
     choices,

@@ -102,8 +102,9 @@ export function modesOf(sorted: readonly number[]): { modes: number[]; count: nu
   for (const r of runs) best = Math.max(best, r.k)
   if (best <= 1) return { modes: [], count: 1 }
   const modes = runs.filter((r) => r.k === best).map((r) => r.v)
-  // "Every value appears twice" has no mode in the sense a class means.
-  if (modes.length === runs.length) return { modes: [], count: best }
+  // "Every value appears twice" has no mode in the sense a class means —
+  // but 5, 5, 5, 5 (one value, every time) has the mode 5.
+  if (modes.length === runs.length && runs.length > 1) return { modes: [], count: best }
   return { modes, count: best }
 }
 
@@ -440,12 +441,55 @@ export function niceNearest(raw: number): number {
 export function defaultBinWidth(values: readonly number[]): number {
   const s = summarize(values)
   if (s.n === 0) return 1
-  if (!(s.range > 0)) return niceNearest(Math.max(1e-9, Math.abs(s.min) * 0.1)) || 1
+  // Every value the same: a tenth of it, or 1 when it is 0 (never 10⁻⁹).
+  if (!(s.range > 0)) return s.min !== 0 ? niceNearest(Math.abs(s.min) * 0.1) : 1
   const k = Math.min(12, Math.max(5, Math.ceil(Math.log2(s.n) + 1)))
   let w = niceNearest(s.range / k)
   // whole-number data gets whole-number bins
   if (s.sorted.every((v) => Number.isInteger(v)) && w < 1) w = 1
   return w
+}
+
+/** The most bins a histogram draws; a typed width that would make more is widened (see histogramWidth). */
+export const MAX_HIST_BINS = 200
+
+/** The smallest "nice" number (1, 2, 2.5 or 5 × 10ᵏ) at or above raw. */
+export function niceAtLeast(raw: number): number {
+  if (!(raw > 0) || !Number.isFinite(raw)) return 1
+  const e = Math.floor(Math.log10(raw))
+  for (const k of [e - 1, e, e + 1]) {
+    for (const m of [1, 2, 2.5, 5]) {
+      const c = Number((m * 10 ** k).toPrecision(12))
+      if (c >= raw * (1 - 1e-12)) return c
+    }
+  }
+  return Number((10 ** (e + 1)).toPrecision(12))
+}
+
+/**
+ * The width a histogram actually draws with, and why when it is not the one
+ * asked for: a width that would cut the data into more than MAX_HIST_BINS
+ * bins (0.001 over a range of 100) is widened to the smallest nice width
+ * that fits, and said so, instead of the plot going blank.
+ */
+export function histogramWidth(values: readonly number[], width: number): { width: number; note: string | null } {
+  const xs = values.filter((v) => Number.isFinite(v))
+  const w = width > 0 && Number.isFinite(width) ? width : 1
+  if (xs.length === 0) return { width: w, note: null }
+  let lo = Infinity
+  let hi = -Infinity
+  for (const v of xs) {
+    if (v < lo) lo = v
+    if (v > hi) hi = v
+  }
+  const bins = Math.floor((hi - lo) / w) + 2
+  if (bins <= MAX_HIST_BINS) return { width: w, note: null }
+  const wide = niceAtLeast((hi - lo) / (MAX_HIST_BINS - 2))
+  const fmt = (v: number): string => String(Number(v.toPrecision(6)))
+  return {
+    width: wide,
+    note: `A bin width of ${fmt(w)} would make about ${Math.round((hi - lo) / w).toLocaleString('en-US')} bins: drawn with width ${fmt(wide)} instead.`,
+  }
 }
 
 export interface Bins {

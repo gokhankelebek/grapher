@@ -642,6 +642,12 @@ export interface ShapeXform {
   op: XformOp
   /** The aids drawn; absent means the default for the op (see defaultAids). */
   aids?: XformAid[]
+  /**
+   * Which image of its figure this is, from 2 (absent: the first). The second
+   * image of ABC is A′₂B′₂C′₂ — not A″B″C″, which names the image of A′B′C′ —
+   * and it keeps that name when the first is deleted.
+   */
+  n?: number
 }
 
 const MAX_XFORM_TEXT = 120
@@ -686,6 +692,8 @@ export function cleanXform(raw: unknown): ShapeXform | undefined {
   if (!op) return undefined
   const out: ShapeXform = { of: o.of, op }
   if (Array.isArray(o.aids)) out.aids = XFORM_AIDS.filter((a) => (o.aids as unknown[]).includes(a))
+  const n = (raw as { n?: unknown }).n
+  if (typeof n === 'number' && Number.isInteger(n) && n >= 2 && n <= 99) out.n = n
   return out
 }
 

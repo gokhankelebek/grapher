@@ -78,7 +78,23 @@ export interface OverlayRect {
   height: number
 }
 
-export type Overlay =
+/**
+ * What every overlay may carry besides its own kind's fields.
+ *
+ * `hideWith` is a reveal-mode answer key (src/ui/reveal.ts) the overlay
+ * BELONGS to: while that answer is hidden — on the screen in reveal mode, in
+ * an export made from it, in a worksheet's student copy — the overlay is not
+ * drawn at all. A hidden transformation image's triangle centres are the
+ * case that needs it: its medians and circumcircle would draw the image.
+ */
+export interface OverlayCommon {
+  hideWith?: string
+}
+
+export type Overlay = OverlayCommon & OverlayKinds
+
+/** The overlay kinds, one per shape of mark. */
+export type OverlayKinds =
   | {
       kind: 'area'
       /** Which curve bounds the region (FittedCurve.id). */
@@ -143,6 +159,12 @@ export type Overlay =
       color?: string
       /** Stroke weight in CSS px before `present.stroke`. Absent: MARK_LINE_WIDTH. */
       width?: number
+      /**
+       * The reveal-mode answer key this segment gives away (the Evaluate
+       * guide across to the y-axis marks f(a) there): hidden — not replaced
+       * by a "?" — while that answer is hidden, and left off a student copy.
+       */
+      answer?: string
     }
   | {
       kind: 'line'
@@ -191,6 +213,8 @@ export type Overlay =
       at: Vec2
       hollow?: boolean
       color?: string
+      /** The reveal-mode answer key this dot shows (as on 'label'): reveal mode leaves it out while hidden. */
+      answer?: string
     }
   | {
       kind: 'hline'

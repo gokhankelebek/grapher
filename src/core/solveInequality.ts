@@ -1324,7 +1324,11 @@ function goldenMinAbs(f: Fn, a: number, b: number): number {
 const sgnOf = (v: number): Sign => (v > 0 ? 1 : v < 0 ? -1 : 0)
 
 /** Zeros (and, for h itself, poles, jumps and domain ends) of f over one stretch. */
-function scanStretch(f: Fn, lo: number, hi: number, zerosOnly: boolean, marks: Mark[], state: { overflow: boolean }): void {
+function scanStretch(
+  f: Fn, lo: number, hi: number, zerosOnly: boolean, marks: Mark[], state: { overflow: boolean },
+  /** max(|L|, |R|) when h = L − R: what an exact 0 of h could be absorbing */
+  magAt?: Fn,
+): void {
   const xs = gridOf(lo, hi)
   const vs = xs.map(f)
   const n = xs.length
@@ -1366,7 +1370,17 @@ function scanStretch(f: Fn, lo: number, hi: number, zerosOnly: boolean, marks: M
       const before = i > first && !isN(i - 1) ? Math.abs(vs[i - 1]) : Infinity
       const after = j < last && !isN(j + 1) ? Math.abs(vs[j + 1]) : Infinity
       const underflow = (before < 1e-250 || after < 1e-250) && (j > i || Math.min(before, after) < 1e-250)
-      if (!underflow) {
+      // ABSORPTION: h = L − R is 0 here only because the sides are so large
+      // that the difference seen next door is below their last bits —
+      // 2ˣ − (2ˣ + 1) is −1 everywhere, but 0 in doubles once 2ˣ passes
+      // ~10¹³ (and 2ˣ + 1 rounds to 2ˣ past 2⁵³). Not a zero, not a stretch.
+      let absorbed = false
+      if (magAt) {
+        const near = Math.min(before, after)
+        const M = Math.max(magAt(xs[i]), magAt(xs[j]))
+        absorbed = Number.isFinite(near) && Number.isFinite(M) && near <= 1e-11 * M
+      }
+      if (!underflow && !absorbed) {
         if (j === i) marks.push({ x: xs[i], exact: null, why: 'zero', scale: localScale(i) })
         else {
           if (i > first && !isN(i - 1)) {
@@ -1474,11 +1488,17 @@ interface Engine {
   windowCut: boolean
 }
 
-function numericValue(v: number): { v: number | null; text: string; exact: boolean } {
+/**
+ * h at a test point, as the table prints it. `relative`: h is L − R already
+ * snapped to 0 where the two sides agree to their last bits (buildEngine), so
+ * a value that is merely SMALL is not 0 — e^(−100) − 2^(−100) ≈ −7.9×10⁻³¹ is
+ * negative, and calling it 0 put all of (−∞, 0) into e^x = 2^x.
+ */
+function numericValue(v: number, relative = false): { v: number | null; text: string; exact: boolean } {
   if (Number.isNaN(v)) return { v: null, text: 'undefined', exact: true }
   if (!Number.isFinite(v)) return { v, text: decimalText(v), exact: false }
   if (v === 0) return { v: 0, text: '0', exact: true }
-  if (Math.abs(v) < 1e-13) return { v: 0, text: '0', exact: true }
+  if (Math.abs(v) < 1e-13) return relative ? { v, text: `≈ ${decimalText(v)}`, exact: false } : { v: 0, text: '0', exact: true }
   const ef = exactForm(v)
   if (ef) return { v, text: ef.text, exact: true }
   const ext = extForms(v, { bases: [], trig: false }, 1e-11)
@@ -1517,11 +1537,13 @@ function buildEngine(
   sides: { L: ExprNode; R: ExprNode } | null,
 ): Engine {
   let f = compileFn(h, isVar)
+  let magAt: Fn | undefined
   if (sides) {
     // L − R where the two agree to the last few bits is 0, not noise that
     // changes sign (sin²x + cos²x = 1, everywhere)
     const fL = compileFn(sides.L, isVar)
     const fR = compileFn(sides.R, isVar)
+    magAt = (x) => Math.max(Math.abs(fL(x)), Math.abs(fR(x)))
     f = (x) => {
       const a = fL(x)
       const b = fR(x)
@@ -1610,7 +1632,7 @@ function buildEngine(
     if (P.lo < win[0] || P.hi > win[1]) windowCut = true
     if (!(hi > lo)) continue
     const raw: Mark[] = []
-    scanStretch(f, lo, hi, false, raw, state)
+    scanStretch(f, lo, hi, false, raw, state, magAt)
     for (const g of singFns) {
       const zs: Mark[] = []
       scanStretch(g, lo, hi, true, zs, { overflow: false })
@@ -1622,7 +1644,7 @@ function buildEngine(
     // the universe's own finite ends are added later; a scan end is not a domain end
     marks.push(...raw)
   }
-  return { ...base, marks, valueAt: (t: number) => numericValue(f(t)), numeric: true, overflow: state.overflow, windowCut }
+  return { ...base, marks, valueAt: (t: number) => numericValue(f(t), !!sides), numeric: true, overflow: state.overflow, windowCut }
 }
 
 // ============================================================================
@@ -1979,8 +2001,14 @@ function solveRel(
       const cands = testCandidates(a.x, b.x, env.trig)
       let pick = cands[0]
       let val = eng.valueAt(pick.t, pick.q)
+      const first = val
       for (const c of cands.slice(0, 12)) {
         const vv = c === cands[0] ? val : eng.valueAt(c.t, c.q)
+        // An exact value reads better — but never a 0 the nicest point did not
+        // see: there is no zero inside the interval, so a 0 far out is the
+        // arithmetic failing (eˣ and 2ˣ both underflow at x = −10000; eˣ + 0.001
+        // rounds to eˣ at x = 100), not h vanishing.
+        if (vv.v === 0 && first.v !== null && first.v !== 0) continue
         if (vv.exact && vv.v !== null) { pick = c; val = vv; break }
       }
       let sign: Sign | null = null

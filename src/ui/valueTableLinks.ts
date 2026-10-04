@@ -22,7 +22,7 @@
 // Pure: no React, no DOM, no canvas.
 // ============================================================================
 
-import type { ExactPoint, FittedCurve, ModelSpec } from '../core/types'
+import type { ExactPoint, FittedCurve, ModelSpec, PieceInfo } from '../core/types'
 import type { ValueTableCol, ValueTableView } from '../core/persist'
 import {
   VALUE_TABLE_COLS,
@@ -32,15 +32,20 @@ import {
   VALUE_TABLE_START_DEFAULT,
   VALUE_TABLE_STEP_DEFAULT,
 } from '../core/persist'
-import type { Cell, Evaluator, Num, SyntheticDivision, TablePattern, ValueTable } from '../core/valueTable'
+import type { Cell, CrossScan, Evaluator, Gap, GapFn, Num, SyntheticDivision, TablePattern, TableStructure, ValueTable } from '../core/valueTable'
 import {
   cell,
+  GAP_RESOLUTION,
+  compareGrid,
+  crossingExact,
+  linearGrid,
+  plainGap,
+  scanCrossings,
   divisorA,
   divisorText,
   irrationalText,
   numCell,
   numValue,
-  overtake,
   parserText,
   polyText,
   polynomialCoeffs,
@@ -51,7 +56,11 @@ import {
   valueTable,
 } from '../core/valueTable'
 import { tableNumber } from '../core/limits'
-import { parseExpression } from '../core/parse'
+import { analyzeExpr, parseExpression } from '../core/parse'
+import type { ExprNode } from '../core/parse'
+import type { Asym, Formula, LogNum } from '../core/growth'
+import { commonPeriod, diffClass, classify, growthReason, isExponential, logEvaluator, lsum, polyDegree } from '../core/growth'
+import type { ExactForm } from '../core/exact'
 import { prettyMath } from '../core/ineqText'
 import type { Overlay } from '../render/overlays'
 import type { ValueTableFigure } from '../render/valueTable'
@@ -119,12 +128,16 @@ export const COL_TITLE: Record<ValueTableCol, string> = {
 export { tableKey }
 export type { TablePart }
 
-/** The keys a stored table states, in teaching order. */
-export function tableKeysOf(curveId: string, v: ValueTableView | undefined | null): string[] {
+/**
+ * The keys a stored table states, in teaching order. `live`: the curves on
+ * the board — a compare whose other curve has gone states nothing, so it is
+ * no step of reveal mode.
+ */
+export function tableKeysOf(curveId: string, v: ValueTableView | undefined | null, live?: ReadonlySet<string>): string[] {
   if (!v) return []
   const out = [tableKey(curveId, 'values')]
   if (v.ev) out.push(tableKey(curveId, 'eval'))
-  if (v.vs) out.push(tableKey(curveId, 'compare'))
+  if (v.vs && (!live || live.has(v.vs))) out.push(tableKey(curveId, 'compare'))
   if (v.div) out.push(tableKey(curveId, 'divide'))
   return out
 }
@@ -143,6 +156,15 @@ export function parseX(text: string): number | null {
   if (s === '') return null
   const v = parseNumeric(s)
   return v !== null && Number.isFinite(v) ? v : null
+}
+
+/**
+ * Text that is a NUMBER as a table's x is written — 2, −1/3, 0.25, π/6, 2π,
+ * √2, sqrt(3)/2, e — rather than an expression to work out (sin(2), f(1)).
+ */
+export function isNumberText(text: string): boolean {
+  const s = text.trim().replace(/\bpi\b/gi, '').replace(/\bsqrt\b/gi, '').replace(/[π√]/g, '')
+  return /^[\d\s.+\-−*/()^e]*$/i.test(s) && !/e\s*\(/i.test(s) && /\d|π|pi|e/i.test(text)
 }
 
 /** The x's of a typed list: comma- or semicolon-separated (spaces when there are neither). */
@@ -200,8 +222,30 @@ export function cellEvaluator(curve: FittedCurve, models: Record<string, ModelSp
   if (!f) return null
   const spec = models[curve.modelId]
   const ex = spec?.evalExact
+  // A typed restriction's own ends: {0 < x < 5} leaves out 0 and 5, which a
+  // [0, 5] domain alone would let in.
+  let pieces: PieceInfo[] | null = null
+  try {
+    pieces = spec?.pieces ? spec.pieces(curve.params) : null
+  } catch {
+    pieces = null
+  }
+  const inPieces = (x: number): boolean =>
+    !pieces ||
+    pieces.some((p) => (x > p.lo || (x === p.lo && p.loClosed)) && (x < p.hi || (x === p.hi && p.hiClosed)))
   return (x: number): number => {
+    if (!inPieces(x)) return Number.NaN
     const v = f(x)
+    // Undefined stays undefined: outside a typed restriction ({x ≥ 0}) the
+    // plain evaluation is NaN, and the exact one — which reads the formula
+    // alone — must never put a value back.
+    if (Number.isNaN(v)) return Number.NaN
+    if (!Number.isFinite(v)) {
+      // ±∞ AT x with finite values beside it is a pole or ln 0: undefined.
+      // ∞ on both sides is an overflow (2¹¹⁰⁰), which is a value, too large.
+      const d = 1e-7 * Math.max(1, Math.abs(x))
+      return Number.isFinite(f(x - d)) || Number.isFinite(f(x + d)) ? Number.NaN : v
+    }
     if (!ex || !Number.isFinite(x)) return v
     const d = curve.domain
     if (d && (x < Math.min(d[0], d[1]) || x > Math.max(d[0], d[1]))) return v
@@ -209,7 +253,10 @@ export function cellEvaluator(curve: FittedCurve, models: Record<string, ModelSp
     if (!pt) return v
     try {
       const e = ex.call(spec, curve.params, pt)
-      return typeof e === 'number' ? e : v
+      if (typeof e !== 'number') return v
+      // The exact value refines a defined one, or removes a spurious one
+      // (tan at π/2) — it is never ±∞.
+      return Number.isFinite(e) || Number.isNaN(e) ? e : Number.NaN
     } catch {
       return v
     }
@@ -273,9 +320,17 @@ export type EvalView =
     }
   | { ok: false; question: string; error: string }
 
-/** "f(1.5)" from what was typed: spaces tidied, a real minus sign. */
+const SUPS: Record<string, string> = { '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹' }
+
+/** "f(1.5)" from what was typed: spaces tidied, a real minus sign, f(1)^2 as f(1)², * as ·. */
 function questionText(src: string): string {
-  return src.trim().replace(/\s+/g, ' ').replace(/-/g, MINUS).replace(/\bpi\b/g, 'π')
+  return src
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/\^\s*(\d+)/g, (_, d: string) => d.split('').map((c) => SUPS[c] ?? c).join(''))
+    .replace(/\*/g, '·')
+    .replace(/-/g, MINUS)
+    .replace(/\bpi\b/g, 'π')
 }
 
 /** "= 4.375", "= √2 ≈ 1.414214", "≈ 2.718282". */
@@ -306,8 +361,8 @@ export function evaluateTyped(src: string, self: FittedCurve, ctx: TableContext)
   const text = src.trim()
   if (text === '') return null
   const selfLetter = ctx.letters[self.id] ?? null
-  // A bare number: f(a).
-  const bare = parseX(text)
+  // A bare number: f(a). (sin(2) is a value to work out, not an x.)
+  const bare = isNumberText(text) ? parseX(text) : null
   if (bare !== null) {
     const ev = cellEvaluator(self, ctx.models)
     const name = nameOf(ctx, self.id)
@@ -361,22 +416,30 @@ export function evaluateTyped(src: string, self: FittedCurve, ctx: TableContext)
     return { ok: false, question, error: `${what} is not a function on this board` }
   }
   if (plot.kind !== 'explicit') return { ok: false, question, error: 'Type a value to work out, such as f(2.5)' }
-  let v0 = Number.NaN
-  let v1 = Number.NaN
+  // x in it at all — sqrt(x − 1) is undefined at 0.37, but it is not a number.
+  const DEPENDS = 'That depends on x — type a value, such as f(2.5)'
+  try {
+    const a = analyzeExpr(parserText(text), env)
+    if (a.ok && a.free.includes('x')) return { ok: false, question, error: DEPENDS }
+  } catch {
+    /* the probes below decide */
+  }
+  const probes = [0.37, 2.91, -1.73, 5.29, 11.7, 0.053, 101.3]
+  const vals: number[] = []
   try {
     const model = plot.makeModel('__table_eval__')
     const ev = model.evalExplicit
-    if (ev) {
-      v0 = ev.call(model, plot.defaultParams, 0.37)
-      v1 = ev.call(model, plot.defaultParams, 2.91)
-    }
+    if (ev) for (const x of probes) vals.push(ev.call(model, plot.defaultParams, x))
   } catch {
-    v0 = Number.NaN
+    /* nothing to evaluate */
   }
-  if (Number.isFinite(v0) && Number.isFinite(v1) && Math.abs(v0 - v1) > 1e-9 * Math.max(1, Math.abs(v0))) {
-    return { ok: false, question, error: 'That depends on x — type a value, such as f(2.5)' }
+  const finite = vals.filter(Number.isFinite)
+  if (finite.some((v) => Math.abs(v - finite[0]) > 1e-9 * Math.max(1, Math.abs(finite[0])))) {
+    return { ok: false, question, error: DEPENDS }
   }
-  return okEval(question, cell(v0), null)
+  // Defined at some probes and not at others: it moves with x.
+  if (finite.length > 0 && finite.length < vals.length) return { ok: false, question, error: DEPENDS }
+  return okEval(question, cell(finite.length > 0 ? finite[0] : Number.NaN), null)
 }
 
 // ---------------------------------------------------------------------------
@@ -456,19 +519,280 @@ export interface TablePanel {
 }
 
 const fix2 = (v: number): string => {
-  const s = Math.abs(v) >= 1e5 ? v.toExponential(2) : v.toFixed(2)
-  return s.replace(/^-/, MINUS)
+  if (Math.abs(v) >= 1e5) {
+    const [m, e] = v.toExponential(2).split('e')
+    const exp = String(Number(e)).replace(/-/g, MINUS).split('').map((c) => SUPS[c] ?? (c === MINUS ? '⁻' : c)).join('')
+    return `${m.replace(/^-/, MINUS)} × 10${exp}`
+  }
+  return v.toFixed(2).replace(/^-/, MINUS)
 }
 
-/** "x = 2", "x ≈ 9.94". */
+/** "x = 2", "x ≈ 9.94". A found root reads as exact only when it is a small, short number (x = 4), never x = 3430631121407624. */
 function atText(x: number, exactText: string | null): string {
   if (exactText) return `x = ${exactText}`
   const c = cell(x)
-  return c.exact && !/[/√π]/.test(c.text) ? `x = ${c.text}` : `x ≈ ${fix2(x)}`
+  return c.exact && Math.abs(x) < 1e6 && !/[/√π]/.test(c.text) ? `x = ${c.text}` : `x ≈ ${fix2(x)}`
 }
 
 function labelFor(ctx: TableContext, id: string): string {
   return shortLabel(ctx.sources?.[id]) ?? `${nameOf(ctx, id)}(x)`
+}
+
+// ---------------------------------------------------------------------------
+// The formula a curve IS (src/core/growth.ts reads it)
+// ---------------------------------------------------------------------------
+
+const numNode = (v: number): ExprNode => ({ t: 'num', v, raw: String(v) }) as ExprNode
+const X_NODE = { t: 'var', name: 'x' } as ExprNode
+const binNode = (op: '+' | '*' | '^', a: ExprNode, b: ExprNode): ExprNode => ({ t: 'bin', op, a, b }) as ExprNode
+
+/** A library family's formula at its parameters (lines, polynomials, a·e^(bx) + c); null for the rest. */
+function libraryFormula(modelId: string, p: readonly number[]): ExprNode | null {
+  if (!p.every(Number.isFinite)) return null
+  if (modelId === 'line' || modelId === 'poly2' || modelId === 'poly3' || modelId === 'poly4') {
+    // ascending coefficients
+    let out: ExprNode = numNode(p[0] ?? 0)
+    for (let k = 1; k < p.length; k++) out = binNode('+', out, binNode('*', numNode(p[k]), k === 1 ? X_NODE : binNode('^', X_NODE, numNode(k))))
+    return out
+  }
+  if (modelId === 'exp' && p.length >= 3) {
+    const e = { t: 'call', fn: 'exp', args: [binNode('*', numNode(p[1]), X_NODE)] } as ExprNode
+    return binNode('+', binNode('*', numNode(p[0]), e), numNode(p[2]))
+  }
+  return null
+}
+
+/**
+ * The formula a curve is, with its sliders:
+ *   'whole'   only when that formula IS the curve for every x — no pieces,
+ *             no restriction, no sketch's ends: what end behaviour needs
+ *   'family'  the same, except that a sketched line or polynomial is its
+ *             family (the polynomial a teacher divides is the one drawn)
+ *   'drawn'   the formula the curve follows wherever it is drawn (one
+ *             piece): what a table's pattern needs, since its rows lie there
+ */
+export function formulaOf(curve: FittedCurve, models: Record<string, ModelSpec>, mode: 'whole' | 'family' | 'drawn'): Formula | null {
+  if (curve.kind !== 'explicit') return null
+  const spec = models[curve.modelId]
+  if (!spec || typeof spec.inequality === 'function') return null
+  if (spec.formula) {
+    if (mode !== 'drawn' && (spec.pieces || curve.domain)) return null
+    return { node: spec.formula, params: curve.params }
+  }
+  if (spec.pieces) return null
+  if (mode === 'whole' && curve.domain) return null
+  if (mode === 'family' && curve.domain && !/^(line|poly\d)$/.test(curve.modelId)) return null
+  const node = libraryFormula(curve.modelId, curve.params)
+  return node ? { node, params: curve.params } : null
+}
+
+/** What the table's pattern may name for this curve (src/core/valueTable.ts TableStructure), or null when nothing. */
+export function tableStructure(curve: FittedCurve, models: Record<string, ModelSpec>): TableStructure | null {
+  const F = formulaOf(curve, models, 'drawn')
+  if (!F) return null
+  let degree: number | null = null
+  if (polyDegree(F) !== null) {
+    const c = formulaCoeffs(F) ?? coeffsBySamples(curve, models)
+    if (c) degree = c.length - 1
+  }
+  return { degree, exponential: isExponential(F) }
+}
+
+// ---------------------------------------------------------------------------
+// Comparing two functions (F-IF.9, F-LE.3)
+// ---------------------------------------------------------------------------
+
+/** f − g from log-space values: overflow-free, so 1.01ˣ and x¹⁰⁰ compare at x = 10⁶. */
+function logGap(f: (x: number) => LogNum | null, g: (x: number) => LogNum | null): GapFn {
+  return (x: number): Gap | null => {
+    const a = f(x)
+    const b = g(x)
+    if (!a || !b) return null
+    if (a.l === Infinity && b.l === Infinity && a.s === b.s) return null
+    const d = lsum(a, { s: -b.s, l: b.l })
+    if (!d || Number.isNaN(d.l)) return null
+    const la = a.s !== 0 ? a.l : -Infinity
+    const lb = b.s !== 0 ? b.l : -Infinity
+    const m = Math.max(0, la, lb)
+    const rel = d.s === 0 ? 0 : Math.exp(d.l - m)
+    // ℓ carries about 16 digits of ITSELF: a relative difference below that
+    // is rounding, and has no sign (x² + 3x and x² + 2x at x = 10¹⁴⁰)
+    const blur =
+      a.s === b.s && a.s !== 0 && Math.abs(la - lb) <= GAP_RESOLUTION * Math.max(1, Math.abs(la), Math.abs(lb))
+    return { s: blur || rel <= GAP_RESOLUTION ? 0 : d.s, rel }
+  }
+}
+
+/** How far "for good" is checked when f and g are read in log space. */
+export const COMPARE_FAR = 1e300
+
+/**
+ * What a comparison can say:
+ *   same         the formulas are one function
+ *   eventual     the growth classes decide who is ahead for good, and the
+ *                search found the last crossing before that
+ *   beyond       the growth classes decide, but the leader at the end of
+ *                the search (10³⁰⁰) is the other one: the pass lies further
+ *   oscillating  f − g keeps changing sign as x grows (sin x, x·cos x)
+ *   periodic     f − g is periodic: one period decides (crossings or not)
+ *   window       nothing decides beyond the table: its range only
+ */
+export interface CompareOutcome {
+  kind: 'same' | 'eventual' | 'beyond' | 'oscillating' | 'periodic' | 'window'
+  /** Who is ahead for good (eventual, beyond), throughout (periodic without crossings), or at the end of the table (window). */
+  leader: 'f' | 'g' | null
+  /** Who is ahead at the end of the search (beyond). */
+  endLeader: 'f' | 'g' | null
+  crossings: number[]
+  touches: number[]
+  /** The last crossing. */
+  last: number | null
+  exact: ExactForm | null
+  /**
+   * Where the leader's final run began: a crossing (it passes there), a flip
+   * (a pole or a gap in the domain: it is ahead after it, without a
+   * crossing), or the start (ahead throughout). `first` is where both were
+   * first defined.
+   */
+  settled: number
+  settledBy: 'cross' | 'flip' | 'start'
+  first: number
+  /** Sign changes at poles (periodic: a difference that changes sign only there). */
+  flips: number
+  reason: string | null
+  from: number
+  to: number
+}
+
+const sideOf = (s: number): 'f' | 'g' | null => (s > 0 ? 'f' : s < 0 ? 'g' : null)
+
+/** Compare f and g from x = from on; `end` is the table's last x. F and G: their formulas, when they are the whole curve. */
+export function compareFunctions(
+  f: Evaluator,
+  g: Evaluator,
+  F: Formula | null,
+  G: Formula | null,
+  from: number,
+  end: number,
+  names?: { f: string; g: string },
+): CompareOutcome {
+  const lastOf = (xs: number[]): number | null => (xs.length > 0 ? xs[xs.length - 1] : null)
+  const of = (scan: CrossScan) => ({
+    endLeader: null,
+    exact: null,
+    reason: null,
+    from,
+    crossings: scan.crossings,
+    touches: scan.touches,
+    last: lastOf(scan.crossings),
+    settled: scan.settled,
+    settledBy: scan.settledBy,
+    first: scan.first,
+    flips: scan.flips.length,
+    to: scan.reach,
+  })
+  const window = (): CompareOutcome => {
+    const to = end > from ? end : from + 1
+    const scan = scanCrossings(plainGap(f, g), linearGrid(from, to))
+    const last = lastOf(scan.crossings)
+    return { ...of(scan), kind: 'window', leader: sideOf(scan.lastS), exact: last !== null ? crossingExact(f, g, last) : null, to }
+  }
+  const H: Asym | null = F && G ? diffClass(F, G) : null
+  if (H && H.k === 'sum' && H.terms.length === 0 && H.exact) {
+    return { ...of(scanCrossings(() => null, [])), kind: 'same', leader: null, to: Infinity }
+  }
+  if (H && H.k === 'sum' && H.terms.length > 0 && F && G) {
+    const sigma = H.terms[0].c > 0 ? 1 : -1
+    const lf = logEvaluator(F)
+    const lg = logEvaluator(G)
+    const gap = lf && lg ? logGap(lf, lg) : plainGap(f, g)
+    const scan: CrossScan = scanCrossings(gap, compareGrid(from, COMPARE_FAR))
+    if (!Number.isNaN(scan.lastS)) {
+      const leader = sideOf(sigma)
+      const last = lastOf(scan.crossings)
+      const reason = growthReason(classify(F), classify(G), leader ?? 'f', names)
+      const exact = last !== null ? crossingExact(f, g, last) : null
+      if (scan.lastS === sigma) return { ...of(scan), kind: 'eventual', leader, exact, reason }
+      return { ...of(scan), kind: 'beyond', leader, endLeader: sideOf(scan.lastS), exact, reason }
+    }
+    return window()
+  }
+  if (H && H.k === 'osc') {
+    const scan = scanCrossings(plainGap(f, g), compareGrid(from, Math.max(end, from + 60)))
+    return { ...of(scan), kind: 'oscillating', leader: null, last: null }
+  }
+  const T = F && G ? commonPeriod([F, G]) : null
+  if (typeof T === 'number' && T > 0 && Number.isFinite(T)) {
+    // One whole period from the table's start says everything: it repeats.
+    const scan = scanCrossings(plainGap(f, g), linearGrid(from, from + T, 4800))
+    const inPeriod = scan.crossings.filter((x) => x < from + T * (1 - 1e-9))
+    if (inPeriod.length > 0) {
+      // the first few, a period's worth and the start of the next
+      const more = scanCrossings(plainGap(f, g), linearGrid(from, from + 2 * T, 9600))
+      return { ...of(more), kind: 'periodic', leader: null, touches: [], last: null, to: Infinity }
+    }
+    if (!Number.isNaN(scan.lastS)) {
+      // ahead throughout — unless the difference changes sign at its poles
+      const leader = scan.flips.length > 0 ? null : sideOf(scan.lastS)
+      return { ...of(scan), kind: 'periodic', leader, crossings: [], touches: scan.touches.filter((x) => x < from + T * (1 - 1e-9)), last: null, to: Infinity }
+    }
+  }
+  return window()
+}
+
+/**
+ * A comparison is worked out once per pair of curves (their specs, sliders
+ * and the table's range) — the card, the figure and the sentences all ask.
+ */
+const COMPARE_CACHE = new WeakMap<ModelSpec, WeakMap<ModelSpec, Map<string, CompareOutcome>>>()
+
+function cachedCompare(
+  a: FittedCurve,
+  b: FittedCurve,
+  models: Record<string, ModelSpec>,
+  from: number,
+  end: number,
+  work: () => CompareOutcome,
+): CompareOutcome {
+  const sa = models[a.modelId]
+  const sb = models[b.modelId]
+  if (!sa || !sb) return work()
+  let inner = COMPARE_CACHE.get(sa)
+  if (!inner) COMPARE_CACHE.set(sa, (inner = new WeakMap()))
+  let m = inner.get(sb)
+  if (!m) inner.set(sb, (m = new Map()))
+  const key = `${a.params.join(',')}|${JSON.stringify(a.domain)}|${b.params.join(',')}|${JSON.stringify(b.domain)}|${from}|${end}`
+  const hit = m.get(key)
+  if (hit) return hit
+  const out = work()
+  if (m.size > 32) m.delete(m.keys().next().value as string)
+  m.set(key, out)
+  return out
+}
+
+/** At most this many crossings are listed; the rest are counted. */
+export const CROSSINGS_SHOWN = 5
+
+function crossingsLine(o: CompareOutcome): string | null {
+  const list = o.crossings.map((x) => atText(x, null))
+  if (o.kind === 'oscillating' || (o.kind === 'periodic' && list.length > 0)) {
+    const first = list.slice(0, CROSSINGS_SHOWN)
+    return first.length > 0
+      ? `They cross infinitely often${o.kind === 'periodic' ? ' (the difference is periodic)' : ''}: at ${first.join(', ')}, …`
+      : 'They cross infinitely often.'
+  }
+  if (list.length <= 1) return null
+  if (list.length <= CROSSINGS_SHOWN) return `They cross at ${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}.`
+  return `They cross ${list.length} times: first at ${list.slice(0, CROSSINGS_SHOWN).join(', ')} and ${list.length - CROSSINGS_SHOWN} more, the last at ${list[list.length - 1]}.`
+}
+
+/** ", except at x = 1, where they touch" — the touches after `after`. */
+function touchText(touches: readonly number[], after: number | null, f: Evaluator, g: Evaluator): string {
+  const t = touches.filter((x) => after === null || x > after)
+  if (t.length === 0) return ''
+  const at = t.slice(0, 3).map((x) => atText(x, crossingExact(f, g, x)?.text ?? null).replace(/^x [=≈] /, ''))
+  const more = t.length > 3 ? ` and ${t.length - 3} more` : ''
+  return `, except at x ${t.length === 1 && crossingExact(f, g, t[0]) ? '=' : '≈'} ${at.join(', ')}${more}, where they touch`
 }
 
 function compareView(
@@ -487,20 +811,66 @@ function compareView(
   let crossings: string | null = null
   if (f && g && xs.length > 0) {
     const from = Math.min(...xs)
-    const res = overtake(f, g, from)
-    if (res) {
-      const lead = res.leader === 'f' ? labelFor(ctx, self.id) : labelFor(ctx, other.id)
-      const back = res.leader === 'f' ? labelFor(ctx, other.id) : labelFor(ctx, self.id)
-      const to = cell(res.to).exact ? cell(res.to).text : fix2(res.to)
-      if (res.x === null) {
-        sentence = `${lead} is above ${back} for every x checked, from x = ${cell(from).text} to x = ${to}`
-      } else {
-        sentence = `${lead} passes ${back} after ${atText(res.x, res.exact?.text ?? null)} and stays ahead (checked to x = ${to})`
+    const end = Math.max(...xs)
+    const labF = labelFor(ctx, self.id)
+    const labG = labelFor(ctx, other.id)
+    const F = formulaOf(self, ctx.models, 'whole')
+    const G = formulaOf(other, ctx.models, 'whole')
+    let o: CompareOutcome | null = null
+    try {
+      o = cachedCompare(self, other, ctx.models, from, end, () => compareFunctions(f, g, F, G, from, end, { f: labF, g: labG }))
+    } catch {
+      o = null
+    }
+    if (o) {
+      const lab = (w: 'f' | 'g' | null): string => (w === 'g' ? labG : labF)
+      const lead = lab(o.leader)
+      const back = lab(o.leader === 'g' ? 'f' : 'g')
+      const lastAt = o.last !== null ? atText(o.last, o.exact?.text ?? null) : null
+      const touch = touchText(o.touches, o.settledBy === 'start' ? null : o.settled, f, g)
+      const fromText = cell(from).text
+      /** Since when the leader has been ahead: "passes … after x ≈ 9.94", "is above … for every x after x = 0". */
+      const since = (tail: string): string => {
+        if (o!.settledBy === 'cross' && lastAt !== null) return `${lead} passes ${back} after ${lastAt}${tail}`
+        if (o!.settledBy === 'flip') return `${lead} is above ${back} for every x after ${atText(o!.settled, null)}${tail}`
+        const where = o!.first > from + 1e-9 * Math.max(1, Math.abs(from)) ? ' where both are defined' : ''
+        return `${lead} is above ${back} for every x from x = ${fromText} on${where}${tail}`
       }
-      if (res.crossings.length > 1) {
-        const list = res.crossings.map((x) => atText(x, null))
-        crossings = `They cross at ${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}.`
+      switch (o.kind) {
+        case 'same':
+          sentence = `${labF} and ${labG} are the same function: they agree for every x`
+          break
+        case 'eventual':
+          sentence = `${since(touch)}${o.settledBy === 'cross' && !touch ? '' : ','} and stays ahead for good (${o.reason})`
+          break
+        case 'beyond':
+          sentence = `${lab(o.endLeader)} is ahead as far as x = ${fix2(o.to)}, but ${lead} passes it eventually (${o.reason})`
+          break
+        case 'oscillating':
+          sentence = `Neither stays ahead: ${labF} − ${labG} keeps changing sign as x grows`
+          break
+        case 'periodic':
+          sentence =
+            o.leader !== null
+              ? `${lead} is above ${back} for every x${touch} (the difference is periodic, so one period decides)`
+              : o.crossings.length > 0
+                ? `Neither stays ahead: the difference is periodic, so the pattern of crossings repeats forever`
+                : `Neither stays ahead: the difference is periodic and changes sign at its asymptotes`
+          break
+        case 'window': {
+          // Nothing decides beyond the table: say only what its range shows.
+          const endText = cell(o.to).exact ? cell(o.to).text : fix2(o.to)
+          const where = o.first > from + 1e-9 * Math.max(1, Math.abs(from)) ? ' where both are defined' : ''
+          if (o.leader === null) sentence = null
+          else if (o.settledBy === 'cross' && lastAt !== null)
+            sentence = `${lead} passes ${back} after ${lastAt} and is ahead up to x = ${endText}, the end of the table${touch}`
+          else if (o.settledBy === 'flip')
+            sentence = `${lead} is above ${back} for every x after ${atText(o.settled, null)} up to x = ${endText}, the end of the table${touch}`
+          else sentence = `${lead} is above ${back} for every x in the table, from x = ${fromText} to x = ${endText}${where}${touch}`
+          break
+        }
       }
+      crossings = crossingsLine(o)
     }
   }
   let avg: string | null = null
@@ -521,13 +891,43 @@ function compareView(
   return { otherId: other.id, otherName: nameB, sentence, crossings, avg }
 }
 
-/** The polynomial's coefficients, highest first, or null when f is not one. */
+/**
+ * The polynomial's coefficients, highest first, or null when f is not one.
+ * Its FORMULA must be a polynomial (src/core/growth.ts polyDegree) and hold
+ * for every x: a piecewise (x² for x < 10, x after) or a restricted curve is
+ * not a polynomial, whatever its values near 0 look like.
+ */
 export function polyOf(curve: FittedCurve, models: Record<string, ModelSpec>): Num[] | null {
   if (curve.kind !== 'explicit') return null
-  const f = familyF(curve, models)
-  if (!f) return null
-  const c = polynomialCoeffs(f)
+  const F = formulaOf(curve, models, 'family')
+  if (!F) return null
+  const c = formulaCoeffs(F) ?? (polyDegree(F) !== null ? coeffsBySamples(curve, models) : null)
   return c && c.length >= 2 ? c : null
+}
+
+function coeffsBySamples(curve: FittedCurve, models: Record<string, ModelSpec>): Num[] | null {
+  const f = familyF(curve, models)
+  return f ? polynomialCoeffs(f) : null
+}
+
+/**
+ * A polynomial formula's coefficients, highest first, expanded from the
+ * formula itself (src/core/growth.ts) — 10⁷ + 0.001x² has c₂ = 0.001, not an
+ * interpolation's 0.0010000002 — each snapped to a fraction when it is one.
+ * Null when the formula is not a polynomial (or not one it can expand).
+ */
+export function formulaCoeffs(F: Formula): Num[] | null {
+  if (polyDegree(F) === null) return null
+  const A = classify(F)
+  if (!A || A.k !== 'sum' || !A.exact) return null
+  let deg = 0
+  for (const t of A.terms) {
+    if (t.lam !== 0 || t.q !== 0 || !Number.isInteger(t.p) || t.p < 0) return null
+    deg = Math.max(deg, t.p)
+  }
+  const out: Num[] = []
+  for (let k = deg; k >= 0; k--) out.push(toNum(A.terms.find((t) => t.p === k)?.c ?? 0))
+  return out
 }
 
 function divisionView(coeffs: Num[], input: string, name: string, f: Evaluator | null): DivisionView {
@@ -606,12 +1006,14 @@ export function tablePanel(curve: FittedCurve, stored: ValueTableView | undefine
   if (t) {
     for (let i = 0; i < t.xs.length; i++) {
       const row: TableRowView = { x: t.x[i], y: t.y[i] }
-      if (i >= 1) {
+      // Beside an undefined value the difference is blank, not "undefined".
+      const def = (k: number): boolean => Number.isFinite(t.y[k].v)
+      if (i >= 1 && def(i) && def(i - 1)) {
         if (s.cols.includes('d1')) row.d1 = t.d1[i - 1]
         if (s.cols.includes('ratio')) row.ratio = t.ratio[i - 1]
         if (s.cols.includes('avg')) row.avg = t.avg[i - 1]
       }
-      if (i >= 2 && s.cols.includes('d2')) row.d2 = t.d2[i - 2]
+      if (i >= 2 && def(i) && def(i - 1) && def(i - 2) && s.cols.includes('d2')) row.d2 = t.d2[i - 2]
       if (gEv) {
         const gy = gEv(t.xs[i])
         row.g = cell(gy)
@@ -625,7 +1027,7 @@ export function tablePanel(curve: FittedCurve, stored: ValueTableView | undefine
       rows.push(row)
     }
   }
-  const pattern = t && plain ? tablePattern(t, plain) : null
+  const pattern = t && plain ? tablePattern(t, plain, tableStructure(curve, ctx.models)) : null
   const evaluate = s.ev ? evaluateTyped(s.ev, curve, ctx) : null
   const compare =
     other && t && gEv
@@ -703,7 +1105,8 @@ export function tableOverlays(
     if (!owner || !owner.visible) continue
     const { x, y } = r.point
     out.push({ kind: 'segment', curveId: owner.id, from: { x, y: 0 }, to: { x, y }, dashed: true })
-    out.push({ kind: 'segment', curveId: owner.id, from: { x: 0, y }, to: { x, y }, dashed: true })
+    // the guide across to the y-axis marks f(a) there: an answer, like the chip
+    out.push({ kind: 'segment', curveId: owner.id, from: { x: 0, y }, to: { x, y }, dashed: true, answer: tableKey(c.id, 'eval') })
     out.push({ kind: 'dot', curveId: owner.id, at: { x, y } })
     out.push({
       kind: 'label',

@@ -24,6 +24,37 @@
 
 export type ResidualVerdict = 'none' | 'curved' | 'few'
 
+/**
+ * How small a residual must be to be 0 — rounding, not a miss: a billionth
+ * of the y data's own scale (its range plus the size of its mean), so
+ * y = 1.7x − 2.9 fitted exactly leaves residuals of 10⁻¹⁵ that are 0, and
+ * those are never read as a pattern.
+ */
+export function residualZeroTol(ys: readonly number[]): number {
+  const v = ys.filter(Number.isFinite)
+  if (v.length === 0) return 0
+  let lo = Infinity
+  let hi = -Infinity
+  let sum = 0
+  for (const y of v) {
+    lo = Math.min(lo, y)
+    hi = Math.max(hi, y)
+    sum += y
+  }
+  return 1e-9 * (hi - lo + Math.abs(sum / v.length))
+}
+
+/** Every residual is 0 within residualZeroTol: the model passes through every point. */
+export function exactFit(residuals: readonly number[], ys: readonly number[]): boolean {
+  const r = residuals.filter(Number.isFinite)
+  if (r.length === 0) return false
+  const tol = residualZeroTol(ys)
+  return r.every((x) => Math.abs(x) <= tol)
+}
+
+/** What the card says when the model fits every point exactly. */
+export const EXACT_FIT_SENTENCE = 'Every residual is 0: the model fits every point exactly.'
+
 export interface ResidualPattern {
   verdict: ResidualVerdict
   /** R² of the residuals on a parabola in x (0 … 1). */
@@ -37,6 +68,8 @@ export interface ResidualPattern {
   fan: 'out' | 'in' | null
   /** The sentence for the card: cautious, and about THIS model. */
   sentence: string
+  /** Every residual is 0 (to rounding): the model fits every point exactly. */
+  exact?: true
 }
 
 /** Fewer points than this: no verdict on a pattern. */
@@ -158,10 +191,19 @@ function corr(a: readonly number[], b: readonly number[]): number {
  * The verdict on a residual plot. `model` names the fit in the sentence
  * ("a linear model", "this quadratic model").
  */
-export function residualPattern(xs: readonly number[], residuals: readonly number[], model = 'a linear model'): ResidualPattern {
+export function residualPattern(
+  xs: readonly number[],
+  residuals: readonly number[],
+  model = 'a linear model',
+  ys?: readonly number[],
+): ResidualPattern {
   const pts: { x: number; r: number }[] = []
   for (let i = 0; i < Math.min(xs.length, residuals.length); i++) {
     if (Number.isFinite(xs[i]) && Number.isFinite(residuals[i])) pts.push({ x: xs[i], r: residuals[i] })
+  }
+  // An exact fit: the residuals are rounding noise, and noise has no pattern.
+  if (ys && pts.length > 0 && exactFit(pts.map((p) => p.r), ys)) {
+    return { verdict: 'none', curvature: 0, runs: 0, expectedRuns: 0, runsZ: 0, fan: null, sentence: EXACT_FIT_SENTENCE, exact: true }
   }
   const X = pts.map((p) => p.x)
   const R = pts.map((p) => p.r)

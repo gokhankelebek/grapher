@@ -275,6 +275,11 @@ export function DataPlotCard(props: DataPlotCardProps) {
             )}
           </div>
         )}
+        {p.dist === 'hist' && card.binNote && (
+          <div className="rr-sentence" data-testid="dp-bin-note">
+            {card.binNote}
+          </div>
+        )}
       </CardSection>
 
       {card.ok && (

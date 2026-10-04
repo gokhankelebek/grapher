@@ -28,6 +28,7 @@ import type { Effect, Fences, NamedSummary, Recommendation, Shape, Summary } fro
 import {
   compareSentence,
   defaultBinWidth,
+  histogramWidth,
   dotStacks,
   dotStep,
   exclusionEffect,
@@ -172,10 +173,19 @@ export function dataPlotView(p: BoardDataPlot): SetView[] {
 /** Any value at all on the plot. */
 export const hasData = (p: BoardDataPlot): boolean => p.sets.some((s) => s.values.length > 0)
 
-/** The bin width the histogram uses: the typed one, else the default for every value on the plot. */
+/**
+ * The bin width the histogram uses: the typed one, else the default for every
+ * value on the plot — widened when it would make more bins than can be drawn.
+ */
 export function binWidthOf(p: BoardDataPlot): number {
-  if (p.binWidth !== undefined && p.binWidth > 0 && Number.isFinite(p.binWidth)) return p.binWidth
-  return defaultBinWidth(p.sets.flatMap((s) => s.values))
+  return binWidthInfo(p).width
+}
+
+/** The width drawn, and why it is not the typed one (null when it is). */
+export function binWidthInfo(p: BoardDataPlot): { width: number; note: string | null } {
+  const every = p.sets.flatMap((s) => s.values)
+  const w = p.binWidth !== undefined && p.binWidth > 0 && Number.isFinite(p.binWidth) ? p.binWidth : defaultBinWidth(every)
+  return histogramWidth(every, w)
 }
 
 // ---------------------------------------------------------------------------
@@ -533,6 +543,8 @@ export interface DataPlotCardData {
   compare: string
   binWidth: number
   binAuto: boolean
+  /** Why the histogram is drawn with another width than the typed one (too many bins), or null. */
+  binNote: string | null
 }
 
 /** The quartile method, as the card states it. */
@@ -594,8 +606,10 @@ export function dataPlotCard(p: BoardDataPlot): DataPlotCardData {
     ok,
     sets,
     compare: compareSentence(live.map(named), (x) => short(x)),
-    binWidth: binWidthOf(p),
+    // the field shows what was typed; binNote says when another width is drawn
+    binWidth: p.binWidth !== undefined && p.binWidth > 0 && Number.isFinite(p.binWidth) ? p.binWidth : binWidthOf(p),
     binAuto: p.binWidth === undefined,
+    binNote: p.dist === 'hist' ? binWidthInfo(p).note : null,
   }
 }
 

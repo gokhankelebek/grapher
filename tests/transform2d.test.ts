@@ -22,6 +22,7 @@ import {
   preservedChecks,
   primeName,
   primeTex,
+  siblingName,
   symmetryOf,
 } from '../src/core/transform2d'
 import type { Motion } from '../src/core/transform2d'
@@ -373,14 +374,21 @@ describe('what a transformation preserves', () => {
 })
 
 describe('names with primes', () => {
-  it('A → A′ → A″ → A‴ → A₄ → A₅', () => {
+  it('A → A′ → A″ → A‴ → A⁽⁴⁾ → A⁽⁵⁾: primes count the steps; a subscript is carried along', () => {
     expect(primeName('A')).toBe('A′')
     expect(primeName('A′')).toBe('A″')
     expect(primeName('A″')).toBe('A‴')
-    expect(primeName('A‴')).toBe('A₄')
-    expect(primeName('A₉')).toBe('A₁₀')
+    expect(primeName('A‴')).toBe('A⁽⁴⁾')
+    expect(primeName('A⁽⁹⁾')).toBe('A⁽¹⁰⁾')
+    // a second image (A′₂) keeps its number down the chain; a typed A₁ is primed
+    expect(primeName('A′₂')).toBe('A″₂')
+    expect(primeName('A₁')).toBe('A′₁')
+    expect(siblingName('A′', 2)).toBe('A′₂')
+    expect(siblingName('A′', 1)).toBe('A′')
     expect(primeTex('A₁₂')).toBe('A_{12}')
     expect(primeTex('A″')).toBe("A''")
+    expect(primeTex('A′₂')).toBe("A'_{2}")
+    expect(primeTex('A⁽⁴⁾')).toBe('A^{(4)}')
   })
 
   it('identify: a dilation through 180° is a negative scale factor', () => {

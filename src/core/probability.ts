@@ -318,12 +318,19 @@ export const SET_LETTERS = ['A', 'B', 'C'] as const
 
 type Tok = { t: 'set'; i: number } | { t: 'all' } | { t: 'none' } | { t: 'or' } | { t: 'and' } | { t: 'minus' } | { t: 'not' } | { t: 'comp' } | { t: '(' } | { t: ')' }
 
+/** What a Venn event says to "A | B" or "A given B". */
+export const CONDITIONAL_HINT =
+  'Venn events are sets; “|” means “given”. For P(A | B) use the two-way table, or type A ∩ B and B here and divide P(A ∩ B) by P(B).'
+
 function tokenize(src: string, sets: number): Tok[] | string {
   const out: Tok[] = []
   const operandEnded = (): boolean => {
     const last = out[out.length - 1]
     return !!last && (last.t === 'set' || last.t === 'all' || last.t === 'none' || last.t === ')' || last.t === 'comp')
   }
+  // "A | B" is a conditional probability, never a union: say so rather
+  // than shade A ∪ B for a student who meant P(A | B).
+  if (/[|∣]/.test(src) || /\bgiven\b/i.test(src)) return CONDITIONAL_HINT
   let i = 0
   const s = src
   while (i < s.length) {
@@ -335,7 +342,7 @@ function tokenize(src: string, sets: number): Tok[] | string {
     const rest = s.slice(i)
     const word = /^[A-Za-z]+/.exec(rest)?.[0] ?? ''
     const lower = word.toLowerCase()
-    if (ch === '∪' || ch === '⋃' || ch === '+' || ch === '|') {
+    if (ch === '∪' || ch === '⋃' || ch === '+') {
       out.push({ t: 'or' })
       i++
     } else if (ch === '∩' || ch === '⋂' || ch === '&' || ch === '∧') {
@@ -748,7 +755,13 @@ export function shortNames(names: readonly string[]): string[] {
   return new Set(first).size === first.length ? first : names.map((n) => n.trim() || '?')
 }
 
-export const MAX_LEAVES = 27
+/**
+ * Every path is computed: 4 outcomes over 3 stages (or 4 colours over 3
+ * draws) is 4³ = 64. Nothing is ever cut — a tree that drops paths gets every
+ * event's probability wrong. The FIGURE decides how much it can label
+ * (src/ui/probLinks.ts TREE_LABEL_MAX); the arithmetic is always complete.
+ */
+export const MAX_LEAVES = 64
 export const MAX_STAGES = 3
 export const MAX_OUTCOMES = 4
 
@@ -791,7 +804,7 @@ export function bagTree(colors: readonly BagColor[], draws: number, replace: boo
   const grow = (counts: number[], depth: number, key: string, path: Branch[]): TreeNode => {
     const node: TreeNode = { key, depth, branches: [] }
     if (depth === k) {
-      if (leaves.length < MAX_LEAVES) leaves.push(finishLeaf(path, key, shorts, stageNames))
+      leaves.push(finishLeaf(path, key, shorts, stageNames))
       return node
     }
     const T = counts.reduce((a, b) => a + b, 0)
@@ -835,7 +848,7 @@ export function manualTree(stages: readonly TreeStage[]): TreeResult {
   const grow = (depth: number, key: string, path: Branch[], index: number): TreeNode => {
     const node: TreeNode = { key, depth, branches: [] }
     if (depth === st.length) {
-      if (leaves.length < MAX_LEAVES) leaves.push(finishLeaf(path, key, shorts, stageNames))
+      leaves.push(finishLeaf(path, key, shorts, stageNames))
       return node
     }
     const s = st[depth]

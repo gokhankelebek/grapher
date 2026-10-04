@@ -420,7 +420,10 @@ export function docFigure(m: DocModel, o: FigureOptions): DocFigure {
     ...domain, ...base, ...polarAreas, ...sysOverlays, ...(seq?.overlays ?? []), ...tableMarks, ...circleMarks, ...centreMarks,
   ]
   // A student copy keeps no chip that states an answer (reveal mode's keys).
-  const overlays = o.answers ? allOverlays : allOverlays.filter((ov) => !(ov.kind === 'label' && ov.answer))
+  // …nor anything belonging to an answer it hides (a transformation image's centres).
+  const overlays = o.answers
+    ? allOverlays
+    : allOverlays.filter((ov) => !((ov.kind === 'label' || ov.kind === 'segment') && ov.answer) && !ov.hideWith)
   const shapes = cartesian
     ? [
         ...safe(() => {

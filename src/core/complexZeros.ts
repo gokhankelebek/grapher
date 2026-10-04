@@ -260,6 +260,7 @@ function discriminantOf(q: readonly Num[], exact: boolean): Discriminant {
     return numValue(n) < 0 || t.includes('/') ? `(${t})` : t
   }
   let valueText: string
+  let valueTex: string | null = null
   let value: number
   if (exact && isRat(a) && isRat(b) && isRat(c)) {
     // b² − 4ac in exact fractions
@@ -269,7 +270,11 @@ function discriminantOf(q: readonly Num[], exact: boolean): Discriminant {
     value = Number(n) / Number(d)
   } else {
     value = numValue(b) ** 2 - 4 * numValue(a) * numValue(c)
-    valueText = `≈ ${dec4(value)}`
+    // significant figures, not four decimals: 0² − 4(1)(0.000001) is
+    // ≈ −4×10⁻⁶, and "≈ 0.0000 < 0" would be a false sentence on its face
+    const sv = sigFigs(value)
+    valueText = `≈ ${sv.text}`
+    valueTex = sv.tex
   }
   const verdict: Discriminant['verdict'] = Math.abs(value) <= (exact ? 0 : 1e-12) ? 'one-repeated' : value > 0 ? 'two-real' : 'two-non-real'
   const words = {
@@ -283,7 +288,7 @@ function discriminantOf(q: readonly Num[], exact: boolean): Discriminant {
     of: polyText(q),
     value,
     text: `b² − 4ac = ${paren(b)}² − 4(${cellOf(a)})(${cellOf(c)}) ${valueText.startsWith('≈') ? valueText : `= ${valueText}`}`,
-    tex: `b^2 - 4ac = ${valueText.startsWith('≈') ? `\\approx ${vShort.replace(MINUS, '-')}` : vShort.replace(MINUS, '-')}`,
+    tex: `b^2 - 4ac = ${valueText.startsWith('≈') ? `\\approx ${valueTex ?? vShort.replace(MINUS, '-')}` : vShort.replace(MINUS, '-')}`,
     verdict,
     sentence: `${vShort} ${rel}: ${words}`,
     exact,
@@ -356,58 +361,89 @@ function aberth(c: readonly number[]): C[] {
   return z
 }
 
+/** Four significant figures: "−36", "0.1235", "−4×10⁻⁶" (text) and its LaTeX. */
+function sigFigs(v: number): { text: string; tex: string } {
+  if (v === 0 || !Number.isFinite(v)) return { text: '0', tex: '0' }
+  const a = Math.abs(v)
+  if (a >= 1e-3 && a < 1e7) {
+    const t = String(Number(v.toPrecision(4)))
+    return { text: t.replace('-', MINUS), tex: t }
+  }
+  const [m, e] = v.toExponential(3).split('e')
+  const mt = String(Number(m))
+  const ev = Number(e)
+  const supE = String(ev).split('').map((ch) => (ch === '-' ? '⁻' : '⁰¹²³⁴⁵⁶⁷⁸⁹'[Number(ch)] ?? ch)).join('')
+  return { text: `${mt.replace('-', MINUS)}×10${supE}`, tex: `${mt} \\times 10^{${ev}}` }
+}
+
 function dec4(v: number): string {
   const r = Math.abs(v) < 5e-5 ? 0 : v
   const s = r.toFixed(4)
   return s.startsWith('-') ? MINUS + s.slice(1) : s
 }
 
-/** Numeric zeros as entries: real ones and conjugate pairs, clustered into multiplicities. */
-function numericEntries(c: readonly number[]): CZero[] {
+/**
+ * Numeric zeros as entries: real ones and conjugate pairs, clustered into
+ * multiplicities. Null — no section rather than a wrong one — when the zeros
+ * do not sort cleanly into real zeros and conjugate pairs.
+ *
+ * A repeated zero converges to a small RING around it (radius ~ε^(1/m)), so a
+ * cluster is real when its mean's imaginary part is inside that ring, not
+ * only when it is below 10⁻⁷: a triple zero at √2 is real even though its
+ * three approximations are not. A non-real cluster needs a conjugate partner
+ * within the same tolerance, or nothing is said.
+ */
+function numericEntries(c: readonly number[]): CZero[] | null {
   const zs = aberth(c)
+  if (zs.some((z) => !Number.isFinite(z[0]) || !Number.isFinite(z[1]))) return null
   const scale = Math.max(1, ...zs.map(cabs))
+  const near = 1e-4 * scale
   // cluster (a repeated zero converges to a small ring)
   const used = new Array(zs.length).fill(false)
-  const groups: { z: C; m: number }[] = []
+  const groups: { z: C; m: number; radius: number }[] = []
   for (let i = 0; i < zs.length; i++) {
     if (used[i]) continue
     const members = [zs[i]]
     used[i] = true
     for (let j = i + 1; j < zs.length; j++) {
-      if (!used[j] && cabs(csub(zs[i], zs[j])) <= 1e-4 * scale) {
+      if (!used[j] && cabs(csub(zs[i], zs[j])) <= near) {
         members.push(zs[j])
         used[j] = true
       }
     }
     const m = members.length
     const mean: C = [members.reduce((s, z) => s + z[0], 0) / m, members.reduce((s, z) => s + z[1], 0) / m]
-    groups.push({ z: mean, m })
+    const radius = m > 1 ? Math.max(...members.map((z) => cabs(csub(z, mean)))) : 0
+    groups.push({ z: mean, m, radius })
   }
   const out: CZero[] = []
   const taken = new Array(groups.length).fill(false)
   for (let i = 0; i < groups.length; i++) {
     if (taken[i]) continue
-    const { z, m } = groups[i]
-    if (Math.abs(z[1]) <= 1e-7 * Math.max(1, cabs(z))) {
+    const { z, m, radius } = groups[i]
+    if (Math.abs(z[1]) <= Math.max(1e-7 * Math.max(1, cabs(z)), 2 * radius)) {
       taken[i] = true
       out.push({ kind: 'real', re: z[0], im: 0, mult: m, exact: false, text: dec4(z[0]), tex: dec4(z[0]).replace(MINUS, '-'), count: m })
       continue
     }
-    // its conjugate
+    // its conjugate: the same multiplicity, at [re, −im]
     let best = -1
     let bestD = Infinity
     for (let j = 0; j < groups.length; j++) {
-      if (j === i || taken[j]) continue
+      if (j === i || taken[j] || groups[j].m !== m) continue
       const d = cabs(csub(groups[j].z, [z[0], -z[1]]))
       if (d < bestD) {
         bestD = d
         best = j
       }
     }
+    if (best < 0 || bestD > near) return null
     taken[i] = true
-    if (best >= 0) taken[best] = true
+    taken[best] = true
     const re = z[0]
     const im = Math.abs(z[1])
+    // an imaginary part that prints as 0.0000 is not a pair anyone should be shown
+    if (im < 5e-5) return null
     const reT = dec4(re)
     const reZero = reT === '0.0000'
     const text = `${reZero ? '' : `${reT} `}±${reZero ? '' : ' '}${dec4(im)}i`
@@ -465,6 +501,119 @@ function smallFraction(v: number): Num | null {
 }
 
 // ---------------------------------------------------------------------------
+// Repeated factors, exactly: the square-free decomposition over ℚ
+//
+// A zero of multiplicity 3 or more is where a numeric root finder is at its
+// worst — Aberth spreads a triple zero √2 into a ring of radius ~10⁻⁵, whose
+// mean keeps a stray imaginary part, and (x² − 2)³ came out "6 non-real".
+// So repeated factors are split off EXACTLY first, the way a CAS does it:
+// gcd(p, p′) holds every repeated factor once less often, and the chain
+//     G₀ = p,  Gₖ = gcd(Gₖ₋₁, G′ₖ₋₁)
+// gives sₖ = Gₖ₋₁/Gₖ (each factor of multiplicity ≥ k, once), and sₖ/sₖ₊₁ is
+// the product of the factors of multiplicity exactly k. Every polynomial
+// handed on from here is square-free, so its zeros are simple.
+// ---------------------------------------------------------------------------
+
+type BPoly = bigint[]
+
+function btrim(a: BPoly): BPoly {
+  let i = 0
+  while (i < a.length - 1 && a[i] === 0n) i++
+  return a.slice(i)
+}
+const bzero = (a: BPoly): boolean => a.every((c) => c === 0n)
+const bdeg = (a: BPoly): number => btrim(a).length - 1
+
+/** Divide out the content; leading coefficient positive. */
+function bprimitive(a0: BPoly): BPoly {
+  const a = btrim(a0)
+  let g = 0n
+  for (const c of a) g = bgcd(g, c)
+  if (g === 0n) return [0n]
+  const out = a.map((c) => c / g)
+  return out[0] < 0n ? out.map((c) => -c) : out
+}
+
+function bderiv(a: BPoly): BPoly {
+  const n = a.length - 1
+  if (n < 1) return [0n]
+  return a.slice(0, n).map((c, i) => c * BigInt(n - i))
+}
+
+/** lc(b)^(da − db + 1)·a = q·b + r, deg r < deg b: pseudo-division, in integers. */
+function bpdiv(a0: BPoly, b0: BPoly): { q: BPoly; r: BPoly } {
+  const b = btrim(b0)
+  const db = b.length - 1
+  const lb = b[0]
+  let r = btrim(a0)
+  const n = r.length - 1 - db
+  if (n < 0) return { q: [0n], r }
+  let q: BPoly = new Array(n + 1).fill(0n)
+  for (let k = 0; k <= n; k++) {
+    // r is of degree deg a − k here; lb·r − r₀·x^(n − k)·b kills its leading term
+    const lead = r[0]
+    r = r.map((c) => c * lb)
+    q = q.map((c) => c * lb)
+    q[k] += lead
+    for (let j = 0; j <= db; j++) r[j] -= lead * b[j]
+    r = r.slice(1)
+  }
+  return { q, r: r.length > 0 ? btrim(r) : [0n] }
+}
+
+function bpgcd(a0: BPoly, b0: BPoly): BPoly {
+  let a = bprimitive(a0)
+  let b = bprimitive(b0)
+  if (bdeg(a) < bdeg(b)) [a, b] = [b, a]
+  while (!bzero(b)) {
+    const { r } = bpdiv(a, b)
+    a = b
+    b = bzero(r) ? [0n] : bprimitive(r)
+  }
+  return bprimitive(a)
+}
+
+/** a/b when b divides a exactly (as primitive integer polynomials), else null. */
+function bexact(a: BPoly, b: BPoly): BPoly | null {
+  const { q, r } = bpdiv(a, b)
+  return bzero(r) ? bprimitive(q) : null
+}
+
+/**
+ * The square-free decomposition of an integer polynomial: [{ poly, mult }],
+ * p = c·∏ polyₖ^multₖ with each polyₖ square-free and primitive. Null when the
+ * arithmetic fails (it does not, for degree ≤ 8 with sane coefficients).
+ */
+function squareFreeParts(p: BPoly): { poly: BPoly; mult: number }[] | null {
+  const G: BPoly[] = [bprimitive(p)]
+  while (bdeg(G[G.length - 1]) > 0 && G.length < 12) {
+    const g = G[G.length - 1]
+    G.push(bpgcd(g, bderiv(g)))
+  }
+  const S: BPoly[] = []
+  for (let k = 1; k < G.length; k++) {
+    const s = bexact(G[k - 1], G[k])
+    if (!s) return null
+    S.push(s)
+  }
+  S.push([1n])
+  const out: { poly: BPoly; mult: number }[] = []
+  for (let k = 0; k + 1 < S.length; k++) {
+    const part = bexact(S[k], S[k + 1])
+    if (!part) return null
+    if (bdeg(part) > 0) out.push({ poly: part, mult: k + 1 })
+  }
+  return out
+}
+
+/** A bigint polynomial as the valueTable's Num coefficients (null past 2⁵³). */
+function bToNum(a: BPoly): Num[] | null {
+  const lim = 2n ** 53n
+  if (a.some((c) => babs(c) >= lim)) return null
+  return a.map((c) => ({ p: Number(c), q: 1 }))
+}
+
+// ---------------------------------------------------------------------------
 // The driver
 // ---------------------------------------------------------------------------
 
@@ -486,6 +635,7 @@ export function complexZeros(desc0: readonly Num[]): ComplexZeros | null {
   let disc: Discriminant | null = null
   const exactCoeffs = desc.every(isRat)
   let cur: Num[] = desc.slice()
+  let failed = false
 
   const pushQuadratic = (q: Num[], mult: number): void => {
     const ints = integerize(q)
@@ -507,7 +657,8 @@ export function complexZeros(desc0: readonly Num[]): ComplexZeros | null {
       steps.push(`${m0 === 1 ? 'x' : `x${sup(m0)}`} factors out: x = 0${m0 > 1 ? ` (${multiplicityWord(m0)})` : ''}, leaving ${polyText(cur).text}.`)
     }
     // 2. rational zeros by synthetic division
-    if (cur.length - 1 >= 3 || (cur.length - 1 >= 1 && cur.length - 1 !== 2)) {
+    // (a linear or quadratic leftover is solved directly below: no candidates to try)
+    if (cur.length - 1 >= 3) {
       const ints = integerize(cur)
       const d0 = ints ? divisors(ints[ints.length - 1]) : null
       const dn = ints ? divisors(ints[0]) : null
@@ -554,59 +705,90 @@ export function complexZeros(desc0: readonly Num[]): ComplexZeros | null {
       }
     }
     // 4. a cubic or higher with no rational zeros: rational quadratic factors from numeric pairs
-    let guard = 0
-    while (cur.length - 1 >= 3 && guard++ < 4) {
-      const zs = aberth(cur.map(numValue))
-      let found = false
-      for (let i = 0; i < zs.length && !found; i++) {
-        for (let j = i + 1; j < zs.length && !found; j++) {
-          const s = cadd(zs[i], zs[j])
-          const p = cmul(zs[i], zs[j])
-          if (Math.abs(s[1]) > 1e-6 * Math.max(1, cabs(s)) || Math.abs(p[1]) > 1e-6 * Math.max(1, cabs(p))) continue
-          const sq = smallFraction(s[0])
-          const pq = smallFraction(p[0])
-          if (!sq || !pq) continue
-          const quad: Num[] = [{ p: 1, q: 1 }, ratOf(-(sq as { p: number; q: number }).p, (sq as { p: number; q: number }).q), pq]
-          const first = divideExact(cur, quad)
-          if (!first) continue
-          let rest: Num[] = first
-          let mult = 1
-          for (;;) {
-            const again: Num[] | null = rest.length - 1 >= 2 ? divideExact(rest, quad) : null
-            if (!again) break
-            rest = again
-            mult++
+    const solveRest = (start: Num[], k: number): void => {
+      let rest0 = start
+      let guard = 0
+      while (rest0.length - 1 >= 3 && guard++ < 4) {
+        const zs = aberth(rest0.map(numValue))
+        let found = false
+        for (let i = 0; i < zs.length && !found; i++) {
+          for (let j = i + 1; j < zs.length && !found; j++) {
+            const s = cadd(zs[i], zs[j])
+            const p = cmul(zs[i], zs[j])
+            if (Math.abs(s[1]) > 1e-6 * Math.max(1, cabs(s)) || Math.abs(p[1]) > 1e-6 * Math.max(1, cabs(p))) continue
+            const sq = smallFraction(s[0])
+            const pq = smallFraction(p[0])
+            if (!sq || !pq) continue
+            const quad: Num[] = [{ p: 1, q: 1 }, ratOf(-(sq as { p: number; q: number }).p, (sq as { p: number; q: number }).q), pq]
+            const first = divideExact(rest0, quad)
+            if (!first) continue
+            let rest: Num[] = first
+            let mult = 1
+            for (;;) {
+              const again: Num[] | null = rest.length - 1 >= 2 ? divideExact(rest, quad) : null
+              if (!again) break
+              rest = again
+              mult++
+            }
+            const m = mult * k
+            steps.push(`${polyText(quad, true).text} is a factor${m > 1 ? ` (${multiplicityWord(m)})` : ''} — found from the numeric zeros, confirmed by exact division — leaving ${polyText(rest, true).text}.`)
+            pushQuadratic(quad, m)
+            rest0 = rest
+            found = true
           }
-          steps.push(`${polyText(quad, true).text} is a factor${mult > 1 ? ` (${multiplicityWord(mult)})` : ''} — found from the numeric zeros, confirmed by exact division — leaving ${polyText(rest, true).text}.`)
-          pushQuadratic(quad, mult)
-          cur = rest
-          found = true
         }
+        if (!found) break
       }
-      if (!found) break
+      // 3. what is left
+      const deg = rest0.length - 1
+      const each = k > 1 ? ` (each ${multiplicityWord(k)})` : ''
+      if (deg === 1) {
+        const a = rest0[0] as { p: number; q: number }
+        const b = rest0[1] as { p: number; q: number }
+        const x = ratOf(-b.p * a.q, b.q * a.p) as { p: number; q: number }
+        const xt = fracText(BigInt(x.p), BigInt(x.q))
+        zeros.push({ kind: 'real', re: x.p / x.q, im: 0, mult: k, exact: true, text: xt, tex: fracTex(BigInt(x.p), BigInt(x.q)), count: k })
+        if (n > 1) steps.push(`${polyText(rest0, true).text} = 0 gives x = ${xt}${k > 1 ? ` (${multiplicityWord(k)})` : ''}.`)
+      } else if (deg === 2) {
+        disc = discriminantOf(rest0, true)
+        const before = zeros.length
+        pushQuadratic(rest0, k)
+        const added = zeros.slice(before).map((z) => z.text).join(', ')
+        if (n > 2) steps.push(`${polyText(rest0, true).text} = 0 by the quadratic formula: ${disc.sentence}, x = ${added}${each}.`)
+      } else if (deg >= 3) {
+        steps.push(`${polyText(rest0, true).text} has no rational zeros; its zeros are found numerically (≈, to 4 decimals)${each}.`)
+        const got = numericEntries(rest0.map(numValue))
+        if (!got) {
+          failed = true
+          return
+        }
+        zeros.push(...got.map((z) => ({ ...z, mult: z.mult * k, count: z.count * k })))
+      }
     }
-    // 3. what is left
-    const deg = cur.length - 1
-    if (deg === 1) {
-      const a = cur[0] as { p: number; q: number }
-      const b = cur[1] as { p: number; q: number }
-      const x = ratOf(-b.p * a.q, b.q * a.p) as { p: number; q: number }
-      zeros.push({ kind: 'real', re: x.p / x.q, im: 0, mult: 1, exact: true, text: fracText(BigInt(x.p), BigInt(x.q)), tex: fracTex(BigInt(x.p), BigInt(x.q)), count: 1 })
-    } else if (deg === 2) {
-      disc = discriminantOf(cur, true)
-      const before = zeros.length
-      pushQuadratic(cur, 1)
-      const added = zeros.slice(before).map((z) => z.text).join(', ')
-      if (n > 2) steps.push(`${polyText(cur, true).text} = 0 by the quadratic formula: ${disc.sentence}, x = ${added}.`)
-    } else if (deg >= 3) {
-      steps.push(`${polyText(cur, true).text} has no rational zeros; its zeros are found numerically (≈, to 4 decimals).`)
-      zeros.push(...numericEntries(cur.map(numValue)))
+    // Repeated factors come off exactly first (see "Repeated factors" above):
+    // what is handed on is square-free, its zeros simple.
+    const ints = cur.length - 1 >= 3 ? integerize(cur) : null
+    const parts = ints ? squareFreeParts(ints) : null
+    const partNums = parts ? parts.map((q) => ({ poly: bToNum(q.poly), mult: q.mult })) : null
+    if (partNums && parts!.some((q) => q.mult > 1) && partNums.every((q) => q.poly !== null)) {
+      const factors = partNums
+        .map((q) => `(${polyText(q.poly!, true).text})${q.mult > 1 ? sup(q.mult) : ''}`)
+        .join('')
+      const lead = numValue(cur[0]) / partNums.reduce((acc, q) => acc * numValue(q.poly![0]) ** q.mult, 1)
+      const leadText = Math.abs(lead - 1) < 1e-12 ? '' : numCell(smallFraction(lead) ?? { d: lead }, true).text
+      steps.push(`Repeated factors, found exactly from gcd(p, p′): ${polyText(cur, true).text} = ${leadText}${factors}.`)
+      for (const q of partNums) solveRest(q.poly!, q.mult)
+    } else {
+      solveRest(cur, 1)
     }
+    if (failed) return null
   } else {
     // decimals that are not rational: the quadratic formula in doubles, or numerically
     if (n === 2) disc = discriminantOf(cur, false)
     steps.push('The coefficients are decimals, so the zeros are found numerically (≈, to 4 decimals).')
-    zeros.push(...numericEntries(cur.map(numValue)))
+    const got = numericEntries(cur.map(numValue))
+    if (!got) return null
+    zeros.push(...got)
   }
 
   // order: real zeros left to right, then the pairs

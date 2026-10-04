@@ -25,7 +25,7 @@ import { useEffect, useState } from 'react'
 import type { XformAid, XformOp } from '../core/types'
 import type { ShapeXform } from '../core/persist'
 import { defaultOp } from '../core/parse/xform'
-import { primeName } from '../core/transform2d'
+import { primeName, siblingName } from '../core/transform2d'
 import type { Motion, SymmetryReport } from '../core/transform2d'
 import { motionName, motionRule, motionWords, sequenceName, sequenceWords } from '../core/transform2d'
 import { CardSection } from './CardSection'
@@ -181,17 +181,20 @@ function useOpDraft(initial: XformOp): [XformOp, (op: XformOp) => void, (t: Xfor
 export function TransformTool({
   figure,
   names,
+  imageNo,
   onAddImage,
 }: {
   /** "ABC", or null when the vertices have no names. */
   figure: string | null
   /** The vertex names (A, B, C … or A′, B′ …) the image will be primed from. */
   names: string[]
+  /** Which image of this figure the next one is (2: A′₂B′₂C′₂). */
+  imageNo?: number
   onAddImage(op: XformOp): string | null
 }) {
   const [draft, setDraft, pick] = useOpDraft(defaultOp('rotate'))
   const [err, setErr] = useState<string | null>(null)
-  const imageName = names.map(primeName).join('')
+  const imageName = names.map((n) => siblingName(primeName(n), imageNo ?? 1)).join('')
   const typed = figure ?? 'ABC'
   const submit = (): void => setErr(onAddImage(draft))
   return (

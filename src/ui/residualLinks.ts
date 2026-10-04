@@ -16,7 +16,7 @@
 
 import type { RegressionKind, RegressionResult } from '../core/data'
 import type { CorrelationWords, ResidualPattern } from '../core/residuals'
-import { correlationWords, residualPattern } from '../core/residuals'
+import { correlationWords, residualPattern, residualZeroTol } from '../core/residuals'
 import { niceStep } from '../core/stats'
 import type { DescribeStat } from '../core/describeAdapters'
 import type { StatPrim, StatsFigure } from '../render/stats'
@@ -34,6 +34,8 @@ export interface ResidualInfo {
   table: string
   xs: number[]
   residuals: number[]
+  /** The y of each residual's point (the data's scale). */
+  ys: number[]
   pattern: ResidualPattern
   /** r for a linear fit (and its words); null for the others, which report R². */
   r: number | null
@@ -52,7 +54,7 @@ export function residualInfo(
   if (cols.xs.length === 0) return null
   const res = fit(cols, reg.kind)
   if (!res.ok) return null
-  const { xs, residuals } = residualPairs(cols, res)
+  const { xs, residuals, ys } = residualPairs(cols, res)
   const r = reg.kind === 'linear' && res.r !== undefined && Number.isFinite(res.r) ? res.r : null
   return {
     dataId: data.id,
@@ -61,7 +63,8 @@ export function residualInfo(
     table: data.name,
     xs,
     residuals,
-    pattern: residualPattern(xs, residuals, modelWords(reg.kind)),
+    ys,
+    pattern: residualPattern(xs, residuals, modelWords(reg.kind), ys),
     r,
     rWords: r === null ? null : correlationWords(r, statText(r), data.xLabel || 'x', data.yLabel || 'y'),
   }
@@ -102,9 +105,16 @@ export function residualFigure(
       describe: null,
     }
   }
+  // The vertical scale never goes below a small share of the data's own
+  // scale: an exact fit's 10⁻¹⁵ rounding would otherwise fill the panel and
+  // look like a pattern. An exact fit draws every residual ON the zero line.
+  const exact = info.pattern.exact === true
+  const residuals = exact ? info.residuals.map(() => 0) : info.residuals
+  const floor = Math.max(residualZeroTol(info.ys) * 1e5, 1e-300)
   let m = 0
-  for (const r of info.residuals) m = Math.max(m, Math.abs(r))
-  if (!(m > 0)) m = 1
+  for (const r of residuals) m = Math.max(m, Math.abs(r))
+  if (exact || !(m > 0)) m = residualZeroTol(info.ys) > 0 ? residualZeroTol(info.ys) * 1e7 : 1
+  m = Math.max(m, floor)
   const yMax = m * 1.2
   const mid = (plot.y0 + plot.y1) / 2
   const half = (plot.y1 - plot.y0) / 2
@@ -112,7 +122,7 @@ export function residualFigure(
   const prims: StatPrim[] = []
   prims.push({ k: 'curve', pts: [{ x: plot.x0, y: toY(0) }, { x: plot.x1, y: toY(0) }], ink: 'axis', w: 1.3, dash: [6, 4] })
   const w = panel.x1 - panel.x0
-  prims.push({ k: 'dots', pts: info.xs.map((x, i) => ({ x, y: toY(info.residuals[i]) })), r: w * 0.0065, ink: 'main' })
+  prims.push({ k: 'dots', pts: info.xs.map((x, i) => ({ x, y: toY(residuals[i]) })), r: w * 0.0065, ink: 'main' })
 
   // the vertical axis: residual ticks symmetric about 0
   const yStep = niceStep(yMax / 2)
@@ -148,7 +158,7 @@ export function residualFigure(
     yTicks,
     title: {
       question: `Residual plot · ${KIND_NAME[info.kind]} model`,
-      answer: verdict === 'none' ? ' · no clear pattern' : verdict === 'curved' ? ' · curved pattern' : '',
+      answer: exact ? ' · exact fit' : verdict === 'none' ? ' · no clear pattern' : verdict === 'curved' ? ' · curved pattern' : '',
     },
     describe,
   }

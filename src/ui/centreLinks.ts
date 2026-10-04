@@ -264,7 +264,11 @@ export function centreOverlays(shapes: readonly BoardShape[], compiled: Readonly
     const t = compiled.get(s.id)?.centres
     if (!t) continue
     try {
-      out.push(...triangleCentreOverlays(s.id, t, flags))
+      const marks = triangleCentreOverlays(s.id, t, flags)
+      // An image's centres BELONG to the image: while it is hidden (reveal
+      // mode, a student copy) its medians, circles and centres would draw
+      // the answer, so they go with it.
+      out.push(...(s.xform ? marks.map((o) => ({ ...o, hideWith: shapeKey(s.id, 'image') })) : marks))
     } catch {
       /* a triangle whose centres cannot be drawn draws none */
     }

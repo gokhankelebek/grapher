@@ -220,19 +220,33 @@ function endText(v: number, exact: string | undefined): string {
 
 /**
  * Where two curves coincide, as the card says it: "the same function — they
- * coincide everywhere", "they coincide for x ≤ 0", "… on 0 ≤ x ≤ 3".
+ * coincide everywhere", "they coincide for x ≤ 0", "… on 0 ≤ x ≤ 3", "… for
+ * x > 0" (an open end: neither is defined there), "they coincide everywhere
+ * except at x = 1 (only one of them is defined there)".
  */
 export function coincideText(c: Coincidence): string {
-  if (c.everywhere) return 'the same function — they coincide everywhere'
+  if (c.everywhere) {
+    return c.gaps ? 'the same function — they coincide wherever they are defined' : 'the same function — they coincide everywhere'
+  }
   const parts = c.intervals.map((iv) => {
     const lo = Number.isFinite(iv.lo)
     const hi = Number.isFinite(iv.hi)
-    if (!lo && !hi) return 'everywhere'
-    if (!lo) return `for x ≤ ${endText(iv.hi, iv.hiExact)}`
-    if (!hi) return `for x ≥ ${endText(iv.lo, iv.loExact)}`
-    return `on ${endText(iv.lo, iv.loExact)} ≤ x ≤ ${endText(iv.hi, iv.hiExact)}`
+    const le = iv.loOpen ? '<' : '≤'
+    const he = iv.hiOpen ? '<' : '≤'
+    const ge = iv.loOpen ? '>' : '≥'
+    if (!lo && !hi) return c.gaps ? 'wherever they are defined' : 'everywhere'
+    if (!lo) return `for x ${he} ${endText(iv.hi, iv.hiExact)}`
+    if (!hi) return `for x ${ge} ${endText(iv.lo, iv.loExact)}`
+    return `on ${endText(iv.lo, iv.loExact)} ${le} x ${he} ${endText(iv.hi, iv.hiExact)}`
   })
-  return `they coincide ${parts.join(' and ')}`
+  let out = `they coincide ${parts.join(' and ')}`
+  const ex = c.except ?? []
+  if (ex.length > 0) {
+    const xs = ex.map((e) => `x = ${endText(e.x, e.exact)}`)
+    const list = xs.length === 1 ? xs[0] : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`
+    out += ` except at ${list} (only one of them is defined there${xs.length > 1 ? ', at each' : ''}), so they are not quite the same function`
+  }
+  return out
 }
 
 /** One other curve, named, and where this curve meets it. */

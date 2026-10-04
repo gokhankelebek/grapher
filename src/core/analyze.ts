@@ -2203,11 +2203,28 @@ export function intersectionPoints(
 //     functions that never meet (no crossing, no coincidence), and within
 //     10⁻¹² of the largest coefficient when one is a fitted decimal;
 //   * anything else is SAMPLED: 512 x's across the span plus 48 far out to
-//     ±1000, f − g compared with a tolerance of 10⁻¹⁰ of the values
-//     themselves (plus 10⁻¹³). Agreeing everywhere sampled is "the same function"; agreeing
-//     on a run of samples is an overlap INTERVAL (a piecewise curve sharing a
-//     piece), its ends bisected to the last bit and snapped to closed forms.
-//     Both undefined (a shared hole or gap) neither breaks nor starts a run.
+//     ±1000 spans, f − g compared with a tolerance of 10⁻¹⁰ of the values
+//     themselves plus 10⁻¹² of the window's typical |f|. Agreeing everywhere
+//     sampled is "the same function"; agreeing on a run of samples is an
+//     overlap INTERVAL (a piecewise curve sharing a piece), its ends bisected
+//     to the last bit, snapped to closed forms, and OPEN where the two are
+//     not both defined (ln(x²) and 2 ln x: x > 0).
+//
+//     Floating point makes "agree" cheap where the values are huge: 2ˣ and
+//     2ˣ + 3 are within 10⁻¹⁰ of each other past x ≈ 35, and e^x and 2e^x
+//     are both ∞ past 709. So: ∞ and ∞ is undecidable, never agreement; an
+//     agreement whose tolerance is not 100× below the smallest difference the
+//     WINDOW shows (away from a crossing) is undecidable too; and the far
+//     samples are compared loosely and can only veto — an overlap needs six
+//     agreeing samples inside the window.
+//
+//     Both undefined (a shared gap) ENDS a run: √(x² − 4) and √(x − 2)·√(x + 2)
+//     coincide for x ≥ 2, not over the gap (−2, 2) where neither exists.
+//     Undecidable samples neither break nor start one.
+//
+//   * either way, a HOLE one curve has and the other does not (findHoles) is
+//     an exception: (x² − 1)/(x − 1) and x + 1 coincide everywhere except at
+//     x = 1, so they are not quite the same function.
 //
 // Crossings inside an overlap are dropped — the curves are not crossing there,
 // they are one curve — and crossings outside it are kept.
@@ -2217,10 +2234,21 @@ export function intersectionPoints(
 export interface Coincidence {
   /** f ≡ g wherever both are drawn (the whole shared domain). */
   everywhere: boolean
-  /** The overlap intervals (±Infinity for an unbounded side); [] when everywhere. */
-  intervals: { lo: number; hi: number; loExact?: string; hiExact?: string }[]
+  /**
+   * The overlap intervals (±Infinity for an unbounded side); [] when everywhere.
+   * An end is OPEN (loOpen / hiOpen) when the two are not both defined there:
+   * ln(x²) and 2 ln x coincide for x > 0, not x ≥ 0.
+   */
+  intervals: { lo: number; hi: number; loExact?: string; hiExact?: string; loOpen?: boolean; hiOpen?: boolean }[]
   /** Decided by exact polynomial coefficients, not by sampling. */
   exact: boolean
+  /**
+   * x's inside the overlap where only ONE of the two is defined — a hole the
+   * other does not have: (x² − 1)/(x − 1) and x + 1 at x = 1. Absent when none.
+   */
+  except?: { x: number; exact?: string }[]
+  /** Both are undefined somewhere (a shared gap): the same function wherever they are defined. */
+  gaps?: boolean
 }
 
 /** The meeting points of two curves, and where they coincide (null: nowhere). */
@@ -2233,6 +2261,15 @@ const COINCIDE_SAMPLES = 512
 const COINCIDE_FAR = 48
 const COINCIDE_TOL = 1e-10
 const COINCIDE_FLOOR = 1e-13
+/** The absolute half of the in-window tolerance, as a fraction of the window's typical |f|. */
+const COINCIDE_ABS = 1e-12
+/** Outside the window the comparison is looser: those samples can only veto "everywhere". */
+const COINCIDE_FAR_TOL = 1e-8
+/**
+ * An agreement counts only when its tolerance is at least this many times
+ * below the smallest difference the window shows between the two curves.
+ */
+const COINCIDE_RESOLVE = 100
 /** A run must hold this many consecutive agreeing samples to be an overlap, not a crossing. */
 const COINCIDE_RUN = 6
 
@@ -2273,13 +2310,89 @@ function coincidenceOf(
   models: Record<string, ModelSpec>,
   span: [number, number],
 ): Coincidence | null {
-  const domainAll = (): Coincidence => {
-    const da = a.domain
-    const db = b.domain
-    if (!da && !db) return { everywhere: true, intervals: [], exact: true }
-    const lo = Math.max(da ? Math.min(da[0], da[1]) : -Infinity, db ? Math.min(db[0], db[1]) : -Infinity)
-    const hi = Math.min(da ? Math.max(da[0], da[1]) : Infinity, db ? Math.max(db[0], db[1]) : Infinity)
-    return { everywhere: false, intervals: [withExactEnds(lo, hi)], exact: true }
+  const base = coincidenceBase(a, b, f, g, models, span)
+  return base ? withHoleExceptions(base, a, b, f, g, models, span) : null
+}
+
+/** Both defined at x and equal there: the end of an overlap is then IN it (x ≥ 0), else not (x > 0). */
+function closedAt(f: Fn, g: Fn, x: number): boolean {
+  let u: number
+  let w: number
+  try {
+    u = f(x)
+    w = g(x)
+  } catch {
+    return false
+  }
+  if (!Number.isFinite(u) || !Number.isFinite(w)) return false
+  return Math.abs(u - w) <= 1e-9 * Math.max(1, Math.abs(u), Math.abs(w))
+}
+
+/** An overlap interval with its ends snapped to closed forms and marked open where neither curve is there. */
+function overlapInterval(f: Fn, g: Fn, lo: number, hi: number): Coincidence['intervals'][number] {
+  const iv = withExactEnds(lo, hi)
+  if (Number.isFinite(iv.lo) && !closedAt(f, g, iv.lo)) iv.loOpen = true
+  if (Number.isFinite(iv.hi) && !closedAt(f, g, iv.hi)) iv.hiOpen = true
+  return iv
+}
+
+/**
+ * The same function "everywhere" — except where ONE of the two has a hole the
+ * other does not: (x² − 1)/(x − 1) and x + 1 agree at every x but 1, where
+ * only x + 1 is defined. Holes come from findHoles over the window (removable
+ * discontinuities and written exclusions); a hole both curves share is not an
+ * exception — neither is defined there.
+ */
+function withHoleExceptions(
+  c: Coincidence,
+  a: FittedCurve,
+  b: FittedCurve,
+  f: Fn,
+  g: Fn,
+  models: Record<string, ModelSpec>,
+  span: [number, number],
+): Coincidence {
+  let ha: { x: number }[] = []
+  let hb: { x: number }[] = []
+  try {
+    ha = findHoles(a, models, span)
+    hb = findHoles(b, models, span)
+  } catch {
+    return c
+  }
+  const near = (p: number, q: number): boolean => Math.abs(p - q) <= 1e-9 * Math.max(1, Math.abs(p))
+  const except: { x: number; exact?: string }[] = []
+  const consider = (x: number, theirs: { x: number }[], other: Fn): void => {
+    if (!Number.isFinite(x) || theirs.some((h) => near(h.x, x))) return
+    if (except.some((e) => near(e.x, x))) return
+    let v: number
+    try { v = other(x) } catch { return }
+    if (!Number.isFinite(v)) return
+    if (!inOverlap(c, x)) return
+    const e = exactForm(x, { tol: 1e-9 })
+    except.push(e ? { x: e.value, exact: e.text } : { x })
+  }
+  for (const h of ha) consider(h.x, hb, g)
+  for (const h of hb) consider(h.x, ha, f)
+  if (except.length === 0) return c
+  except.sort((p, q) => p.x - q.x)
+  if (c.everywhere) return { everywhere: false, intervals: [{ lo: -Infinity, hi: Infinity }], exact: c.exact, except, ...(c.gaps ? { gaps: true } : {}) }
+  return { ...c, except }
+}
+
+function coincidenceBase(
+  a: FittedCurve,
+  b: FittedCurve,
+  f: Fn,
+  g: Fn,
+  models: Record<string, ModelSpec>,
+  span: [number, number],
+): Coincidence | null {
+  const domLo = Math.max(a.domain ? Math.min(...a.domain) : -Infinity, b.domain ? Math.min(...b.domain) : -Infinity)
+  const domHi = Math.min(a.domain ? Math.max(...a.domain) : Infinity, b.domain ? Math.max(...b.domain) : Infinity)
+  const domainAll = (exact: boolean): Coincidence => {
+    if (!a.domain && !b.domain) return { everywhere: true, intervals: [], exact }
+    return { everywhere: false, intervals: [overlapInterval(f, g, domLo, domHi)], exact }
   }
   // ---- two polynomials: their coefficients decide
   const pa = polyCoeffsOf(a, models, f)
@@ -2293,90 +2406,145 @@ function coincidenceOf(
         const e = c as { p: number; q: number }
         return e.p === d.p && e.q === d.q
       })
-      return same ? domainAll() : null
+      return same ? domainAll(true) : null
     }
     const big = Math.max(...pa.map((c) => Math.abs(numValue(c))), ...pb.map((c) => Math.abs(numValue(c))))
     const same = pa.every((c, i) => Math.abs(numValue(c) - numValue(pb[i])) <= 1e-12 * Math.max(1, big))
-    return same ? { ...domainAll(), exact: false } : null
+    return same ? domainAll(false) : null
   }
   // ---- anything else: sampled
   const [lo, hi] = span
-  const xs: number[] = []
-  for (let i = 0; i < COINCIDE_SAMPLES; i++) xs.push(lo + ((hi - lo) * (i + 0.5)) / COINCIDE_SAMPLES)
-  const domLo = Math.max(a.domain ? Math.min(...a.domain) : -Infinity, b.domain ? Math.min(...b.domain) : -Infinity)
-  const domHi = Math.min(a.domain ? Math.max(...a.domain) : Infinity, b.domain ? Math.max(...b.domain) : Infinity)
+  const pts: { x: number; win: boolean }[] = []
+  for (let i = 0; i < COINCIDE_SAMPLES; i++) pts.push({ x: lo + ((hi - lo) * (i + 0.5)) / COINCIDE_SAMPLES, win: true })
   for (let k = 0; k < COINCIDE_FAR / 2; k++) {
     const r = Math.pow(1000, (k + 1) / (COINCIDE_FAR / 2)) * 1.0137
     for (const x of [hi + r * Math.max(1, hi - lo) / 10, lo - r * Math.max(1, hi - lo) / 10]) {
-      if (x > domLo && x < domHi) xs.push(x)
+      if (x > domLo && x < domHi) pts.push({ x, win: false })
     }
   }
-  xs.sort((u, w) => u - w)
-  type St = 0 | 1 | 2 // 0 differ, 1 agree, 2 both undefined
-  const state = (x: number): St => {
-    let u: number
-    let w: number
+  pts.sort((u, w) => u.x - w.x)
+  const xs = pts.map((p) => p.x)
+  const evalPair = (x: number): [number, number] => {
     try {
-      u = f(x)
-      w = g(x)
+      return [f(x), g(x)]
     } catch {
-      return 0
+      return [Number.NaN, Number.NaN]
     }
+  }
+  const vals = xs.map(evalPair)
+
+  // The window's typical size: the absolute half of the tolerance is a
+  // fraction of it, so a value that is tiny next to the window — sin²x and
+  // (1 − cos 2x)/2 at x ≈ 0, where the second is pure cancellation — can
+  // still be seen to agree.
+  const mags: number[] = []
+  vals.forEach(([u, w], i) => {
+    if (pts[i].win && Number.isFinite(u) && Number.isFinite(w)) mags.push(Math.max(Math.abs(u), Math.abs(w)))
+  })
+  let Y = median(mags)
+  if (!(Y > 0)) Y = mags.reduce((s, v) => Math.max(s, v), 0)
+  if (!(Y > 0)) Y = 1
+
+  // 0 differ, 1 agree, 2 both undefined (a shared hole or gap),
+  // 3 undecidable (both negligible, or agreeing only because the arithmetic
+  // cannot see a difference the window shows plainly — see below)
+  type St = 0 | 1 | 2 | 3
+  const raw = (u: number, w: number, win: boolean): { s: St; d: number; tol: number } => {
     const fu = Number.isFinite(u)
     const fw = Number.isFinite(w)
-    if (!fu && !fw) return Number.isNaN(u) && Number.isNaN(w) ? 2 : u === w ? 1 : 0
-    if (!fu || !fw) return 0
+    if (!fu && !fw) {
+      // NaN and NaN: neither is defined here, a shared gap
+      if (Number.isNaN(u) && Number.isNaN(w)) return { s: 2, d: 0, tol: 0 }
+      // ∞ and ∞ of one sign — e^x and 2e^x past 709, ln(x²) and 2 ln x at
+      // 0 — is no evidence of agreement: undecidable
+      if (u === w) return { s: 3, d: 0, tol: 0 }
+      return { s: 0, d: Infinity, tol: 0 }
+    }
+    if (!fu || !fw) return { s: 0, d: Infinity, tol: 0 }
+    const m = Math.max(Math.abs(u), Math.abs(w))
     // Both (nearly) zero says nothing either way — 2ˣ and 3^(x − 1) far to
-    // the left, two curves crossing on the axis — so it is neutral, like a
-    // shared hole. Otherwise the tolerance is relative to the values
-    // themselves: one scaled by the window's largest value would call 2ˣ and
-    // 3^(x − 1) "equal" wherever both are small.
-    if (Math.abs(u) <= COINCIDE_FLOOR && Math.abs(w) <= COINCIDE_FLOOR) return 2
-    return Math.abs(u - w) <= COINCIDE_TOL * Math.max(Math.abs(u), Math.abs(w)) ? 1 : 0
+    // the left, two curves crossing on the axis.
+    if (m <= COINCIDE_FLOOR) return { s: 3, d: 0, tol: 0 }
+    const d = Math.abs(u - w)
+    // relative to the values themselves, plus a sliver of the window's size;
+    // far outside the window looser still (those samples can only veto)
+    const tol = win ? COINCIDE_TOL * m + COINCIDE_ABS * Y : COINCIDE_FAR_TOL * (m + Y)
+    return d <= tol ? { s: 1, d, tol } : { s: 0, d, tol }
   }
-  const st = xs.map(state)
-  if (!st.includes(1)) return null
-  if (!st.includes(0)) return { everywhere: !a.domain && !b.domain, intervals: !a.domain && !b.domain ? [] : [withExactEnds(domLo, domHi)], exact: false }
-  // runs of agreement (undefined-both is neutral)
+  const first = vals.map(([u, w], i) => raw(u, w, pts[i].win))
+
+  // The smallest difference the WINDOW shows between the two (away from
+  // where they cross, where any difference is small). An agreement whose own
+  // tolerance is not far below it proves nothing: 2ˣ and 2ˣ + 3 differ by 3
+  // everywhere, and "agree" past x ≈ 35 only because 3 is below 10⁻¹⁰ of 2ˣ.
+  const sgn = (i: number): number => Math.sign(vals[i][0] - vals[i][1])
+  let dMin = Infinity
+  for (let i = 0; i < first.length; i++) {
+    const r = first[i]
+    if (!pts[i].win || r.s !== 0 || !Number.isFinite(r.d)) continue
+    const crossing = [i - 1, i + 1].some((j) => j >= 0 && j < first.length && first[j].s === 0 && Number.isFinite(first[j].d) && sgn(j) !== sgn(i))
+    if (!crossing) dMin = Math.min(dMin, r.d)
+  }
+  const settle = (r: { s: St; tol: number }): St => (r.s === 1 && COINCIDE_RESOLVE * r.tol >= dMin ? 3 : r.s)
+  const st: St[] = first.map(settle)
+  const stateAt = (x: number): St => {
+    const [u, w] = evalPair(x)
+    return settle(raw(u, w, x >= lo && x <= hi))
+  }
+
+  let agreeIn = 0
+  st.forEach((s, i) => {
+    if (s === 1 && pts[i].win) agreeIn++
+  })
+  if (agreeIn < COINCIDE_RUN) return null
+  if (!st.includes(0)) {
+    const all = domainAll(false)
+    return st.includes(2) ? { ...all, gaps: true } : all
+  }
+
+  // runs of agreement: a difference ends one, and so does a gap where
+  // neither is defined (√(x² − 4) and √(x − 2)·√(x + 2) are not one curve on
+  // (−2, 2), where there is no curve at all); undecidable samples pass
   const runs: { i0: number; i1: number; n: number }[] = []
   let i0 = -1
+  let i1 = -1
   let count = 0
   for (let i = 0; i <= st.length; i++) {
-    const s0 = i < st.length ? st[i] : 0
-    if (s0 === 1) {
+    const s = i < st.length ? st[i] : 0
+    if (s === 1) {
       if (i0 < 0) i0 = i
-      count++
-    } else if (s0 === 0) {
-      if (i0 >= 0) {
-        let i1 = i - 1
-        while (i1 > i0 && st[i1] === 2) i1--
-        runs.push({ i0, i1, n: count })
-      }
+      i1 = i
+      if (pts[i].win) count++
+    } else if (s === 0 || s === 2) {
+      if (i0 >= 0) runs.push({ i0, i1, n: count })
       i0 = -1
       count = 0
     }
   }
-  const edge = (inside: number, outside: number): number => {
-    let p = inside
-    let q = outside
+  const inside = (s: St): boolean => s === 1 || s === 3
+  const edge = (inX: number, outX: number): number => {
+    let p = inX
+    let q = outX
     for (let k = 0; k < 60; k++) {
       const m = 0.5 * (p + q)
       if (m === p || m === q) break
-      if (state(m) === 0) q = m
-      else p = m
+      if (inside(stateAt(m))) p = m
+      else q = m
     }
     return p
   }
   const intervals: Coincidence['intervals'] = []
   for (const r of runs) {
+    // far samples can veto, never make an overlap: a run needs the window's own samples
     if (r.n < COINCIDE_RUN) continue
-    // neutral samples at either end belong to the run
-    while (r.i0 > 0 && st[r.i0 - 1] === 2) r.i0--
-    while (r.i1 < st.length - 1 && st[r.i1 + 1] === 2) r.i1++
-    const L = r.i0 === 0 ? domLo : edge(xs[r.i0], xs[r.i0 - 1])
-    const H = r.i1 === xs.length - 1 ? domHi : edge(xs[r.i1], xs[r.i1 + 1])
+    let j0 = r.i0
+    while (j0 > 0 && st[j0 - 1] === 3) j0--
+    let j1 = r.i1
+    while (j1 < st.length - 1 && st[j1 + 1] === 3) j1++
+    const L = j0 === 0 ? domLo : edge(xs[j0], xs[j0 - 1])
+    const H = j1 === xs.length - 1 ? domHi : edge(xs[j1], xs[j1 + 1])
     if (!(H > L)) continue
-    intervals.push(withExactEnds(L, H))
+    intervals.push(overlapInterval(f, g, L, H))
   }
   return intervals.length > 0 ? { everywhere: false, intervals, exact: false } : null
 }
@@ -2430,8 +2598,9 @@ export function pairMeeting(
     const [lo, hi] = span
 
     const coincide = coincidenceOf(parent, other, f, g, models, span)
-    if (coincide && coincide.everywhere) return { points: [], coincide }
-    const points = meetingPoints(parent, other, models, f, g, lo, hi)
+    // the same curve over the whole span (bar a hole): nothing to cross
+    if (coincide && (coincide.everywhere || coincide.intervals.some((iv) => iv.lo <= lo && iv.hi >= hi))) return { points: [], coincide }
+    const points = meetingPoints(parent, other, models, f, g, lo, hi, range)
     return { points: coincide ? points.filter((p) => !inOverlap(coincide, p.pos.x)) : points, coincide }
   } catch {
     return { points: [], coincide: null }
@@ -2446,9 +2615,12 @@ function meetingPoints(
   g: Fn,
   lo: number,
   hi: number,
+  range: readonly [number, number],
 ): SpecialPoint[] {
   try {
     const xs = curveIntersections(parent, other, models, [lo, hi])
+    const winLo = Math.min(range[0], range[1])
+    const winHi = Math.max(range[0], range[1])
     if (xs.length === 0) return []
 
     // What "they agree here" means for THESE two curves: their own magnitude.
@@ -2471,12 +2643,42 @@ function meetingPoints(
       if (!Number.isFinite(y) || !Number.isFinite(gy)) continue
       // the assertion: a crossing the curves do not actually share is not one
       if (Math.abs(y - gy) > MEET_ACCEPT * scale) continue
-      // At the very end of the hunted span a "meeting" with no sign change
-      // past it is where two curves merely become small together (2ˣ and
-      // 3^(x − 1) far to the left): kept only when the two values agree
-      // relative to themselves, as a real crossing's do.
-      const atEdge = Math.min(x - lo, hi - x) <= 1e-9 * (hi - lo)
-      if (atEdge && Math.abs(y - gy) > 1e-6 * Math.max(Math.abs(y), Math.abs(gy))) continue
+      // At an edge of the WINDOW (not a curve's own domain end: sin x on
+      // [π, 2π] really does meet y = 0 at π and 2π) a "meeting" can be two
+      // curves merely becoming small together — 2ˣ and 3^(x − 1) far to the
+      // left. Such a point is kept when the two values agree relative to
+      // themselves, as a real crossing's do, or when f − g opens up a step
+      // inside the window, as it does past a real crossing (cos x and 0 at
+      // −π/2); it is dropped when f − g stays negligible there too.
+      // A crossing the arithmetic cannot resolve is not one: 10ˣ and 10ˣ + 1
+      // "cross" near x = 16 only because 1 is below the last bit of 10¹⁶.
+      // A real crossing (or touch) opens f − g up a step away, by far more
+      // than the rounding of the values there.
+      {
+        const probe = (hi - lo) / SAMPLES
+        let seen = false
+        let clear = false
+        for (const xp of [x - probe, x + probe]) {
+          let u = Number.NaN
+          let w = Number.NaN
+          try { u = f(xp); w = g(xp) } catch { /* outside: no say */ }
+          if (!Number.isFinite(u) || !Number.isFinite(w)) continue
+          seen = true
+          if (Math.abs(u - w) > 1e-12 * Math.max(Math.abs(u), Math.abs(w))) clear = true
+        }
+        if (seen && !clear) continue
+      }
+      const tolEdge = 1e-9 * (hi - lo)
+      const atWinEdge =
+        (Math.abs(x - winLo) <= tolEdge && Math.abs(lo - winLo) <= tolEdge) ||
+        (Math.abs(x - winHi) <= tolEdge && Math.abs(hi - winHi) <= tolEdge)
+      if (atWinEdge && Math.abs(y - gy) > 1e-6 * Math.max(Math.abs(y), Math.abs(gy))) {
+        const step = (hi - lo) / SAMPLES
+        const xin = x - lo < hi - x ? x + step : x - step
+        let din = Number.NaN
+        try { din = Math.abs(f(xin) - g(xin)) } catch { /* no value: not a crossing */ }
+        if (!(din > 10 * MEET_ACCEPT * scale)) continue
+      }
 
       const tol = 1e-9 * Math.max(1, Math.abs(x))
       const exact =

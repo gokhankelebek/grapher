@@ -91,15 +91,40 @@ const ratEq = (a: Rat, b: Rat): boolean => a.n === b.n && a.d === b.d
 export const MAX_DEN = 1000
 
 /**
+ * How close a float has to be to p/q to BE p/q: relative to |v| (floored at
+ * 1). A typed 0.1 is within 1e-17 of 1/10 and a value computed in a few
+ * floating-point steps is within ~1e-15 of what it should be, so 1e-12 keeps
+ * every honest fraction. It is the dishonest ones it stops: at the 1e-9 this
+ * once used, about one computed irrational in 150 (an incentre, a 28° turn, a
+ * point projected onto a circle) sat that close to SOME fraction with a
+ * three-digit denominator and was printed as it — 2245/537 for 4.1806331500.
+ */
+export const RAT_TOL = 1e-12
+
+/**
+ * Below this a computed value is rounding noise around 0 (1 − 0.1·10, a
+ * cos 90° of 6e-17), and is read as 0. Anything larger is a number, however
+ * small, and is never printed as an exact 0.
+ */
+export const ZERO_TOL = 1e-13
+
+/**
  * The fraction with denominator ≤ maxDen within a hair of v, or null.
  *
  * Continued fractions: the convergents are the best approximations there are,
  * so the first one within tolerance is the simplest fraction that fits.
+ *
+ * The denominator is also capped by the tolerance: fractions with q ≤ Q are
+ * about 1/Q² apart, and a match is only evidence when that gap dwarfs the
+ * window. For |v| up to ~10⁴ the cap is above 1000 and changes nothing; for
+ * large |v| (where 1e-12·|v| is wide) it keeps 123456.789 from "being" a
+ * fraction with denominator 800.
  */
 export function toRat(v: number, maxDen = MAX_DEN): Rat | null {
   if (typeof v !== 'number' || !Number.isFinite(v) || Math.abs(v) > 1e9) return null
   if (Number.isInteger(v)) return { n: v === 0 ? 0 : v, d: 1 }
-  const tol = 1e-9 * Math.max(1, Math.abs(v))
+  const tol = RAT_TOL * Math.max(1, Math.abs(v))
+  const qMax = Math.min(maxDen, Math.floor(1 / Math.sqrt(2e3 * tol)))
   let h0 = 0
   let h1 = 1
   let k0 = 1
@@ -109,12 +134,17 @@ export function toRat(v: number, maxDen = MAX_DEN): Rat | null {
     const a = Math.floor(x)
     const h2 = a * h1 + h0
     const k2 = a * k1 + k0
-    if (k2 > maxDen || !safe(h2)) break
+    if (k2 > qMax || !safe(h2)) break
     h0 = h1
     h1 = h2
     k0 = k1
     k1 = k2
-    if (Math.abs(v - h1 / k1) <= tol) return rat(h1, k1)
+    if (Math.abs(v - h1 / k1) <= tol) {
+      // never 0 for a value that is not 0: a tiny length, or the square of
+      // one, is a number (measureOf reads rounding noise as 0 on its own)
+      if (h1 === 0) return null
+      return rat(h1, k1)
+    }
     const f = x - a
     if (f < 1e-14) break
     x = 1 / f
@@ -147,7 +177,7 @@ export interface Surd {
 const MAX_RADICAND = 100000
 
 /** m = a²·k with k square-free, or null when m is too large to factor here. */
-function squareFree(m: number): [number, number] | null {
+export function squareFree(m: number): [number, number] | null {
   if (!safe(m) || m < 0 || m > 1e10) return null
   if (m === 0) return [0, 1]
   let a = 1
@@ -200,16 +230,65 @@ export function surdTex(s: Surd): string {
 /**
  * v as ±c√k, recognised through its SQUARE (rational with a small denominator)
  * — the route for quantities computed from irrational coordinates.
+ *
+ * The square is matched at RAT_TOL and the surd is then checked against v
+ * itself, so a tiny v (whose square is within any absolute window of 0) is
+ * never "0", and nothing is accepted that does not reproduce v.
  */
 export function surdOf(v: number): Surd | null {
   if (!Number.isFinite(v)) return null
-  if (Math.abs(v) < 1e-12) return { c: { n: 0, d: 1 }, k: 1 }
+  if (Math.abs(v) < ZERO_TOL) return { c: { n: 0, d: 1 }, k: 1 }
   const direct = toRat(v)
   if (direct) return { c: direct, k: 1 }
   const sq = toRat(v * v)
-  const s = sq ? sqrtRat(sq) : null
+  if (!sq || sq.n === 0) return null
+  const s = sqrtRat(sq)
   if (!s) return null
-  return v < 0 ? { c: { n: -s.c.n, d: s.c.d }, k: s.k } : s
+  const out = v < 0 ? { c: { n: -s.c.n, d: s.c.d }, k: s.k } : s
+  return Math.abs(surdValue(out) - v) <= RAT_TOL * Math.max(1, Math.abs(v)) ? out : null
+}
+
+/**
+ * A sum of rational multiples of square roots, written the way a class
+ * writes it: over one denominator, a positive term first when there is one,
+ * binary signs spaced — "9 − 2√5", "(√3 − 1)/2", "−1 − √2", "3√5/2".
+ */
+export function formatSurdTerms(terms: readonly Surd[]): { text: string; tex: string } | null {
+  const live = terms.filter((t) => t.c.n !== 0)
+  if (live.length === 0) return { text: '0', tex: '0' }
+  let L = 1
+  for (const t of live) {
+    L = (L / gcd(L, t.c.d)) * t.c.d
+    if (!safe(L)) return null
+  }
+  const ordered = [...live].sort((a, b) => a.k - b.k)
+  if (ordered[0].c.n < 0) {
+    const i = ordered.findIndex((t) => t.c.n > 0)
+    if (i > 0) ordered.unshift(...ordered.splice(i, 1))
+  }
+  const nums = ordered.map((t) => ({ n: (t.c.n * L) / t.c.d, k: t.k }))
+  if (!nums.every((t) => safe(t.n))) return null
+  const head = (n: number, k: number): string => (k === 1 ? String(n) : `${n === 1 ? '' : n}√${k}`)
+  const headTex = (n: number, k: number): string => (k === 1 ? String(n) : `${n === 1 ? '' : n}\\sqrt{${k}}`)
+  let text = ''
+  let tex = ''
+  nums.forEach((t, i) => {
+    const a = Math.abs(t.n)
+    if (i === 0) {
+      text = `${t.n < 0 ? MINUS : ''}${head(a, t.k)}`
+      tex = `${t.n < 0 ? '-' : ''}${headTex(a, t.k)}`
+    } else {
+      text += ` ${t.n < 0 ? MINUS : '+'} ${head(a, t.k)}`
+      tex += ` ${t.n < 0 ? '-' : '+'} ${headTex(a, t.k)}`
+    }
+  })
+  if (L === 1) return { text, tex }
+  if (nums.length === 1) {
+    const neg = nums[0].n < 0
+    const body = headTex(Math.abs(nums[0].n), nums[0].k)
+    return { text: `${text}/${L}`, tex: `${neg ? '-' : ''}\\frac{${body}}{${L}}` }
+  }
+  return { text: `(${text})/${L}`, tex: `\\frac{${tex}}{${L}}` }
 }
 
 // ---------------------------------------------------------------------------
@@ -225,11 +304,28 @@ export interface Measure {
   exact: boolean
   /** The decimal to 2 places, for "≈ 3.61" beside an irrational or fractional value. */
   approx: string
+  /** For an exact SUM of surds ("9 − 2√5"): its terms, so it can be negated exactly. */
+  terms?: Surd[]
 }
 
-/** A decimal, trimmed: dec(2.50, 2) = "2.5", dec(-0.004, 2) = "0". */
+/** Superscript digits, for "× 10¹⁶". */
+const SUP: Record<string, string> = { '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹', '-': '⁻' }
+
+/** v in scientific notation, 3 significant figures: "2 × 10¹⁶", "7.07 × 10⁻⁸". */
+export function sciText(v: number): string {
+  const [m, e] = v.toExponential(2).split('e')
+  const mant = String(Number(m)).replace('-', MINUS)
+  const exp = String(Number(e)).split('').map((ch) => SUP[ch] ?? ch).join('')
+  return `${mant} × 10${exp}`
+}
+
+/** Past this a decimal's digits are rounding, not a measurement: written in scientific notation. */
+const BIG_DEC = 1e12
+
+/** A decimal, trimmed: dec(2.50, 2) = "2.5", dec(-0.004, 2) = "0"; 2e16 is "2 × 10¹⁶". */
 export function dec(v: number, digits = 2): string {
   if (!Number.isFinite(v)) return '—'
+  if (Math.abs(v) >= BIG_DEC) return sciText(v)
   const f = 10 ** digits
   let r = Math.round(v * f) / f
   if (Object.is(r, -0) || Math.abs(r) < 0.5 / f) r = 0
@@ -242,17 +338,93 @@ export function measureOfSurd(s: Surd): Measure {
   return { value, text: surdText(s), tex: surdTex(s), exact: true, approx: dec(value, 2) }
 }
 
+/**
+ * A decimal measure. A value that is not 0 but rounds to it is given in
+ * significant figures instead ("0.0012", "7.07 × 10⁻⁸"): "≈ 0" for the
+ * circumradius of a triangle 10⁻⁷ across says nothing.
+ */
 export function decimalMeasure(v: number, digits = 2): Measure {
-  const t = dec(v, digits)
-  return { value: v, text: t, tex: t.replace(MINUS, '-'), exact: false, approx: t }
+  let t = dec(v, digits)
+  if (t === '0' && v !== 0 && Number.isFinite(v)) {
+    t = Math.abs(v) >= 1e-4 ? dec(Number(v.toPrecision(2)), 6) : sciText(v)
+  }
+  return { value: v, text: t, tex: texOfDec(t), exact: false, approx: t }
 }
 
-/** A measure of a value with no algebra behind it: recognised, else a decimal. */
+/** "7.07 × 10⁻⁸" → "7.07 \times 10^{-8}"; "−2.5" → "-2.5". */
+function texOfDec(t: string): string {
+  const m = /^(.*) × 10([⁰¹²³⁴⁵⁶⁷⁸⁹⁻]+)$/.exec(t)
+  if (!m) return t.replace(MINUS, '-')
+  const back: Record<string, string> = {}
+  for (const [k, v] of Object.entries(SUP)) back[v] = k
+  const e = m[2].split('').map((ch) => back[ch] ?? ch).join('')
+  return `${m[1].replace(MINUS, '-')} \\times 10^{${e}}`
+}
+
+/**
+ * exactForm's (a ± b√n)/c in the house style: the positive term first and
+ * the binary sign spaced — "(√3 − 1)/2", not "(−1+√3)/2", which reads as a
+ * double sign after a minus.
+ */
+function tidyQuad(text: string): { text: string; tex: string; terms: Surd[] } | null {
+  const m = /^\(?(−?\d+)([+−])(\d*)√(\d+)\)?(?:\/(\d+))?$/.exec(text)
+  if (!m) return null
+  const a = Number(m[1].replace(MINUS, '-'))
+  const b = (m[3] === '' ? 1 : Number(m[3])) * (m[2] === '+' ? 1 : -1)
+  const n = Number(m[4])
+  const c = m[5] ? Number(m[5]) : 1
+  const ra = rat(a, c)
+  const rb = rat(b, c)
+  if (!ra || !rb) return null
+  const terms = [{ c: ra, k: 1 }, { c: rb, k: n }]
+  const f = formatSurdTerms(terms)
+  return f ? { ...f, terms } : null
+}
+
+/** The measure of a sum of surds, or null when it cannot be written. */
+export function measureOfTerms(terms: readonly Surd[], value: number): Measure | null {
+  const live = terms.filter((t) => t.c.n !== 0)
+  if (live.length <= 1) return measureOfSurd(live[0] ?? { c: { n: 0, d: 1 }, k: 1 })
+  const f = formatSurdTerms(live)
+  return f ? { value, text: f.text, tex: f.tex, exact: true, approx: dec(value, 2), terms: [...live] } : null
+}
+
+/** −m, exactly: a sum is negated term by term ("9 − 2√5" → "2√5 − 9"), not by dropping its first sign. */
+export function negMeasure(m: Measure): Measure {
+  if (m.exact && m.terms && m.terms.length > 1) {
+    const neg = measureOfTerms(m.terms.map((t) => ({ c: { n: -t.c.n || 0, d: t.c.d }, k: t.k })), -m.value)
+    if (neg) return neg
+  }
+  if (isSum(m.text)) return measureOf(-m.value)
+  if (m.text.startsWith(MINUS)) return { ...m, value: -m.value, text: m.text.slice(1), tex: m.tex.replace(/^-/, ''), approx: dec(-m.value, 2) }
+  if (m.value === 0) return m
+  return { ...m, value: -m.value, text: `${MINUS}${m.text}`, tex: `-${m.tex}`, approx: dec(-m.value, 2) }
+}
+
+/** Is this text a sum ("√3 − 1"), as opposed to a single signed term ("−√3/2")? */
+export const isSum = (t: string): boolean => /.[−+]/.test(t.replace(/^\(/, ''))
+
+/**
+ * A measure of a value with no algebra behind it: recognised, else a decimal.
+ *
+ * In order: a fraction (RAT_TOL), then exactForm — which charges a
+ * complicated form for its complexity, so a junk surd cannot beat a clean
+ * closed form — then a surd recognised through its square, each checked
+ * against v at RAT_TOL. Anything else is a decimal, shown with "≈".
+ */
 export function measureOf(v: number): Measure {
+  if (!Number.isFinite(v)) return decimalMeasure(v)
+  if (Math.abs(v) < ZERO_TOL) return measureOfSurd({ c: { n: 0, d: 1 }, k: 1 })
+  const r = toRat(v)
+  if (r) return measureOfSurd({ c: r, k: 1 })
+  const ef = exactForm(v, { tol: RAT_TOL })
+  if (ef && !/π/.test(ef.text)) {
+    const tidy = tidyQuad(ef.text)
+    if (tidy) return { value: v, text: tidy.text, tex: tidy.tex, exact: true, approx: dec(v, 2), terms: tidy.terms }
+    return { value: v, text: ef.text.replace(/-/g, MINUS), tex: ef.tex, exact: true, approx: dec(v, 2) }
+  }
   const s = surdOf(v)
   if (s) return measureOfSurd(s)
-  const ef = exactForm(v)
-  if (ef && !/π/.test(ef.text)) return { value: v, text: ef.text.replace(/-/g, MINUS), tex: ef.tex, exact: true, approx: dec(v, 2) }
   return decimalMeasure(v)
 }
 
@@ -436,20 +608,39 @@ export interface LineEq {
 /** "x − 4", "x + 2", "x" — the bracket of point-slope form. */
 function shiftText(v: string, varName: string, value: number, m: Measure): { text: string; tex: string } {
   if (Math.abs(value) < 1e-12) return { text: varName, tex: varName }
-  const neg = value < 0
-  const mag = neg ? m.text.replace(MINUS, '') : m.text
-  const magTex = neg ? m.tex.replace(/^-/, '') : m.tex
-  return { text: `${v}${neg ? ' + ' : ` ${MINUS} `}${mag}`, tex: `${v} ${neg ? '+' : '-'} ${magTex}` }
+  if (value < 0) {
+    const n = negMeasure(m)
+    return { text: `${v} + ${n.text}`, tex: `${v} + ${n.tex}` }
+  }
+  return isSum(m.text)
+    ? { text: `${v} ${MINUS} (${m.text})`, tex: `${v} - \\left(${m.tex}\\right)` }
+    : { text: `${v} ${MINUS} ${m.text}`, tex: `${v} - ${m.tex}` }
 }
 
-/** "(1/2)x", "−x", "3x", "√3x" — the slope as a coefficient of x. */
+/**
+ * Does a coefficient need brackets before a variable? A fraction, a decimal,
+ * an approximation — or a SUM: "−1 − √2" glued to x reads as −1 − √2·x.
+ * A leading sign is not a sum; a binary + or − anywhere after it is.
+ */
+export function needsBrackets(t: string): boolean {
+  // one number, whole or decimal, is never bracketed: 3x, −0.64x
+  if (/^[−-]?\d+(\.\d+)?$/.test(t)) return false
+  return /[/≈.+]/.test(t) || /.[−-]/.test(t)
+}
+
+/** The TeX of a coefficient, bracketed when it is a sum (a fraction is one unit already). */
+export function coefTex(tex: string): string {
+  return /.[+-]/.test(tex.replace(/^\s*-/, '')) ? `\\left(${tex}\\right)` : tex
+}
+
+/** "(1/2)x", "−x", "3x", "√3x", "(−1 − √2)x" — the slope as a coefficient of x. */
 function coefText(m: SlopeInfo): { text: string; tex: string } {
   if (m.rat && m.rat.d === 1 && Math.abs(m.rat.n) === 1) {
     return m.rat.n < 0 ? { text: `${MINUS}x`, tex: '-x' } : { text: 'x', tex: 'x' }
   }
   const t = m.text
-  const wrap = /[/≈.]/.test(t) && !/^−?\d+(\.\d+)?$/.test(t) ? `(${t})` : t
-  return { text: `${wrap}x`, tex: `${m.tex}x` }
+  const wrap = needsBrackets(t) ? `(${t})` : t
+  return { text: `${wrap}x`, tex: `${coefTex(m.tex)}x` }
 }
 
 /** The line through p with slope m, in both forms. */
@@ -457,7 +648,8 @@ export function lineThroughSlope(p: Vec2, m: SlopeInfo): LineEq {
   const q = qpt(p)
   if (m.vertical) {
     const xm = coordMeasure(p.x, q.rx)
-    const t = { text: `x = ${xm.text}`, tex: `x = ${xm.tex}` }
+    const rel = xm.exact ? '=' : '≈'
+    const t = { text: `x ${rel} ${xm.text}`, tex: `x ${xm.exact ? '=' : '\\approx'} ${xm.tex}` }
     return { slope: m, through: p, slopeIntercept: t, pointSlope: t, intercept: null }
   }
   // b = y₁ − m·x₁
@@ -465,16 +657,24 @@ export function lineThroughSlope(p: Vec2, m: SlopeInfo): LineEq {
   const bVal = p.y - m.value * p.x
   const b = bRat ? measureOfSurd({ c: bRat, k: 1 }) : measureOf(bVal)
   const isZeroM = m.rat ? m.rat.n === 0 : Math.abs(m.value) < 1e-15
+  // a decimal anywhere makes the equation approximate, and it says so
+  const mExact = !!m.rat || !/[≈.]/.test(m.text)
+  const siExact = (isZeroM || mExact) && (b.exact || Math.abs(b.value) < 1e-12)
+  const siRel = siExact ? '=' : '≈'
+  const siRelTex = siExact ? '=' : '\\approx'
   let si: { text: string; tex: string }
-  if (isZeroM) si = { text: `y = ${b.text}`, tex: `y = ${b.tex}` }
+  if (isZeroM) si = { text: `y ${siRel} ${b.text}`, tex: `y ${siRelTex} ${b.tex}` }
   else {
     const c = coefText(m)
-    if (Math.abs(b.value) < 1e-12) si = { text: `y = ${c.text}`, tex: `y = ${c.tex}` }
+    if (Math.abs(b.value) < 1e-12) si = { text: `y ${siRel} ${c.text}`, tex: `y ${siRelTex} ${c.tex}` }
     else {
       const neg = b.value < 0
-      const mag = neg ? b.text.replace(MINUS, '') : b.text
-      const magTex = neg ? b.tex.replace(/^-/, '') : b.tex
-      si = { text: `y = ${c.text} ${neg ? MINUS : '+'} ${mag}`, tex: `y = ${c.tex} ${neg ? '-' : '+'} ${magTex}` }
+      const mag = neg ? negMeasure(b) : b
+      // a sum keeps its own signs: y = 2x + √3 − 1, y = 2x − 1 − √2
+      const op = neg && !isSum(mag.text) ? MINUS : neg ? MINUS : '+'
+      const term = neg && isSum(mag.text) ? `(${mag.text})` : mag.text
+      const termTex = neg && isSum(mag.text) ? `\\left(${mag.tex}\\right)` : mag.tex
+      si = { text: `y ${siRel} ${c.text} ${op} ${term}`, tex: `y ${siRelTex} ${c.tex} ${op === '+' ? '+' : '-'} ${termTex}` }
     }
   }
   // y − y₁ = m(x − x₁)
@@ -482,15 +682,18 @@ export function lineThroughSlope(p: Vec2, m: SlopeInfo): LineEq {
   const xm = coordMeasure(p.x, q.rx)
   const left = shiftText('y', 'y', p.y, ym)
   const right = shiftText('x', 'x', p.x, xm)
+  const psExact = (isZeroM || mExact) && ym.exact && xm.exact
+  const psRel = psExact ? '=' : '≈'
+  const psRelTex = psExact ? '=' : '\\approx'
   let ps: { text: string; tex: string }
-  if (isZeroM) ps = { text: `${left.text} = 0`, tex: `${left.tex} = 0` }
+  if (isZeroM) ps = { text: `${left.text} ${psRel} 0`, tex: `${left.tex} ${psRelTex} 0` }
   else {
     const one = m.rat && m.rat.d === 1 && Math.abs(m.rat.n) === 1
-    const mt = one ? (m.rat!.n < 0 ? MINUS : '') : /[/≈]/.test(m.text) ? `(${m.text})` : m.text
-    const mtex = one ? (m.rat!.n < 0 ? '-' : '') : m.tex
+    const mt = one ? (m.rat!.n < 0 ? MINUS : '') : needsBrackets(m.text) ? `(${m.text})` : m.text
+    const mtex = one ? (m.rat!.n < 0 ? '-' : '') : coefTex(m.tex)
     const rt = Math.abs(p.x) < 1e-12 ? 'x' : `(${right.text})`
     const rtex = Math.abs(p.x) < 1e-12 ? 'x' : `\\left(${right.tex}\\right)`
-    ps = { text: `${left.text} = ${mt}${rt}`, tex: `${left.tex} = ${mtex}${rtex}` }
+    ps = { text: `${left.text} ${psRel} ${mt}${rt}`, tex: `${left.tex} ${psRelTex} ${mtex}${rtex}` }
   }
   return { slope: m, through: p, slopeIntercept: si, pointSlope: ps, intercept: b }
 }
@@ -622,7 +825,10 @@ export function shoelace(pts: readonly Vec2[]): AreaResult {
     termTexts.push(tr ? ratText(tr) : dec(t, 2))
   }
   const half = exact ? ratMul(exact, { n: 1, d: 2 }) : null
-  const area = half ? measureOfSurd({ c: { n: Math.abs(half.n), d: half.d }, k: 1 }) : measureOf(Math.abs(s2) / 2)
+  const areaV = Math.abs(s2) / 2
+  // a figure 10⁻⁷ across has an area of 10⁻¹⁵: a number, not an exact 0
+  const tiny = areaV > 0 && Math.abs(areaV) < ZERO_TOL
+  const area = half ? measureOfSurd({ c: { n: Math.abs(half.n), d: half.d }, k: 1 }) : tiny ? decimalMeasure(areaV) : measureOf(areaV)
   const sumText = termTexts
     .map((t, i) => (i === 0 ? t : t.startsWith(MINUS) ? `${MINUS} ${t.slice(1)}` : `+ ${t}`))
     .join(' ')
@@ -655,7 +861,10 @@ export function degText(deg: number): { text: string; exact: boolean } {
     const v = twice / 2
     return { text: `${Number.isInteger(v) ? v : v.toFixed(1)}°`, exact: true }
   }
-  return { text: `${dec(deg, 1)}°`, exact: false }
+  // one decimal always: an inexact 36.04° must not print as the exact-looking
+  // "36°", nor 179.99999977° as "180°"
+  const t = dec(deg, 1)
+  return { text: `${t.includes('.') ? t : `${t}.0`}°`, exact: false }
 }
 
 /** Twice the signed area: > 0 counter-clockwise. */
@@ -817,17 +1026,110 @@ export function isSelfIntersecting(pts: readonly Vec2[]): boolean {
   return false
 }
 
+/** The figure's size: its longest side (0 when every vertex is one point). */
+function figureScale(pts: readonly Vec2[]): number {
+  let L = 0
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i]
+    const b = pts[(i + 1) % pts.length]
+    L = Math.max(L, Math.hypot(b.x - a.x, b.y - a.y))
+  }
+  return L
+}
+
+/**
+ * The first vertex that is not a corner: it lies on the line through its two
+ * neighbours (a straight angle, B on AC; or a spike, where the boundary
+ * turns straight back). −1 when every vertex is a corner. Relative to the
+ * two sides there, so a triangle 10⁻⁷ across is as much a triangle as one
+ * 10 across.
+ */
+export function straightVertex(pts: readonly Vec2[]): number {
+  const n = pts.length
+  for (let i = 0; i < n; i++) {
+    const p = pts[(i - 1 + n) % n]
+    const c = pts[i]
+    const q = pts[(i + 1) % n]
+    const ux = c.x - p.x
+    const uy = c.y - p.y
+    const vx = q.x - c.x
+    const vy = q.y - c.y
+    const lu = Math.hypot(ux, uy)
+    const lv = Math.hypot(vx, vy)
+    if (!(lu > 0) || !(lv > 0)) continue
+    if (Math.abs(ux * vy - uy * vx) <= 1e-10 * lu * lv) return i
+  }
+  return -1
+}
+
+/** Two consecutive vertices in one place: the index of the first, else −1. */
+function repeatedVertex(pts: readonly Vec2[]): number {
+  const L = figureScale(pts)
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i]
+    const b = pts[(i + 1) % pts.length]
+    if (!(L > 0) || Math.hypot(b.x - a.x, b.y - a.y) <= 1e-12 * L) return i
+  }
+  return -1
+}
+
 /** Three consecutive vertices on one line, or two vertices in one place. */
 export function isDegenerate(pts: readonly Vec2[]): boolean {
   const n = pts.length
   if (n < 3) return true
-  const scale = Math.max(1, ...pts.map((p) => Math.max(Math.abs(p.x), Math.abs(p.y))))
-  for (let i = 0; i < n; i++) {
-    const a = pts[i]
-    const b = pts[(i + 1) % n]
-    if (Math.hypot(b.x - a.x, b.y - a.y) <= 1e-12 * scale) return true
+  const L = figureScale(pts)
+  if (!(L > 0)) return true
+  if (repeatedVertex(pts) >= 0) return true
+  if (Math.abs(signedArea2(pts)) <= 1e-12 * L * L) return true
+  return straightVertex(pts) >= 0
+}
+
+/**
+ * Why a polygon is degenerate, in words: "B lies on AC, so ABCD is really
+ * the triangle ACD", "A and B are the same point", "the vertices are
+ * collinear". `fig` is the polygon's own name ("ABCD").
+ */
+export function degenerateWhy(pts: readonly Vec2[], names: readonly string[], fig: string): { sentence: string; short: string; because: string } {
+  const n = pts.length
+  const rep = repeatedVertex(pts)
+  if (rep >= 0) {
+    const a = names[rep]
+    const b = names[(rep + 1) % n]
+    return {
+      sentence: `${a} and ${b} are the same point, so ${fig} is degenerate.`,
+      short: `${fig}: ${a} = ${b}`,
+      because: `${a} and ${b} coincide`,
+    }
   }
-  return Math.abs(signedArea2(pts)) <= 1e-12 * scale * scale
+  const L = figureScale(pts)
+  const st = straightVertex(pts)
+  if (st >= 0 && !(L > 0 && Math.abs(signedArea2(pts)) <= 1e-12 * L * L)) {
+    const p = (st - 1 + n) % n
+    const q = (st + 1) % n
+    const [P, C, Q] = [pts[p], pts[st], pts[q]]
+    const on = (C.x - P.x) * (Q.x - C.x) + (C.y - P.y) * (Q.y - C.y) > 0
+    const rest = names.filter((_v, i) => i !== st)
+    const kinds: Record<number, string> = { 3: 'triangle', 4: 'quadrilateral', 5: 'pentagon', 6: 'hexagon', 7: 'heptagon', 8: 'octagon' }
+    const really = rest.join('')
+    const what = kinds[rest.length] ?? `${rest.length}-gon`
+    if (on) {
+      return {
+        sentence: `${names[st]} lies on ${names[p]}${names[q]} (∠${names[st]} = 180°), so ${fig} is really the ${what} ${really}, not a ${n === 4 ? 'quadrilateral' : (kinds[n] ?? `${n}-gon`)}.`,
+        short: `${fig}: ${names[st]} lies on ${names[p]}${names[q]}`,
+        because: `${names[st]} lies on ${names[p]}${names[q]}`,
+      }
+    }
+    return {
+      sentence: `${names[p]}${names[st]} and ${names[st]}${names[q]} overlap (the boundary turns straight back at ${names[st]}), so ${fig} is degenerate.`,
+      short: `${fig}: ${names[p]}${names[st]} and ${names[st]}${names[q]} overlap`,
+      because: `the sides at ${names[st]} overlap`,
+    }
+  }
+  return {
+    sentence: `The vertices of ${fig} all lie on one line, so it has no area and is degenerate.`,
+    short: `${fig}: collinear vertices`,
+    because: 'its vertices are collinear',
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -942,13 +1244,7 @@ const named = (names: readonly string[], i: number, j: number): string => `${nam
 export function classifyQuadrilateral(pts: readonly Vec2[], names: readonly string[]): Classification {
   const q = names.join('')
   if (isDegenerate(pts) && !isSelfIntersecting(pts)) {
-    return {
-      name: 'degenerate quadrilateral',
-      also: [],
-      sentence: `Two of the vertices coincide or the figure has no area, so ${q} is degenerate.`,
-      short: `${q}: degenerate`,
-      because: 'it has no area',
-    }
+    return { name: 'degenerate quadrilateral', also: [], ...degenerateWhy(pts, names, q) }
   }
   if (isSelfIntersecting(pts)) {
     return {
@@ -1064,7 +1360,7 @@ export function classifyPolygon(pts: readonly Vec2[], names: readonly string[]):
   const nm = names.join('')
   const base = POLY_NAMES[pts.length] ?? `${pts.length}-gon`
   if (isDegenerate(pts) && !isSelfIntersecting(pts)) {
-    return { name: `degenerate ${base}`, also: [], sentence: `${nm} has no area, so it is degenerate.`, short: `${nm}: degenerate`, because: 'it has no area' }
+    return { name: `degenerate ${base}`, also: [], ...degenerateWhy(pts, names, nm) }
   }
   if (isSelfIntersecting(pts)) {
     return { name: `crossed ${base}`, also: [], sentence: `Two sides of ${nm} cross, so it is a crossed (self-intersecting) ${base}.`, short: `${nm}: crossed ${base}`, because: 'two sides cross' }
@@ -1133,7 +1429,7 @@ function sqTex(m: Measure): string {
 
 function sqValue(s: SideInfo): string {
   if (s.len2) return ratText(s.len2)
-  return dec(s.length.value ** 2, 2)
+  return decimalMeasure(s.length.value ** 2).text
 }
 
 /** The ratio of two sides, exactly: √(p²/q²) simplified. */
@@ -1222,8 +1518,8 @@ export function pythagoreanTest(pts: readonly Vec2[], names: readonly string[]):
   const lhsR = a.len2 && b.len2 ? ratAdd(a.len2, b.len2) : null
   const lhsV = a.length.value ** 2 + b.length.value ** 2
   const rhsV = c.length.value ** 2
-  const lhs = lhsR ? ratText(lhsR) : dec(lhsV, 2)
-  const rhs = c.len2 ? ratText(c.len2) : dec(rhsV, 2)
+  const lhs = lhsR ? ratText(lhsR) : decimalMeasure(lhsV).text
+  const rhs = c.len2 ? ratText(c.len2) : decimalMeasure(rhsV).text
   const cmp = lhsR && c.len2 ? Math.sign(ratValue(lhsR) - ratValue(c.len2)) : Math.abs(lhsV - rhsV) <= 1e-9 * rhsV ? 0 : Math.sign(lhsV - rhsV)
   const verdict = cmp === 0 ? 'right' : cmp > 0 ? 'acute' : 'obtuse'
   const sign = cmp === 0 ? '=' : cmp > 0 ? '>' : '<'

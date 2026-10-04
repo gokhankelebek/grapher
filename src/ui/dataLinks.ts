@@ -444,18 +444,20 @@ export interface DataCardData {
 export const modelWords = (kind: RegressionKind): string =>
   kind === 'linear' ? 'a linear model' : `this ${KIND_NAME[kind].toLowerCase()} model`
 
-/** The fit's residuals, finite pairs only, aligned (x, y − ŷ). */
-export function residualPairs(cols: DataColumns, res: RegressionResult): { xs: number[]; residuals: number[] } {
+/** The fit's residuals, finite pairs only, aligned (x, y − ŷ), with the y they belong to. */
+export function residualPairs(cols: DataColumns, res: RegressionResult): { xs: number[]; residuals: number[]; ys: number[] } {
   const xs: number[] = []
   const residuals: number[] = []
+  const ys: number[] = []
   cols.xs.forEach((x, i) => {
     const r = res.residuals[i]
     if (Number.isFinite(x) && Number.isFinite(r)) {
       xs.push(x)
       residuals.push(r)
+      ys.push(cols.ys[i])
     }
   })
-  return { xs, residuals }
+  return { xs, residuals, ys }
 }
 
 /** Everything one table's card prints, already worked out. */
@@ -515,7 +517,7 @@ export function dataCard(
     }
     if (reg.residualPlot) {
       const pr = residualPairs(columns, result)
-      row.pattern = residualPattern(pr.xs, pr.residuals, modelWords(reg.kind))
+      row.pattern = residualPattern(pr.xs, pr.residuals, modelWords(reg.kind), pr.ys)
     }
     return row
   })

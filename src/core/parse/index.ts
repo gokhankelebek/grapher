@@ -2002,6 +2002,7 @@ function makePlot(
           spec.evalExact = (params, x) => evalExactAt(body, params, x)
           spec.taylor = (params, a, n) => jetAt(body, params, a, n)
           spec.expShape = (params) => expShapeOf(body, (n) => n.t === 'var' && n.name === 'x', params)
+          spec.formula = body
         }
       } else if (kind === 'polar') {
         spec.evalPolar = (params, theta) => ev(params, theta, 0)
@@ -3972,6 +3973,11 @@ export function parseAst(src: string): AstOutcome {
 /** Evaluate an AST node at `x` (free constants read as NaN, y as NaN). */
 export function evalAst(n: ExprNode, x: number): number {
   return compile(n)(NO_PARAMS, x, NaN)
+}
+
+/** Evaluate an AST node at `x` with the sliders' values (y reads as NaN). */
+export function evalAstAt(n: ExprNode, params: readonly number[], x: number): number {
+  return compile(n)(params, x, NaN)
 }
 
 // ----------------------------------------------------------------------------

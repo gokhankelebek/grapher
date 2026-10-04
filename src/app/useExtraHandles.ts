@@ -14,7 +14,9 @@ import { tangentAt } from '../core/calculus'
 import { ppuX, ppuY } from '../core/types'
 import type { FittedCurve, Vec2 } from '../core/types'
 import type { ExtraHandle } from '../ui/CanvasStage'
+import { circlePanel, circlePointHandles, draggedCirclePoint, setCirclePoint } from '../ui/circleLinks'
 import { conicHandles, safeReadConic } from '../ui/conicLinks'
+import { patchCircleView } from '../ui/curveViews'
 import { runColor } from '../ui/eulerLinks'
 import { expHandles, safeReadExponential } from '../ui/expLinks'
 import { rootHandles, safeReadFactored } from '../ui/factorLinks'
@@ -53,7 +55,7 @@ export interface ExtraHandlesDeps {
 }
 
 export function useExtraHandles({ board, docState, refs, derived, calc, fieldsApi, shapesApi, builders }: ExtraHandlesDeps) {
-  const { curves, kind, selectedId, factorDragRef, calcLinks, fields, shapes } = board
+  const { curves, kind, selectedId, factorDragRef, calcLinks, fields, shapes, circleViews, circleViewsRef, setCircleViews } = board
   const { exprSources, calls } = docState
   const { curvesRef, preEditRef, calcRef } = refs
   const { models, modelsRef, depKeysRef, axisUnitsRef, vpRef } = derived
@@ -637,6 +639,44 @@ export function useExtraHandles({ board, docState, refs, derived, calc, fieldsAp
         }
       }
     }
+    // A circle's theorem points (P, Q, R …), when its section draws them: each
+    // slides ALONG the circle, and the drag rewrites what was typed for it —
+    // degrees, or coordinates when it was typed as coordinates (see
+    // draggedCirclePoint). A circle's settings are never an undo step, so the
+    // drag simply sets them, frame by frame, as a typed edit does.
+    const circleCurve = curves.find((c) => c.id === selectedId)
+    const cview = circleCurve ? circleViews[circleCurve.id] : undefined
+    if (circleCurve && circleCurve.visible && cview?.show && cview.show.length > 0) {
+      let panel: ReturnType<typeof circlePanel> = null
+      try {
+        panel = circlePanel(circleCurve, exprSources[circleCurve.id], cview)
+      } catch {
+        panel = null
+      }
+      if (panel) {
+        const circle = panel.circle
+        const cid = circleCurve.id
+        for (const h of circlePointHandles(panel)) {
+          out.push({
+            id: `circle:${cid}:${h.index}`,
+            pos: h.pos,
+            label: h.label,
+            color: circleCurve.color,
+            onDrag: (pos) => {
+              const live = circleViewsRef.current[cid]
+              const was = live?.pts?.[h.index]
+              if (was === undefined) return
+              const next = draggedCirclePoint(circle, was, pos, (p) => snapPlaced(p, vpRef.current))
+              if (next === null || next === was) return
+              const m = patchCircleView(circleViewsRef.current, cid, { pts: setCirclePoint(live, h.index, next).pts })
+              if (m === circleViewsRef.current) return
+              circleViewsRef.current = m
+              setCircleViews(m)
+            },
+          })
+        }
+      }
+    }
     // A tangent's point on an implicit curve goes LAST: on a tie with a family
     // handle at the same spot — (5, 0) is the circle's r handle and a vertical
     // tangent's point — the later handle wins, and the point is what the
@@ -657,6 +697,7 @@ export function useExtraHandles({ board, docState, refs, derived, calc, fieldsAp
     shapes,
     shapeCompiled,
     dragShapeVertex,
+    circleViews,
     exprSources,
     calls,
     dragFactorRoot,

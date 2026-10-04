@@ -717,7 +717,7 @@ export function useExport({ board, docState, session, refs, derived, notices, ca
 
   return {
     exportPNG, copyPNG, exportVector, exportCurrent, latexCopyState, copyLatex, physicalSizeOf,
-    exportSizeOf, changeExportSettings,
+    exportSizeOf, changeExportSettings, exportContent,
   }
 }
 

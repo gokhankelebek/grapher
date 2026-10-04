@@ -5,6 +5,7 @@
 // ============================================================================
 
 import type { ExpShape } from './expSolve'
+import type { ExprNode } from './parse'
 
 export interface Vec2 { x: number; y: number }
 
@@ -161,6 +162,14 @@ export interface ModelSpec {
    * with it is solved too. Null for anything else; absent for library families.
    */
   expShape?(params: number[]): ExpShape | null
+  /**
+   * For a typed explicit expression whose one formula holds wherever the
+   * curve is drawn: that formula's AST, read-only — what src/core/growth.ts
+   * reads STRUCTURALLY (is it a polynomial, and of what degree; an
+   * exponential; its end behaviour) instead of extrapolating from samples.
+   * A restriction is not part of it: check `pieces` too. Absent otherwise.
+   */
+  formula?: ExprNode
   latex(params: number[]): string    // KaTeX-renderable string
   paramMeta(params: number[]): ParamMeta[]  // ranges centered on current values
   /** Optional: return params translated by (dx, dy) in math units (for drag-editing).

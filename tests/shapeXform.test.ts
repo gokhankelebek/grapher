@@ -160,10 +160,10 @@ describe('linked images on the board', () => {
     expect(b.kind === 'polygon' && b.pts[0]).toEqual({ x: 2, y: -1 })
   })
 
-  it('a second image of the same figure takes the next primes, in board order', () => {
+  it('a second image of the same figure is numbered (A′₂), not primed again (A″ is the image of A′)', () => {
     const dil = image('I3', 'S1', { t: 'dilate', k: '1/2', about: '(1, 1)' })
     const s = built([base(), ROT, REF, dil], 'I3')
-    expect(s.kind === 'polygon' && s.labels).toEqual(['A‴', 'B‴', 'C‴'])
+    expect(s.kind === 'polygon' && s.labels).toEqual(['A′₂', 'B′₂', 'C′₂'])
     expect(s.kind === 'polygon' && s.pts).toEqual([{ x: 1, y: 1.5 }, { x: 2.5, y: 1.5 }, { x: 2.5, y: 3.5 }])
     expect(s.kind === 'polygon' && s.aids?.rays?.length).toBe(3)
     expect(s.kind === 'polygon' && s.aids?.center).toEqual({ at: { x: 1, y: 1 }, label: '(1, 1)' })

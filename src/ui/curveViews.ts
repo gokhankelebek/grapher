@@ -253,6 +253,24 @@ export function viewStatesFrom(views: Readonly<CurveViews>, curves: readonly Fit
   return out
 }
 
+/**
+ * A table that compares with a curve no longer on the board forgets the
+ * compare (its `vs`) — the SAME map when none does. Undo brings it back with
+ * the curve (restoreViewStates).
+ */
+function dropDeadCompares(m: Record<string, ValueTableView>, live: ReadonlySet<string>): Record<string, ValueTableView> {
+  let out: Record<string, ValueTableView> | null = null
+  for (const [id, v] of Object.entries(m)) {
+    if (!v.vs || live.has(v.vs)) continue
+    if (!out) out = { ...m }
+    const rest: ValueTableView = { ...v }
+    delete rest.vs
+    if (Object.keys(rest).length > 0) out[id] = rest
+    else delete out[id]
+  }
+  return out ?? m
+}
+
 /** A map without the keys `live` does not hold — the SAME object when none go. */
 function keepLive<T>(m: Record<string, T>, live: ReadonlySet<string>): Record<string, T> {
   let dropped = false
@@ -279,7 +297,7 @@ export function pruneViewStates(s: ViewStates, live: ReadonlySet<string>): ViewS
   const factorThrough = keepLive(s.factorThrough, live)
   const motion = keepLive(s.motion, live)
   const lens = keepLive(s.lens, live)
-  const table = keepLive(s.table, live)
+  const table = dropDeadCompares(keepLive(s.table, live), live)
   const circle = keepLive(s.circle, live)
   if (
     construction === s.construction &&
@@ -334,6 +352,28 @@ export function restoreViewStates(
     delete out.table[c.id]
     delete out.circle[c.id]
     put(out, c.id, v, c)
+  }
+  // A curve that stayed gets back a compare with a curve that came back.
+  const arrived = new Set(curves.filter((c) => !before.has(c.id)).map((c) => c.id))
+  for (const c of curves) {
+    if (!before.has(c.id)) continue
+    const rec = normalizeCurveView(recorded[c.id])?.table
+    const vs = rec?.vs
+    if (!vs || !arrived.has(vs)) continue
+    const cur = (out ?? pruned).table[c.id]
+    if (cur?.vs) continue
+    if (!out) {
+      out = {
+        construction: { ...pruned.construction },
+        showParent: { ...pruned.showParent },
+        factorThrough: { ...pruned.factorThrough },
+        motion: { ...pruned.motion },
+        lens: { ...pruned.lens },
+        table: { ...pruned.table },
+        circle: { ...pruned.circle },
+      }
+    }
+    out.table[c.id] = { ...(cur ?? {}), vs }
   }
   return out ?? pruned
 }

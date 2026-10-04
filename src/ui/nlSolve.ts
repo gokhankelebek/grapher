@@ -40,6 +40,10 @@ import type {
   SolveLineSpec,
 } from '../render/nlSolve'
 import { SOLVE_BAND, distanceBracket } from '../render/nlSolve'
+import type { Overlay } from '../render/overlays'
+import type { Vec2 } from '../core/types'
+import { isHidden, solveKey } from './reveal'
+import type { RevealState } from './reveal'
 
 export type { BracketGeometry, SolveFigureSpec, SolveLayout, SolveLineLayout, SolveLineSpec, SolveDistanceSpec }
 export { distanceBracket }
@@ -789,6 +793,71 @@ export function graphNote(src: string): string | null {
   if (bad.length === 0) return null
   const list = bad.map((c) => `x = ${c.text}`).join(' and ')
   return `${list} ${bad.length > 1 ? 'are' : 'is'} extraneous — the graphs do not meet there.`
+}
+
+/** Is `src` a single equation "Show on graph" draws as its two sides (y = L and y = R)? */
+function graphsAsSides(src: string, wanted: readonly GraphCurve[] | null): boolean {
+  return !!wanted && wanted.length === 2 && wanted.every((g) => !g.signChart) && /=/.test(src) && !/[<>≤≥≠!]/.test(src)
+}
+
+/**
+ * Show on graph's toast note, or null: none while reveal mode hides the
+ * item's solution — the extraneous candidate is part of the route, which is
+ * behind that answer.
+ */
+export function graphNoteShown(item: { id: string; src: string }, reveal: RevealState | null): string | null {
+  if (reveal && isHidden(reveal, solveKey(item.id))) return null
+  return graphsAsSides(item.src, graphSources(item.src)) ? graphNote(item.src) : null
+}
+
+/**
+ * On the Graph board, the extraneous candidates of each solved equation whose
+ * two sides are drawn there: a hollow dot on each side's graph at the
+ * candidate's x (they do not meet there — √(x + 7) is 3 at x = 2, x − 5 is
+ * −3), and a chip "x = 2 (extraneous)". Where neither side has a value (a
+ * denominator or a log argument is 0 or negative) the dot sits on the x-axis.
+ * Each mark carries the item's solution key, so reveal mode hides it with the
+ * route.
+ */
+export function extraneousOverlays(
+  items: readonly NLItem[],
+  curves: readonly { id: string; modelId: string; params: number[]; visible: boolean }[],
+  exprSources: Readonly<Record<string, string>>,
+  evalAt: (curveId: string, x: number) => number,
+): Overlay[] {
+  const out: Overlay[] = []
+  for (const it of items) {
+    if (it.kind !== 'solve') continue
+    const wanted = graphSources(it.src)
+    if (!wanted || !graphsAsSides(it.src, wanted)) continue
+    const ids = wanted.map((g) => {
+      const hit = Object.entries(exprSources).find(([id, src]) => src.trim() === g.src && curves.some((c) => c.id === id && c.visible))
+      return hit ? hit[0] : null
+    })
+    if (ids.some((id) => id === null)) continue
+    const r = routeOf(it.src, solveOf(it))
+    if (!r || r.kind === 'exp') continue
+    const key = solveKey(it.id)
+    for (const c of r.candidates) {
+      if (c.ok || !Number.isFinite(c.x)) continue
+      const at: Vec2[] = []
+      for (const id of ids as string[]) {
+        let y = Number.NaN
+        try { y = evalAt(id, c.x) } catch { y = Number.NaN }
+        if (Number.isFinite(y)) {
+          at.push({ x: c.x, y })
+          out.push({ kind: 'dot', curveId: id, at: { x: c.x, y }, hollow: true, answer: key })
+        }
+      }
+      if (at.length === 0) {
+        at.push({ x: c.x, y: 0 })
+        out.push({ kind: 'dot', at: { x: c.x, y: 0 }, hollow: true, color: it.color, answer: key })
+      }
+      const top = at.reduce((p, q) => (q.y > p.y ? q : p))
+      out.push({ kind: 'label', at: top, text: `x = ${c.text} (extraneous)`, dir: { x: 0, y: -1 }, color: it.color, answer: key })
+    }
+  }
+  return out
 }
 
 // ---------------------------------------------------------------------------

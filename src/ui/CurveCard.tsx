@@ -2939,6 +2939,12 @@ export function CurveCard({
               kind="intersections"
               title={crossings.length > 1 || crossings[0].points.length > 1 ? 'Intersections' : crossings[0].coincide && crossings[0].points.length === 0 ? 'Intersections' : 'Intersection'}
               summary={crossings.map((g) => (g.coincide?.everywhere ? `with ${g.name} (same function)` : `with ${g.name} (${g.points.length}${g.coincide ? ' + overlap' : ''})`)).join(' · ')}
+              // "(same function)" and "+ overlap" are the coincidence answer:
+              // the folded summary is masked with it while it is hidden
+              answerKey={(() => {
+                const keys = crossings.filter((g) => !!g.coincide).map((g) => coincideKey(curve.id, g.id))
+                return keys.find((k) => revealApi.hidden(k)) ?? keys[0]
+              })()}
               className="an-section an-crossings"
               testId="intersections-section"
             >

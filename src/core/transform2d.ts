@@ -37,8 +37,10 @@ import type { Vec2 } from './types'
 import type { AngleInfo, Measure } from './geometry'
 import {
   MINUS,
+  coefTex,
   dec,
   distance,
+  needsBrackets,
   interiorAngles,
   lineThrough,
   measureOf,
@@ -66,13 +68,18 @@ export interface Affine {
 
 export const IDENTITY: Affine = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }
 
-/** Snap a computed value back to the fraction it is (small denominators), else leave it. */
+/**
+ * Snap a computed value back to the fraction it is (small denominators), else
+ * leave it. Only rounding is removed: the match has to be within RAT_TOL
+ * (1e-12, relative) — what a few floating-point steps can be off by — so an
+ * irrational image coordinate is never moved onto a nearby fraction (the
+ * 4.180633150012 of a 28° turn once became 2245/537, three billionths away).
+ */
 export function clean(v: number): number {
   if (!Number.isFinite(v)) return v
   if (Math.abs(v) < 1e-12) return 0
   const r = toRat(v, 1000)
-  if (r && Math.abs(r.n / r.d - v) <= 1e-9 * Math.max(1, Math.abs(v))) return r.n / r.d
-  return v
+  return r ? r.n / r.d : v
 }
 
 export function applyAffine(A: Affine, p: Vec2): Vec2 {
@@ -264,16 +271,32 @@ export function degreeText(deg: number): { text: string; tex: string } {
   return { text: `${neg ? MINUS : ''}${s}°`, tex: `${neg ? '-' : ''}${s}^\\circ` }
 }
 
+/**
+ * "(1, 1)", "(√3, 1/2)", "≈ (0.197, 1.4)" — a point, exact where it is and
+ * marked "≈" where a coordinate had to be rounded (to 3 places, so a centre
+ * at 0.1968 is not printed as a clean-looking 0.2).
+ */
+export function pointForm(p: Vec2): { text: string; tex: string; exact: boolean } {
+  const x = numForm(p.x)
+  const y = numForm(p.y)
+  const exact = x.exact && y.exact
+  return {
+    text: `${exact ? '' : '≈ '}(${x.text}, ${y.text})`,
+    tex: `${exact ? '' : '\\approx '}(${x.tex}, ${y.tex})`,
+    exact,
+  }
+}
+
 /** "(1, 1)" / "O" — a centre, as a subscript names it. */
 export function centreName(p: Vec2): { text: string; tex: string } {
   if (isOrigin(p)) return { text: 'O', tex: 'O' }
-  const t = pointText(p)
-  return { text: t.text, tex: `(${t.x.tex}, ${t.y.tex})` }
+  const t = pointForm(p)
+  return { text: t.text, tex: t.tex }
 }
 
 /** "the origin" / "(1, 1)" — a centre, as a sentence says it. */
 export function centreWords(p: Vec2): string {
-  return isOrigin(p) ? 'the origin' : pointText(p).text
+  return isOrigin(p) ? 'the origin' : pointForm(p).text
 }
 
 // ---------------------------------------------------------------------------
@@ -295,8 +318,10 @@ function piece(c: number, v: string): Piece | null {
   const m = numForm(Math.abs(cc))
   if (v === '') return { neg, text: m.text, tex: m.tex, exact: m.exact }
   if (m.exact && Math.abs(m.value - 1) < 1e-12) return { neg, text: v, tex: v, exact: true }
-  const wrap = /[/≈.]/.test(m.text)
-  return { neg, text: wrap ? `(${m.text})${v}` : `${m.text}${v}`, tex: `${m.tex}${v}`, exact: m.exact }
+  // a fraction gets brackets, and so does a SUM: (1 + √2)x, never 1 + √2x;
+  // a decimal is a single number and goes bare (the rule says ≈ instead)
+  const wrap = m.exact && needsBrackets(m.text)
+  return { neg, text: wrap ? `(${m.text})${v}` : `${m.text}${v}`, tex: `${m.exact ? coefTex(m.tex) : m.tex}${v}`, exact: m.exact }
 }
 
 function joinPieces(list: readonly (Piece | null)[]): { text: string; tex: string; exact: boolean } {
@@ -332,9 +357,11 @@ export interface Rule {
 export function ruleOfAffine(A: Affine): Rule {
   const X = joinPieces([piece(A.a, 'x'), piece(A.b, 'y'), piece(A.e, '')])
   const Y = joinPieces([piece(A.c, 'x'), piece(A.d, 'y'), piece(A.f, '')])
+  // decimal coefficients are rounded: the rule says so
+  const approx = !(X.exact && Y.exact)
   return {
-    text: `(x, y) → (${X.text}, ${Y.text})`,
-    tex: `(x, y) \\to \\left(${X.tex},\\ ${Y.tex}\\right)`,
+    text: `(x, y) → ${approx ? '≈ ' : ''}(${X.text}, ${Y.text})`,
+    tex: `(x, y) \\to ${approx ? '\\approx ' : ''}\\left(${X.tex},\\ ${Y.tex}\\right)`,
     x: X.text,
     y: Y.text,
     exact: X.exact && Y.exact,
@@ -345,8 +372,12 @@ export function ruleOfAffine(A: Affine): Rule {
 function shifted(v: string, h: number): { text: string; tex: string } {
   if (Math.abs(h) < 1e-12) return { text: v, tex: v }
   const m = numForm(Math.abs(h))
+  // a sum subtracted keeps its own brackets: (x − (1 + √2)), not (x − 1 + √2)
+  const sum = m.exact && /.[−+]/.test(m.text.replace(/^\(/, '')) && !/^\(.*\)\/\d+$/.test(m.text)
+  const mt = sum ? `(${m.text})` : m.text
+  const mtex = sum ? `\\left(${m.tex}\\right)` : m.tex
   return h > 0
-    ? { text: `(${v} ${MINUS} ${m.text})`, tex: `(${v} - ${m.tex})` }
+    ? { text: `(${v} ${MINUS} ${mt})`, tex: `(${v} - ${mtex})` }
     : { text: `(${v} + ${m.text})`, tex: `(${v} + ${m.tex})` }
 }
 
@@ -430,7 +461,8 @@ function mirrorSub(m: Mirror): Notation {
 function vecName(v: Vec2): Notation {
   const x = numForm(v.x)
   const y = numForm(v.y)
-  return { text: `⟨${x.text}, ${y.text}⟩`, tex: `\\langle ${x.tex}, ${y.tex}\\rangle` }
+  const ap = x.exact && y.exact ? '' : '≈ '
+  return { text: `${ap}⟨${x.text}, ${y.text}⟩`, tex: `${ap ? '\\approx ' : ''}\\langle ${x.tex}, ${y.tex}\\rangle` }
 }
 
 /** Textbook notation: T_{⟨3, −2⟩}, r_{y-axis}, R_{90°, O}, D_{2, O}. */
@@ -469,8 +501,9 @@ function shiftWords(v: Vec2): string {
   const part = (n: number, pos: string, neg: string): string | null => {
     if (Math.abs(n) < 1e-12) return null
     const m = numForm(Math.abs(n))
-    const one = m.exact && Math.abs(m.value - 1) < 1e-12
-    return `${m.text} unit${one ? '' : 's'} ${n > 0 ? pos : neg}`
+    // "1 unit", "1/2 unit", "3 units": plural only past one
+    const one = Math.abs(n) <= 1 + 1e-12
+    return `${m.exact ? '' : '≈ '}${m.text} unit${one ? '' : 's'} ${n > 0 ? pos : neg}`
   }
   const parts = [part(v.x, 'right', 'left'), part(v.y, 'up', 'down')].filter((p): p is string => p !== null)
   return parts.length === 0 ? 'nowhere' : parts.join(' and ')
@@ -678,19 +711,42 @@ export function composeMotions(list: readonly Motion[]): Composite {
 
 const PRIMES = ['′', '″', '‴']
 const SUB_DIGITS = '₀₁₂₃₄₅₆₇₈₉'
+const SUP_DIGITS = '⁰¹²³⁴⁵⁶⁷⁸⁹'
 const toSub = (n: number): string => String(n).split('').map((d) => SUB_DIGITS[Number(d)]).join('')
 const fromSub = (s: string): number => Number(s.split('').map((c) => SUB_DIGITS.indexOf(c)).join(''))
+const toSup = (n: number): string => String(n).split('').map((d) => SUP_DIGITS[Number(d)]).join('')
+const fromSup = (s: string): number => Number(s.split('').map((c) => SUP_DIGITS.indexOf(c)).join(''))
 
-/** A′ from A, A″ from A′, A‴ from A″; past that a subscript count: A₄, A₅ … */
+/** A label as base + prime mark + subscript: "A", "′", "₂". */
+const LABEL_RE = /^(.*?)([′″‴]|⁽[⁰-⁹]+⁾)?([₀-₉]*)$/
+
+/**
+ * One more prime: A′ from A, A″ from A′, A‴ from A″, then A⁽⁴⁾, A⁽⁵⁾ … —
+ * the PRIMES count the steps from the first figure, so A″ is always the
+ * image of A′. A subscript rides along unchanged: it tells apart two images
+ * of the same figure (A′ and A′₂), or is the teacher's own (A₁ → A′₁).
+ */
 export function primeName(label: string): string {
-  const m = /^(.*?)([′″‴]?)([₀-₉]*)$/.exec(label)
+  const m = LABEL_RE.exec(label)
   if (!m) return `${label}′`
-  const [, base, mark, sub] = m
-  if (sub) return `${base}${toSub(fromSub(sub) + 1)}`
-  if (mark === '') return `${base}′`
-  const i = PRIMES.indexOf(mark)
-  if (i < PRIMES.length - 1) return `${base}${PRIMES[i + 1]}`
-  return `${base}${toSub(4)}`
+  const [, base, mark = '', sub] = m
+  let next: string
+  if (mark === '') next = '′'
+  else if (mark.startsWith('⁽')) next = `⁽${toSup(fromSup(mark.slice(1, -1)) + 1)}⁾`
+  else {
+    const i = PRIMES.indexOf(mark)
+    next = i < PRIMES.length - 1 ? PRIMES[i + 1] : `⁽${toSup(4)}⁾`
+  }
+  return `${base}${next}${sub}`
+}
+
+/**
+ * A primed name marked as the n-th image of its figure (n ≥ 2): A′ → A′₂.
+ * The first image keeps the plain name.
+ */
+export function siblingName(primed: string, n: number): string {
+  if (!(n >= 2)) return primed
+  return `${primed}${toSub(n)}`
 }
 
 /** "A′" written for KaTeX: A' / A'' / A''' / A_{4}. */
@@ -699,6 +755,7 @@ export function primeTex(label: string): string {
     .replace(/′/g, "'")
     .replace(/″/g, "''")
     .replace(/‴/g, "'''")
+    .replace(/⁽([⁰-⁹]+)⁾/, (_m, d: string) => `^{(${fromSup(d)})}`)
     .replace(/([₀-₉]+)$/, (d) => `_{${fromSub(d)}}`)
 }
 

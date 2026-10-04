@@ -596,11 +596,20 @@ function treeArea(index: number): { f: Frame; area: Box } {
   return { f, area }
 }
 
+/**
+ * The most paths the figure labels one by one. Past it (a 4 × 4 × 4 tree has
+ * 64) the rows are too close to read: the figure draws every branch but
+ * leaves the last stage's labels and the paths' products to the card, and
+ * says so. The arithmetic is always every path.
+ */
+export const TREE_LABEL_MAX = 27
+
 function treeFigure(p: BoardProb, index: number): StatsFigure {
   const { f, area } = treeArea(index)
   const prims: StatPrim[] = []
   const tree = treeOf(p)
   const geo = treeGeo(tree, area)
+  const dense = tree.leaves.length > TREE_LABEL_MAX
   const picked = new Set(p.tree.pick.filter((k) => tree.leaves.some((l) => l.key === k)))
   const onPath = (key: string): boolean => [...picked].some((k) => k === key || k.startsWith(`${key}.`))
   // stage headings
@@ -609,7 +618,15 @@ function treeFigure(p: BoardProb, index: number): StatsFigure {
     const x1 = geo.stageX[i + 1]
     prims.push({ k: 'text', at: { x: (x0 + x1) / 2, y: area.y1 + 0.28 }, text: name, ink: 'axis', small: true, rise: 0 })
   })
-  prims.push({ k: 'text', at: { x: geo.prodX, y: area.y1 + 0.28 }, text: 'Multiplication Rule', ink: 'axis', small: true, rise: 0, align: 'start' })
+  prims.push({
+    k: 'text',
+    at: { x: dense ? geo.leafX : geo.prodX, y: area.y1 + 0.28 },
+    text: dense ? `${tree.leaves.length} paths: too many to label here; each is listed on the card` : 'Multiplication Rule',
+    ink: 'axis',
+    small: true,
+    rise: 0,
+    align: 'start',
+  })
   // branches
   const NODE = 0.26
   const walk = (node: TreeNode): void => {
@@ -622,6 +639,11 @@ function treeFigure(p: BoardProb, index: number): StatsFigure {
       const start = { x: from.x + (node.key === '' ? 0.06 : NODE), y: from.y }
       const end = { x: to.x - NODE, y: to.y }
       prims.push({ k: 'curve', pts: [start, end], ink: hot ? 'hot' : 'main', w: hot ? 2.6 : 1.4 })
+      // too dense: the last stage's branches are drawn, not labelled
+      if (dense && br.child.depth === tree.stages) {
+        walk(br.child)
+        continue
+      }
       // the outcome at the end of the branch
       const name = shortOf(tree, br.child.depth - 1, br.b.k, br.b.name)
       prims.push({ k: 'text', at: to, text: name, ink: hot ? 'hot' : 'main', small: name.length > 2, rise: 0, bold: true })
@@ -635,7 +657,7 @@ function treeFigure(p: BoardProb, index: number): StatsFigure {
   prims.push({ k: 'dots', pts: [geo.pos.get('') ?? { x: area.x0, y: (area.y0 + area.y1) / 2 }], r: 0.07, ink: 'main' })
   walk(tree.root)
   // the leaves: the outcome and its product
-  for (const l of tree.leaves) {
+  for (const l of dense ? [] : tree.leaves) {
     const y = geo.leafY.get(l.key)
     if (y === undefined) continue
     const hot = picked.has(l.key)

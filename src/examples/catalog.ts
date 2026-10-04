@@ -614,7 +614,7 @@ export const EXAMPLE_DEFS: readonly ExampleDef[] = [
     title: 'A system of linear inequalities',
     short: 'y > 2x − 3 and y ≤ −x/2 + 2',
     note:
-      'Only the overlap is shaded: points above the dashed line y = 2x − 3 and on or below the solid line y = −x/2 + 2. The test point (0, 0) satisfies both inequalities — drag it into each region and ask the class why the corner (2, 1) belongs to one boundary and not the other.',
+      'Only the overlap is shaded: points above the dashed line y = 2x − 3 and on or below the solid line y = −x/2 + 2. The test point (0, 0) satisfies both inequalities — drag it into each region and ask the class why the corner (2, 1), which lies on both boundary lines, is not a solution: it satisfies y ≤ −x/2 + 2 but not the strict y > 2x − 3.',
     keywords: ['system of inequalities', 'linear inequality', 'shading', 'half-plane', 'test point', 'dashed', 'solid', 'A-REI.12'],
     build: (b) => {
       b.frame([-5, 6], [-5, 5])
@@ -826,25 +826,6 @@ export const EXAMPLE_DEFS: readonly ExampleDef[] = [
       const abc = b.shape('ABC = (1,1) (3,1) (1,4)', { fill: true, measure: ['lengths'] })
       const img = b.image('dilate ABC by 2 about (0, 0)', { measure: ['lengths'] })
       b.compare(abc, img)
-    },
-  },
-  {
-    id: 'm2-triangle-centres',
-    course: 'math2',
-    unit: 'M2',
-    help: ['m2-centres'],
-    title: 'Centres of an obtuse triangle and the Euler line',
-    short: 'four centres and the Euler line',
-    note:
-      'ABC is obtuse at C, so the circumcentre O (2, −2) and the orthocentre H (0, 6) fall outside it while the centroid G (4/3, 2/3) and the incentre I stay inside. O, G and H lie on the Euler line y = −4x + 6 with HG = 2·GO. Ask the class to check O by showing OA = OB = OC = 2√5, then to drag C up until the triangle is acute and watch O and H move inside.',
-    keywords: [
-      'centroid', 'circumcenter', 'circumcentre', 'incenter', 'incentre', 'orthocenter', 'orthocentre', 'median',
-      'perpendicular bisector', 'angle bisector', 'altitude', 'circumscribed circle', 'inscribed circle',
-      'points of concurrency', 'euler line', 'obtuse', 'G-CO.10',
-    ],
-    build: (b) => {
-      b.frame([-6, 10], [-7, 7.5])
-      b.shape('ABC = (-2,0) (6,0) (0,2)', { centres: ['centroid', 'circumcentre', 'incentre', 'orthocentre', 'euler'] })
     },
   },
   {
@@ -1065,6 +1046,27 @@ export const EXAMPLE_DEFS: readonly ExampleDef[] = [
       const c = b.line('x^2 + y^2 = 36')
       b.circle(c, { pts: ['30°', '150°'], show: ['sector'] })
       b.select(c)
+    },
+  },
+  {
+    // The id keeps its old m2- prefix (saved links and tests name it); in the
+    // 2016 NC SCOS the centres of a triangle are NC.M3.G-CO.10, Math 3.
+    id: 'm2-triangle-centres',
+    course: 'math3',
+    unit: 'M3',
+    help: ['m3-centres'],
+    title: 'Centres of an obtuse triangle and the Euler line',
+    short: 'four centres and the Euler line',
+    note:
+      'ABC is obtuse at C, so the circumcentre O (2, −2) and the orthocentre H (0, 6) fall outside it while the centroid G (4/3, 2/3) and the incentre I stay inside. O, G and H lie on the Euler line y = −4x + 6 with HG = 2·GO. Ask the class to check O by showing OA = OB = OC = 2√5, then to drag C up until the triangle is acute and watch O and H move inside.',
+    keywords: [
+      'centroid', 'circumcenter', 'circumcentre', 'incenter', 'incentre', 'orthocenter', 'orthocentre', 'median',
+      'perpendicular bisector', 'angle bisector', 'altitude', 'circumscribed circle', 'inscribed circle',
+      'points of concurrency', 'euler line', 'obtuse', 'G-CO.10', 'NC.M3.G-CO.10',
+    ],
+    build: (b) => {
+      b.frame([-6, 10], [-7, 7.5])
+      b.shape('ABC = (-2,0) (6,0) (0,2)', { centres: ['centroid', 'circumcentre', 'incentre', 'orthocentre', 'euler'] })
     },
   },
 ]

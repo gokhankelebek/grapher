@@ -342,18 +342,23 @@ const scaleOf = (m: Mat): number => Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2]
 
 const TWO_PI = Math.PI * 2
 
-/** The canvas spec's sweep for arc(…, a0, a1, ccw), signed (+ = canvas direction). */
+/**
+ * The sweep a browser draws for arc(…, a0, a1, ccw), signed (+ = canvas
+ * direction) — Chromium's and Firefox's reading (adjustEndAngle), which the
+ * board on screen shows: an arc that runs the "wrong" way round goes the long
+ * way, so arc(0, 2π, anticlockwise) is the WHOLE circle backwards (−2π), not
+ * nothing. The Venn diagram cuts its holes that way; a sweep of 0 there lost
+ * every hole in the SVG, PDF and TikZ exports. Equal angles draw nothing.
+ */
 export function arcSweep(a0: number, a1: number, ccw: boolean): number {
   if (!ccw) {
     if (a1 - a0 >= TWO_PI) return TWO_PI
-    let s = (a1 - a0) % TWO_PI
-    if (s < 0) s += TWO_PI
-    return s
+    if (a0 > a1) return TWO_PI - ((a0 - a1) % TWO_PI)
+    return a1 - a0
   }
   if (a0 - a1 >= TWO_PI) return -TWO_PI
-  let s = (a0 - a1) % TWO_PI
-  if (s < 0) s += TWO_PI
-  return -s
+  if (a0 < a1) return -(TWO_PI - ((a1 - a0) % TWO_PI))
+  return -(a0 - a1)
 }
 
 /**

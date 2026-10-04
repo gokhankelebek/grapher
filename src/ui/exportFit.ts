@@ -16,7 +16,7 @@
 // file computes instead of the live one.
 // ============================================================================
 
-import type { BoardKind, FittedCurve, ModelSpec, NLItem, Shape, Vec2, Viewport } from '../core/types'
+import type { BoardKind, FittedCurve, ModelSpec, NLItem, Shape, ShapeAidsDraw, Vec2, Viewport } from '../core/types'
 import type { Overlay } from '../render/overlays'
 import { isStretched, ppuX, ppuY } from '../core/types'
 import type { ExportSettings } from './renderBoard'
@@ -227,11 +227,43 @@ export function overlaysBox(overlays: readonly Overlay[]): Box | null {
   return pointsBox(pts)
 }
 
-/** The box the board's shapes occupy (a whole line only by its anchor point). */
+/**
+ * The points a shape's construction aids are drawn through: the centre of a
+ * rotation or dilation, the whole arc a vertex turns through, the rays, the
+ * vertex paths, the translation vector's two ends, a point on a mirror or
+ * symmetry line and the symmetry chip. A fitted frame that showed the figure
+ * but not the GIVEN centre would cut off half of what the question says.
+ */
+export function aidPoints(a: ShapeAidsDraw | undefined): Vec2[] {
+  if (!a) return []
+  const pts: Vec2[] = []
+  for (const [p, q] of a.paths ?? []) pts.push(p, q)
+  for (const [p, q] of a.rays ?? []) pts.push(p, q)
+  if (a.center) pts.push(a.center.at)
+  if (a.mirror) pts.push(a.mirror.through)
+  if (a.vector) pts.push(a.vector.tail, { x: a.vector.tail.x + a.vector.v.x, y: a.vector.tail.y + a.vector.v.y })
+  if (a.arc) {
+    const { center: c, from, deg } = a.arc
+    const r = Math.hypot(from.x - c.x, from.y - c.y)
+    const t0 = Math.atan2(from.y - c.y, from.x - c.x)
+    const n = Math.max(2, Math.ceil(Math.abs(deg) / 10))
+    for (let i = 0; i <= n; i++) {
+      const t = t0 + (((deg * i) / n) * Math.PI) / 180
+      pts.push({ x: c.x + r * Math.cos(t), y: c.y + r * Math.sin(t) })
+    }
+    pts.push(c, a.arc.to)
+  }
+  for (const l of a.symLines ?? []) pts.push(l.through)
+  if (a.symText) pts.push(a.symText.at)
+  return pts.filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y))
+}
+
+/** The box the board's shapes occupy (a whole line only by its anchor point), with their aids. */
 export function shapesBox(shapes: readonly Shape[]): Box | null {
   const pts: Vec2[] = []
   for (const s of shapes) {
     if (!s.visible) continue
+    if (s.kind !== 'vector') pts.push(...aidPoints(s.aids))
     switch (s.kind) {
       case 'point':
         pts.push(s.at)

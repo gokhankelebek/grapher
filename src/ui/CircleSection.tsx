@@ -34,6 +34,9 @@ export interface CircleActions {
   set(curveId: string, next: CircleView): void
 }
 
+/** "= (2, 3)" or "≈ (3.7, 1.53)": a point's coordinates after its name. */
+const eqPt = (t: string): string => (t.startsWith('≈') ? t : `= ${t}`)
+
 function Field({
   value,
   title,
@@ -92,7 +95,7 @@ export function CircleSection({ panel, actions }: { panel: CirclePanel; actions:
   const flip = (f: CircleFlag): void => set(toggleCircleFlag(p.view, f, p.circle))
   const summaryParts: string[] = []
   if (p.angles && !isErr(p.angles)) summaryParts.push(`inscribed ${p.angles.inscribed.text}`)
-  if (p.sector && !isErr(p.sector)) summaryParts.push(`s = ${p.sector.arc.text}`)
+  if (p.sector && !isErr(p.sector)) summaryParts.push(`s ${p.sector.arc.exact ? `= ${p.sector.arc.text}` : p.sector.arc.text}`)
   if (p.tangent && !isErr(p.tangent)) summaryParts.push('tangent')
   const summary = summaryParts.length > 0 ? summaryParts.join(' · ') : `centre ${p.circle.centreText.text}, r = ${p.circle.radius.text}`
   const ptName = (i: number): string => p.rows[i]?.name ?? 'P'
@@ -192,10 +195,10 @@ export function CircleSection({ panel, actions }: { panel: CirclePanel; actions:
           ) : (
             <Answer k={k('angles')} block what="the angles">
               <div className="calc-fact calc-fact-lead">
-                ∠{ptName(0)}O{ptName(1)} = {p.angles.central.text} (central{p.angles.central.reflex ? ', reflex' : ''})
+                ∠{ptName(0)}O{ptName(1)} {eqPt(p.angles.central.text)} (central{p.angles.central.reflex ? ', reflex' : ''})
               </div>
               <div className="calc-fact calc-fact-lead">
-                ∠{ptName(0)}{ptName(2)}{ptName(1)} = {p.angles.inscribed.text} (inscribed)
+                ∠{ptName(0)}{ptName(2)}{ptName(1)} {eqPt(p.angles.inscribed.text)} (inscribed)
               </div>
               <div className="calc-fact">{p.angles.intercepts}</div>
               <div className="calc-fact measure-sentence">{p.angles.relation}</div>
@@ -261,7 +264,7 @@ export function CircleSection({ panel, actions }: { panel: CirclePanel; actions:
           ) : (
             <>
               <div className="calc-fact calc-fact-lead">
-                θ = {p.sector.degText} = {p.sector.theta.text}
+                θ {eqPt(p.sector.degText)} {p.sector.theta.exact ? `= ${p.sector.theta.text}` : p.sector.theta.text}
                 {p.sector.theta.exact ? '' : ' rad'}
               </div>
               <Answer k={k('sector')} block what="the arc length and the sector area">
@@ -289,7 +292,7 @@ export function CircleSection({ panel, actions }: { panel: CirclePanel; actions:
             <div className="calc-why">{p.chords.error}</div>
           ) : (
             <Answer k={k('chords')} block what="the products">
-              <div className="calc-fact">E = {p.chords.eText.text}</div>
+              <div className="calc-fact">E {eqPt(p.chords.eText.text)}</div>
               <div className="calc-fact calc-fact-lead">{p.chords.left}</div>
               <div className="calc-fact calc-fact-lead">{p.chords.right}</div>
               <div className="calc-fact">{p.chords.power}</div>
@@ -317,13 +320,13 @@ export function CircleSection({ panel, actions }: { panel: CirclePanel; actions:
             <Answer k={k('external')} block what="the tangent lengths">
               <div className="calc-fact calc-fact-lead">{p.external.lengthText}</div>
               <div className="calc-fact">
-                A = {p.external.aText.text}, B = {p.external.bText.text}
+                A {eqPt(p.external.aText.text)}, B {eqPt(p.external.bText.text)}
               </div>
               <div className="calc-fact">Two tangent segments from the same outside point are equal.</div>
               {p.external.secant && (
                 <div className="calc-fact calc-fact-lead">
                   {p.external.secant.text} (the secant through {p.external.secant.through} meets the circle again at{' '}
-                  {p.external.secant.through}′{p.external.secant.p2Text.text})
+                  {p.external.secant.through}′ {eqPt(p.external.secant.p2Text.text)})
                 </div>
               )}
             </Answer>

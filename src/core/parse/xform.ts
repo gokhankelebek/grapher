@@ -50,14 +50,17 @@ export function parseAngle(src: string): { deg: number } | Fail {
   if (s === '') return { error: 'Type an angle in degrees, e.g. 90' }
   let sign = 1
   const cw = /\b(cw|clockwise)\b/.exec(s)
-  const ccw = /\b(ccw|counter-?clockwise|anticlockwise|anti-clockwise)\b/.exec(s)
+  const ccw = /\b(ccw|counter[\s-]?clockwise|anti[\s-]?clockwise)\b/.exec(s)
   if (ccw) s = s.replace(ccw[0], '')
   else if (cw) {
     sign = -1
     s = s.replace(cw[0], '')
   }
   s = s.replace(/°|\bdeg(rees?)?\b/g, '').trim()
-  const radians = /π|\bpi\b/.test(s)
+  // "1.5708 rad" is radians, as on a circle's points
+  const radWord = /\s*\brad(ians?)?\s*$/.exec(s)
+  if (radWord) s = s.slice(0, radWord.index).trim()
+  const radians = !!radWord || /π|\bpi\b/.test(s)
   const v = evalConst(s.replace(/π/g, 'pi'))
   if (v === null) return { error: `“${src.trim()}” is not an angle — type degrees, e.g. 90 or -45` }
   const deg = sign * (radians ? (v * 180) / Math.PI : v)
@@ -110,7 +113,8 @@ const NAME_RE = /^[A-Za-z][′″‴]*[₀-₉]*$/
  * of a point on the board ("C", "A′", "A'").
  */
 export function parsePointRef(src: string, named?: ReadonlyMap<string, Vec2>): { p: Vec2 } | Fail {
-  const s = normalizePrimes(src.trim())
+  // "centre C", "the point (1, 2)", "center of rotation P": the word is not the point
+  const s = normalizePrimes(src.trim()).replace(/^(the\s+)?(centre|center|point)(\s+of\s+(rotation|dilation))?\s+(?=\S)/i, '')
   if (s === '' || /^(the\s+)?origin$/i.test(s)) return { p: { x: 0, y: 0 } }
   if (NAME_RE.test(s)) {
     const p = named?.get(s)

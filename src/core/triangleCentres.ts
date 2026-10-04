@@ -13,9 +13,12 @@
 //                    R = OA, exact as a surd (R² is rational).
 //   incentre I       where the ANGLE BISECTORS meet; the centre of the circle
 //                    touching the three sides. I = (aA + bB + cC)/(a + b + c)
-//                    with a = BC … — irrational in general: exact only when
-//                    the closed form is a clean one (1, 4 − 2√2), else a
-//                    decimal. r = Area / s, the same rule.
+//                    with a = BC … — irrational in general. With rational
+//                    vertices it is COMPUTED exactly in surd arithmetic
+//                    (src/core/surdSum.ts: 9 − 2√5, (2√13 − 4)/3) and shown
+//                    exactly when that is readable (≤ 3 terms), else as a
+//                    decimal; r = Area / s, the same way. Never recognised
+//                    from a float when the vertices are rational.
 //   orthocentre H    where the ALTITUDES meet: H = A + B + C − 2O, so it is
 //                    rational whenever O is. Outside an obtuse triangle; the
 //                    right-angle vertex of a right triangle.
@@ -35,6 +38,8 @@
 import type { Vec2 } from './types'
 import type { LineEq, Measure, PointMeasure, Rat } from './geometry'
 import { spaced } from './circleGeometry'
+import type { SurdSum } from './surdSum'
+import { ssAdd, ssDiv, ssMeasure, ssRat, ssScale, ssSqrt } from './surdSum'
 import {
   angleAt,
   decimalMeasure,
@@ -261,10 +266,33 @@ export function triangleCentres(ptsIn: readonly Vec2[], labels?: readonly string
   const c = len(A, B)
   const per = a + b + c
   const I = { x: (a * A.x + b * B.x + c * C.x) / per, y: (a * A.y + b * B.y + c * C.y) / per }
-  const inPm = measuredPoint(I)
   const area = Math.abs(cross) / 2
   const rIn = area / (per / 2)
-  const inradius = spaced(measureOf(rIn))
+  let inPm = measuredPoint(I)
+  let inradius = spaced(measureOf(rIn))
+  if (rational) {
+    // exactly: a, b, c are surds (their squares are rational), the rest is
+    // field arithmetic. A result too long to read is a decimal, not a guess.
+    const side = (u: Q, v: Q): SurdSum | null =>
+      ssSqrt(ratAdd(ratMul(ratSub(v.rx, u.rx), ratSub(v.rx, u.rx)), ratMul(ratSub(v.ry, u.ry), ratSub(v.ry, u.ry))))
+    const sa = side(qb, qc)
+    const sb = side(qc, qa)
+    const sc = side(qa, qb)
+    const P = ssAdd(ssAdd(sa, sb), sc)
+    const wsum = (ka: 'rx' | 'ry'): SurdSum | null =>
+      ssAdd(ssAdd(ssScale(sa, qa[ka]), ssScale(sb, qb[ka])), ssScale(sc, qc[ka]))
+    const ex = ssDiv(wsum('rx'), P)
+    const ey = ssDiv(wsum('ry'), P)
+    if (ex && ey) {
+      const mx = ssMeasure(ex) ?? decimalMeasure(I.x)
+      const my = ssMeasure(ey) ?? decimalMeasure(I.y)
+      inPm = { pt: I, x: mx, y: my, text: `(${mx.text}, ${my.text})`, tex: `\\left(${mx.tex}, ${my.tex}\\right)` }
+    }
+    // r = 2·Area / (a + b + c), 2·Area = |cross| rational
+    const twoK = ratSub(ratMul(ratSub(qb.rx, qa.rx), ratSub(qc.ry, qa.ry)), ratMul(ratSub(qb.ry, qa.ry), ratSub(qc.rx, qa.rx)))
+    const er = twoK ? ssDiv(ssRat({ n: Math.abs(twoK.n), d: twoK.d }), P) : null
+    if (er) inradius = ssMeasure(er) ?? decimalMeasure(rIn)
+  }
 
   // ---- construction
   const mid = (u: Vec2, v: Vec2): Vec2 => ({ x: (u.x + v.x) / 2, y: (u.y + v.y) / 2 })
@@ -318,12 +346,12 @@ export function triangleCentres(ptsIn: readonly Vec2[], labels?: readonly string
     const hyp = side(rightAt)
     const hypLen = distance(tri[(rightAt + 1) % 3], tri[(rightAt + 2) % 3])
     notes.push(
-      `${tri3} is right-angled at ${names[rightAt]}, so the circumcentre O is the midpoint of the hypotenuse ${hyp} and R = ${hyp}/2 = ${circumradius.text}${hypLen.exact ? '' : ' (approximately)'}.`,
+      `${tri3} is right-angled at ${names[rightAt]}, so the circumcentre O is the midpoint of the hypotenuse ${hyp} and R = ${hyp}/2 ${hypLen.exact && circumradius.exact ? `= ${circumradius.text}` : eqMeasure(circumradius)}.`,
     )
     notes.push(`The orthocentre H is the right-angle vertex ${names[rightAt]}: two of the altitudes are the legs.`)
   } else if (kind === 'obtuse') {
     notes.push(
-      `${tri3} is obtuse at ${names[obtuseAt]} (${degText(angles[obtuseAt]).text}), so the circumcentre O and the orthocentre H lie outside the triangle.`,
+      `${tri3} is obtuse at ${names[obtuseAt]} (${degText(angles[obtuseAt]).exact ? '' : '≈ '}${degText(angles[obtuseAt]).text}), so the circumcentre O and the orthocentre H lie outside the triangle.`,
     )
   } else {
     notes.push(`${tri3} is acute, so all four centres lie inside it.`)
@@ -409,6 +437,6 @@ export function centreFacts(t: TriangleCentres, key: CentreKey): string[] {
 
 /** A coordinate pair's decimal, for the "≈" beside an inexact centre. */
 export function approxPoint(p: PointMeasure): string {
-  const d = (v: number) => decimalMeasure(v).text
+  const d = (v: number) => (Math.abs(v) < 1e-13 ? '0' : decimalMeasure(v).text)
   return `(${d(p.pt.x)}, ${d(p.pt.y)})`
 }

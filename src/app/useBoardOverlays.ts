@@ -24,6 +24,7 @@ import type { Overlay } from '../ui/renderBoard'
 import { seriesOverlays } from '../ui/seqLinks'
 import { signRange } from '../ui/signChartLinks'
 import { tableOverlays } from '../ui/valueTableLinks'
+import { extraneousOverlays } from '../ui/nlSolve'
 import { anyCentres, centreOverlays } from '../ui/centreLinks'
 import { circleOverlays } from '../ui/circleLinks'
 import type { ShapesApi } from './useShapes'
@@ -56,7 +57,7 @@ export interface BoardOverlaysDeps {
 const EMPTY_MARKS: Overlay[] = []
 
 export function useBoardOverlays({ board, docState, session, derived, calc, tables, domain, system, shapesApi }: BoardOverlaysDeps) {
-  const { curves, kind, motionPlay, motionPlayRef, lens, calcLinks, sequences, playEpoch, valueTables, shapes, circleViews } = board
+  const { curves, kind, motionPlay, motionPlayRef, lens, calcLinks, sequences, playEpoch, valueTables, shapes, circleViews, items } = board
   const shapeCompiled = shapesApi?.shapeCompiled
   const { exprSources, displaySources, names, calls, inverses } = docState
   const { markersOn, canvasTheme, exportFormat, latexWidthCm, exportSettings, curvePalette } = session
@@ -242,6 +243,30 @@ export function useBoardOverlays({ board, docState, session, derived, calc, tabl
     }
   }, [kind, curves, exprSources, circleViews])
 
+  /**
+   * A solved equation's two sides drawn by "Show on graph": each extraneous
+   * candidate as a hollow dot on both graphs and a chip "x = 2 (extraneous)"
+   * (src/ui/nlSolve.ts extraneousOverlays) — answers, hidden with the route.
+   */
+  const extraneousMarks = useMemo<Overlay[]>(() => {
+    if (kind !== 'cartesian' || !items.some((it) => it.kind === 'solve')) return EMPTY_MARKS
+    try {
+      const fns = new Map<string, ((x: number) => number) | null>()
+      const evalAt = (id: string, x: number): number => {
+        if (!fns.has(id)) {
+          const c = curves.find((cc) => cc.id === id)
+          fns.set(id, c ? explicitF(c, models) : null)
+        }
+        const f = fns.get(id)
+        return f ? f(x) : Number.NaN
+      }
+      const out = extraneousOverlays(items, curves, exprSources, evalAt)
+      return out.length > 0 ? out : EMPTY_MARKS
+    } catch {
+      return EMPTY_MARKS
+    }
+  }, [kind, items, curves, exprSources, models])
+
   /** Σ aₙ on the board: staircase bars, the joined sums, the band, y = S. */
   const seriesMarks = useMemo<Overlay[]>(
     () => (kind === 'cartesian' && sequences.some((q) => q.series) ? seriesOverlays(sequences, seqCompiled) : []),
@@ -273,16 +298,16 @@ export function useBoardOverlays({ board, docState, session, derived, calc, tabl
         : []
     const more =
       motionAreaOverlays.length + domainOverlays.length + sysOverlays.length + seriesMarks.length + tableMarks.length +
-      centreMarks.length + circleMarks.length
+      centreMarks.length + circleMarks.length + extraneousMarks.length
     if (more === 0) return base
     // The ghost goes first (under everything else); the marks sort themselves
     // onto the curves by kind.
     return [
       ...domainOverlays, ...base, ...motionAreaOverlays, ...sysOverlays, ...seriesMarks, ...tableMarks,
-      ...circleMarks, ...centreMarks,
+      ...circleMarks, ...centreMarks, ...extraneousMarks,
     ]
     // depKeys: a secant, limit or volume on p(x) = h(x) + 1 moves when h is retyped.
-  }, [kind, calcLinks, curves, models, motionAreaOverlays, bandSpan, domainOverlays, sysOverlays, seriesMarks, tableMarks, circleMarks, centreMarks, implicitSources, implicitBox, depKeys])
+  }, [kind, calcLinks, curves, models, motionAreaOverlays, bandSpan, domainOverlays, sysOverlays, seriesMarks, tableMarks, circleMarks, centreMarks, extraneousMarks, implicitSources, implicitBox, depKeys])
   const overlaysRef = useRef<Overlay[]>(overlays)
   overlaysRef.current = overlays
   /**

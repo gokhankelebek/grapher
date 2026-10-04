@@ -415,13 +415,14 @@ export function looksLikeLinkedLine(src: string): boolean {
  */
 export function parseLinkedLine(src: string): ShapeOutcome | null {
   if (!looksLikeLinkedLine(src)) return null
-  let rest = src.trim()
+  // A' and A'' as typed are the board's A′ and A″ (an image's vertices)
+  let rest = src.trim().replace(/'''/g, '‴').replace(/''/g, '″').replace(/['’]/g, '′')
   let through: string | Vec2 | null = null
   let rel: 'parallel' | 'perpendicular' | null = null
   let to: [string, string] | null = null
 
   const readThrough = (): Fail | null => {
-    const named = /^through\s+([A-Za-z])(?![A-Za-z0-9(])\s*/i.exec(rest)
+    const named = /^through\s+([A-Za-z][′″‴]*[₀-₉]*)(?![A-Za-z0-9(′″‴])\s*/i.exec(rest)
     if (named) {
       through = named[1]
       rest = rest.slice(named[0].length)
@@ -464,7 +465,7 @@ export function parseLinkedLine(src: string): ShapeOutcome | null {
   if (toWord) rest = rest.slice(toWord[0].length)
   const kind = /^(?:segment|side|line)\s+/i.exec(rest)
   if (kind) rest = rest.slice(kind[0].length)
-  const seg = /^([A-Za-z])([A-Za-z])(?![A-Za-z0-9])\s*/.exec(rest)
+  const seg = /^([A-Za-z][′″‴]*[₀-₉]*)([A-Za-z][′″‴]*[₀-₉]*)(?![A-Za-z0-9′″‴])\s*/.exec(rest)
   if (!seg) return fail(`Name the segment by its two endpoints, e.g. ${rel} to AB through P`)
   if (seg[1] === seg[2]) return fail(`'${seg[0].trim()}' names one point twice — a segment needs two different endpoints`)
   to = [seg[1], seg[2]]
@@ -479,7 +480,8 @@ export function parseLinkedLine(src: string): ShapeOutcome | null {
 
   const link = { rel, to, through } as { rel: 'parallel' | 'perpendicular'; to: [string, string]; through: string | Vec2 }
   const thr = typeof link.through === 'string' ? link.through : `(${fmtNum(link.through.x)}, ${fmtNum(link.through.y)})`
-  const latex = `\\ell ${rel === 'parallel' ? '\\parallel' : '\\perp'} \\overline{${to.join('')}}\\text{ through }${thr}`
+  const texName = (n: string): string => n.replace(/‴/g, "'''").replace(/″/g, "''").replace(/′/g, "'")
+  const latex = `\\ell ${rel === 'parallel' ? '\\parallel' : '\\perp'} \\overline{${texName(to.join(''))}}\\text{ through }${texName(thr)}`
   return {
     ok: true,
     kind: 'line',

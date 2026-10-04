@@ -619,6 +619,26 @@ export function maskShapeMeasure(m: ShapeMeasureDraw, hidden: (part: ShapePart) 
 }
 
 /**
+ * The translation vector of a HIDDEN image, drawn where it says nothing: its
+ * tail is the pre-image's first vertex, so its tip would be A′ exactly. It is
+ * moved clear of the figure — tail just left of the pre-image's box — where
+ * it still shows ⟨a, b⟩ and its tip is no image vertex (Q + v is in the
+ * image only when Q is in the pre-image).
+ */
+function detachedVector<V extends { tail: Vec2; v: Vec2 }>(vec: V, image: Shape): V {
+  const pts: readonly Vec2[] =
+    image.kind === 'polygon' ? image.pts : image.kind === 'segment' ? [image.a, image.b] : image.kind === 'point' ? [image.at] : []
+  // the image's own box, moved back by −v, is the pre-image's
+  const pre = pts.map((p) => ({ x: p.x - vec.v.x, y: p.y - vec.v.y }))
+  if (pre.length === 0) return vec
+  const minX = Math.min(...pre.map((p) => p.x))
+  const minY = Math.min(...pre.map((p) => p.y))
+  const maxY = Math.max(...pre.map((p) => p.y))
+  const gap = 1 + Math.max(0, vec.v.x)
+  return { ...vec, tail: { x: minX - gap, y: (minY + maxY) / 2 } }
+}
+
+/**
  * Every shape with its hidden answers masked: measurement chips say "?"; a
  * transformation's image is the answer itself, so only what is GIVEN stays
  * (the mirror line, the centre, the translation vector) and the figure, its
@@ -634,7 +654,7 @@ export function maskShapes(shapes: readonly Shape[], hidden: (key: string) => bo
       const given = {
         ...(a.mirror ? { mirror: a.mirror } : {}),
         ...(a.center ? { center: a.center } : {}),
-        ...(a.vector ? { vector: a.vector } : {}),
+        ...(a.vector ? { vector: detachedVector(a.vector, s) } : {}),
       }
       out = { ...out, figureHidden: true, aids: given } as Shape
     }
@@ -746,6 +766,12 @@ export function applyReveal(scene: BoardScene, r: SceneReveal | null | undefined
       return scene.curves.find((c) => c.id === id)?.color ?? NEUTRAL
     }
     out.overlays = scene.overlays.filter((ov) => {
+      // everything that belongs to a hidden answer goes with it (a hidden image's centres)
+      if (ov.hideWith && r.hidden(ov.hideWith)) return false
+      // an answer's dot (an extraneous candidate's hollow dot) is simply not drawn while hidden
+      if (ov.kind === 'dot' && ov.answer) return !r.hidden(ov.answer)
+      // …and a guide that marks an answer on an axis (Evaluate's f(a)) likewise
+      if (ov.kind === 'segment' && ov.answer) return !r.hidden(ov.answer)
       if (ov.kind !== 'label' || !ov.answer) return true
       return !visit(r, ov.answer, ov.at, colorOf(ov), marks, pulses)
     })

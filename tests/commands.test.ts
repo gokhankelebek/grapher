@@ -699,7 +699,7 @@ describe('the palette and the help sheet render accessibly', () => {
       'NC Math 1',
       'Coordinate geometry: distance, midpoint, slope, polygons (G-GPE.4–6)',
       'NC Math 2',
-      'Right triangle trigonometry (G-SRT.6–8, 12)',
+      'Right triangle trigonometry (NC.M2.G-SRT.6, NC.M2.G-SRT.8, NC.M2.G-SRT.12)',
       'NC Math 3',
       'Drawing &amp; editing',
       'Exports &amp; worksheets',

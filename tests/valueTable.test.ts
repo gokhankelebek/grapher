@@ -243,7 +243,7 @@ describe('compare and overtake', () => {
     expect(r.crossings.length).toBe(2)
     expect(r.crossings[0]).toBeCloseTo(1.3734, 3)
     const p = tablePanel(C.p2, { vs: 'c', n: 12 }, ctx)!
-    expect(p.compare!.sentence).toBe('2ˣ passes x³ after x ≈ 9.94 and stays ahead (checked to x = 1000)')
+    expect(p.compare!.sentence).toBe('2ˣ passes x³ after x ≈ 9.94 and stays ahead for good (an exponential with base > 1 outgrows every power of x)')
     expect(p.compare!.crossings).toBe('They cross at x ≈ 1.37 and x ≈ 9.94.')
     // side by side, with the row where the lead changes marked
     expect(p.rows[10].g!.text).toBe('1000')
@@ -260,7 +260,7 @@ describe('compare and overtake', () => {
     const r = overtake(fOf(C.f), fOf(lin), -5)!
     expect(r.exact?.text).toBe('1')
     const all = tablePanel(C.g, { vs: 'f' }, { ...ctx, curves: [...CURVES] })!
-    expect(all.compare!.sentence).toMatch(/^3·2ˣ is above 2x \+ 1 for every x checked/)
+    expect(all.compare!.sentence).toMatch(/^3·2ˣ is above 2x \+ 1 for every x from x = 0 on, and stays ahead for good/)
   })
 })
 

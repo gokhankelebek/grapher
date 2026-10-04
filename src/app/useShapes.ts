@@ -26,7 +26,7 @@ import type { BoardShape, CompiledShape, ShapeCardData } from '../ui/shapeLinks'
 import type { ShapeMeasureSettings, ShapeXform } from '../core/persist'
 import type { XformAid, XformOp } from '../core/types'
 import { looksLikeXformCommand, parseXformCommand, resolveOp } from '../core/parse/xform'
-import { imageDependents, imageSrc, shapeByName, withAids } from '../ui/shapeXform'
+import { imageDependents, imageNumber, imageSrc, retargetImage, shapeByName, withAids } from '../ui/shapeXform'
 import { snapPlaced } from '../ui/snap'
 import type { BoardStateApi } from './useBoardState'
 import type { BoardRefsApi } from './useBoardRefs'
@@ -247,6 +247,7 @@ export function useShapes({ board, refs, derived, notices, history, editing, cal
       if (!parent) return 'That figure cannot be drawn right now, so it has no image'
       const ok = resolveOp(op, namedNow())
       if ('error' in ok) return ok.error
+      const n = imageNumber(shapesRef.current, parentId, null)
       const shape: BoardShape = {
         id: nextId(),
         src: imageSrc(op, parent),
@@ -254,7 +255,7 @@ export function useShapes({ board, refs, derived, notices, history, editing, cal
         color: pickColor(),
         fill: false,
         visible: true,
-        xform: { of: parentId, op },
+        xform: { of: parentId, op, ...(n >= 2 ? { n } : {}) },
       }
       commitState({ shapes: [...shapesRef.current, shape] }, `${op.t} shape`)
       setSelectedId(shape.id)
@@ -288,6 +289,12 @@ export function useShapes({ board, refs, derived, notices, history, editing, cal
       const kindChanged = now.xform.op.t !== op.t
       const xform: ShapeXform = { ...(kindChanged ? {} : now.xform), of: parentId, op }
       if (kindChanged) delete xform.aids
+      if (parentId !== now.xform.of) {
+        // another figure's image now: numbered among ITS images
+        const n = imageNumber(shapesRef.current, parentId, id)
+        if (n >= 2) xform.n = n
+        else delete xform.n
+      } else if (now.xform.n !== undefined) xform.n = now.xform.n
       const src = imageSrc(op, parent)
       commitState({ shapes: mapShape(id, (s) => ({ ...s, src, xform })) }, 'edit transformation')
       setSelectedId(id)
@@ -380,9 +387,9 @@ export function useShapes({ board, refs, derived, notices, history, editing, cal
         const cmd = parseXformCommand(src)
         if ('error' in cmd) return cmd.error
         const list = [...shapeCompiledRef.current.values()].map((c) => ({ id: c.id, shape: c.shape }))
-        const named = shapeByName(cmd.target, list)
-        if (named === id) return 'A figure cannot be the image of itself'
-        return setImageOp(id, cmd.op, named ?? undefined)
+        const to = retargetImage(cmd.target, list, id, now.xform.of)
+        if ('error' in to) return to.error
+        return setImageOp(id, cmd.op, to.of)
       }
       return restateShape(id, src, 'edit shape', false)
     },
@@ -453,7 +460,11 @@ export function useShapes({ board, refs, derived, notices, history, editing, cal
   /** Everything each shape's card says, computed once for all of them. */
   const shapeCards = useMemo<Record<string, ShapeCardData>>(() => {
     const out: Record<string, ShapeCardData> = {}
-    for (const s of shapes) out[s.id] = shapeCard(s, shapeCompiled)
+    for (const s of shapes) {
+      const card = shapeCard(s, shapeCompiled)
+      const n = imageNumber(shapes, s.id, null)
+      out[s.id] = n >= 2 ? { ...card, nextImage: n } : card
+    }
     return out
   }, [shapes, shapeCompiled])
 

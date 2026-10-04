@@ -233,6 +233,18 @@ export function toggleCircleFlag(view: CircleView | undefined, flag: CircleFlag,
     while (pts.length < need) pts.push(DEFAULT_CIRCLE_PTS[pts.length] ?? `${(pts.length * 60) % 360}°`)
     next.pts = pts
     if (flag === 'external' && !next.ext && circle) next.ext = DEFAULT_EXTERNAL(circle)
+  } else {
+    // What switching ON added by itself goes when it is switched off again,
+    // so on-then-off stores exactly what was stored before: default points
+    // nobody retyped, beyond what the figures still on need, and the default
+    // T of a "Tangents from T" that is off.
+    const still = Math.max(0, ...[...cur].map((f) => CIRCLE_NEEDS[f]))
+    const pts = [...(next.pts ?? [])]
+    while (pts.length > still && pts[pts.length - 1] === DEFAULT_CIRCLE_PTS[pts.length - 1]) pts.pop()
+    if (pts.length > 0) next.pts = pts
+    else delete next.pts
+    if (next.at !== undefined && next.at >= pts.length) delete next.at
+    if (flag === 'external' && next.ext !== undefined && circle && next.ext === DEFAULT_EXTERNAL(circle)) delete next.ext
   }
   if (next.show && next.show.length === 0) delete next.show
   return next
@@ -253,6 +265,44 @@ export function setCirclePoint(view: CircleView | undefined, i: number, text: st
 export function nextCirclePoint(view: CircleView | undefined): string {
   const n = view?.pts?.length ?? 0
   return DEFAULT_CIRCLE_PTS[n] ?? `${[45, 210, 330, 120][n % 4]}°`
+}
+
+// ---------------------------------------------------------------------------
+// Dragging a point along the circle
+// ---------------------------------------------------------------------------
+
+/** "3.2" / "-1.5": a snapped coordinate as a point is typed. */
+const coordText = (v: number): string => String(Object.is(v, -0) ? 0 : v)
+
+/**
+ * The text a circle point gets when it is dragged to `pos`: it stays ON the
+ * circle (the pointer is projected onto it along the radius), and it keeps
+ * the way it was written — a point typed as coordinates "(3, 4)" gets the
+ * projected point's coordinates, snapped to the grid's ladder by `snap` (a
+ * lattice point on the circle lands exactly; any other is moved onto the
+ * circle when it is read, as a typed one is); anything else becomes whole
+ * degrees, "37°". Null when the pointer is at the centre.
+ */
+export function draggedCirclePoint(c: Circle, was: string, pos: Vec2, snap: (p: Vec2) => Vec2): string | null {
+  const dx = pos.x - c.centre.x
+  const dy = pos.y - c.centre.y
+  const d = Math.hypot(dx, dy)
+  if (!(d > 0) || !Number.isFinite(d)) return null
+  if ((was ?? '').trim().startsWith('(')) {
+    const on = snap({ x: c.centre.x + (c.r * dx) / d, y: c.centre.y + (c.r * dy) / d })
+    return `(${coordText(on.x)}, ${coordText(on.y)})`
+  }
+  const deg = (((Math.round((Math.atan2(dy, dx) * 180) / Math.PI) % 360) + 360) % 360)
+  return `${deg}°`
+}
+
+/** Where each of a panel's points can be grabbed, for the board's drag handles. */
+export function circlePointHandles(p: CirclePanel): { index: number; name: string; pos: Vec2; label: string }[] {
+  const out: { index: number; name: string; pos: Vec2; label: string }[] = []
+  p.rows.forEach((row, index) => {
+    if (row.ok) out.push({ index, name: row.name, pos: row.p.pt, label: `${row.name} ${row.p.degText}` })
+  })
+  return out
 }
 
 // ---------------------------------------------------------------------------
@@ -284,6 +334,12 @@ const polar = (c: Vec2, r: number, deg: number): Vec2 => ({
   y: c.y + r * Math.sin((deg * Math.PI) / 180),
 })
 
+/** "= 60°" or "≈ 66.9°" — a text after its name, never "= ≈ 66.9°". */
+const eqT = (t: string): string => (t.startsWith('≈') ? t : `= ${t}`)
+
+/** "= 2π" or "≈ 3.71" — a value after its name, never "= ≈ 3.71". */
+const eqV = (v: { text: string; exact: boolean }): string => (v.exact ? `= ${v.text}` : v.text.startsWith('≈') ? v.text : `≈ ${v.text}`)
+
 /** A chip direction (screen: y down) pointing away from `from` toward `to`. */
 const away = (from: Vec2, to: Vec2): Vec2 => ({ x: to.x - from.x, y: -(to.y - from.y) })
 
@@ -312,7 +368,7 @@ export function panelOverlays(p: CirclePanel, curveColor: string): Overlay[] {
     const rc = 0.2 * r
     out.push({ kind: 'path', points: arcPoints(O, rc, a.centralMark.start, a.centralMark.sweep), color: COL.central, width: 1.75 })
     const midC = polar(O, rc, a.centralMark.start + a.centralMark.sweep / 2)
-    marks.push({ kind: 'label', at: midC, text: `∠${P.name}O${Q.name} = ${a.central.text}`, dir: away(O, midC), color: COL.central, answer: key('angles') })
+    marks.push({ kind: 'label', at: midC, text: `∠${P.name}O${Q.name} ${eqT(a.central.text)}`, dir: away(O, midC), color: COL.central, answer: key('angles') })
     const ri = 0.17 * r
     if (a.diameter) {
       const u1 = { x: (P.pt.x - R.pt.x) / Math.hypot(P.pt.x - R.pt.x, P.pt.y - R.pt.y), y: (P.pt.y - R.pt.y) / Math.hypot(P.pt.x - R.pt.x, P.pt.y - R.pt.y) }
@@ -322,7 +378,7 @@ export function panelOverlays(p: CirclePanel, curveColor: string): Overlay[] {
       out.push({ kind: 'path', points: arcPoints(R.pt, ri, a.inscribedMark.start, a.inscribedMark.sweep), color: COL.inscribed, width: 1.75 })
     }
     const midI = polar(R.pt, ri, a.inscribedMark.start + a.inscribedMark.sweep / 2)
-    marks.push({ kind: 'label', at: midI, text: `∠${P.name}${R.name}${Q.name} = ${a.inscribed.text}`, dir: away(R.pt, midI), color: COL.inscribed, answer: key('angles') })
+    marks.push({ kind: 'label', at: midI, text: `∠${P.name}${R.name}${Q.name} ${eqT(a.inscribed.text)}`, dir: away(R.pt, midI), color: COL.inscribed, answer: key('angles') })
   }
 
   if (ok<TangentReport>(p.tangent)) {
@@ -353,11 +409,11 @@ export function panelOverlays(p: CirclePanel, curveColor: string): Overlay[] {
     out.push({ kind: 'path', points: arcPoints(O, ra, s.start, s.deg), color: COL.sector, width: 1.5 })
     const mid = s.start + s.deg / 2
     const onArcPt = polar(O, r, mid)
-    marks.push({ kind: 'label', at: onArcPt, text: `s = ${s.arc.text}`, dir: away(O, onArcPt), color: COL.sector, answer: key('sector') })
+    marks.push({ kind: 'label', at: onArcPt, text: `s ${eqV(s.arc)}`, dir: away(O, onArcPt), color: COL.sector, answer: key('sector') })
     const inside = polar(O, 0.55 * r, mid)
-    marks.push({ kind: 'label', at: inside, text: `A = ${s.area.text}`, dir: { x: 0, y: 0.01 }, color: COL.sector, answer: key('sector') })
+    marks.push({ kind: 'label', at: inside, text: `A ${eqV(s.area)}`, dir: { x: 0, y: 0.01 }, color: COL.sector, answer: key('sector') })
     const thetaAt = polar(O, ra, mid)
-    marks.push({ kind: 'label', at: thetaAt, text: `θ = ${s.theta.text}`, dir: away(onArcPt, O), color: COL.sector })
+    marks.push({ kind: 'label', at: thetaAt, text: `θ ${eqV(s.theta)}`, dir: away(onArcPt, O), color: COL.sector })
   }
 
   if (ok<ChordsReport>(p.chords)) {
@@ -474,7 +530,7 @@ export function circleSentences(
     if (!p) continue
     const ptsText = p.rows
       .filter((r): r is Extract<PointRow, { ok: true }> => r.ok)
-      .map((r) => `${r.name}${r.p.coords.text}`)
+      .map((r) => `${r.name}${r.p.coords.text.startsWith('≈') ? ' ' : ''}${r.p.coords.text}`)
     out.push({
       text: `On the circle ${p.circle.equation} (centre O${p.circle.centreText.text}, radius ${p.circle.radius.text}) the points ${ptsText.join(', ')} are marked.`,
     })
@@ -488,7 +544,7 @@ export function circleSentences(
       out.push({ text: `The tangent at ${p.tangent.name} is ${p.tangent.line.slopeIntercept.text}.`, answer: true })
     }
     if (ok<SectorReport>(p.sector)) {
-      out.push({ text: `The sector ${p.sector.ends[0]}O${p.sector.ends[1]} with central angle θ = ${p.sector.theta.text} (${p.sector.degText}) is shaded and its arc highlighted.` })
+      out.push({ text: `The sector ${p.sector.ends[0]}O${p.sector.ends[1]} with central angle θ ${eqV(p.sector.theta)} (${p.sector.degText}) is shaded and its arc highlighted.` })
       out.push({ text: `The arc length is ${p.sector.arc.text} and the sector area is ${p.sector.area.text}.`, answer: true })
     }
     if (ok<ChordsReport>(p.chords)) {

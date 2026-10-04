@@ -12,7 +12,7 @@ import { nextId, ppuX } from '../core/types'
 import { curveBounds, unionBoxes } from '../ui/curveState'
 import { dataBox } from '../ui/dataLinks'
 import { eulerFramePoints } from '../ui/eulerLinks'
-import { fitRange, graphNote, graphSources, solveCached, solveXs } from '../ui/nlSolve'
+import { fitRange, graphNoteShown, graphSources, solveCached, solveXs } from '../ui/nlSolve'
 import { relatedRatesBox } from '../ui/relatedRatesLinks'
 import { sequenceBox } from '../ui/seqLinks'
 import { unitCircleBox } from '../ui/unitCircleLinks'
@@ -46,6 +46,7 @@ import type { TypedLinesApi } from './useTypedLines'
 import type { DataTablesApi } from './useDataTables'
 import type { NumberLineApi } from './useNumberLine'
 import { statsBox } from '../ui/statsLinks'
+import type { RevealState } from '../ui/reveal'
 
 /** What useViewport reads from the hooks App calls before it. */
 export interface ViewportDeps {
@@ -61,9 +62,11 @@ export interface ViewportDeps {
   typed: TypedLinesApi
   tables: DataTablesApi
   numberLine: NumberLineApi
+  /** Reveal mode's current state (src/ui/reveal.ts): Show on graph keeps a hidden route's verdict out of its toast. */
+  revealRef?: { readonly current: RevealState }
 }
 
-export function useViewport({ board, refs, derived, notices, history, persistence, docActions, calc, fieldsApi, typed, tables, numberLine }: ViewportDeps) {
+export function useViewport({ board, refs, derived, notices, history, persistence, docActions, calc, fieldsApi, typed, tables, numberLine, revealRef }: ViewportDeps) {
   const { setSelectedId, lens, lensRef, boardGrid, axesMode, setAxesMode, viewSubsRef } = board
   const {
     curvesRef, itemsRef, kindRef, exprSourcesRef, calcRef, dataRef, seqRef, ucRef, rrRef, statsRef,
@@ -470,7 +473,9 @@ export function useViewport({ board, refs, derived, notices, history, persistenc
       // An equation drawn as its two sides: the solutions are the crossings,
       // and a candidate the algebra produced that is not one is extraneous.
       const sides = wanted.length === 2 && wanted.every((g) => !g.signChart) && /=/.test(it.src) && !/[<>≤≥≠!]/.test(it.src)
-      const note = sides ? graphNote(it.src) : null
+      // the note names the extraneous candidate — part of the route, which is
+      // behind the solve item's answer while reveal mode hides it
+      const note = graphNoteShown(it, revealRef ? revealRef.current : null)
       showToast(
         `Graphed ${graphed.join(', ')}${
           wanted.some((g) => g.signChart)
@@ -483,7 +488,7 @@ export function useViewport({ board, refs, derived, notices, history, persistenc
       )
       return null
     },
-    [addExpression, commitState, fitToContent, setBoardKind, showToast],
+    [addExpression, commitState, fitToContent, setBoardKind, showToast, revealRef],
   )
 
   /** "Zoom to data" on a table's menu: frame its points, nothing else. */

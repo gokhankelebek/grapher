@@ -1981,9 +1981,9 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     { id: 'build-transform', note: 'Absolute value a|x − h| + k: the vertex, and the V of the parent |x| as a ghost' },
     { title: 'Table to data', text: 'Turn the table into a data table for a scatter plot or a regression', how: 'Curve card → Table → Copy to a data table' },
   ] },
-  { id: 'm1-linexp', course: 'NC Math 1', title: 'Linear and exponential functions, sequences (F-IF.3, 6; F-BF.2; F-LE.1, 2, 5)', entries: [
-    { id: 'build-segment', note: 'The line through two points: its slope, and y = mx + b from Equation on its card (F-LE.2)' },
-    { id: 'build-exp', note: 'y = a·bˣ from a starting value and a growth or decay rate, or through two points (F-LE.2, F-LE.5)' },
+  { id: 'm1-linexp', course: 'NC Math 1', title: 'Linear and exponential functions, sequences (F-IF.3, 6; F-BF.1a, 2; F-LE.1, 5)', entries: [
+    { id: 'build-segment', note: 'The line through two points: its slope, and y = mx + b from Equation on its card (F-BF.1a)' },
+    { id: 'build-exp', note: 'y = a·bˣ from a starting value and a growth or decay rate, or through two points (F-BF.1a, F-LE.5)' },
     { id: 'curve-table', note: 'Equal steps in x: Δy constant for a linear function, the ratio constant for an exponential one (F-LE.1)' },
     { id: 'calc-secant', note: 'Average rate of change over an interval, as the slope of the secant (F-IF.6)' },
     { id: 'build-seq', note: 'Arithmetic and geometric sequences, explicit and recursive, with the linear or exponential function behind the dots drawn dashed (F-IF.3, F-BF.2)' },
@@ -2024,7 +2024,7 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     { id: 'build-roots', note: 'Factored form: the zeros and their multiplicities; a typed (x − 4)(x + 2) is read back as its roots (F-IF.8)' },
     { id: 'view-analysis', note: 'Vertex, zeros and y-intercept on the graph — the solutions of f(x) = 0 (A-REI.4)' },
     { title: 'Line and parabola', text: 'Type the parabola and the line: their intersections — none, one or two — are marked, exact where they can be (A-REI.7)', how: 'Each curve’s card → Intersection' },
-    { id: 'curve-complex-zeros', note: 'Complex solutions: x² − 4x + 13 has discriminant −36 < 0 and zeros 2 ± 3i; x² + 2x + 4 has −1 ± i√3. The count is the degree, by the Fundamental Theorem of Algebra (A-REI.4b, N-CN.9)' },
+    { id: 'curve-complex-zeros', note: 'Complex solutions: x² − 4x + 13 has discriminant −36 < 0 and zeros 2 ± 3i; x² + 2x + 4 has −1 ± i√3. The count is the degree, by the Fundamental Theorem of Algebra (A-REI.4b; the theorem itself is NC.M3.N-CN.9)' },
     { title: 'Equivalent forms', text: 'Type one quadratic in two forms, x² − 2x − 8 and (x + 2)(x − 4): the cards say they are the same function, which coincides everywhere, instead of listing crossings (A-SSE.3)', how: 'Each curve’s card → Intersections' },
     { id: 'nl-solve', note: 'Quadratic inequalities such as x² − 2x − 3 ≤ 0, with critical values and a sign chart (A-CED.1)' },
   ] },
@@ -2049,17 +2049,10 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     { id: 'shape-compare', note: 'Congruent or similar, the motion that maps one onto the other, and SSS / SAS / ASA / AAS / HL or AA / SAS~ / SSS~ (never SSA)' },
     { id: 'shape-symmetry', note: 'The lines of symmetry and the rotation symmetry of a triangle, quadrilateral or regular polygon' },
   ] },
-  { id: 'm2-centres', course: 'NC Math 2', title: 'Centres of triangles (G-CO.10)', entries: [
-    { id: 'shape-centres', note: 'Centroid G where the medians meet, exact: ((x₁ + x₂ + x₃)/3, (y₁ + y₂ + y₃)/3); G is two-thirds of the way along each median' },
-    { id: 'shape-centres', note: 'Circumcentre O where the perpendicular bisectors meet, with the circle through the vertices and R exact; on a right triangle it is the midpoint of the hypotenuse' },
-    { id: 'shape-centres', note: 'Incentre I where the angle bisectors meet, with the inscribed circle and r = Area ÷ s' },
-    { id: 'shape-centres', note: 'Orthocentre H where the altitudes meet — outside an obtuse triangle, the altitudes extended; drag a vertex and watch O and H leave' },
-    { id: 'shape-centres', note: 'The Euler line through O, G and H with HG = 2·GO; an equilateral triangle has all four centres in one point' },
-  ] },
-  { id: 'm2-trig', course: 'NC Math 2', title: 'Right triangle trigonometry (G-SRT.6–8, 12)', entries: [
-    { id: 'build-shape', note: 'ABC = (0,0) (4,0) (4,3): the right angle, 4² + 3² = 5², and sin, cos and tan of each acute angle as side ratios (G-SRT.6–8)' },
-    { id: 'build-shape', note: 'A 45-45-90 or 30-60-90 triangle is recognised, with its side ratio (G-SRT.12)' },
-    { id: 'shape-compare', note: 'Two right triangles with an equal acute angle are similar (AA), so their trig ratios match (G-SRT.6)' },
+  { id: 'm2-trig', course: 'NC Math 2', title: 'Right triangle trigonometry (NC.M2.G-SRT.6, NC.M2.G-SRT.8, NC.M2.G-SRT.12)', entries: [
+    { id: 'build-shape', note: 'ABC = (0,0) (4,0) (4,3): the right angle, 4² + 3² = 5², and sin, cos and tan of each acute angle as side ratios (NC.M2.G-SRT.6, NC.M2.G-SRT.8)' },
+    { id: 'build-shape', note: 'A 45-45-90 or 30-60-90 triangle is recognised, with its side ratio (NC.M2.G-SRT.12)' },
+    { id: 'shape-compare', note: 'Two right triangles with an equal acute angle are similar (AA), so their trig ratios match (NC.M2.G-SRT.6)' },
   ] },
   { id: 'm2-prob', course: 'NC Math 2', title: 'Probability (S-CP.1, 3–8)', entries: [
     { id: 'build-probability', note: 'Two-way table: type the counts; the totals, P(A and B), P(A), P(B) and P(A | B) as the fraction of B’s outcomes, with B’s column and the cell highlighted (S-CP.3a, 6)' },
@@ -2076,6 +2069,13 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     { id: 'shape-centres', note: 'A triangle’s centroid, circumcentre, incentre and orthocentre, for proofs with coordinates (G-CO.14)' },
     { id: 'build-shape' },
   ] },
+  { id: 'm3-centres', course: 'NC Math 3', title: 'Centres of triangles (NC.M3.G-CO.10)', entries: [
+    { id: 'shape-centres', note: 'Centroid G where the medians meet, exact: ((x₁ + x₂ + x₃)/3, (y₁ + y₂ + y₃)/3); G is two-thirds of the way along each median' },
+    { id: 'shape-centres', note: 'Circumcentre O where the perpendicular bisectors meet, with the circle through the vertices and R exact; on a right triangle it is the midpoint of the hypotenuse' },
+    { id: 'shape-centres', note: 'Incentre I where the angle bisectors meet, with the inscribed circle and r = Area ÷ s' },
+    { id: 'shape-centres', note: 'Orthocentre H where the altitudes meet — outside an obtuse triangle, the altitudes extended; drag a vertex and watch O and H leave' },
+    { id: 'shape-centres', note: 'The Euler line through O, G and H with HG = 2·GO; an equilateral triangle has all four centres in one point' },
+  ] },
   { id: 'm3-ineq', course: 'NC Math 3', title: 'Equations, inequalities and systems', entries: [
     { id: 'nl-solve' },
     { id: 'nl-solve', note: 'Equations too: type L = R. Radical, rational and log equations show the algebraic route and check every candidate, flagging the extraneous ones (A-REI.2)' },
@@ -2083,11 +2083,11 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     { id: 'build-inequality' },
     { id: 'build-piecewise' },
   ] },
-  { id: 'm3-stats', course: 'NC Math 3', title: 'Statistics: normal distributions and simulation', entries: [
-    { id: 'build-normal', note: 'Shade P(a < X < b), read the z-scores, find the value for a percentile; drag the peak for μ and a shoulder for σ' },
-    { id: 'build-normal', note: 'The empirical rule: μ ± σ, 2σ, 3σ with 68%, 95%, 99.7% (Show → empirical rule)' },
-    { id: 'build-simulation', note: 'Sample means or proportions, n × samples, with σ/√n, the margin of error and an interval estimate' },
-    { id: 'build-simulation', note: 'Compare treatments: paste two groups, re-randomise, read the p-value and the conclusion' },
+  { id: 'm3-stats', course: 'NC Math 3', title: 'Statistics: normal distributions (NC Math 4, NC.M4.S-ID.4) and simulation (NC.M3.S-IC.4–5)', entries: [
+    { id: 'build-normal', note: 'Shade P(a < X < b), read the z-scores, find the value for a percentile; drag the peak for μ and a shoulder for σ (NC Math 4: NC.M4.S-ID.4)' },
+    { id: 'build-normal', note: 'The empirical rule: μ ± σ, 2σ, 3σ with 68%, 95%, 99.7% (Show → empirical rule; NC.M4.S-ID.4)' },
+    { id: 'build-simulation', note: 'Sample means or proportions, n × samples, with σ/√n, the margin of error and an interval estimate (NC.M3.S-IC.4)' },
+    { id: 'build-simulation', note: 'Compare treatments: paste two groups, re-randomise, read the p-value and the conclusion (NC.M3.S-IC.5)' },
   ] },
   // ---------------------------------------------------- Drawing & editing
   { id: 'draw', course: 'Drawing & editing', title: 'On the board', entries: [

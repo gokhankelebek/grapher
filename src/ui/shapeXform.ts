@@ -38,9 +38,11 @@ import {
   motionRule,
   motionWords,
   numForm,
+  pointForm,
   preservedChecks,
   primeName,
   primeTex,
+  siblingName,
   symmetryOf,
 } from '../core/transform2d'
 import { opCommand, resolveOp } from '../core/parse/xform'
@@ -236,8 +238,13 @@ export function buildImage(
 
   const labels = shapeLabels(parent)
   const names = figureNames(pre.length, labels)
-  let primes = names.map(primeName)
-  for (let guard = 0; guard < 8 && primes.some((p) => taken.has(p)); guard++) primes = primes.map(primeName)
+  // one more prime than the pre-image; the n-th image of the same figure is
+  // told apart by its number (A′₂), never by an extra prime (A″ is the image of A′)
+  const plain = names.map(primeName)
+  let primes = plain.map((p) => siblingName(p, x.n ?? 1))
+  for (let k = Math.max(2, (x.n ?? 1) + 1); k < 100 && primes.some((p) => taken.has(p)); k++) {
+    primes = plain.map((p) => siblingName(p, k))
+  }
   const imageLabels = labels ? primes : null
   const name = motionName(motion)
   const rule = motionRule(motion)
@@ -294,7 +301,11 @@ export function buildImage(
     primes,
     preName,
     imageName,
-    vertexTexts: post.map((p, i) => `${primes[i]}${pointText(p).text}`),
+    // exact where it is; a rounded vertex says so: "A′ ≈ (4.181, 3.137)"
+    vertexTexts: post.map((p, i) => {
+      const f = pointForm(p)
+      return f.exact ? `${primes[i]}${pointText(p).text}` : `${primes[i]} ${f.text}`
+    }),
     chain,
   }
   const latex = `${figureTex(shape, imageLabels)} = ${name.tex}\\left(${figureTex(parent, labels)}\\right)`
@@ -427,6 +438,18 @@ export function imageSrc(op: XformOp, parent: Shape | null): string {
   return opCommand(op, parent ? commandTarget(parent) : 'figure')
 }
 
+/**
+ * The number a new image of `parentId` gets among that figure's images: the
+ * smallest not in use (1 is the first, unnumbered). `self` is left out (an
+ * image being moved to this figure).
+ */
+export function imageNumber(shapes: readonly BoardShape[], parentId: string, self: string | null): number {
+  const used = new Set(shapes.filter((s) => s.id !== self && s.xform?.of === parentId).map((s) => s.xform!.n ?? 1))
+  let n = 1
+  while (used.has(n)) n++
+  return n
+}
+
 /** The shapes that depend on these (images of them, images of those …). */
 export function imageDependents(shapes: readonly BoardShape[], ids: readonly string[]): Set<string> {
   const dead = new Set(ids)
@@ -456,4 +479,26 @@ export function shapeByName(
     if (labels && labels.join('') === want) return id
   }
   return null
+}
+
+/**
+ * Which figure a RETYPED image line is of: the named figure (another
+ * pre-image), or its own pre-image when the line names it as it is already
+ * called ("ABC", or "triangle" when it has no names). Any other name is an
+ * error — "rotate XYZ …" with no XYZ on the board is a typo, and silently
+ * keeping ABC (and rewriting the line to say ABC) would hide it.
+ */
+export function retargetImage(
+  target: string,
+  list: readonly { id: string; shape: Shape | null }[],
+  selfId: string,
+  parentId: string,
+): { of: string | undefined } | { error: string } {
+  const named = shapeByName(target, list)
+  if (named === selfId) return { error: 'A figure cannot be the image of itself' }
+  if (named) return { of: named }
+  const parent = list.find((x) => x.id === parentId)?.shape ?? null
+  const own = parent ? commandTarget(parent) : null
+  if (own !== null && target.replace(/^△\s*/, '') === own) return { of: undefined }
+  return { error: `There is no figure named ${target} on the board — this is the image of ${own ?? 'a figure that is not on the board'}` }
 }

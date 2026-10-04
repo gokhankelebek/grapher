@@ -713,6 +713,12 @@ function solveImpl(f0: ExpShape, g0: ExpShape, v: string): ExpSolution | null {
       steps,
     }
   }
+  if (sgn(t.coef) < 0 && sgn(s.coef) < 0) {
+    // both sides negative: ln of either is undefined, so the signs go first
+    const pl = termText({ ...t, coef: neg(t.coef) }, v)
+    const pr = termText({ ...s, coef: neg(s.coef) }, v)
+    steps.push({ text: `Multiply both sides by ${MINUS}1: ${pl.text} = ${pr.text}`, tex: `${pl.tex} = ${pr.tex}` })
+  }
   const l1 = lnBase(t.base)
   const l2 = lnBase(s.base)
   const lA1 = lnOf(sgn(t.coef) < 0 ? neg(t.coef) : t.coef)
@@ -747,6 +753,8 @@ function solveImpl(f0: ExpShape, g0: ExpShape, v: string): ExpSolution | null {
       dt.text === '1' ? { text: v, tex: v }
       : dt.text === `${MINUS}1` ? { text: `${MINUS}${v}`, tex: `-${v}` }
       : Dn.ln.size === 0 ? { text: `${dt.text}${v}`, tex: `${dt.tex}${v}` }
+      // a negative single log goes in front: "−x ln 2", not "x −ln 2"
+      : single && dt.text.startsWith(MINUS) ? { text: `${MINUS}${v} ${dt.text.slice(1)}`, tex: `-${v}\\,${dt.tex.replace(/^-/, '')}` }
       : single ? { text: `${v} ${dt.text}`, tex: `${v}\\,${dt.tex}` }
       : { text: `${v}(${dt.text})`, tex: `${v}\\left(${dt.tex}\\right)` }
     steps.push({ text: `Collect the ${v} terms: ${lhs.text} = ${llText(Nm).text}`, tex: `${lhs.tex} = ${llText(Nm).tex}` })

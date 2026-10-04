@@ -10,8 +10,12 @@
 //   tablePattern(table, f)           "Δy is constant (3): linear", "Δ²y is
 //                                    constant (4): quadratic", "the ratio is
 //                                    constant (2): exponential" — or nothing
-//   overtake(f, g, from)             where one function passes the other for
-//                                    good (2ˣ passes x³ after x ≈ 9.94)
+//   scanCrossings(gap, xs)           where f and g cross (a sign change
+//                                    where they MEET — never a pole) and
+//                                    where they touch; "for good" is
+//                                    decided from growth classes
+//                                    (src/core/growth.ts) by the caller
+//   overtake(f, g, from)             the crossings on [from, 1000]
 //   polynomialCoeffs(f)              the coefficients when f IS a polynomial
 //   syntheticDivision(coeffs, a)     the Remainder Theorem's tableau, exact
 //                                    with a fractional a
@@ -48,8 +52,13 @@ export interface Cell {
 
 /** Places a decimal may have and still be "the value" rather than a rounding. */
 const SHORT_PLACES = 4
-/** Relative slack for "this double is that short decimal". */
-const SHORT_TOL = 1e-9
+/**
+ * Slack for "this double is that short decimal": the rounding a few
+ * operations leave (0.1 + 0.2), never a real difference — 1000000.0005 is
+ * not 1000000. Relative to |v| in units of the double's own precision, with a
+ * tiny absolute floor near 0.
+ */
+const shortTol = (v: number): number => Math.max(1e-13, 256 * Number.EPSILON * Math.abs(v))
 
 /** The decimal places of v when it is a short decimal (≤ 4 places), else null. */
 export function shortPlaces(v: number): number | null {
@@ -59,7 +68,7 @@ export function shortPlaces(v: number): number | null {
   for (let p = 0; p <= SHORT_PLACES; p++) {
     const f = Math.pow(10, p)
     const t = Math.round(v * f) / f
-    if (Math.abs(t - v) <= SHORT_TOL * Math.max(1, Math.abs(v))) return p
+    if (Math.abs(t - v) <= shortTol(v)) return p
   }
   return null
 }
@@ -69,11 +78,17 @@ const withMinus = (s: string): string => (s.startsWith('-') ? MINUS + s.slice(1)
 /** A printed value: an integer or a short decimal, a closed form, else seven significant digits. */
 export function cell(v: number): Cell {
   if (Number.isNaN(v)) return { v, text: 'undefined', tex: '\\text{undefined}', exact: true }
-  if (v === Infinity) return { v, text: '∞', tex: '\\infty', exact: true }
-  if (v === -Infinity) return { v, text: `${MINUS}∞`, tex: '-\\infty', exact: true }
+  // An overflow, not a value (a pole or ln 0 is undefined, and the evaluator
+  // says so with NaN before it gets here).
+  if (v === Infinity) return { v, text: 'too large', tex: '\\text{too large}', exact: false }
+  if (v === -Infinity) return { v, text: `too large (${MINUS})`, tex: '\\text{too large }(-)', exact: false }
   if (v === 0 || Math.abs(v) < 1e-13) return { v: 0, text: '0', tex: '0', exact: true }
-  if (Number.isInteger(v) && Math.abs(v) < 1e15) {
-    return { v, text: withMinus(String(v)), tex: String(v), exact: true }
+  if (Number.isInteger(v)) {
+    // Every integer a double holds exactly prints as itself; past 2⁵³ the
+    // double is a rounding, so it is a decimal (≈) in scientific form.
+    if (Number.isSafeInteger(v)) return { v, text: withMinus(String(v)), tex: String(v), exact: true }
+    const t = tableNumber(v)
+    return { v, text: t, tex: t.replace(/−/g, '-').replace(/e\+?(-?\d+)$/, '\\times 10^{$1}'), exact: false }
   }
   const p = shortPlaces(v)
   if (p !== null) {
@@ -120,7 +135,14 @@ export function tableXs(spec: TableXSpec): number[] {
   const out: number[] = []
   for (let i = 0; i < n; i++) {
     const x = spec.start + i * spec.step
-    out.push(spec.exactStep === false ? x : Number(x.toPrecision(12)))
+    if (spec.exactStep === false) {
+      out.push(x)
+      continue
+    }
+    // Snap only what is floating residue: at x = 10¹⁵ with step 1, twelve
+    // digits would merge every row into one.
+    const snapped = Number(x.toPrecision(12))
+    out.push(Math.abs(snapped - x) <= 1e-6 * Math.abs(spec.step) ? snapped : x)
   }
   return out
 }
@@ -164,11 +186,28 @@ function equalSpacing(xs: readonly number[]): number | null {
   return h
 }
 
-/** A difference that should have cancelled to zero, snapped: 1.2 − 1.0 is 0.2, 3 − 3 is 0. */
+/**
+ * A difference that should have cancelled to zero, snapped: 3 − 3 is 0. Only
+ * rounding residue is snapped — a few units of the doubles' own precision at
+ * the size of the values — never a real difference: 10⁷ + 0.001 − 10⁷ is 0.001.
+ */
 function tidy(v: number, scale: number): number {
   if (!Number.isFinite(v)) return v
-  if (Math.abs(v) <= 1e-12 * Math.max(1, scale)) return 0
+  if (Math.abs(v) <= 4 * Number.EPSILON * Math.max(1, scale)) return 0
   return v
+}
+
+/**
+ * b − a for two values the table prints as short decimals, taken as those
+ * decimals: (10⁷ + 0.004) − (10⁷ + 0.001) is 0.003, not the 0.0030000005 the
+ * doubles leave. Anything else is the plain difference.
+ */
+function decimalDiff(a: number, b: number, d: number): number {
+  const pa = shortPlaces(a)
+  const pb = shortPlaces(b)
+  if (pa === null || pb === null || !Number.isFinite(d)) return d
+  const f = Math.pow(10, Math.max(pa, pb))
+  return Math.round(d * f) / f
 }
 
 export function valueTable(f: Evaluator, xs: readonly number[]): ValueTable {
@@ -185,14 +224,14 @@ export function valueTable(f: Evaluator, xs: readonly number[]): ValueTable {
   const ratiov: number[] = []
   const avgv: number[] = []
   for (let i = 0; i + 1 < ys.length; i++) {
-    const d = tidy(ys[i + 1] - ys[i], scale)
+    const d = tidy(decimalDiff(ys[i], ys[i + 1], ys[i + 1] - ys[i]), scale)
     d1v.push(d)
     ratiov.push(ys[i] === 0 || !Number.isFinite(ys[i]) ? Number.NaN : ys[i + 1] / ys[i])
     const dx = xs[i + 1] - xs[i]
     avgv.push(dx === 0 ? Number.NaN : tidy(d / dx, scale / Math.max(1e-12, Math.abs(dx))))
   }
   const d2v: number[] = []
-  for (let i = 0; i + 1 < d1v.length; i++) d2v.push(tidy(d1v[i + 1] - d1v[i], scale))
+  for (let i = 0; i + 1 < d1v.length; i++) d2v.push(tidy(decimalDiff(d1v[i], d1v[i + 1], d1v[i + 1] - d1v[i]), scale))
   const h = equalSpacing(xs)
   return {
     xs: xs.slice(),
@@ -221,10 +260,16 @@ export interface TablePattern {
   text: string
 }
 
-/** All finite and equal to the first within a relative tolerance. */
+/**
+ * All finite and equal to the first. The slack is relative to the values
+ * THEMSELVES (the differences being compared), plus the rounding the values
+ * they were taken from can leave (`scale`, their size) — never relative to
+ * that size alone: Δy of 0.001, 0.003, 0.005 at y ≈ 10⁷ are not constant.
+ */
 function constant(vals: readonly number[], scale: number): boolean {
   if (vals.length === 0 || !vals.every(Number.isFinite)) return false
-  const tol = 1e-9 * Math.max(1, scale)
+  const big = Math.max(...vals.map(Math.abs))
+  const tol = 1e-9 * big + 64 * Number.EPSILON * Math.max(1, scale)
   return vals.every((v) => Math.abs(v - vals[0]) <= tol)
 }
 
@@ -236,7 +281,21 @@ function constant(vals: readonly number[], scale: number): boolean {
 function agrees(f: Evaluator, model: (x: number) => number, xs: readonly number[], h: number): boolean {
   const x0 = xs[0]
   const xn = xs[xs.length - 1]
-  const probes = [x0 + 0.5 * h, x0 + 1.37 * h, (x0 + xn) / 2 + 0.29 * h, xn - 0.41 * h, xn + 0.63 * h, x0 - 0.83 * h]
+  const far = 10 * Math.max(1, Math.abs(x0), Math.abs(xn))
+  const probes = [
+    x0 + 0.5 * h,
+    x0 + 1.37 * h,
+    (x0 + xn) / 2 + 0.29 * h,
+    xn - 0.41 * h,
+    xn + 0.63 * h,
+    x0 - 0.83 * h,
+    // far from the rows on both sides: |x| agrees with a line on 1 … 6
+    x0 - 5.3 * h,
+    x0 - 50.7 * h,
+    xn + 50.3 * h,
+    -far - 0.37,
+    far + 0.41,
+  ]
   let checked = 0
   for (const x of probes) {
     let y: number
@@ -255,11 +314,28 @@ function agrees(f: Evaluator, model: (x: number) => number, xs: readonly number[
 }
 
 /**
+ * What f IS, read off its formula (src/core/growth.ts) — what certifies a
+ * pattern for the function rather than for the rows: `degree` the polynomial's
+ * true degree (null: not a polynomial), `exponential` exactly c·bˣ.
+ */
+export interface TableStructure {
+  degree: number | null
+  exponential: boolean
+}
+
+/**
  * What the table shows — only when it is so, and only when f agrees.
  * Linear before quadratic before exponential (a constant Δy is also a
  * constant Δ²y of 0, and a constant function has ratio 1).
+ *
+ * `structure` is what f is (see TableStructure): a pattern is then named
+ * only when f's formula IS that kind of function — |x| on 1 … 6 has a
+ * constant Δy, but |x| is not linear. `null`: f's formula cannot be read
+ * (a piecewise, a sketch), so nothing is named. Absent: the numeric checks
+ * alone (rows, plus f between and far beyond them).
  */
-export function tablePattern(t: ValueTable, f: Evaluator): TablePattern | null {
+export function tablePattern(t: ValueTable, f: Evaluator, structure?: TableStructure | null): TablePattern | null {
+  if (structure === null) return null
   if (!t.equal || t.h === null || t.xs.length < 3) return null
   const ys = t.y.map((c) => c.v)
   if (!ys.every(Number.isFinite)) return null
@@ -268,6 +344,7 @@ export function tablePattern(t: ValueTable, f: Evaluator): TablePattern | null {
   const x0 = t.xs[0]
   const d1 = t.d1.map((c) => c.v)
   if (constant(d1, scale)) {
+    if (structure && !(structure.degree !== null && structure.degree <= 1)) return null
     const m = d1[0] / h
     if (!agrees(f, (x) => ys[0] + m * (x - x0), t.xs, h)) return null
     const value = cell(d1[0])
@@ -276,6 +353,7 @@ export function tablePattern(t: ValueTable, f: Evaluator): TablePattern | null {
   }
   const d2 = t.d2.map((c) => c.v)
   if (t.xs.length >= 4 && constant(d2, scale) && d2[0] !== 0) {
+    if (structure && structure.degree !== 2) return null
     // Newton's form through the first three rows.
     const a1 = d1[0] / h
     const a2 = d2[0] / (2 * h * h)
@@ -286,6 +364,7 @@ export function tablePattern(t: ValueTable, f: Evaluator): TablePattern | null {
   }
   const r = t.ratio.map((c) => c.v)
   if (constant(r, Math.max(1, Math.abs(r[0]))) && r[0] > 0 && Math.abs(r[0] - 1) > 1e-9) {
+    if (structure && !structure.exponential) return null
     const b = r[0]
     const model = (x: number): number => ys[0] * Math.pow(b, (x - x0) / h)
     if (!agrees(f, model, t.xs, h)) return null
@@ -307,91 +386,303 @@ export interface Overtake {
   exact: ExactForm | null
   /** Every crossing found in [from, to], ascending. */
   crossings: number[]
+  /** Where they touch without crossing (x² and 2x − 1 at x = 1), ascending. */
+  touches: number[]
   /** How far the comparison was checked. */
   to: number
 }
 
-/** Where the doubles stop being able to compare them (both overflow): the scan ends there. */
-function compare(f: Evaluator, g: Evaluator, x: number): number {
-  let a: number
-  let b: number
-  try {
-    a = f(x)
-    b = g(x)
-  } catch {
-    return Number.NaN
+/**
+ * f − g at one x: its sign, and its size relative to max(1, |f|, |g|) — so a
+ * sign change is a crossing only where the two values actually meet, not
+ * across a pole (1/(x − 3) jumps from −∞ to +∞ past y = 1).
+ */
+export interface Gap {
+  s: number
+  rel: number
+}
+
+export type GapFn = (x: number) => Gap | null
+
+/** f − g from plain values; null where either is undefined. */
+export function plainGap(f: Evaluator, g: Evaluator): GapFn {
+  return (x: number): Gap | null => {
+    let a: number
+    let b: number
+    try {
+      a = f(x)
+      b = g(x)
+    } catch {
+      return null
+    }
+    if (Number.isNaN(a) || Number.isNaN(b)) return null
+    if (!Number.isFinite(a) || !Number.isFinite(b)) {
+      if (a === b) return null
+      return { s: a > b ? 1 : -1, rel: 1 }
+    }
+    const d = a - b
+    const rel = Math.abs(d) / Math.max(1, Math.abs(a), Math.abs(b))
+    // below the doubles' resolution the sign of a − b is rounding, not order
+    return { s: rel <= GAP_RESOLUTION ? 0 : Math.sign(d), rel }
   }
-  if (Number.isNaN(a) || Number.isNaN(b)) return Number.NaN
-  if (a === b) return 0
-  if (!Number.isFinite(a) && !Number.isFinite(b)) return Number.NaN
-  return a > b ? 1 : -1
+}
+
+/** A relative difference this small is the doubles' rounding: no sign. */
+export const GAP_RESOLUTION = 16 * Number.EPSILON
+
+/** A bisected sign change is a crossing only when f and g agree there to this (relative) size. */
+export const CROSS_TOL = 1e-6
+/** A local minimum of |f − g| this small (relative) is a touch. */
+export const TOUCH_TOL = 1e-12
+
+export interface CrossScan {
+  crossings: number[]
+  touches: number[]
+  /**
+   * Where f − g changes sign WITHOUT f and g meeting: across a pole
+   * (1/x at 0) or a gap in the domain. The leader changes there, but they
+   * do not cross.
+   */
+  flips: number[]
+  /** The sign of f − g at the last sample where it was defined and nonzero (NaN: never). */
+  lastS: number
+  /** Where that last sign began: the last crossing or flip, else the first defined sample. */
+  settled: number
+  settledBy: 'cross' | 'flip' | 'start'
+  /** The first and the last x where both were defined. */
+  first: number
+  reach: number
 }
 
 /**
- * The crossings of f and g on [from, to], each refined by bisection, and who
- * leads after the last. The scan is dense near `from` (the table's range is
- * where a class looks) and coarser out to `to`; it ends early where both
- * overflow, which is past every crossing a high-school pair has.
+ * The crossings and touches of f and g over the sample x's (ascending): every
+ * sign change of f − g between neighbouring samples is bisected and kept only
+ * when f and g meet there (|f − g| ≤ CROSS_TOL, relative) — a pole or a jump
+ * changes sign without meeting, and is a flip. Where |f − g| dips toward 0
+ * without changing sign, the dip is refined and kept as a touch when it
+ * reaches TOUCH_TOL and is sharp (far below its neighbours, not a level of
+ * rounding noise). An undefined sample breaks the run: nothing is bisected
+ * across a gap, and a sign that differs on its far side is a flip.
+ */
+export function scanCrossings(gap: GapFn, xs: readonly number[]): CrossScan {
+  const crossings: number[] = []
+  const touches: number[] = []
+  const flips: number[] = []
+  const events: { x: number; by: 'cross' | 'flip' }[] = []
+  let lastS = Number.NaN
+  let first = Number.NaN
+  let reach = Number.NaN
+  type S = { x: number; s: number; rel: number }
+  let run: S[] = []
+  const bisect = (a: S, b: S): void => {
+    let lo = a.x
+    let hi = b.x
+    let broken = false
+    for (let k = 0; k < 90; k++) {
+      const mid = (lo + hi) / 2
+      if (mid === lo || mid === hi) break
+      const gm = gap(mid)
+      if (!gm) {
+        broken = true // undefined inside: a gap in the domain, not a crossing
+        break
+      }
+      if (gm.s === 0) {
+        lo = hi = mid
+        break
+      }
+      if (gm.s === a.s) lo = mid
+      else hi = mid
+    }
+    const x = (lo + hi) / 2
+    // Agreement where they "cross": both sides of the bracket, and the middle.
+    const ends = broken ? [] : [gap(lo), gap(hi), gap(x)].filter((v): v is Gap => v !== null)
+    if (ends.length === 0 || Math.min(...ends.map((v) => v.rel)) > CROSS_TOL) {
+      flips.push(x)
+      events.push({ x, by: 'flip' })
+      return
+    }
+    crossings.push(x)
+    events.push({ x, by: 'cross' })
+  }
+  const touchNear = (a: S, m: S, b: S): void => {
+    // Golden-section search for the smallest |f − g| on [a, b].
+    let lo = a.x
+    let hi = b.x
+    const R = (Math.sqrt(5) - 1) / 2
+    let c = hi - R * (hi - lo)
+    let d = lo + R * (hi - lo)
+    const at = (x: number): number => {
+      const v = gap(x)
+      return v && v.s !== -m.s ? v.rel : Infinity
+    }
+    let fc = at(c)
+    let fd = at(d)
+    for (let k = 0; k < 80 && hi - lo > 1e-15 * Math.max(1, Math.abs(lo)); k++) {
+      if (fc <= fd) {
+        hi = d
+        d = c
+        fd = fc
+        c = hi - R * (hi - lo)
+        fc = at(c)
+      } else {
+        lo = c
+        c = d
+        fc = fd
+        d = lo + R * (hi - lo)
+        fd = at(d)
+      }
+    }
+    const x = fc <= fd ? c : d
+    const best = Math.min(fc, fd, m.rel)
+    if (best <= TOUCH_TOL && best <= 1e-6 * Math.min(a.rel, b.rel)) touches.push(best === m.rel ? m.x : x)
+  }
+  let prevS = 0 // the last nonzero sign of the previous run
+  let lastDefined = Number.NaN // the last defined x before a gap
+  let gapXs: number[] = [] // the undefined samples of the current gap
+  const flush = (): void => {
+    if (run.length === 0) return
+    // Zeros that are only rounding (|f − g| was already at the doubles'
+    // resolution beside them, as for x² + 3x and x² + 2x at x = 10¹⁶) say
+    // nothing: they are left out, and the signs around them decide.
+    const quiet = (k: number): boolean => k < 0 || k >= run.length || run[k].rel < 1e-9
+    const kept: S[] = []
+    for (let i = 0; i < run.length; i++) {
+      if (run[i].s !== 0) {
+        kept.push(run[i])
+        continue
+      }
+      let j = i
+      while (j + 1 < run.length && run[j + 1].s === 0) j++
+      if (!(quiet(i - 1) && quiet(j + 1))) for (let k = i; k <= j; k++) kept.push(run[k])
+      i = j
+    }
+    run = kept
+    if (run.length === 0) return
+    // a sign that differs across a gap in the domain: a point the formula
+    // leaves out (1/x at 0) is the flip; a wide gap, where the run resumes
+    const firstS = run.find((r) => r.s !== 0)
+    if (firstS && prevS !== 0 && firstS.s !== prevS) {
+      const x = gapXs.length > 0 && gapXs.length <= 2 ? gapXs[Math.floor((gapXs.length - 1) / 2)] : run[0].x
+      flips.push(x)
+      events.push({ x, by: 'flip' })
+    }
+    // zeros ON a sample: a crossing when the sign changes across them, else a touch
+    for (let i = 0; i < run.length; i++) {
+      if (run[i].s !== 0) continue
+      let j = i
+      while (j + 1 < run.length && run[j + 1].s === 0) j++
+      const before = i > 0 ? run[i - 1].s : 0
+      const after = j + 1 < run.length ? run[j + 1].s : 0
+      const x = run[Math.floor((i + j) / 2)].x
+      if (before !== 0 && after !== 0 && before !== after) {
+        crossings.push(x)
+        events.push({ x, by: 'cross' })
+      } else touches.push(x)
+      i = j
+    }
+    let lastNZ: S | null = null
+    for (let i = 0; i < run.length; i++) {
+      const b = run[i]
+      if (b.s === 0) continue
+      if (lastNZ && lastNZ.s !== b.s && i > 0 && run[i - 1].s !== 0) bisect(run[i - 1], b)
+      lastNZ = b
+      if (i >= 1 && i + 1 < run.length) {
+        const a = run[i - 1]
+        const c = run[i + 1]
+        if (a.s === b.s && b.s === c.s && b.rel < a.rel && b.rel <= c.rel && b.rel < 1e-3) touchNear(a, b, c)
+      }
+    }
+    if (lastNZ) prevS = lastNZ.s
+    run = []
+  }
+  void lastDefined
+  for (const x of xs) {
+    const g = gap(x)
+    if (!g || Number.isNaN(g.s)) {
+      if (run.length > 0) {
+        flush()
+        gapXs = []
+      }
+      gapXs.push(x)
+      continue
+    }
+    if (run.length === 0 && !Number.isNaN(lastDefined) && gapXs.length === 0) gapXs = []
+    run.push({ x, s: g.s, rel: g.rel })
+    lastDefined = x
+    if (Number.isNaN(first)) first = x
+    reach = x
+    if (g.s !== 0) lastS = g.s
+  }
+  flush()
+  crossings.sort((a, b) => a - b)
+  touches.sort((a, b) => a - b)
+  events.sort((a, b) => a.x - b.x)
+  const ev = events[events.length - 1]
+  return {
+    crossings,
+    touches,
+    flips,
+    lastS,
+    settled: ev ? ev.x : first,
+    settledBy: ev ? ev.by : 'start',
+    first,
+    reach,
+  }
+}
+
+/**
+ * The sample x's for a comparison from `from`: dense (step 0.025) over the
+ * first 60 units — where a class's table lives — then geometric (2 % a step)
+ * out to `to`, which can be as far as 10³⁰⁰ when f and g are read in log space.
+ */
+export function compareGrid(from: number, to: number): number[] {
+  const xs: number[] = []
+  const near = Math.min(to, Math.max(from + 60, 60))
+  const N1 = Math.min(20000, Math.max(2400, Math.ceil((near - from) / 0.025)))
+  for (let i = 0; i <= N1; i++) xs.push(from + ((near - from) * i) / N1)
+  if (to > near) {
+    let x = near
+    while (x < to) {
+      x = Math.min(to, x * 1.02)
+      xs.push(x)
+    }
+  }
+  return xs
+}
+
+/** Evenly spaced samples over [a, b]. */
+export function linearGrid(a: number, b: number, n = 2400): number[] {
+  const xs: number[] = []
+  for (let i = 0; i <= n; i++) xs.push(a + ((b - a) * i) / n)
+  return xs
+}
+
+/** The exact form of a crossing, when f and g verifiably agree there. */
+export function crossingExact(f: Evaluator, g: Evaluator, x: number): ExactForm | null {
+  return verifiedExact(x, (c) => {
+    const a = f(c)
+    const b = g(c)
+    return Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a))
+  })
+}
+
+/**
+ * The crossings of f and g on [from, to] from plain values: who leads after
+ * the last, every crossing (a pole is not one) and every touch. Says nothing
+ * about beyond `to` — src/ui/valueTableLinks.ts decides "for good" from the
+ * growth classes (src/core/growth.ts).
  */
 export function overtake(f: Evaluator, g: Evaluator, from: number, to = 1000): Overtake | null {
   if (!Number.isFinite(from) || !(to > from)) return null
   const near = Math.min(to, from + 60)
-  const xs: number[] = []
-  const N1 = 2400
-  for (let i = 0; i <= N1; i++) xs.push(from + ((near - from) * i) / N1)
-  if (to > near) {
-    const N2 = 2400
-    for (let i = 1; i <= N2; i++) xs.push(near + ((to - near) * i) / N2)
-  }
-  const crossings: number[] = []
-  let prevX = Number.NaN
-  let prevS = Number.NaN
-  let lastS = Number.NaN
-  let reach = from
-  for (const x of xs) {
-    const s = compare(f, g, x)
-    if (Number.isNaN(s)) {
-      prevS = Number.NaN
-      continue
-    }
-    reach = x
-    if (s === 0) {
-      // A touch exactly on a sample: a crossing only if the sign then changes.
-      continue
-    }
-    if (!Number.isNaN(prevS) && s !== prevS) {
-      let lo = prevX
-      let hi = x
-      for (let k = 0; k < 80; k++) {
-        const mid = (lo + hi) / 2
-        const sm = compare(f, g, mid)
-        if (Number.isNaN(sm)) break
-        if (sm === prevS || sm === 0) {
-          if (sm === 0) {
-            lo = hi = mid
-            break
-          }
-          lo = mid
-        } else hi = mid
-      }
-      crossings.push((lo + hi) / 2)
-    }
-    prevX = x
-    prevS = s
-    lastS = s
-  }
-  if (Number.isNaN(lastS)) return null
-  const leader = lastS > 0 ? 'f' : 'g'
-  const x = crossings.length > 0 ? crossings[crossings.length - 1] : null
-  let exact: ExactForm | null = null
-  if (x !== null) {
-    exact = verifiedExact(x, (c) => {
-      const a = f(c)
-      const b = g(c)
-      return Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a))
-    })
-  }
-  return { leader, x, exact, crossings, to: reach }
+  const xs = linearGrid(from, near)
+  if (to > near) xs.push(...linearGrid(near, to).slice(1))
+  const scan = scanCrossings(plainGap(f, g), xs)
+  if (Number.isNaN(scan.lastS)) return null
+  const leader = scan.lastS > 0 ? 'f' : 'g'
+  const x = scan.crossings.length > 0 ? scan.crossings[scan.crossings.length - 1] : null
+  const exact = x !== null ? crossingExact(f, g, x) : null
+  return { leader, x, exact, crossings: scan.crossings, touches: scan.touches, to: scan.reach }
 }
 
 // ---------------------------------------------------------------------------
@@ -481,7 +772,9 @@ export function polynomialCoeffs(f: Evaluator): Num[] | null {
     }
   })
   if (!ys.every(Number.isFinite)) return null
-  const tests = [-3.7, -2.45, -1.3, -0.55, 0.37, 1.21, 2.6, 3.33, 5.9, 7.15]
+  // …and far out on both sides: a piecewise break at x = 10 passes every test
+  // inside [−4, 8], but not these.
+  const tests = [-3.7, -2.45, -1.3, -0.55, 0.37, 1.21, 2.6, 3.33, 5.9, 7.15, -51.3, 49.7, -1013.1, 997.3]
   const ty = tests.map((x) => {
     try {
       return f(x)

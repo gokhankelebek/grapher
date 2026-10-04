@@ -454,7 +454,7 @@ export function ShapeCard({
           )}
 
           {data.canTransform && onAddImage && (
-            <TransformTool figure={data.figure} names={data.names} onAddImage={onAddImage} />
+            <TransformTool figure={data.figure} names={data.names} imageNo={data.nextImage} onAddImage={onAddImage} />
           )}
 
           {data.symmetry && onToggleSymmetry && (

@@ -33,7 +33,9 @@ import {
   dec,
   degText,
   distance,
+  isSum,
   lineRelativeTo,
+  negMeasure,
   measureOf,
   measureOfSurd,
   perpReason,
@@ -50,6 +52,8 @@ import {
   withApprox,
 } from './geometry'
 import { evalAst, parseAst } from './parse'
+import type { SurdSum } from './surdSum'
+import { ssAdd, ssDiv, ssMeasure, ssMul, ssRat, ssScale, ssSqrt, ssSurd } from './surdSum'
 
 // ---------------------------------------------------------------------------
 // The circle
@@ -76,7 +80,9 @@ export interface Circle {
 /** "x − 2", "y + 3", "x" — one squared bracket of the standard form. */
 function shifted(v: string, m: Measure): string {
   if (Math.abs(m.value) < 1e-12) return v
-  return m.value < 0 ? `${v} + ${m.text.replace(MINUS, '')}` : `${v} ${MINUS} ${m.text}`
+  // a sum is negated term by term and subtracted in brackets: x − (1 + √2), x + 1 − √2
+  if (m.value < 0) return `${v} + ${negMeasure(m).text}`
+  return isSum(m.text) ? `${v} ${MINUS} (${m.text})` : `${v} ${MINUS} ${m.text}`
 }
 
 export function makeCircle(h: number, k: number, r: number): Circle | null {
@@ -112,6 +118,13 @@ export interface CirclePoint {
   radText: string
   /** Typed as coordinates that were not on the circle: moved onto it along the radius. */
   moved: boolean
+  /**
+   * The coordinates EXACTLY, when they are sums of square roots: a point at
+   * a multiple of 15° on a circle with a rational centre and r² rational, or
+   * coordinates typed off the circle and projected onto it (r/|OX| is then a
+   * surd). Absent otherwise (the coordinates are decimals).
+   */
+  exact?: { x: SurdSum; y: SurdSum }
 }
 
 export type CirclePointRead = { ok: true; p: CirclePoint } | { ok: false; error: string }
@@ -152,11 +165,15 @@ function splitPair(inner: string): [string, string] | null {
   return at < 0 ? null : [inner.slice(0, at), inner.slice(at + 1)]
 }
 
-/** A number of degrees in [0, 360), snapped onto the fraction it is (59.999… → 60). */
+/**
+ * A number of degrees in [0, 360), snapped onto the fraction it is when it is
+ * one to rounding (pi/3 → 59.999… → 60). toRat's tolerance is 1e-12
+ * relative, so an angle that merely sits near a fraction is left alone.
+ */
 function normDeg(d: number): number {
   let v = d % 360
   if (v < 0) v += 360
-  const r = toRat(v, 1000)
+  const r = toRat(v, 360)
   if (r) v = r.n / r.d
   if (v >= 360 - 1e-9) v = 0
   return v
@@ -196,27 +213,85 @@ export function spaced(m: Measure): Measure {
   return { ...m, text: m.text.replace(/([\d√)])([+−])(?=[\d√(])/g, '$1 $2 ') }
 }
 
-/** A point's coordinates: fractions when they are, else recognised (2 + 3√3), else decimals. */
-function coordsOf(pt: Vec2): PointMeasure {
+/**
+ * A point's coordinates: computed exactly when `exact` is given, else
+ * fractions when they are, else recognised (2 + 3√3), else decimals — and a
+ * point with a decimal coordinate is written "≈ (3.7, 1.53)".
+ */
+function coordsOf(pt: Vec2, exact?: { x: SurdSum; y: SurdSum }): PointMeasure {
+  if (exact) {
+    const ex = ssMeasure(exact.x)
+    const ey = ssMeasure(exact.y)
+    if (ex && ey) return { pt, x: ex, y: ey, text: `(${ex.text}, ${ey.text})`, tex: `\\left(${ex.tex}, ${ey.tex}\\right)` }
+  }
   const rx = toRat(pt.x)
   const ry = toRat(pt.y)
   if (rx && ry) return pointMeasure(pt, rx, ry)
   const x = rx ? pointMeasure(pt, rx, rx).x : spaced(measureOf(pt.x))
   const y = ry ? pointMeasure(pt, ry, ry).y : spaced(measureOf(pt.y))
-  return { pt, x, y, text: `(${x.text}, ${y.text})`, tex: `\\left(${x.tex}, ${y.tex}\\right)` }
+  const ap = x.exact && y.exact ? '' : '≈ '
+  return { pt, x, y, text: `${ap}(${x.text}, ${y.text})`, tex: `${ap ? '\\approx ' : ''}\\left(${x.tex}, ${y.tex}\\right)` }
 }
 
-function makePoint(c: Circle, name: string, deg: number, pt: Vec2, moved: boolean): CirclePoint {
+/** cos θ for θ a whole multiple of 15°, exactly: (√6 + √2)/4 at 15°. Null otherwise. */
+function cos15(deg: number): SurdSum | null {
+  const d = ((Math.round(deg) % 360) + 360) % 360
+  if (Math.abs(deg - Math.round(deg)) > 1e-9 || d % 15 !== 0) return null
+  const q = (n: number, dd: number) => ({ n, d: dd })
+  // the first quadrant, then its reflections
+  const first: Record<number, SurdSum> = {
+    0: new Map([[1, q(1, 1)]]),
+    15: new Map([[2, q(1, 4)], [6, q(1, 4)]]),
+    30: new Map([[3, q(1, 2)]]),
+    45: new Map([[2, q(1, 2)]]),
+    60: new Map([[1, q(1, 2)]]),
+    75: new Map([[2, q(-1, 4)], [6, q(1, 4)]]),
+    90: new Map(),
+  }
+  const neg = (a: SurdSum): SurdSum => ssScale(a, q(-1, 1))!
+  if (d <= 90) return first[d]
+  if (d <= 180) return neg(first[180 - d])
+  if (d <= 270) return neg(first[d - 180])
+  return first[360 - d]
+}
+
+/** The point at `deg` on the circle, exactly — when the centre is rational, r² is, and deg is a multiple of 15°. */
+function exactAtDeg(c: Circle, deg: number): { x: SurdSum; y: SurdSum } | undefined {
+  if (!c.hr || !c.kr || !c.rSurd) return undefined
+  const cs = cos15(deg)
+  const sn = cos15(90 - deg)
+  const r = ssSurd(c.rSurd)
+  const x = ssAdd(ssRat(c.hr), ssMul(r, cs))
+  const y = ssAdd(ssRat(c.kr), ssMul(r, sn))
+  return x && y ? { x, y } : undefined
+}
+
+/** The rational point (x, y) moved onto the circle along the radius, exactly: O + r·(X − O)/|X − O|. */
+function exactProjection(c: Circle, x: number, y: number): { x: SurdSum; y: SurdSum } | undefined {
+  const xr = toRat(x)
+  const yr = toRat(y)
+  if (!xr || !yr || !c.hr || !c.kr || !c.rSurd) return undefined
+  const dx = ratSub(xr, c.hr)
+  const dy = ratSub(yr, c.kr)
+  const d = ssSqrt(ratAdd(ratMul(dx, dx), ratMul(dy, dy)))
+  const f = ssDiv(ssSurd(c.rSurd), d)
+  const X = ssAdd(ssRat(c.hr), ssScale(f, dx))
+  const Y = ssAdd(ssRat(c.kr), ssScale(f, dy))
+  return X && Y ? { x: X, y: Y } : undefined
+}
+
+function makePoint(c: Circle, name: string, deg: number, pt: Vec2, moved: boolean, exact?: { x: SurdSum; y: SurdSum }): CirclePoint {
   const d = degText(deg)
   const rad = radiansOf(deg)
   return {
     name,
     deg,
     pt,
-    coords: coordsOf(pt),
+    coords: coordsOf(pt, exact),
     degText: d.exact ? d.text : `≈ ${d.text}`,
     radText: rad.text,
     moved,
+    ...(exact ? { exact } : {}),
   }
 }
 
@@ -242,7 +317,7 @@ export function readCirclePoint(text: string, c: Circle, name: string): CirclePo
     const deg = normDeg((Math.atan2(dy, dx) * 180) / Math.PI)
     const on = Math.abs(d - c.r) <= 1e-9 * Math.max(1, c.r)
     if (on) return { ok: true, p: makePoint(c, name, deg, { x, y }, false) }
-    return { ok: true, p: makePoint(c, name, deg, pointAtDeg(c, deg), true) }
+    return { ok: true, p: makePoint(c, name, deg, pointAtDeg(c, deg), true, exactProjection(c, x, y) ?? exactAtDeg(c, deg)) }
   }
   const isDeg = /(°|deg(rees?)?)\s*$/i.test(s)
   const isRad = !isDeg && (/rad(ians?)?\s*$/i.test(s) || /pi/.test(s))
@@ -250,7 +325,7 @@ export function readCirclePoint(text: string, c: Circle, name: string): CirclePo
   const v = constValue(body)
   if (v === null) return { ok: false, error: `“${raw}” is not an angle — type 30°, pi/3 or a point (3, 4).` }
   const deg = normDeg(isRad ? (v * 180) / Math.PI : v)
-  return { ok: true, p: makePoint(c, name, deg, pointAtDeg(c, deg), false) }
+  return { ok: true, p: makePoint(c, name, deg, pointAtDeg(c, deg), false, exactAtDeg(c, deg)) }
 }
 
 // ---------------------------------------------------------------------------
@@ -322,9 +397,12 @@ export function inscribedCentral(c: Circle, P: CirclePoint, Q: CirclePoint, R: C
   const reflex = centralDeg > 180 + 1e-7
   const ang = `∠${P.name}${R.name}${Q.name}`
   const cang = `∠${P.name}O${Q.name}`
+  // an angle ∠POQ is at most 180° by convention: past it the inscribed angle
+  // is half the reflex angle, i.e. half the major arc PQ
+  const half = reflex ? `arc ${P.name}${Q.name}` : cang
   const relation = diameter
     ? `${P.name}${Q.name} is a diameter, so ${ang} = ½ · 180° = 90°`
-    : `${ang} = ½·${cang}: ${itext.replace('≈ ', '')} = ½ · ${ctext.replace('≈ ', '')}`
+    : `${ang} = ½·${half}${reflex ? ' (the major arc)' : ''}: ${itext.replace('≈ ', '')} = ½ · ${ctext.replace('≈ ', '')}`
   const intercepts = `${ang} intercepts arc ${P.name}${Q.name} (${ctext}${reflex ? ', the major arc' : ''})`
   return {
     arc,
@@ -435,12 +513,16 @@ export function sectorOf(c: Circle, P: CirclePoint, Q: CirclePoint): SectorRepor
   const rBr = /[√/]/.test(r) || r.startsWith('≈') ? `(${r})` : r
   const r2 = c.r2 ? ratText(c.r2) : `≈ ${dec(c.r * c.r, 2)}`
   const degNum = dt.exact ? dt.text.replace('°', '') : dec(deg, 2)
-  const show = (v: ExactValue): string => (v.exact ? v.text : v.text)
+  // "= 2π", or "≈ 3.71" — never "= ≈ 3.71"
+  const show = (v: ExactValue): string => (v.exact ? `= ${v.text}` : v.text)
   const thetaT = theta.exact ? theta.text : dec(theta.value, 3)
-  const arcRadian = `s = rθ = ${rBr} · ${thetaT} = ${show(arc)}`
-  const areaRadian = `A = ½r²θ = ½ · ${r2} · ${thetaT} = ${show(area)}`
-  const arcDegree = `s = (${degNum}/360) · 2π · ${rBr} = ${show(arc)}`
-  const areaDegree = `A = (${degNum}/360) · π · ${rBr}² = ${show(area)}`
+  // a rounded θ (or a rounded radius) makes the working approximate too
+  const rel = (v: ExactValue, inputsExact: boolean): string => (v.exact && inputsExact ? '=' : '≈')
+  const rEx = c.radius.exact
+  const arcRadian = `s = rθ ${rel(arc, theta.exact && rEx)} ${rBr} · ${thetaT} ${show(arc)}`
+  const areaRadian = `A = ½r²θ ${rel(area, theta.exact && !!c.r2)} ½ · ${r2} · ${thetaT} ${show(area)}`
+  const arcDegree = `s = (${degNum}/360) · 2π · ${rBr} ${show(arc)}`
+  const areaDegree = `A = (${degNum}/360) · π · ${rBr}² ${show(area)}`
   const radianDef = arc.exact && theta.exact
     ? `θ = s/r = ${/\//.test(arc.text) ? `(${arc.text})` : arc.text} ÷ ${rBr} = ${theta.text} — the radian measure is the arc length per unit of radius`
     : `θ = s/r ≈ ${dec(sVal / c.r, 3)} — the radian measure is the arc length per unit of radius`
@@ -506,11 +588,12 @@ function powerOf(c: Circle, X: Vec2): { m: Measure; text: string } {
     const p = ratSub(c.r2, d2)
     if (d2 && p) {
       const m = measureOfSurd({ c: p, k: 1 })
-      return { m, text: `${ratText(c.r2)} ${MINUS} ${ratText(d2)} = ${m.text}` }
+      return { m, text: `= ${ratText(c.r2)} ${MINUS} ${ratText(d2)} = ${m.text}` }
     }
   }
   const m = measureOf(val)
-  return { m, text: withApprox(m) }
+  // "≈ 7.93" (the caller writes "r² − OE² ≈ 7.93"), or "= 5"
+  return { m, text: eqM(m) }
 }
 
 export function chordsCross(c: Circle, P: CirclePoint, Q: CirclePoint, R: CirclePoint, S: CirclePoint): ChordsReport | { error: string } {
@@ -539,7 +622,7 @@ export function chordsCross(c: Circle, P: CirclePoint, Q: CirclePoint, R: Circle
     names,
     left: `${P.name}E · E${Q.name} = ${times(pe, eq)} ${eqM(pw.m)}`,
     right: `${R.name}E · E${S.name} = ${times(re, es)} ${eqM(pw.m)}`,
-    power: `both equal r² ${MINUS} OE² = ${pw.text}`,
+    power: `both equal r² ${MINUS} OE² ${pw.text}`,
   }
 }
 

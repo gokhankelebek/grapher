@@ -62,6 +62,7 @@ import { useBoardLook } from './app/useBoardLook'
 import { useRevealMode } from './app/useRevealMode'
 import { useCardCrossings } from './app/useCardCrossings'
 import { useExport } from './app/useExport'
+import { useFitAll } from './app/useFitAll'
 import { useFigureSettings } from './app/useFigureSettings'
 import { useFileDrop } from './app/useFileDrop'
 import { useSidebarEditors } from './app/useSidebarEditors'
@@ -113,7 +114,7 @@ export default function App() {
   const numberLine = useNumberLine({ board, refs, history, editing })
   const viewport = useViewport({
     board, refs, derived, notices, history, persistence, docActions, calc, fieldsApi, typed, tables,
-    numberLine,
+    numberLine, revealRef: session.revealRef,
   })
   const examplesApi = useExamples({ docState, refs, derived, notices, persistence, viewport })
   const unitCircle = useUnitCircle({ board, refs, derived, notices, history, calc, viewport })
@@ -147,6 +148,12 @@ export default function App() {
     unitCircle, rates, system, overlaysApi, marks, naming, lookApi, revealMode, describer, statsApi,
     valueTablesApi,
   })
+  // "Fit to curves" frames the geometry too, measured as the fitted export is
+  const fitAll = useFitAll({
+    refs, derived, fieldsApi, shapesApi, viewport,
+    geometryMarksRef: overlaysApi.geometryMarksRef, exportContent: exporter.exportContent,
+  })
+  const viewportFit = useMemo(() => ({ ...viewport, fitToContent: fitAll }), [viewport, fitAll])
   const figureSettings = useFigureSettings({
     board, docState, session, refs, derived, notices, history, viewport, lookApi,
   })
@@ -160,7 +167,7 @@ export default function App() {
   })
   const commandsApi = useCommands({
     board, docState, session, refs, derived, notices, history, docActions, editing, calc, fieldsApi,
-    typed, tables, domain, numberLine, viewport, unitCircle, rates, overlaysApi, naming, revealMode,
+    typed, tables, domain, numberLine, viewport: viewportFit, unitCircle, rates, overlaysApi, naming, revealMode,
     exporter, figureSettings, editors, examples: examplesApi, itemBank, describer, statsApi, shapesApi,
     circleViewsApi,
   })
@@ -249,7 +256,7 @@ export default function App() {
     deleteItem, setItemWidth, addInequality, setSolveShow, setItemEquation,
   } = numberLine
   const {
-    viewRefresh, viewportChanged, zoomBy, resetView, viewSettings, fitToContent, graphSolve,
+    viewRefresh, viewportChanged, zoomBy, resetView, viewSettings, graphSolve,
     zoomToData, zoomToSequence,
   } = viewport
   const { addUnitCircle, ucFigures, unitCircleCardNodes } = unitCircle
@@ -1159,7 +1166,7 @@ export default function App() {
           </button>
           <button
             className="zoom-btn"
-            onClick={fitToContent}
+            onClick={fitAll}
             title="Fit to curves (frame everything visible)"
             aria-label="Fit to curves"
             data-testid="fit-to-curves"

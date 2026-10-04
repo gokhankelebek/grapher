@@ -401,8 +401,10 @@ describe('commands and help', () => {
     for (const id of ids) expect(COMMANDS.some((c) => c.id === id), id).toBe(true)
     const listed = (course: string): string[] =>
       HELP_SECTIONS.filter((s) => s.course === course).flatMap((s) => s.entries.flatMap((e) => ('id' in e ? [e.id] : [])))
-    expect(listed('NC Math 2')).toContain('shape-centres')
     expect(listed('NC Math 3')).toEqual(expect.arrayContaining(['circle-angles', 'circle-tangent', 'circle-sector', 'shape-centres']))
-    expect(HELP_SECTIONS.find((s) => s.id === 'm2-centres')!.title).toContain('G-CO.10')
+    // 2016 NC SCOS: the centres of a triangle are Math 3 (NC.M3.G-CO.10)
+    expect(HELP_SECTIONS.find((s) => s.id === 'm3-centres')!.title).toContain('NC.M3.G-CO.10')
+    expect(HELP_SECTIONS.find((s) => s.id === 'm3-centres')!.course).toBe('NC Math 3')
+    expect(HELP_SECTIONS.some((s) => s.id === 'm2-centres')).toBe(false)
   })
 })

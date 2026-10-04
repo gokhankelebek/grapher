@@ -571,7 +571,14 @@ export function describeInputFromCurves(input: AdapterInput): DescribeInput {
           const a = label.get(visible[i].curve.id)!
           const b = label.get(visible[j].curve.id)!
           sameExtras.push(
-            { text: meet.coincide.everywhere ? `${a} and ${b} are the same function: their graphs coincide everywhere.` : `${a} and ${b} coincide on part of the window.`, answer: true },
+            {
+              text: meet.coincide.everywhere
+                ? `${a} and ${b} are the same function: their graphs coincide everywhere.`
+                : meet.coincide.except && meet.coincide.except.length > 0
+                  ? `${a} and ${b} coincide except at ${meet.coincide.except.map((e) => `x = ${e.exact ?? String(Number(e.x.toPrecision(4))).replace('-', '−')}`).join(' and ')}, where only one of them is defined.`
+                  : `${a} and ${b} coincide on part of the window.`,
+              answer: true,
+            },
           )
         }
         for (const p of pts) {

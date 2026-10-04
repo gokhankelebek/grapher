@@ -25,7 +25,7 @@ import { needsApprox, withApprox } from '../core/geometry'
 import type { Measure } from '../core/geometry'
 import { CardSection } from './CardSection'
 import { Latex } from './Latex'
-import { Answer, AnswerTex } from './RevealAnswer'
+import { Answer, AnswerTex, useReveal } from './RevealAnswer'
 import { shapeKey } from './reveal'
 import type { ShapePart } from './reveal'
 import type { MeasureCardData } from './shapeMeasure'
@@ -54,6 +54,10 @@ function M({ m }: { m: Measure }) {
 export function ShapeMeasureSection({ shapeId, data, settings, onMeasure, onAddShape }: Props) {
   const k = (part: ShapePart): string => shapeKey(shapeId, part)
   const r = data.reports
+  const rv = useReveal()
+  // the classification is its own answer: it rides on the summary only while shown
+  const classHidden = rv.on && rv.hidden(k('class'))
+  const summary = data.summary && data.summaryClass && !classHidden ? `${data.summary} · ${data.summaryClass}` : data.summary
   const anyOn = data.toggles.some((t) => t.on)
   const allOn = data.toggles.every((t) => t.on)
 
@@ -101,7 +105,7 @@ export function ShapeMeasureSection({ shapeId, data, settings, onMeasure, onAddS
         kind="shape-measure"
         title="Measurements"
         titleHint="Lengths, slopes, angles, area and what the figure is — exact where they can be"
-        summary={data.summary || null}
+        summary={summary || null}
         answerKey={k(data.summaryPart)}
         testId="shape-measure"
       >
@@ -220,15 +224,22 @@ function PolygonBlock({ data, k }: { data: MeasureCardData; k: (p: ShapePart) =>
 function RightBlock({ data, k }: { data: MeasureCardData; k: (p: ShapePart) => string }) {
   const r = data.reports.poly!
   const rt = r.right!
+  const rv = useReveal()
+  // "Right triangle" and "right angle at A" ARE the classification: while it
+  // is a hidden answer the section has a neutral name and the line a pill
+  const classHidden = rv.on && rv.hidden(k('class'))
   return (
     <CardSection
       kind="shape-right"
-      title="Right triangle"
+      title={classHidden ? 'Triangle ratios' : 'Right triangle'}
       titleHint="The right angle, the Pythagorean theorem and the trigonometric ratios"
       summary={`right angle at ${r.names[rt.right]}`}
+      answerKey={k('class')}
       testId="shape-right"
     >
-      <div className="calc-fact calc-fact-lead">Right angle at {r.names[rt.right]}</div>
+      <Answer k={k('class')} block what="where the right angle is">
+        <div className="calc-fact calc-fact-lead">Right angle at {r.names[rt.right]}</div>
+      </Answer>
       <Answer k={k('trig')} block what="the Pythagorean check and the trigonometric ratios">
         <div className="secant-block">
           <div className="secant-block-title">Pythagorean theorem</div>

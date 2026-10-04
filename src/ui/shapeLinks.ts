@@ -706,6 +706,8 @@ export interface ShapeCardData {
   compare: CompareCardData | null
   /** A triangle's centres (null for anything else, or three collinear points). */
   centres: TriangleCentres | null
+  /** The number its next image gets (2 when it already has one: A′₂B′₂C′₂); absent = 1. */
+  nextImage?: number
 }
 
 export function shapeCard(

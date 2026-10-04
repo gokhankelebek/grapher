@@ -1145,24 +1145,36 @@ export function circleSquareSteps(src: string): CircleSquare | null {
     })
   }
   const grp = (v: string, c: Rat): string => (c[0] === 0 ? `${v}^{2}` : `\\left(${v}^{2}${termTex(c, v)}\\right)`)
-  steps.push({
-    tex: `${grp('x', d)} + ${grp('y', e)} = ${ratTexOf(rhs0)}`,
-    why: 'Group the x-terms and the y-terms; move the constant to the right',
-  })
+  // with no x- or y-term there is nothing to group or complete: moving the
+  // constant across IS the last step, written once
+  const noLinear = d[0] === 0 && e[0] === 0
+  if (!noLinear) {
+    steps.push({
+      tex: `${grp('x', d)} + ${grp('y', e)} = ${ratTexOf(rhs0)}`,
+      why: 'Group the x-terms and the y-terms; move the constant to the right',
+    })
+  }
   const fill = (v: string, c: Rat, add: Rat): string =>
     c[0] === 0 ? `${v}^{2}` : `\\left(${v}^{2}${termTex(c, v)} + ${ratTexOf(add)}\\right)`
   const adds = [d[0] !== 0 ? ax : null, e[0] !== 0 ? ay : null].filter((x): x is Rat => x !== null)
   if (adds.length > 0) {
     const whyParts: string[] = []
-    if (d[0] !== 0) whyParts.push(`(${ratUni(d)}/2)² = ${ratUni(ax)}`)
-    if (e[0] !== 0) whyParts.push(`(${ratUni(e)}/2)² = ${ratUni(ay)}`)
+    // "(−8/2)² = 16"; a fractional coefficient is halved in words: "(3/2 ÷ 2)² = 9/16"
+    const halfSq = (c: Rat, sqr: Rat): string => `(${ratUni(c)}${c[1] === 1 ? '/2' : ' ÷ 2'})² = ${ratUni(sqr)}`
+    if (d[0] !== 0) whyParts.push(halfSq(d, ax))
+    if (e[0] !== 0) whyParts.push(halfSq(e, ay))
     steps.push({
       tex: `${fill('x', d, ax)} + ${fill('y', e, ay)} = ${ratTexOf(rhs0)}${adds.map((a) => ` + ${ratTexOf(a)}`).join('')}`,
       why: `Complete each square: add half the coefficient, squared, to both sides — ${whyParts.join(', ')}`,
     })
   }
   const sq = (v: string, c: Rat): string => (c[0] === 0 ? `${v}^{2}` : `\\left(${shiftTex(v, c)}\\right)^{2}`)
-  steps.push({ tex: `${sq('x', h)} + ${sq('y', k)} = ${ratTexOf(r2)}`, why: 'Each bracket is a perfect square: (x − h)² + (y − k)² = r²' })
+  steps.push({
+    tex: `${sq('x', h)} + ${sq('y', k)} = ${ratTexOf(r2)}`,
+    why: noLinear
+      ? 'Move the constant to the right: x² + y² = r², a circle centred at the origin'
+      : 'Each bracket is a perfect square: (x − h)² + (y − k)² = r²',
+  })
   const r2v = r2[0] / r2[1]
   const radiusText = sqrtUni(r2v)
   const centreText = `(${ratUni(h)}, ${ratUni(k)})`

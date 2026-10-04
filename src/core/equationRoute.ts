@@ -123,6 +123,38 @@ function wrapPolyTex(p: QP, v: string): string {
   return p.filter((c) => !qz(c)).length > 1 ? `\\left(${t}\\right)` : t
 }
 
+/**
+ * A polynomial as the BASE of a power: wrapped unless it is a bare variable or
+ * a non-negative integer — "(−2)²", not "−2²" (which is −4); "(2x)²", "(1/2)²",
+ * "(x − 5)²".
+ */
+function powBase(p: QP, v: string): string {
+  const t = qpText(p, v)
+  return t === v || /^\d+$/.test(t) ? t : `(${t})`
+}
+function powBaseTex(p: QP, v: string): string {
+  const t = qpTex(p, v)
+  return t === v || /^\d+$/.test(t) ? t : `\\left(${t}\\right)`
+}
+
+/**
+ * k·p, written so it cannot be misread: "4(x + 1)", "(1/4)(x − 3)", and a
+ * single term multiplied out — "(1/4)x", "8x" — never "1/4x" (which reads as
+ * 1/(4x)) or "42x".
+ */
+function scaledText(k: Q, p: QP, v: string): string {
+  if (qeq(k, Q1)) return qpText(p, v)
+  if (p.filter((c) => !qz(c)).length <= 1) return qpText(qpScale(p, k), v)
+  const head = qeq(k, qneg(Q1)) ? MINUS : qint(k) ? qText(k) : `(${qText(k)})`
+  return `${head}(${qpText(p, v)})`
+}
+function scaledTex(k: Q, p: QP, v: string): string {
+  if (qeq(k, Q1)) return qpTex(p, v)
+  if (p.filter((c) => !qz(c)).length <= 1) return qpTex(qpScale(p, k), v)
+  const head = qeq(k, qneg(Q1)) ? '-' : qTex(k)
+  return `${head}\\left(${qpTex(p, v)}\\right)`
+}
+
 /** A polynomial (denominator a nonzero constant) or null. */
 function polyOf(n: ExprNode, isVar: IsVar): QP | null {
   const r = toRQ(n, isVar)
@@ -401,9 +433,9 @@ function radicalRoute(L: ExprNode, R: ExprNode, isVar: IsVar, v: string): Equati
     const sideHasMore = (p.side === 'L' ? beta : other).length !== 0
     if (sideHasMore) steps.push({ text: `Isolate the square root: ${rt.text} = ${qpText(w, v)}`, tex: `${rt.tex} = ${qpTex(w, v)}` })
     const a2 = qmul(p.alpha, p.alpha)
-    const lhsT = qeq(a2, Q1) ? qpText(p.u, v) : `${qText(a2)}${wrapPoly(p.u, v)}`
-    const lhsX = qeq(a2, Q1) ? qpTex(p.u, v) : `${qTex(a2)}${wrapPolyTex(p.u, v)}`
-    steps.push({ text: `Square both sides: ${lhsT} = ${wrapPoly(w, v)}²`, tex: `${lhsX} = ${wrapPolyTex(w, v)}^{2}` })
+    const lhsT = scaledText(a2, p.u, v)
+    const lhsX = scaledTex(a2, p.u, v)
+    steps.push({ text: `Square both sides: ${lhsT} = ${powBase(w, v)}²`, tex: `${lhsX} = ${powBaseTex(w, v)}^{2}` })
     P = primitive(qpSub(qpMul(w, w), qpScale(p.u, a2)))
     isolated = { lhs: rt, w, alpha: p.alpha, u: p.u }
   } else {
@@ -423,8 +455,8 @@ function radicalRoute(L: ExprNode, R: ExprNode, isVar: IsVar, v: string): Equati
       const g2 = qmul(g, g)
       const rr2 = rootText(qneg(g), w2, v)
       steps.push({ text: `${r1.text} = ${rr2.text}`, tex: `${r1.tex} = ${rr2.tex}` })
-      const lt = qeq(a2, Q1) ? qpText(u, v) : `${qText(a2)}${wrapPoly(u, v)}`
-      const rt2 = qeq(g2, Q1) ? qpText(w2, v) : `${qText(g2)}${wrapPoly(w2, v)}`
+      const lt = scaledText(a2, u, v)
+      const rt2 = scaledText(g2, w2, v)
       steps.push({ text: `Square both sides: ${lt} = ${rt2}` })
       P = primitive(qpSub(qpScale(u, a2), qpScale(w2, g2)))
     } else {
@@ -436,7 +468,7 @@ function radicalRoute(L: ExprNode, R: ExprNode, isVar: IsVar, v: string): Equati
       const sumPoly = qpAdd2(qpMul(W, W), qpScale(w2, g2))
       const K = qpScale(W, qmul(mkQ(2n), g)) // the coefficient of √w on the right, with a minus in front
       const tr = timesRoot(K, w2, v)
-      const lt = qeq(a2, Q1) ? qpText(u, v) : `${qText(a2)}${wrapPoly(u, v)}`
+      const lt = scaledText(a2, u, v)
       steps.push({ text: `Square both sides: ${lt} = ${qpText(sumPoly, v)} ${tr.neg ? '+' : MINUS} ${tr.text}` })
       let M = qpSub(sumPoly, qpScale(u, a2))
       if (K.length === 0) return null
@@ -448,7 +480,7 @@ function radicalRoute(L: ExprNode, R: ExprNode, isVar: IsVar, v: string): Equati
       }
       steps.push({ text: `Isolate the other square root: ${timesRoot(Kd, w2, v).text} = ${qpText(M, v)}` })
       const K2 = qpMul(K, K)
-      steps.push({ text: `Square again: ${qpText(qpMul(K2, w2), v)} = ${qpDeg(M) < 1 ? qpText(qpMul(M, M), v) : `${wrapPoly(M, v)}²`}` })
+      steps.push({ text: `Square again: ${qpText(qpMul(K2, w2), v)} = ${qpDeg(M) < 1 ? qpText(qpMul(M, M), v) : `${powBase(M, v)}²`}` })
       P = primitive(qpSub(qpMul(K2, w2), qpMul(M, M)))
     }
   }
@@ -470,8 +502,10 @@ function radicalRoute(L: ExprNode, R: ExprNode, isVar: IsVar, v: string): Equati
       const tol = 1e-9 * Math.max(1, Math.abs(wv.v))
       const ok = c.q ? qsign(qpEval(isolated.w, c.q)) * qsign(isolated.alpha) >= 0 : wv.v * qnum(isolated.alpha) >= -tol
       const wT = qpText(isolated.w, v)
-      if (!ok) return { ...base, ok: false, reason: `${isolated.lhs.text} ${eqSign(rv.text)} but ${wT} ${eqSign(wv.text)}: squaring lost the sign` }
-      return { ...base, ok: true, reason: `${isolated.lhs.text} ${eqSign(rv.text)} and ${wT} ${eqSign(wv.text)}` }
+      // a constant other side is its own value: "the other side is −2", not "−2 = −2"
+      const wSaid = qpDeg(isolated.w) < 1 ? `the other side is ${wT}` : `${wT} ${eqSign(wv.text)}`
+      if (!ok) return { ...base, ok: false, reason: `${isolated.lhs.text} ${eqSign(rv.text)} but ${wSaid}: squaring lost the sign` }
+      return { ...base, ok: true, reason: `${isolated.lhs.text} ${eqSign(rv.text)} and ${wSaid}` }
     }
     const lv = evalSide('L', c)
     const rv = evalSide('R', c)
@@ -630,7 +664,8 @@ function logTerms(n: ExprNode, sign: Q, isVar: IsVar, terms: LogTerm[], konst: {
         baseQ = constQ(n.args[0], isVar)
         if (!baseQ || qsign(baseQ) <= 0 || qeq(baseQ, Q1)) return false
         base = qnum(baseQ)
-        baseText = `log_${qText(baseQ)}`
+        // a fractional base in parentheses: log_(1/2), never log_1/2
+        baseText = qint(baseQ) ? `log_${qText(baseQ)}` : `log_(${qText(baseQ)})`
         arg = n.args[1]
       } else if (LOG_BASES[n.fn] && n.args.length === 1) {
         base = LOG_BASES[n.fn].base
@@ -654,6 +689,21 @@ function logTerms(n: ExprNode, sign: Q, isVar: IsVar, terms: LogTerm[], konst: {
   return true
 }
 
+/** Is there an x with every u(x) > 0? Tested between (and beyond) the real roots of the u's. */
+function argumentsCanAllBePositive(us: readonly QP[], v: string): boolean {
+  const xs: number[] = []
+  for (const u of us) for (const c of candidatesOf(u, v)) if (Number.isFinite(c.x)) xs.push(c.x)
+  xs.sort((a, b) => a - b)
+  const tests: number[] = []
+  if (xs.length === 0) tests.push(0)
+  else {
+    const span = Math.max(1, xs[xs.length - 1] - xs[0])
+    tests.push(xs[0] - span, xs[xs.length - 1] + span)
+    for (let i = 0; i + 1 < xs.length; i++) if (xs[i + 1] > xs[i]) tests.push((xs[i] + xs[i + 1]) / 2)
+  }
+  return tests.some((x) => us.every((u) => qpEvalF(u, x) > 0))
+}
+
 const isLogish = (n: ExprNode): boolean => n.t === 'call' && (n.fn === 'log_' || n.fn in LOG_BASES)
 
 const SUPS = '⁰¹²³⁴⁵⁶⁷⁸⁹'
@@ -663,12 +713,16 @@ const supN = (n: bigint): string => String(n).split('').map((c) => SUPS[Number(c
 function productText(fs: { u: QP; k: bigint }[], v: string, alone: boolean): { text: string; tex: string } {
   if (fs.length === 0) return { text: '1', tex: '1' }
   const one = fs.length === 1 && fs[0].k === 1n
+  // a factor is wrapped unless it is alone or a bare variable: "x(x − 3)",
+  // "x(2x)", "x/(−x)" — never "x2x" or "x/−x"
   const text = fs.map((f) => {
-    const t = one && alone ? qpText(f.u, v) : f.u.filter((c) => !qz(c)).length > 1 ? `(${qpText(f.u, v)})` : qpText(f.u, v)
+    const raw = qpText(f.u, v)
+    const t = one && alone ? raw : raw === v ? raw : `(${raw})`
     return `${t}${f.k > 1n ? supN(f.k) : ''}`
   }).join('')
   const tex = fs.map((f) => {
-    const t = one && alone ? qpTex(f.u, v) : f.u.filter((c) => !qz(c)).length > 1 ? `\\left(${qpTex(f.u, v)}\\right)` : qpTex(f.u, v)
+    const raw = qpTex(f.u, v)
+    const t = one && alone ? raw : raw === v ? raw : `\\left(${raw}\\right)`
     return `${t}${f.k > 1n ? `^{${f.k}}` : ''}`
   }).join('')
   return { text, tex }
@@ -721,6 +775,20 @@ function logRoute(L: ExprNode, R: ExprNode, isVar: IsVar, v: string): EquationRo
   const P = primitive(qpSub(A, qpScale(B, power)))
   const steps: RouteStep[] = []
   steps.push({ text: `Each logarithm needs a positive argument: ${withVar.map((t) => `${qpText(t.u, v)} > 0`).join(', ')}` })
+  if (!argumentsCanAllBePositive(withVar.map((t) => t.u), v)) {
+    // log x = log(−x): combining would write log(x/(−x)) = log(−1)… for an
+    // x that does not exist. Say so instead.
+    steps.push({ text: `No ${v} makes every argument positive at once, so no ${v} makes both sides defined: there is nothing to combine.` })
+    return {
+      kind: 'log',
+      method: 'Check where each side is defined',
+      steps,
+      polynomial: null,
+      candidates: [],
+      identity: false,
+      summary: `There is no solution: no ${v} makes both sides defined.`,
+    }
+  }
   // log(ARG) = RHS
   const aT = productText(aF, v, bF.length === 0)
   const bT = productText(bF, v, false)
@@ -738,10 +806,11 @@ function logRoute(L: ExprNode, R: ExprNode, isVar: IsVar, v: string): EquationRo
     rhsTex.push(`${logTex}${qint(cPrime) ? ` ${qTex(cPrime)}` : `\\left(${qTex(cPrime)}\\right)`}`)
   }
   steps.push({ text: `Combine the logs: ${logOf(argT)} = ${rhsParts.join(' + ')}`, tex: `${logTex}\\left(${argX}\\right) = ${rhsTex.join(' + ')}` })
-  const bName = name === 'ln' ? 'e' : baseQ ? qText(baseQ) : '?'
+  // a fractional base raised to a power is in parentheses: (1/2)⁻¹, not 1/2⁻¹
+  const bName = name === 'ln' ? 'e' : baseQ ? (qint(baseQ) ? qText(baseQ) : `(${qText(baseQ)})`) : '?'
   const powT = constLog || qz(C) || qeq(C, Q1) ? qText(power) : `${bName}${supN(C.n < 0n ? -C.n : C.n).replace(/^/, C.n < 0n ? '⁻' : '')} = ${qText(power)}`
   const left = productText(aF, v, true).text
-  const right = bF.length === 0 ? powT : `${qeq(power, Q1) ? '' : `${qText(power)}`}${productText(bF, v, qeq(power, Q1)).text}`
+  const right = bF.length === 0 ? powT : `${qeq(power, Q1) ? '' : qint(power) ? qText(power) : `(${qText(power)})`}${productText(bF, v, qeq(power, Q1)).text}`
   steps.push({ text: `Rewrite without logs: ${left} = ${right}` })
   if (P.length === 0) return null
   steps.push({ text: `Expand and collect: ${qpText(P, v)} = 0`, tex: `${qpTex(P, v)} = 0` })
