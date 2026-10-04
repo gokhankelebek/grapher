@@ -1,0 +1,547 @@
+/* ==========================================================================
+   The landing page. The app's palette and type (src/ui/styles.css :root),
+   restated here because the landing chunk must not load the app's 4,000-line
+   stylesheet. Keep the two in step: same navy, same accent, same font stack.
+   Everything is scoped under .lp.
+   ========================================================================== */
+
+.lp {
+  --bg: #0f1117;
+  --panel: #131722;
+  --panel-2: #1a2031;
+  --border: #2a3047;
+  --border-strong: #404a75;
+  --text: #e6eaf5;
+  --muted: #9aa1bd;
+  --accent: #4f9cf9;
+  --accent-text: #5aa3fa;
+  --accent-strong: #2f74d6;
+  --neon: #5fe3ff;
+  --font: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --gutter: clamp(16px, 4vw, 40px);
+
+  min-height: 100vh;
+  background:
+    linear-gradient(rgba(79, 156, 249, 0.045) 1px, transparent 1px) 0 0 / 60px 60px,
+    linear-gradient(90deg, rgba(79, 156, 249, 0.045) 1px, transparent 1px) 0 0 / 60px 60px,
+    var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+:where(.lp) *,
+:where(.lp) *::before,
+:where(.lp) *::after {
+  box-sizing: border-box;
+}
+
+:where(.lp) :where(h1, h2, h3, p, ul, ol, figure, blockquote) {
+  margin: 0;
+  padding: 0;
+}
+
+:where(.lp) :where(ul, ol) {
+  list-style: none;
+}
+
+:where(.lp) a {
+  color: var(--accent-text);
+}
+
+:where(.lp) img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+:where(.lp) button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.lp :focus-visible {
+  outline: 3px solid var(--neon);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+/* ---------------------------------------------------------------- header */
+
+.lp-top {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 14px var(--gutter);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.lp-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+  text-decoration: none;
+  color: var(--text);
+}
+
+.lp-top nav {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.lp-link {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 15px;
+}
+
+.lp-link:hover {
+  color: var(--text);
+}
+
+/* --------------------------------------------------------------- buttons */
+
+.lp-btn {
+  display: inline-flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 48px;
+  padding: 11px 22px;
+  border-radius: 10px;
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 1.25;
+  text-decoration: none;
+  transition: background-color 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+
+.lp-btn small {
+  font-size: 13px;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+.lp-btn-primary {
+  background: var(--accent-strong);
+  color: #fff;
+  box-shadow: 0 0 0 1px rgba(95, 227, 255, 0.25), 0 8px 28px rgba(47, 116, 214, 0.35);
+}
+
+.lp-btn-primary:hover {
+  background: #2a68c2;
+}
+
+.lp-btn-secondary {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+}
+
+.lp-btn-secondary:hover {
+  border-color: var(--accent);
+}
+
+.lp-btn-quiet {
+  min-height: 40px;
+  padding: 8px 16px;
+  font-size: 15px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.lp-btn-quiet:hover {
+  border-color: var(--accent);
+}
+
+/* ------------------------------------------------------------------ hero */
+
+.lp-hero {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: clamp(12px, 3vh, 40px) var(--gutter) clamp(32px, 6vh, 64px);
+  display: grid;
+  grid-template-columns: minmax(0, 4.6fr) minmax(0, 7.4fr);
+  gap: clamp(24px, 4vw, 56px);
+  align-items: center;
+}
+
+.lp-eyebrow {
+  color: var(--neon);
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+.lp-hero h1 {
+  margin-top: 12px;
+  font-size: clamp(40px, 5.2vw, 64px);
+  line-height: 1.04;
+  font-weight: 800;
+  letter-spacing: -1.5px;
+  text-wrap: balance;
+}
+
+.lp-hero h1 span {
+  display: inline-block;
+}
+
+.lp-h1-accent {
+  color: var(--neon);
+  text-shadow: 0 0 28px rgba(95, 227, 255, 0.35);
+}
+
+.lp-sub {
+  margin-top: 18px;
+  color: #c3c9de;
+  font-size: clamp(16px, 1.35vw, 19px);
+  max-width: 34em;
+}
+
+.lp-ctas {
+  margin-top: 26px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.lp-trust-mini {
+  margin-top: 18px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+/* ------------------------------------------------------------------ demo */
+
+.lp-demo {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  overflow: hidden;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(95, 227, 255, 0.06);
+}
+
+.lp-demo-stage {
+  position: relative;
+  aspect-ratio: 12 / 7;
+  background: var(--bg);
+}
+
+.lp-demo-stage img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  transition: opacity 0.5s ease;
+}
+
+.lp-demo-stage img.on {
+  opacity: 1;
+}
+
+.lp-demo-bar {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.lp-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.lp-steps button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 4px 12px 4px 6px;
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.lp-steps button:hover {
+  color: var(--text);
+}
+
+.lp-step-n {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  font-size: 12px;
+}
+
+.lp-steps button[aria-current='step'] {
+  color: var(--text);
+  background: rgba(79, 156, 249, 0.14);
+}
+
+.lp-steps button[aria-current='step'] .lp-step-n {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+  color: #fff;
+}
+
+.lp-demo-play {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  color: var(--muted);
+}
+
+.lp-demo-play svg {
+  fill: currentColor;
+}
+
+.lp-demo-play:hover {
+  color: var(--text);
+}
+
+.lp-demo-caption {
+  grid-column: 1 / -1;
+  padding: 0 4px;
+  color: #c3c9de;
+  font-size: 15px;
+  min-height: 1.55em;
+}
+
+/* ---------------------------------------------------------------- panels */
+
+.lp-panels,
+.lp-trust,
+.lp-about {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: clamp(32px, 6vh, 64px) var(--gutter);
+}
+
+.lp-section-title {
+  font-size: clamp(26px, 3vw, 36px);
+  font-weight: 750;
+  letter-spacing: -0.5px;
+}
+
+.lp-section-title span {
+  color: var(--neon);
+}
+
+.lp-panel-grid {
+  margin-top: 24px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.lp-panel {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  overflow: hidden;
+  padding-bottom: 20px;
+}
+
+.lp-panel img {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  border-bottom: 1px solid var(--border);
+}
+
+.lp-panel h3 {
+  margin: 16px 20px 6px;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--neon);
+}
+
+.lp-panel p {
+  margin: 0 20px;
+  color: #c3c9de;
+}
+
+/* ----------------------------------------------------------------- trust */
+
+.lp-trust {
+  text-align: center;
+}
+
+.lp-trust h2 {
+  font-size: clamp(24px, 3vw, 36px);
+  font-weight: 750;
+  letter-spacing: -0.5px;
+  text-wrap: balance;
+}
+
+.lp-trust ul {
+  margin: 20px auto 0;
+  max-width: 960px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  text-align: left;
+}
+
+.lp-trust li {
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  color: #c3c9de;
+}
+
+.lp-trust strong {
+  color: var(--text);
+}
+
+/* ----------------------------------------------------------------- about */
+
+.lp-about h2 {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.lp-about-row {
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.lp-photo {
+  flex: none;
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.lp-photo-empty {
+  display: grid;
+  place-items: center;
+  background: var(--panel-2);
+  border: 1px dashed var(--border-strong);
+}
+
+.lp-photo-empty svg {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 2.5;
+}
+
+.lp-about-line {
+  font-size: 19px;
+}
+
+.lp-quote {
+  margin-top: 8px;
+  color: #c3c9de;
+  font-style: italic;
+}
+
+/* ---------------------------------------------------------------- footer */
+
+.lp-foot {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 28px var(--gutter) 40px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 16px 32px;
+}
+
+.lp-foot p {
+  max-width: 44em;
+}
+
+.lp-foot strong {
+  color: var(--text);
+}
+
+.lp-foot ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+}
+
+.lp-todo {
+  color: #ffb547;
+}
+
+/* ------------------------------------------------------------ responsive */
+
+@media (max-width: 980px) {
+  .lp-hero {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .lp-sub {
+    max-width: 40em;
+  }
+  .lp-panel-grid,
+  .lp-trust ul {
+    grid-template-columns: minmax(0, 1fr);
+    max-width: 640px;
+  }
+  .lp-trust ul {
+    margin-left: auto;
+    margin-right: auto;
+  }
+}
+
+@media (max-width: 560px) {
+  .lp-link {
+    display: none;
+  }
+  .lp-ctas .lp-btn {
+    flex: 1 1 100%;
+    text-align: center;
+    align-items: center;
+  }
+  .lp-steps button {
+    padding-right: 10px;
+    font-size: 13px;
+  }
+}
+
+/* A projector or a big monitor: the hero sits in the middle of the screen. */
+@media (min-width: 1600px) and (min-height: 900px) {
+  .lp-hero {
+    padding-top: 6vh;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lp-demo-stage img,
+  .lp-btn {
+    transition: none;
+  }
+}

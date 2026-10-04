@@ -3,7 +3,7 @@
   "short_name": "Grapher",
   "description": "Sketch a curve and get its equation. Graphs, calculus, number lines and worksheets — works offline.",
   "id": "./",
-  "start_url": "./",
+  "start_url": "./?app=1",
   "scope": "./",
   "display": "standalone",
   "orientation": "any",

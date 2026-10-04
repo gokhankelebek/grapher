@@ -87,7 +87,7 @@ describe('the manifest', () => {
       expect(u.startsWith('/'), u).toBe(false)
       expect(/^[a-z]+:/i.test(u), u).toBe(false)
     }
-    expect(m.start_url).toBe('./')
+    expect(m.start_url).toBe('./?app=1')
     expect(m.scope).toBe('./')
   })
 
