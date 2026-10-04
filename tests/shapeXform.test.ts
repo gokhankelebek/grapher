@@ -116,7 +116,7 @@ describe('the typed command and the exact inputs', () => {
     expect(line('banana')).toMatch(/Type a line/)
   })
 
-  it('angles, scale factors and centres', () => {
+  it('angles, scale factors and centers', () => {
     expect(parseAngle('90')).toEqual({ deg: 90 })
     expect(parseAngle('90°')).toEqual({ deg: 90 })
     expect(parseAngle('90 cw')).toEqual({ deg: -90 })
@@ -211,7 +211,7 @@ describe('the image card', () => {
     expect(card.image?.rigidText).toMatch(/^Not rigid: every length is multiplied by 1\/2/)
     expect(card.image?.vertexTexts).toEqual(['A′(1, 3/2)', 'B′(5/2, 3/2)', 'C′(5/2, 7/2)'])
     expect(card.image?.checks.every((x) => x.ok !== false)).toBe(true)
-    expect(card.image?.checks.some((x) => x.text === 'The centre (1, 1) stays fixed')).toBe(true)
+    expect(card.image?.checks.some((x) => x.text === 'The center (1, 1) stays fixed')).toBe(true)
     expect(card.canTransform).toBe(true) // an image can be transformed again
   })
 
@@ -340,7 +340,7 @@ describe('descriptions and exports', () => {
     const said = d.find((x) => x.text.startsWith('△A′B′C′ is the image'))
     expect(said?.answer).toBe(true)
     expect(said?.text).toBe('△A′B′C′ is the image of △ABC under a rotation of 90° counterclockwise about the origin, drawn dashed: R_{90°, O}: (x, y) → (−y, x).')
-    expect(d.some((x) => x.text === 'The centre O, the origin is marked.')).toBe(true)
+    expect(d.some((x) => x.text === 'The center O, the origin is marked.')).toBe(true)
   })
 
   it('pgfplots draws the image dashed, the mirror line, the arc and the symmetry lines', () => {

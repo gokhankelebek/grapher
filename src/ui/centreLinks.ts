@@ -36,9 +36,9 @@ export const CENTRE_COLORS: Record<CentreFlag, string> = {
 
 const LABEL: Record<CentreFlag, [string, string]> = {
   centroid: ['Centroid G', 'Where the three medians meet (vertex to the midpoint of the opposite side)'],
-  circumcentre: ['Circumcentre O', 'Where the perpendicular bisectors of the sides meet; with the circle through the three vertices'],
-  incentre: ['Incentre I', 'Where the three angle bisectors meet; with the circle touching the three sides'],
-  orthocentre: ['Orthocentre H', 'Where the three altitudes meet (extended when the triangle is obtuse)'],
+  circumcentre: ['Circumcenter O', 'Where the perpendicular bisectors of the sides meet; with the circle through the three vertices'],
+  incentre: ['Incenter I', 'Where the three angle bisectors meet; with the circle touching the three sides'],
+  orthocentre: ['Orthocenter H', 'Where the three altitudes meet (extended when the triangle is obtuse)'],
   euler: ['Euler line', 'The line through O, G and H — with HG = 2·GO'],
 }
 

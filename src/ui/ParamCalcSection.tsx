@@ -294,7 +294,7 @@ export function ParamCalcSection({ row, onCalcChange, onRemove }: Props) {
                 <li className="calc-fact">
                   {`Displacement ⟨Δx, Δy⟩ = ⟨${arc.displacement.dx.text}, ${arc.displacement.dy.text}⟩, length ${arc.displacement.length.text}`}
                 </li>
-                <li className="calc-fact">{`Distance travelled = ∫ speed ${d} = L ${arc.length.exact ? '=' : '≈'} ${arc.length.text}`}</li>
+                <li className="calc-fact">{`Distance traveled = ∫ speed ${d} = L ${arc.length.exact ? '=' : '≈'} ${arc.length.text}`}</li>
                 {arc.compare && <li className="calc-fact calc-fact-lead">{arc.compare}</li>}
               </ul>
               </Answer>

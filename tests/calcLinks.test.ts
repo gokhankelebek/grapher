@@ -390,7 +390,7 @@ describe('a tangent that does not exist is refused, not drawn', () => {
     expect(r.slope).toBeCloseTo(8, 9)
     expect(r.params![1]).toBeCloseTo(8, 9)
     expect(r.params![0]).toBeCloseTo(-16, 9)
-    expect(r.text).toBe('tangent to Cubic at x = 2.00 · slope 8.00')
+    expect(r.text).toBe('tangent to Cubic at x = 2 · slope 8')
     expect(r.problem).toBeNull()
   })
 
@@ -572,8 +572,18 @@ describe('the area readout', () => {
 describe('numbers a teacher reads', () => {
   it('uses a real minus sign and never prints a negative zero', () => {
     expect(fixed(-0.0001, 3)).toBe('0.000')
-    expect(fixed(-1.5, 2)).toBe('−1.50')
+    expect(fixed(-1.5, 2)).toBe('−1.5')
     expect(fixed(2.6666666, 3)).toBe('2.667')
+  })
+
+  it('an exact value drops its trailing zeros; an approximation keeps its places', () => {
+    expect(fixed(3, 3)).toBe('3')
+    expect(fixed(-7, 3)).toBe('−7')
+    expect(fixed(0, 2)).toBe('0')
+    expect(fixed(2.5, 3)).toBe('2.5')
+    expect(fixed(0.1 + 0.2, 2)).toBe('0.3')
+    expect(fixed(2.0004, 3)).toBe('2.000')
+    expect(fixed(1.2999, 2)).toBe('1.30')
   })
 })
 
@@ -593,8 +603,8 @@ describe('the projected legend says what a derived curve is', () => {
     expect(out[0]).toEqual(entries[0])
     expect(out[1].tex).toContain("f'")
     expect(out[1].tex).toContain('3x^{2} - 4')
-    expect(out[2].tex).toContain('tangent at }x = 2.00')
-    expect(out[2].text).toBe('tangent at x = 2.00')
+    expect(out[2].tex).toContain('tangent at }x = 2')
+    expect(out[2].text).toBe('tangent at x = 2')
   })
 
   it('is a no-op on a board with no calculus objects', () => {
@@ -682,7 +692,7 @@ describe('areaReadout — a limit off the end of a sketch', () => {
     const link = { kind: 'area', id: 'A', parentId: parent.id, from: -3.5, to: 4.5 } as AreaLink
     const r = areaReadout(link, parent, MODELS)
     expect(r.value).toBeNull()
-    expect(r.problem).toBe("a = −3.50 is outside this curve's domain [−3.42, 4.47]")
+    expect(r.problem).toBe("a = −3.5 is outside this curve's domain [−3.42, 4.47]")
   })
 })
 
@@ -764,14 +774,14 @@ describe('areaReadout between two curves', () => {
     const g: FittedCurve = { ...capped(), domain: [-0.5, 0.5] }
     const r = areaReadout(between({ abs: false }), f, MODELS, g)
     expect(r.value).toBeNull()
-    expect(r.problem).toBe("a = −1.00 is outside the second curve's domain [−0.50, 0.50]")
+    expect(r.problem).toBe("a = −1 is outside the second curve's domain [−0.5, 0.5]")
   })
 
   it('refuses across a pole of the second curve, naming it', () => {
     const recip: FittedCurve = { ...capped(), id: 'h', modelId: 'recip', params: [1, 0, 0] }
     const r = areaReadout(between({ from: -1, to: 2, abs: false }), square(), MODELS, recip)
     expect(r.value).toBeNull()
-    expect(r.problem).toContain('pole at x = 0.00')
+    expect(r.problem).toContain('pole at x = 0')
   })
 
   it('leaves the area-to-the-axis sentence exactly as it was', () => {

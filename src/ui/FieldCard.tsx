@@ -252,8 +252,8 @@ export function FieldCard({
         <button
           className="color-dot"
           style={{ background: ink(field.color) }}
-          title="Change colour"
-          aria-label="Change field colour"
+          title="Change color"
+          aria-label="Change field color"
           onClick={(e) => {
             e.stopPropagation()
             onCycleColor()

@@ -17,13 +17,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FigureStyleId } from '../core/types'
 import type { DocMeta, Worksheet, WorksheetItem } from '../core/persist'
 import { DEFAULT_SHEET_STYLE, MAX_SHEET_ITEMS, newWorksheet } from '../core/persist'
-import { listWorksheets, readDocJSON, readExportSettings, removeWorksheet, writeWorksheet } from './storage'
+import { listWorksheets, readDocJSON, readExportSettings, removeWorksheet, writeDoc, writeWorksheet } from './storage'
+import type { ExampleCourse } from '../examples/catalog'
 import type { DocModel } from './docScene'
 import { docFigure, docModelFromJSON, recordFigure } from './docScene'
 import { buildSheet, itemStyle, pageSvg, sheetLatex } from './worksheetExport'
 import { toPdfPages } from '../render/vectorPdf'
 import { replayList } from '../render/vectorPage'
 import { itemLabel } from './worksheetLayout'
+import { docListName } from './docName'
 import { PX_PER_CM } from './vectorExport'
 import { useDialogFocus } from './useDialogFocus'
 
@@ -33,6 +35,17 @@ interface Props {
   screen: { widthPx: number; heightPx: number }
   onClose(): void
   toast(msg: string): void
+  /**
+   * The teacher's courses (src/ui/courses.ts galleryFilterFor), for "Start
+   * from an example worksheet"; null or absent: every course.
+   */
+  courses?: readonly ExampleCourse[] | null
+  /**
+   * New documents were written (the sample worksheet's figures): the App
+   * re-reads its list, which comes back here as `docs`. Without it the
+   * sample worksheet is not offered.
+   */
+  onDocsChanged?(): void
 }
 
 const STYLE_LABELS: Record<FigureStyleId, string> = {
@@ -81,7 +94,7 @@ function Thumb({ model, style, width = 120 }: { model: DocModel | null; style: F
   return <canvas ref={ref} className="ws-thumb" aria-hidden="true" />
 }
 
-export function WorksheetEditor({ docs, screen: screenIn, onClose, toast }: Props) {
+export function WorksheetEditor({ docs, screen: screenIn, onClose, toast, courses = null, onDocsChanged }: Props) {
   // A new object on every App render; only its two numbers matter.
   const screen = useMemo(() => ({ widthPx: screenIn.widthPx, heightPx: screenIn.heightPx }), [screenIn.widthPx, screenIn.heightPx])
   const [sheets, setSheets] = useState<Worksheet[]>(() => listWorksheets())
@@ -228,6 +241,38 @@ export function WorksheetEditor({ docs, screen: screenIn, onClose, toast }: Prop
     const s = sheets.find((w) => w.id === id)
     if (s) setSheet(s)
   }
+  // ---- "Start from an example worksheet": offered only to a teacher with no
+  // worksheet yet, on the blank one this opens with. Figures from the gallery
+  // for their courses become new documents; the sheet is theirs.
+  const [starting, setStarting] = useState(false)
+  const offerSample = onDocsChanged !== undefined && sheets.length === 0 && sheet.items.length === 0
+  const startSample = (): void => {
+    if (starting || !onDocsChanged) return
+    setStarting(true)
+    import('../examples/sampleWorksheet')
+      .then(({ buildSampleSheet }) => {
+        const made = buildSampleSheet({ courses, existingNames: docs.map((d) => d.name), screen })
+        for (const doc of made.docs) {
+          const out = writeDoc(doc)
+          if (!out.ok) {
+            onDocsChanged()
+            toast(out.message)
+            return
+          }
+        }
+        onDocsChanged()
+        const out = writeWorksheet(made.sheet)
+        if (!out.ok) return toast(out.message)
+        sheetRef.current = made.sheet
+        setSheet(made.sheet)
+        setSheets(listWorksheets())
+        setPicking(false)
+        toast(`Made “${made.sheet.name}”: its ${made.docs.length} figures are new documents in your list, yours to change.`)
+      })
+      .catch(() => toast('Couldn’t load the examples — check the connection and try again.'))
+      .finally(() => setStarting(false))
+  }
+
   const deleteSheet = (): void => {
     removeWorksheet(sheet.id)
     const rest = listWorksheets()
@@ -423,6 +468,18 @@ export function WorksheetEditor({ docs, screen: screenIn, onClose, toast }: Prop
               </button>
             </div>
 
+            {offerSample && (
+              <div className="ws-sample" data-testid="ws-sample">
+                <button className="ws-btn ws-primary" onClick={startSample} disabled={starting} data-testid="ws-sample-start">
+                  {starting ? 'Making it…' : 'Start from an example worksheet'}
+                </button>
+                <p className="ws-sample-text">
+                  Three figures from the examples for your courses, with a title and captions. They are added to your
+                  documents as copies you own.
+                </p>
+              </div>
+            )}
+
             {picking && (
               <div className="ws-picker" role="list" aria-label="Your documents">
                 {docs.length === 0 && <div className="ws-empty">No saved documents yet.</div>}
@@ -435,7 +492,7 @@ export function WorksheetEditor({ docs, screen: screenIn, onClose, toast }: Prop
                     onClick={() => setItems((items) => (items.length >= MAX_SHEET_ITEMS ? items : [...items, { docId: d.id }]))}
                   >
                     <Thumb model={lookup(d.id)} style={sheetStyle} width={104} />
-                    <span className="ws-pick-name">{d.name}</span>
+                    <span className="ws-pick-name">{docListName(d.name)}</span>
                   </button>
                 ))}
               </div>
@@ -465,7 +522,7 @@ export function WorksheetEditor({ docs, screen: screenIn, onClose, toast }: Prop
                     <div className="ws-item-top">
                       <span className="ws-grip" aria-hidden="true">⋮⋮</span>
                       <span className="ws-item-label">{itemLabel(i, sheet.numbering, it.label) || '—'}</span>
-                      <span className="ws-item-name">{meta?.name ?? 'Missing document'}</span>
+                      <span className="ws-item-name">{meta ? docListName(meta.name) : 'Missing document'}</span>
                       <button className="ws-icon" aria-label="Move up" disabled={i === 0} onClick={() => move(i, i - 1)}>↑</button>
                       <button className="ws-icon" aria-label="Move down" disabled={i === sheet.items.length - 1} onClick={() => move(i, i + 1)}>↓</button>
                       <button className="ws-icon" aria-label="Remove" onClick={() => setItems((items) => items.filter((_, k) => k !== i))}>×</button>

@@ -39,7 +39,7 @@ const FRAMES: readonly Frame[] = [
     src: snap,
     step: 'Snap',
     caption: 'It snaps to a parabola and labels the zeros.',
-    alt: 'The stroke has become a smooth parabola. Its zeros are labelled −1.997 and 1.995 on the axis, and a card shows y = 0.99626x² + 0.00268x − 3.9693.',
+    alt: 'The stroke has become a smooth parabola. Its zeros are labeled −1.997 and 1.995 on the axis, and a card shows y = 0.99626x² + 0.00268x − 3.9693.',
     ms: 2800,
   },
   {
@@ -53,7 +53,7 @@ const FRAMES: readonly Frame[] = [
     src: figure,
     step: 'Print',
     caption: 'Download it as a white Textbook figure for your handout.',
-    alt: 'The PNG the app downloaded: y = x² − 4 on white, with a unit grid, black axes, the zeros −2 and 2 and the vertex (0, −4) labelled.',
+    alt: 'The PNG the app downloaded: y = x² − 4 on white, with a unit grid, black axes, the zeros −2 and 2 and the vertex (0, −4) labeled.',
     ms: 3000,
   },
 ]

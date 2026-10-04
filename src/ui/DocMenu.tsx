@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMenuKeys } from './useMenuKeys'
 import type { BoardKind } from '../core/types'
 import type { DocMeta } from '../core/persist'
-import { describeCounts } from './docName'
+import { describeCounts, docListName } from './docName'
 
 export type SaveState = 'saved' | 'saving' | 'error'
 
@@ -446,7 +446,7 @@ export function DocMenu({
                       <span className="doc-open-icon" aria-hidden="true">
                         <KindIcon kind={d.kind ?? 'cartesian'} />
                       </span>
-                      <span className="doc-open-name">{d.name}</span>
+                      <span className="doc-open-name">{docListName(d.name)}</span>
                       {d.counts && (
                         <span className="doc-open-count">
                           {describeCounts(d.kind ?? 'cartesian', d.counts)}

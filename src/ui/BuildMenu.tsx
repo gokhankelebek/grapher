@@ -302,7 +302,7 @@ export function buildRows(p: Props, focus: BuildFocusValue = {}): BuildRow[] {
   add('stats', 'build-normal', 'Normal distribution', p.onNormalAdd, undefined,
     'N(μ, σ): shade a probability, read the z-scores, find the value for a percentile, show the empirical rule')
   add('stats', 'build-simulation', 'Simulation', p.onSimulationAdd, undefined,
-    'Repeated samples of means or proportions with the margin of error, or a randomisation test')
+    'Repeated samples of means or proportions with the margin of error, or a randomization test')
   // ---- Number line
   add('numberline', 'build-nl-solve', 'Solve an inequality', focus.onSolveInequality, undefined,
     'Switch to the number line and type an inequality: critical values, a sign chart and the solution set')

@@ -339,8 +339,8 @@ export function DataCard({
         <button
           className="color-dot"
           style={{ background: ink(data.color) }}
-          title="Change colour"
-          aria-label="Change table colour"
+          title="Change color"
+          aria-label="Change table color"
           onClick={(e) => {
             e.stopPropagation()
             onCycleColor()

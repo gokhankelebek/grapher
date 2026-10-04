@@ -1542,7 +1542,7 @@ function teleTest(ctx: Ctx, F: Facts): SeriesTest {
   const t = F.tele
   const { an, L } = ctx
   if (!t) {
-    return test('telescoping', 'not-applicable', `${an} is not recognised as a difference that telescopes.`)
+    return test('telescoping', 'not-applicable', `${an} is not recognized as a difference that telescopes.`)
   }
   const e1 = t.e2 + t.d * t.m
   const inner = `${recip(linText(t.d, t.e2, L))} ${MINUS} ${recip(linText(t.d, e1, L))}`
@@ -2205,7 +2205,7 @@ export function analyzeSeries(src: SeriesSource): SeriesAnalysis {
   try {
     return analyzeInner(src, termName)
   } catch {
-    return blank(src, 'This series could not be analysed.', termName)
+    return blank(src, 'This series could not be analyzed.', termName)
   }
 }
 

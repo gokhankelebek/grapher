@@ -207,7 +207,7 @@ export function useFields({ board, refs, derived, notices, history, editing, cal
       if (!now) return
       const i = CURVE_COLORS.indexOf(now.color)
       const next = CURVE_COLORS[(i + 1) % CURVE_COLORS.length]
-      commitState({ fields: mapField(id, (f) => ({ ...f, color: next })) }, 'change colour')
+      commitState({ fields: mapField(id, (f) => ({ ...f, color: next })) }, 'change color')
     },
     [commitState, mapField],
   )

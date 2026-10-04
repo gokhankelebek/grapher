@@ -1172,8 +1172,8 @@ export function circleSquareSteps(src: string): CircleSquare | null {
   steps.push({
     tex: `${sq('x', h)} + ${sq('y', k)} = ${ratTexOf(r2)}`,
     why: noLinear
-      ? 'Move the constant to the right: x² + y² = r², a circle centred at the origin'
-      : 'Each bracket is a perfect square: (x − h)² + (y − k)² = r²',
+      ? 'Move the constant to the right: x² + y² = r², a circle centered at the origin'
+      : 'Each group is a perfect square: (x − h)² + (y − k)² = r²',
   })
   const r2v = r2[0] / r2[1]
   const radiusText = sqrtUni(r2v)

@@ -97,7 +97,7 @@ export function CircleSection({ panel, actions }: { panel: CirclePanel; actions:
   if (p.angles && !isErr(p.angles)) summaryParts.push(`inscribed ${p.angles.inscribed.text}`)
   if (p.sector && !isErr(p.sector)) summaryParts.push(`s ${p.sector.arc.exact ? `= ${p.sector.arc.text}` : p.sector.arc.text}`)
   if (p.tangent && !isErr(p.tangent)) summaryParts.push('tangent')
-  const summary = summaryParts.length > 0 ? summaryParts.join(' · ') : `centre ${p.circle.centreText.text}, r = ${p.circle.radius.text}`
+  const summary = summaryParts.length > 0 ? summaryParts.join(' · ') : `center ${p.circle.centreText.text}, r = ${p.circle.radius.text}`
   const ptName = (i: number): string => p.rows[i]?.name ?? 'P'
 
   return (
@@ -109,7 +109,7 @@ export function CircleSection({ panel, actions }: { panel: CirclePanel; actions:
       testId="circle-geo"
     >
       <div className="calc-fact calc-fact-lead ci-circle">
-        {p.circle.equation} · centre O{p.circle.centreText.text} · r = {withApprox(p.circle.radius)}
+        {p.circle.equation} · center O{p.circle.centreText.text} · r = {withApprox(p.circle.radius)}
       </div>
 
       <div className="secant-block">

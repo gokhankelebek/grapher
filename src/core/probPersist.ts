@@ -253,7 +253,7 @@ export function storedToProb(raw: Record<string, unknown>, id: string, problems?
   let color = PROB_COLOR_DEFAULT
   if (raw.color !== undefined) {
     if (isColor(raw.color)) color = raw.color.trim()
-    else say('colour was not a colour; the default was used')
+    else say('color was not a color; the default was used')
   }
   const view: ProbView = raw.view === 'table' || raw.view === 'venn' || raw.view === 'tree' ? raw.view : 'table'
   if (raw.view !== undefined && view !== raw.view) say('view was unreadable; the table is shown')

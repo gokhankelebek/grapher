@@ -39,7 +39,7 @@ const KINDS: { t: XformOp['t']; label: string; hint: string }[] = [
   { t: 'translate', label: 'Translate', hint: 'Slide every point by the same vector ⟨a, b⟩' },
   { t: 'reflect', label: 'Reflect', hint: 'Flip across a line: an axis, y = x, x = k, y = mx + b, or two points' },
   { t: 'rotate', label: 'Rotate', hint: 'Turn about a point; positive angles are counterclockwise' },
-  { t: 'dilate', label: 'Dilate', hint: 'Scale from a centre by k (a fraction shrinks, a negative k goes through the centre)' },
+  { t: 'dilate', label: 'Dilate', hint: 'Scale from a center by k (a fraction shrinks, a negative k goes through the center)' },
 ]
 
 const stop = (e: { stopPropagation(): void }): void => e.stopPropagation()
@@ -124,7 +124,7 @@ function OpEditor({
           <div className="calc-controls xform-row">
             {input(op.angle, (v) => onChange({ ...op, angle: v }), 'Angle in degrees', '3.6rem', '90')}
             <span className="measure-toggles-label">° about</span>
-            {input(op.about, (v) => onChange({ ...op, about: v }), 'Centre of rotation', '5.5rem', '(0, 0)')}
+            {input(op.about, (v) => onChange({ ...op, about: v }), 'Center of rotation', '5.5rem', '(0, 0)')}
           </div>
           {quick(['90', '180', '270', '-90'].map((a) => ({ label: `${a.replace('-', '−')}°`, apply: { ...op, angle: a } })))}
         </>
@@ -136,7 +136,7 @@ function OpEditor({
             <span className="measure-toggles-label">k =</span>
             {input(op.k, (v) => onChange({ ...op, k: v }), 'Scale factor k', '3.6rem', '2')}
             <span className="measure-toggles-label">about</span>
-            {input(op.about, (v) => onChange({ ...op, about: v }), 'Centre of dilation', '5.5rem', '(0, 0)')}
+            {input(op.about, (v) => onChange({ ...op, about: v }), 'Center of dilation', '5.5rem', '(0, 0)')}
           </div>
           {quick(['2', '3', '1/2', '-1'].map((k) => ({ label: `k = ${k.replace('-', '−')}`, apply: { ...op, k } })))}
         </>

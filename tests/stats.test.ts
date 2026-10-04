@@ -249,7 +249,7 @@ describe('sampling distributions', () => {
   })
 })
 
-describe('the randomisation test', () => {
+describe('the randomization test', () => {
   // Pool {1,…,6}; A = {1,2,3}. Of the C(6,3) = 20 splits, only {1,2,3} and
   // {4,5,6} give a difference as extreme as |−3|: p = 2/20 = 0.1 two-sided,
   // and 1/20 = 0.05 one-sided.
@@ -326,7 +326,7 @@ describe('the simulation card', () => {
   it('compares treatments in a sentence', () => {
     const s = { ...newSim('S', 1), mode: 'compare' as const, groupA: [1, 2, 3], groupB: [4, 5, 6], reps: 1000 }
     const c = simCard(s)
-    expect(c.compare!.sentence).toMatch(/^In \d+ of 1000 re-randomisations the difference in means was at least as large \(in either direction\) as the observed −3\.00/)
+    expect(c.compare!.sentence).toMatch(/^In \d+ of 1000 re-randomizations the difference in means was at least as large \(in either direction\) as the observed −3\.00/)
     expect(c.compare!.conclusion).toMatch(/not statistically significant/)
     expect(c.compare!.p).toMatch(/^≈ 0\.\d{3}$/)
     // none as extreme: "p < 0.001", never "p ≈ 0"
@@ -389,7 +389,7 @@ describe('the figures', () => {
     // the tallest stack stays inside the plot
     for (const p of all.prims) if (p.k === 'dots') for (const q of p.pts) expect(q.y).toBeLessThanOrEqual(all.plot.y1)
   })
-  it('a randomisation panel marks the observed difference and the tail', () => {
+  it('a randomization panel marks the observed difference and the tail', () => {
     const f = simFigure({ ...newSim('S', 2), mode: 'compare', groupA: EXAMPLE_GROUP_A, groupB: EXAMPLE_GROUP_B }, 0)
     expect(f.marks[0].text).toBe('0.82')
     expect(f.prims.some((p) => p.k === 'chip' && /^p ≈/.test(p.text))).toBe(true)
@@ -549,12 +549,12 @@ describe('describeGraph', () => {
     expect(student.long).not.toContain('0.8186')
     expect(key.summary).not.toBe('Empty graph')
   })
-  it('states a simulation and a randomisation test', () => {
+  it('states a simulation and a randomization test', () => {
     const m = model([newSim('S1', 3), { ...newSim('S2', 4), mode: 'compare', groupA: EXAMPLE_GROUP_A, groupB: EXAMPLE_GROUP_B, plot: 'hist' }])
     const d = describeBoard(m, { answers: true }).long
     expect(d).toContain('A dot plot shows 1000 simulated sample means from samples of 30 drawn from a normal population (μ = 100, σ = 15)')
     expect(d).toMatch(/95% margin of error is about \d/)
-    expect(d).toContain('A histogram shows the difference in means after each of 1000 re-randomisations of two groups of 10 and 10')
+    expect(d).toContain('A histogram shows the difference in means after each of 1000 re-randomizations of two groups of 10 and 10')
     expect(d).toMatch(/so the p-value is about 0\.\d{3}/)
   })
   it('covers every kind through the adapter', () => {

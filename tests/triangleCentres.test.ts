@@ -3,7 +3,7 @@ import { triangleCentres, centreFacts } from '../src/core/triangleCentres'
 
 const P = (x: number, y: number) => ({ x, y })
 
-describe('triangle centres — exact coordinates', () => {
+describe('triangle centers — exact coordinates', () => {
   it('scalene acute: G, O, H rational, R a surd, Euler HG = 2·GO', () => {
     const t = triangleCentres([P(0, 0), P(6, 0), P(2, 4)])!
     expect(t).not.toBeNull()
@@ -18,7 +18,7 @@ describe('triangle centres — exact coordinates', () => {
     expect(t.euler!.hg.text).toBe('2√2/3')
     expect(t.euler!.hg.value / t.euler!.go.value).toBeCloseTo(2, 12)
     expect(t.euler!.ratioText).toBe('HG = 2·GO: 2√2/3 = 2 · √2/3')
-    expect(t.notes.some((n) => n.includes('acute, so all four centres lie inside'))).toBe(true)
+    expect(t.notes.some((n) => n.includes('acute, so all four centers lie inside'))).toBe(true)
     // the incentre is irrational here: a decimal (or a clean closed form), never wrong
     const I = t.incentre.pt.pt
     const a = Math.hypot(4, 4) // BC
@@ -39,8 +39,8 @@ describe('triangle centres — exact coordinates', () => {
     expect(t.incentre.exact).toBe(true)
     expect(t.inradius.text).toBe('1')
     expect(t.centroid.pt.text).toBe('(4/3, 1)')
-    expect(t.notes.join(' ')).toContain('the circumcentre O is the midpoint of the hypotenuse BC and R = BC/2 = 5/2')
-    expect(t.notes.join(' ')).toContain('The orthocentre H is the right-angle vertex A')
+    expect(t.notes.join(' ')).toContain('the circumcenter O is the midpoint of the hypotenuse BC and R = BC/2 = 5/2')
+    expect(t.notes.join(' ')).toContain('The orthocenter H is the right-angle vertex A')
   })
 
   it('obtuse triangle: O and H outside, the note says so; altitudes extended', () => {
@@ -65,7 +65,7 @@ describe('triangle centres — exact coordinates', () => {
     expect(t.euler!.hg.value).toBeCloseTo(2 * t.euler!.go.value, 12)
   })
 
-  it('equilateral: all four centres coincide, no Euler line', () => {
+  it('equilateral: all four centers coincide, no Euler line', () => {
     const t = triangleCentres([P(0, 0), P(2, 0), P(1, Math.sqrt(3))])!
     expect(t.equilateral).toBe(true)
     expect(t.euler).toBeNull()
@@ -74,10 +74,10 @@ describe('triangle centres — exact coordinates', () => {
     }
     expect(t.circumradius.text).toBe('2√3/3')
     expect(t.inradius.text).toBe('√3/3')
-    expect(t.notes[0]).toContain('equilateral, so its centroid, circumcentre, incentre and orthocentre are one point')
+    expect(t.notes[0]).toContain('equilateral, so its centroid, circumcenter, incenter and orthocenter are one point')
   })
 
-  it('isosceles: the centres lie on the axis of symmetry', () => {
+  it('isosceles: the centers lie on the axis of symmetry', () => {
     const t = triangleCentres([P(0, 4), P(-3, 0), P(3, 0)])!
     expect(t.apex).toBe(0)
     for (const k of ['centroid', 'circumcentre', 'incentre', 'orthocentre'] as const) expect(t[k].pt.pt.x).toBeCloseTo(0, 12)
@@ -85,12 +85,12 @@ describe('triangle centres — exact coordinates', () => {
     expect(t.notes.join(' ')).toContain('isosceles (AB = AC)')
   })
 
-  it('collinear points have no centres', () => {
+  it('collinear points have no centers', () => {
     expect(triangleCentres([P(0, 0), P(1, 1), P(2, 2)])).toBeNull()
     expect(triangleCentres([P(0, 0), P(1, 1)])).toBeNull()
   })
 
-  it('the incentre is equidistant from the sides, the circumcentre from the vertices', () => {
+  it('the incenter is equidistant from the sides, the circumcenter from the vertices', () => {
     const pts = [P(-2, 1), P(5, -1), P(1, 6)]
     const t = triangleCentres(pts)!
     const O = t.circumcentre.pt.pt

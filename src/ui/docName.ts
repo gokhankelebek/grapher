@@ -99,3 +99,15 @@ export function describeCounts(kind: BoardKind, c: DocCounts): string {
   }
   return c.curves === 0 ? 'empty' : plural(c.curves, 'curve')
 }
+
+/**
+ * A document's name as a LIST shows it (the saved-documents menu, the
+ * worksheet's picker). An opened example is named "Example: U6 — Riemann
+ * sums converging", and in a narrow list every one of them truncated to
+ * "Example: U6 — Riema…" — the part that tells them apart cut off. The list
+ * drops the prefix; the stored name, the toolbar and rename keep it whole.
+ */
+export function docListName(name: string): string {
+  const m = /^\s*example:\s*(.+)$/i.exec(name)
+  return m && m[1].trim() !== '' ? m[1].trim() : name
+}

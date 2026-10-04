@@ -270,8 +270,8 @@ export function ShapeCard({
         <button
           className="color-dot"
           style={{ background: ink(shape.color) }}
-          title="Change colour"
-          aria-label="Change shape colour"
+          title="Change color"
+          aria-label="Change shape color"
           onClick={(e) => {
             e.stopPropagation()
             onCycleColor()

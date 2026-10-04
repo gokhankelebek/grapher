@@ -320,7 +320,7 @@ export function useCalcLinks({ board, refs, derived, notices, history, editing }
         const n = TAYLOR_N_DEFAULT
         const a = defaultTaylorA((t) => safePoly(src, t, n) !== null, win, parent.domain)
         if (a === null) {
-          showToast('This curve has no point in view where a Taylor polynomial can be centred.')
+          showToast('This curve has no point in view where a Taylor polynomial can be centered.')
           return
         }
         const wantId = `${TAYLOR_MODEL_PREFIX}${linkId}`

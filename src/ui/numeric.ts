@@ -213,6 +213,22 @@ function bareInteger(s: string | undefined, v: number): string | null {
 }
 
 /**
+ * The decimal of a coordinate that HAS a verified closed form, without the
+ * column's padding when the decimal states it exactly: −3/5 reads
+ * "(0, −3/5) ≈ (0, −0.6)", never "≈ (0, −0.6000)" — trailing zeros on a value
+ * known exactly claim a measurement that never happened. A closed form whose
+ * decimal does not terminate (√3, π/4) keeps its four digits. Null when the
+ * coordinate has no form, or the trimmed decimal is not the value.
+ */
+function exactDecimal(s: string | undefined, v: number, formatted: string): string | null {
+  if (typeof s !== 'string' || s.trim() === '' || !formatted.includes('.') || /e/i.test(formatted)) return null
+  const trimmed = formatted.replace(/0+$/, '').replace(/\.$/, '')
+  const n = Number(trimmed.replace(/−/g, '-'))
+  if (!Number.isFinite(n) || Math.abs(n - v) > 1e-9 * Math.max(1, Math.abs(v))) return null
+  return trimmed
+}
+
+/**
  * A stored exact form, or null — where "no form" also covers a form with
  * nothing to say.
  *
@@ -255,8 +271,10 @@ export function pointParts(p: SpecialPoint, opts: PointTextOpts = {}): PointPart
   const oy = { scale: opts.scale, exact: p.exact }
   const ox = { scale: opts.xScale, exact: p.exact }
   const axes = opts.axes ?? defaultAxes(p.kind)
-  const dx = bareInteger(p.exactX, p.pos.x) ?? formatCoord(p.pos.x, ox)
-  const dy = bareInteger(p.exactY, p.pos.y) ?? formatCoord(p.pos.y, oy)
+  const fx = formatCoord(p.pos.x, ox)
+  const fy = formatCoord(p.pos.y, oy)
+  const dx = bareInteger(p.exactX, p.pos.x) ?? exactDecimal(p.exactX, p.pos.x, fx) ?? fx
+  const dy = bareInteger(p.exactY, p.pos.y) ?? exactDecimal(p.exactY, p.pos.y, fy) ?? fy
   const ex = exactForm(p.exactX, p.pos.x)
   const ey = exactForm(p.exactY, p.pos.y)
 

@@ -632,7 +632,7 @@ export function simCard(s: BoardSim): SimCardData {
     const mB = meanSd(s.groupB).mean
     const dirWord = s.tail === 'two' ? 'at least as large (in either direction) as' : s.tail === 'upper' ? 'at least as large as' : 'at most'
     const pWords = pText(r.extreme, r.diffs.length)
-    const sentence = `In ${r.extreme} of ${r.diffs.length} re-randomisations the difference in means was ${dirWord} the observed ${fixed(r.observed, 2)}, so p ${pWords}.`
+    const sentence = `In ${r.extreme} of ${r.diffs.length} re-randomizations the difference in means was ${dirWord} the observed ${fixed(r.observed, 2)}, so p ${pWords}.`
     const conclusion =
       r.p < 0.05
         ? `That rarely happens by chance alone (p < 0.05): the difference is statistically significant — evidence that the treatment made a difference.`
@@ -936,7 +936,7 @@ export function simFigure(s: BoardSim, index: number, opts: FigureOpts = {}): St
       })
     }
     title = {
-      question: `${shown < N ? `${shown} of ` : ''}${N} re-randomisations · groups of ${s.groupA.length} and ${s.groupB.length}`,
+      question: `${shown < N ? `${shown} of ` : ''}${N} re-randomizations · groups of ${s.groupA.length} and ${s.groupB.length}`,
       answer: '',
     }
     describe = {

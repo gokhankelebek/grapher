@@ -289,7 +289,7 @@ export function storedToStat(raw: unknown, problems?: string[]): { stat: BoardSt
   let color = colorDefault
   if (raw.color !== undefined) {
     if (isColor(raw.color)) color = raw.color.trim()
-    else say('colour was not a colour; the default was used')
+    else say('color was not a color; the default was used')
   }
   const hidden = raw.hidden === true
   if (raw.hidden !== undefined && raw.hidden !== true) say('hidden switch was unreadable; it is shown')

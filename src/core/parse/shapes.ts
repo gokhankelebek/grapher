@@ -252,7 +252,7 @@ function scanItems(src: string, from: number): Item[] | Fail {
         )
       }
       return fail(
-        `Unexpected '${word}' at position ${i} — points are written in brackets, e.g. (1, 2)`,
+        `Unexpected '${word}' at position ${i} — points are written in parentheses, e.g. (1, 2)`,
         i,
       )
     }
@@ -540,7 +540,7 @@ export function parseShape(src: string): ShapeOutcome {
     const kw = lead ? KEYWORDS[lead[1].toLowerCase()] : undefined
     if (kw) {
       return fail(
-        `A ${kw.word} needs coordinates — write them in brackets, e.g. ${kw.eg}`,
+        `A ${kw.word} needs coordinates — write them in ${kw.kind === 'vector' ? 'angle brackets' : 'parentheses'}, e.g. ${kw.eg}`,
         firstNonSpace(src),
       )
     }

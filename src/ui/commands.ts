@@ -580,7 +580,7 @@ export const COMMANDS: readonly Command[] = [
     'volume', 'disk', 'disc', 'disk method', 'washer', 'washer method', 'shell', 'shell method', 'cylindrical shells',
     'solid of revolution', 'revolve', 'rotate', 'cross sections', 'cross-sections', 'squares', 'semicircles',
   ]),
-  calcCommand('calc-taylor', 'taylor', 'Taylor polynomial Pₙ', 'Pₙ(x) about a centre you set, its degree, the error bound', 'Series → Taylor polynomial Pₙ', [
+  calcCommand('calc-taylor', 'taylor', 'Taylor polynomial Pₙ', 'Pₙ(x) about a center you set, its degree, the error bound', 'Series → Taylor polynomial Pₙ', [
     'taylor', 'taylor polynomial', 'taylor series', 'maclaurin', 'maclaurin series', 'series', 'power series',
     'approximation', 'polynomial approximation', 'lagrange error', 'error bound', 'remainder', 'degree n',
   ]),
@@ -778,7 +778,7 @@ export const COMMANDS: readonly Command[] = [
   {
     id: 'nl-tests',
     title: 'Test points',
-    description: 'Mark the test point in each interval, labelled t = …',
+    description: 'Mark the test point in each interval, labeled t = …',
     keywords: ['test points', 'test point', 'test values', 'check', 'intervals'],
     group: 'Calculus',
     path: 'Solved inequality card → Test points',
@@ -830,7 +830,7 @@ export const COMMANDS: readonly Command[] = [
     'piecewise', 'piecewise function', 'step function', 'greatest integer', 'floor', 'ceiling', 'split function',
     'jump discontinuity', 'cases',
   ], 'Piecewise / step'),
-  builder('build-conic', 'conic', 'Conic section', 'Circle, ellipse, hyperbola or parabola from its centre, vertices, foci or directrix', [
+  builder('build-conic', 'conic', 'Conic section', 'Circle, ellipse, hyperbola or parabola from its center, vertices, foci or directrix', [
     'conic', 'conics', 'circle', 'ellipse', 'hyperbola', 'parabola', 'foci', 'focus', 'directrix', 'vertices',
     'center radius', 'general form', 'standard form', 'eccentricity',
   ]),
@@ -956,7 +956,7 @@ export const COMMANDS: readonly Command[] = [
   {
     id: 'build-simulation',
     title: 'Sampling simulation',
-    description: 'Repeated samples (means or proportions), margin of error, and a randomisation test for two treatments',
+    description: 'Repeated samples (means or proportions), margin of error, and a randomization test for two treatments',
     keywords: [
       'simulation', 'simulate', 'sampling', 'sampling distribution', 'sample mean', 'sample proportion',
       'margin of error', 'confidence interval', 'randomization', 'randomisation', 'permutation test',
@@ -1081,8 +1081,8 @@ export const COMMANDS: readonly Command[] = [
   },
   {
     id: 'shape-centres',
-    title: 'Triangle centres',
-    description: 'Centroid, circumcentre, incentre and orthocentre — exact where they can be — drawn with the medians, bisectors and altitudes, the two circles and the Euler line',
+    title: 'Triangle centers',
+    description: 'Centroid, circumcenter, incenter and orthocenter — exact where they can be — drawn with the medians, bisectors and altitudes, the two circles and the Euler line',
     keywords: [
       'centroid', 'circumcenter', 'circumcentre', 'incenter', 'incentre', 'orthocenter', 'orthocentre',
       'triangle centers', 'triangle centres', 'points of concurrency', 'concurrency', 'medians', 'median',
@@ -1091,7 +1091,7 @@ export const COMMANDS: readonly Command[] = [
       'inradius', 'euler line', 'G-CO.10', 'G-CO.14',
     ],
     group: 'Build',
-    path: 'Triangle card → Centres',
+    path: 'Triangle card → Centers',
     target: 'shape',
     when: graphEdit,
     accepts: (ctx, id) => ctx.shapes?.find((s) => s.id === id)?.triangle === true,
@@ -1449,17 +1449,17 @@ export const COMMANDS: readonly Command[] = [
   },
   {
     id: 'view-colour-safe',
-    title: 'Colour-blind-safe curve colours',
+    title: 'Color-blind-safe curve colors',
     label: (ctx) =>
-      ctx.curvePalette === 'safe' ? 'Standard curve colours' : 'Colour-blind-safe curve colours',
-    description: 'Okabe–Ito colours and a dash pattern per curve, on screen and in exports',
+      ctx.curvePalette === 'safe' ? 'Standard curve colors' : 'Color-blind-safe curve colors',
+    description: 'Okabe–Ito colors and a dash pattern per curve, on screen and in exports',
     keywords: [
       'colour blind', 'color blind', 'colourblind', 'colorblind', 'cvd', 'deuteranopia', 'protanopia',
-      'tritanopia', 'palette', 'colours', 'colors', 'accessible colours', 'okabe ito', 'dashes',
+      'tritanopia', 'palette', 'colours', 'colors', 'accessible colours', 'accessible colors', 'okabe ito', 'dashes',
       'accessibility', 'a11y', 'contrast',
     ],
     group: 'View',
-    path: 'Download ▾ (caret) → Curve colours',
+    path: 'Download ▾ (caret) → Curve colors',
     when: always,
     run: (ctx) => ctx.actions.setCurvePalette(ctx.curvePalette === 'safe' ? 'standard' : 'safe'),
   },
@@ -1534,7 +1534,7 @@ export const COMMANDS: readonly Command[] = [
   {
     id: 'view-zoom-in',
     title: 'Zoom in',
-    description: 'Closer, about the centre of the board',
+    description: 'Closer, about the center of the board',
     keywords: ['zoom in', 'closer', 'magnify', 'bigger', 'enlarge'],
     group: 'View',
     path: 'Board corner → +',
@@ -1545,8 +1545,8 @@ export const COMMANDS: readonly Command[] = [
   {
     id: 'view-zoom-out',
     title: 'Zoom out',
-    description: 'Further away, about the centre of the board',
-    keywords: ['zoom out', 'further', 'smaller', 'wider view'],
+    description: 'Farther away, about the center of the board',
+    keywords: ['zoom out', 'farther', 'further', 'smaller', 'wider view'],
     group: 'View',
     path: 'Board corner → −',
     shortcuts: ['-'],
@@ -1709,9 +1709,31 @@ export function availability(cmd: Command, ctx: CommandContext): Availability {
 // Search
 // ---------------------------------------------------------------------------
 
-/** Lower case, accents off, the math glyphs a teacher would type in words. */
+/**
+ * British spellings a teacher may type, folded to the US spelling the app
+ * shows — so "colour", "centre" or "behaviour" still find what they used to.
+ * Applied to both sides of every search (commands, help sheet, examples).
+ */
+const SPELLING_FOLDS: [RegExp, string][] = [
+  [/colour/g, 'color'],
+  [/centred/g, 'centered'],
+  [/centre/g, 'center'],
+  [/behaviour/g, 'behavior'],
+  [/labell(ed|ing)/g, 'label$1'],
+  [/travell(ed|ing)/g, 'travel$1'],
+  [/cancell(ed|ing)/g, 'cancel$1'],
+  [/modell(ed|ing)/g, 'model$1'],
+  [/analys(e|ed|ing)\b/g, 'analyz$1'],
+  [/(recogn|random|summar|maxim|minim|normal|personal|organ|optim|visual|factor|rational)is(e|ed|es|ing|ation)/g, '$1iz$2'],
+  [/\bgrey/g, 'gray'],
+  [/rumour/g, 'rumor'],
+  [/favour/g, 'favor'],
+  [/\bmaths\b/g, 'math'],
+]
+
+/** Lower case, accents off, the math glyphs a teacher would type in words, US spelling. */
 export function normalize(s: string): string {
-  return s
+  let out = s
     .toLowerCase()
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')
@@ -1722,6 +1744,8 @@ export function normalize(s: string): string {
     .replace(/…/g, '')
     .replace(/\s+/g, ' ')
     .trim()
+  for (const [re, us] of SPELLING_FOLDS) out = out.replace(re, us)
+  return out
 }
 
 /** How well `q` matches `text`: 4 exact, 3 prefix, 2 at a word start, 1 inside, 0 none. */
@@ -2085,7 +2109,7 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     { id: 'calc-secant', note: 'Average rate of change over an interval' },
     { id: 'build-roots', note: 'Polynomials from zeros and multiplicities; rationals with asymptotes and holes' },
     { id: 'build-transform' },
-    { id: 'view-analysis', note: 'Zeros, extrema, inflection points, end behaviour' },
+    { id: 'view-analysis', note: 'Zeros, extrema, inflection points, end behavior' },
     { id: 'build-data', note: 'Regression models from data' },
   ] },
   { id: 'pc-2', course: 'AP Precalculus', title: 'Unit 2 · Exponential and logarithmic functions', entries: [
@@ -2170,7 +2194,7 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
   ] },
   { id: 'm1-stats', course: 'NC Math 1', title: 'Statistics: one-variable data (S-ID.1–3)', entries: [
     { id: 'build-data-plot', note: 'Paste a list for a dot plot or histogram (bin width editable) and a box plot with outliers as separate points (S-ID.1)' },
-    { id: 'build-data-plot', note: 'Paste two or more sets: parallel box plots, a table of mean, median, SD, IQR, and the sentence comparing centre and spread (S-ID.2)' },
+    { id: 'build-data-plot', note: 'Paste two or more sets: parallel box plots, a table of mean, median, SD, IQR, and the sentence comparing center and spread (S-ID.2)' },
     { id: 'build-data-plot', note: 'Shape (roughly symmetric / skewed) and which measures fit it: median and IQR for skewed data or outliers, mean and SD otherwise' },
     { id: 'build-data-plot', note: 'Outliers by the 1.5·IQR fences: leave them out, or click dots, and compare before and after (S-ID.3)' },
   ] },
@@ -2213,7 +2237,7 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
   ] },
   { id: 'm2-trig', course: 'NC Math 2', title: 'Right triangle trigonometry (NC.M2.G-SRT.6, NC.M2.G-SRT.8, NC.M2.G-SRT.12)', entries: [
     { id: 'build-shape', note: 'ABC = (0,0) (4,0) (4,3): the right angle, 4² + 3² = 5², and sin, cos and tan of each acute angle as side ratios (NC.M2.G-SRT.6, NC.M2.G-SRT.8)' },
-    { id: 'build-shape', note: 'A 45-45-90 or 30-60-90 triangle is recognised, with its side ratio (NC.M2.G-SRT.12)' },
+    { id: 'build-shape', note: 'A 45-45-90 or 30-60-90 triangle is recognized, with its side ratio (NC.M2.G-SRT.12)' },
     { id: 'shape-compare', note: 'Two right triangles with an equal acute angle are similar (AA), so their trig ratios match (NC.M2.G-SRT.6)' },
   ] },
   { id: 'm2-prob', course: 'NC Math 2', title: 'Probability (S-CP.1, 3–8)', entries: [
@@ -2228,15 +2252,15 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     { id: 'circle-angles', note: 'Points on the circle typed as angles (30°, pi/6) or points: ∠PRQ = ½·∠POQ on the arc PQ, and 90° on a diameter (G-C.2)' },
     { id: 'circle-tangent', note: 'The tangent at P ⟂ the radius OP, with its equation; tangents from an outside point are equal, TA² = TP·TP′ for a secant, and PE·EQ = RE·ES for crossing chords (G-C.2)' },
     { id: 'circle-sector', note: 'θ = 2π/3 on r = 6: s = rθ = 4π and A = ½r²θ = 12π, and the same as (120/360)·2πr — radians as arc per unit of radius (G-C.5)' },
-    { id: 'shape-centres', note: 'A triangle’s centroid, circumcentre, incentre and orthocentre, for proofs with coordinates (G-CO.14)' },
+    { id: 'shape-centres', note: 'A triangle’s centroid, circumcenter, incenter and orthocenter, for proofs with coordinates (G-CO.14)' },
     { id: 'build-shape' },
   ] },
-  { id: 'm3-centres', course: 'NC Math 3', title: 'Centres of triangles (NC.M3.G-CO.10)', entries: [
+  { id: 'm3-centres', course: 'NC Math 3', title: 'Centers of triangles (NC.M3.G-CO.10)', entries: [
     { id: 'shape-centres', note: 'Centroid G where the medians meet, exact: ((x₁ + x₂ + x₃)/3, (y₁ + y₂ + y₃)/3); G is two-thirds of the way along each median' },
-    { id: 'shape-centres', note: 'Circumcentre O where the perpendicular bisectors meet, with the circle through the vertices and R exact; on a right triangle it is the midpoint of the hypotenuse' },
-    { id: 'shape-centres', note: 'Incentre I where the angle bisectors meet, with the inscribed circle and r = Area ÷ s' },
-    { id: 'shape-centres', note: 'Orthocentre H where the altitudes meet — outside an obtuse triangle, the altitudes extended; drag a vertex and watch O and H leave' },
-    { id: 'shape-centres', note: 'The Euler line through O, G and H with HG = 2·GO; an equilateral triangle has all four centres in one point' },
+    { id: 'shape-centres', note: 'Circumcenter O where the perpendicular bisectors meet, with the circle through the vertices and R exact; on a right triangle it is the midpoint of the hypotenuse' },
+    { id: 'shape-centres', note: 'Incenter I where the angle bisectors meet, with the inscribed circle and r = Area ÷ s' },
+    { id: 'shape-centres', note: 'Orthocenter H where the altitudes meet — outside an obtuse triangle, the altitudes extended; drag a vertex and watch O and H leave' },
+    { id: 'shape-centres', note: 'The Euler line through O, G and H with HG = 2·GO; an equilateral triangle has all four centers in one point' },
   ] },
   { id: 'm3-ineq', course: 'NC Math 3', title: 'Equations, inequalities and systems', entries: [
     { id: 'nl-solve' },
@@ -2249,7 +2273,7 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     { id: 'build-normal', note: 'Shade P(a < X < b), read the z-scores, find the value for a percentile; drag the peak for μ and a shoulder for σ (NC Math 4: NC.M4.S-ID.4)' },
     { id: 'build-normal', note: 'The empirical rule: μ ± σ, 2σ, 3σ with 68%, 95%, 99.7% (Show → empirical rule; NC.M4.S-ID.4)' },
     { id: 'build-simulation', note: 'Sample means or proportions, n × samples, with σ/√n, the margin of error and an interval estimate (NC.M3.S-IC.4)' },
-    { id: 'build-simulation', note: 'Compare treatments: paste two groups, re-randomise, read the p-value and the conclusion (NC.M3.S-IC.5)' },
+    { id: 'build-simulation', note: 'Compare treatments: paste two groups, re-randomize, read the p-value and the conclusion (NC.M3.S-IC.5)' },
   ] },
   // ---------------------------------------------------- Drawing & editing
   { id: 'draw', course: 'Drawing & editing', title: 'On the board', entries: [
@@ -2320,8 +2344,8 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
   ] },
   { id: 'a11y', course: 'In class', title: 'Accessibility', entries: [
     { id: 'view-describe', note: 'The board in words for a screen reader — copy it as alt text for a worksheet or an LMS' },
-    { id: 'view-colour-safe', note: 'For colour-vision deficiency: Okabe–Ito colours, a dash pattern per curve, on screen and on paper' },
-    { title: 'Keyboard only', text: 'Everything is reachable without a mouse', how: 'Tab to “Skip to board”; Tab onto the board; arrows pan; + / − zoom; select a curve on its card with Enter; on the board Tab steps through its handles, arrows move one (Shift: further), Enter types an exact value', keys: 'Tab' },
+    { id: 'view-colour-safe', note: 'For color-vision deficiency: Okabe–Ito colors, a dash pattern per curve, on screen and on paper' },
+    { title: 'Keyboard only', text: 'Everything is reachable without a mouse', how: 'Tab to “Skip to board”; Tab onto the board; arrows pan; + / − zoom; select a curve on its card with Enter; on the board Tab steps through its handles, arrows move one (Shift: farther), Enter types an exact value', keys: 'Tab' },
     { title: 'Bigger and calmer', text: 'Presentation mode for large type; the system’s reduced-motion setting stops the animations', how: 'F, or Toolbar → ▭' },
   ] },
 ]

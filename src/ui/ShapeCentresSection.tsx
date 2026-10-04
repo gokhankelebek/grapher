@@ -45,13 +45,13 @@ export function ShapeCentresSection({ shapeId, data, settings, onMeasure }: Prop
   return (
     <CardSection
       kind="shape-centres"
-      title="Centres"
-      titleHint="Centroid, circumcentre, incentre and orthocentre — where the medians, perpendicular bisectors, angle bisectors and altitudes meet"
+      title="Centers"
+      titleHint="Centroid, circumcenter, incenter and orthocenter — where the medians, perpendicular bisectors, angle bisectors and altitudes meet"
       summary={summary}
       answerKey={k('centroid')}
       testId="shape-centres"
     >
-      <div className="measure-toggles" role="group" aria-label="Centres on the board">
+      <div className="measure-toggles" role="group" aria-label="Centers on the board">
         <span className="measure-toggles-label">Show on board</span>
         {toggles.map((t) => (
           <button
@@ -73,10 +73,10 @@ export function ShapeCentresSection({ shapeId, data, settings, onMeasure }: Prop
         <button
           type="button"
           className="calc-chip measure-all"
-          title={allOn ? 'Draw none of the centres' : 'Draw all four centres and the Euler line'}
+          title={allOn ? 'Draw none of the centers' : 'Draw all four centers and the Euler line'}
           onClick={(e) => {
             e.stopPropagation()
-            onMeasure(toggleCentre(settings, allOn ? 'none' : 'all'), allOn ? 'hide centres' : 'show centres')
+            onMeasure(toggleCentre(settings, allOn ? 'none' : 'all'), allOn ? 'hide centers' : 'show centers')
           }}
         >
           {allOn ? 'None' : 'All'}
@@ -119,12 +119,12 @@ export function ShapeCentresSection({ shapeId, data, settings, onMeasure }: Prop
             </>
           ) : (
             <div className="calc-fact">
-              {tri} is equilateral: O = G = H, so there is no Euler line — every centre is {data.centroid.pt.text}.
+              {tri} is equilateral: O = G = H, so there is no Euler line — every center is {data.centroid.pt.text}.
             </div>
           )}
         </Answer>
       </div>
-      <Answer k={k('circumcentre')} block what="what this triangle's centres do">
+      <Answer k={k('circumcentre')} block what="what this triangle's centers do">
         <ul className="calc-facts">
           {data.notes.map((n, i) => (
             <li key={i} className="calc-fact measure-sentence">
@@ -133,7 +133,7 @@ export function ShapeCentresSection({ shapeId, data, settings, onMeasure }: Prop
           ))}
         </ul>
       </Answer>
-      <div className="field-hint">Drag a vertex: every centre, line and circle follows.</div>
+      <div className="field-hint">Drag a vertex: every center, line and circle follows.</div>
     </CardSection>
   )
 }

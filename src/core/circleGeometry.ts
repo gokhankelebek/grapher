@@ -313,7 +313,7 @@ export function readCirclePoint(text: string, c: Circle, name: string): CirclePo
     const dx = x - c.centre.x
     const dy = y - c.centre.y
     const d = Math.hypot(dx, dy)
-    if (!(d > 1e-12)) return { ok: false, error: `(${raw.slice(1, -1)}) is the centre, which is not on the circle.` }
+    if (!(d > 1e-12)) return { ok: false, error: `(${raw.slice(1, -1)}) is the center, which is not on the circle.` }
     const deg = normDeg((Math.atan2(dy, dx) * 180) / Math.PI)
     const on = Math.abs(d - c.r) <= 1e-9 * Math.max(1, c.r)
     if (on) return { ok: true, p: makePoint(c, name, deg, { x, y }, false) }

@@ -75,9 +75,9 @@ export function aidChoices(t: XformOp['t']): { aid: XformAid; label: string; hin
     case 'reflect':
       return [{ aid: 'mirror', label: 'Mirror line', hint: 'The line of reflection, with its equation' }, paths]
     case 'rotate':
-      return [{ aid: 'arc', label: 'Rotation arc', hint: 'The centre and the arc a vertex turns through, with its angle' }, paths]
+      return [{ aid: 'arc', label: 'Rotation arc', hint: 'The center and the arc a vertex turns through, with its angle' }, paths]
     case 'dilate':
-      return [{ aid: 'rays', label: 'Rays', hint: 'Rays from the centre through each vertex and its image' }, paths]
+      return [{ aid: 'rays', label: 'Rays', hint: 'Rays from the center through each vertex and its image' }, paths]
   }
 }
 

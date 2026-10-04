@@ -119,11 +119,22 @@ export function dec(v: number, places = 2): string {
 }
 
 /**
+ * dec() for a readout: a value the places state EXACTLY drops its trailing
+ * zeros ("6 ft", "t = 2 s"); any other keeps them ("6.403 ft").
+ */
+export function decExact(v: number, places = 2): string {
+  const t = dec(v, places)
+  if (!t.includes('.')) return t
+  const n = Number(t.replace(MINUS, '-'))
+  return Math.abs(n - v) <= 1e-9 * Math.max(1, Math.abs(v)) ? t.replace(/\.?0+$/, '') : t
+}
+
+/**
  * A rate as the answer states it: exact when it is (−3/2, 3/π, 20π), else
  * a decimal. `exact` is null when there is no exact form.
  */
 export function rateForm(v: number): { exact: Formula | null; decimal: string } {
-  const decimal = dec(v, 3)
+  const decimal = decExact(v, 3)
   if (!Number.isFinite(v)) return { exact: null, decimal }
   const e = exactForm(v)
   if (e) return { exact: { text: e.text, tex: e.tex }, decimal }

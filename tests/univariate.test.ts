@@ -211,7 +211,7 @@ describe('which measures to use (S-ID.2)', () => {
 describe('comparison sentences', () => {
   const p1 = [72, 75, 68, 80, 77, 74, 71, 79, 76, 73, 70, 78, 75, 74, 41, 77, 72, 76, 74, 79]
   const p2 = [85, 78, 92, 70, 88, 81, 95, 74, 83, 79, 90, 68, 86, 82, 77, 91, 73, 84, 80, 87]
-  it('two sets: centre and spread, the higher one first', () => {
+  it('two sets: center and spread, the higher one first', () => {
     const t = compareSentence([named('Period 1', p1), named('Period 2', p2)], fmt)
     expect(t).toMatch(/^Period 2 has a higher median \(82\.5 vs 74\.5\) and a larger IQR \(10 vs 5\) than Period 1/)
     expect(t).toMatch(/Compared by the median and IQR/)
@@ -252,7 +252,7 @@ describe('leaving values out (S-ID.3)', () => {
   })
   it('nothing left out; everything left out', () => {
     expect(exclusionEffect([1, 2, 3], [true, true, true], fmt).sentence).toBe('Nothing is left out.')
-    expect(exclusionEffect([1, 2], [false, false], fmt).sentence).toMatch(/nothing to summarise/)
+    expect(exclusionEffect([1, 2], [false, false], fmt).sentence).toMatch(/nothing to summarize/)
   })
 })
 

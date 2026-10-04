@@ -1805,7 +1805,9 @@ button.param-value:hover {
   top: calc(100% + 8px);
   left: 0;
   z-index: 40;
-  width: 268px;
+  /* Wide enough that a saved document's name, its count and its date share a
+     row without cutting "U6 — Riemann sums…" to "U6 — Riem…". */
+  width: 340px;
   padding: 6px;
   border-radius: 10px;
   background: rgba(19, 23, 34, 0.97);
@@ -1901,6 +1903,8 @@ button.param-value:hover {
 }
 
 .doc-open-name {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3656,6 +3660,21 @@ button.card-eq {
   white-space: nowrap;
 }
 
+/* …but in a narrow card (an iPad's sidebar: a ~117px value column) a value
+   wider than its column wraps at its own spaces — "(−0.6861," over
+   "−1.541)," — rather than running past the card's edge. */
+.an-table {
+  container-type: inline-size;
+}
+
+@container (max-width: 300px) {
+  .an-value,
+  .an-value .an-approx {
+    white-space: normal;
+    text-align: left;
+  }
+}
+
 /* ---- the markers that belong to the other curves ---- */
 
 .analysis-overlay {
@@ -5343,6 +5362,21 @@ button.calc-field-btn {
 
 .fe-behaviour-none {
   color: var(--faint);
+}
+
+/* A narrow card (an iPad's sidebar) leaves the behavior column ~20px: the
+   word ran under the × beside it. There it takes its own line under the root,
+   as a long one always does. */
+.fe-row {
+  container-type: inline-size;
+}
+
+@container (max-width: 250px) {
+  .fe-behaviour {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    padding-left: var(--sp-6);
+  }
 }
 
 .fe-drop {
@@ -7065,14 +7099,27 @@ button.calc-field-btn {
   min-width: 0;
 }
 
-/* Chips that name an action wrap inside themselves rather than hang off the
-   card ("Horizontal line test", "Add f⁻¹(x) as a curve" in a 186px column). */
+/* Chips that name an action wrap BETWEEN chips, never inside one: a pill
+   broken mid-label ("Horizontal / line test") reads as two buttons. In a
+   narrow card (an iPad's sidebar, ~200px) a row of action chips takes the
+   card's full width instead of the value column; a label still longer than
+   the whole card is cut with an ellipsis (the chip's title says it all). */
 .dr-line .calc-chip,
 .cs .calc-controls .calc-chip {
   max-width: 100%;
-  border-radius: 10px;
-  white-space: normal;
-  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dr-indent {
+  container-type: inline-size;
+}
+
+@container (max-width: 300px) {
+  .dr-indent > .dr-line {
+    grid-column: 1 / -1;
+  }
 }
 
 /* Intersections: one line per other curve. */
@@ -7939,6 +7986,19 @@ button.calc-field-btn {
   background: var(--panel-3);
 }
 .ws-empty { color: var(--muted); padding: var(--sp-2); }
+/* A teacher with no worksheet yet: start from the examples rather than a blank page. */
+.ws-sample {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+}
+.ws-sample-text { color: var(--muted); font-size: var(--fs-sm); line-height: 1.45; }
 .ws-items { list-style: none; display: flex; flex-direction: column; gap: var(--sp-2); }
 .ws-item {
   border: 1px solid var(--border);
@@ -7971,13 +8031,16 @@ button.calc-field-btn {
   overflow: auto;
   display: flex;
   flex-direction: column;
-  align-items: center;
+  /* Centered by the page's auto margins, not align-items: centering a page
+     wider than the pane cut its left edge off where no scrolling reaches
+     (an iPad in portrait lost "Name:"). The page also shrinks to the pane. */
+  align-items: flex-start;
   gap: var(--sp-6);
   padding: var(--sp-6);
   background: #3a3f4b;
 }
-.ws-page { margin: 0; }
-.ws-page img { display: block; background: #fff; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45); }
+.ws-page { margin: 0 auto; max-width: 100%; }
+.ws-page img { display: block; max-width: 100%; height: auto; background: #fff; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45); }
 .ws-page figcaption { text-align: center; color: #d6d9e3; font-size: var(--fs-sm); margin-top: var(--sp-2); }
 @media (max-width: 760px) {
   .ws-body { flex-direction: column; }
@@ -8223,6 +8286,9 @@ button.calc-field-btn {
 
 .an-coincide {
   font-family: var(--font);
+  /* a sentence ("the same function — they coincide everywhere"), not a
+     number: it wraps like one instead of running off a narrow card */
+  white-space: normal;
 }
 
 /* ===========================================================================
@@ -9344,14 +9410,9 @@ button.calc-field-btn {
 
 .exg-course {
   margin-top: var(--sp-4);
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  column-gap: var(--sp-6);
 }
 
 .exg-course-title {
-  flex: 1 0 100%;
   font-size: var(--fs-lg);
   font-weight: 700;
   color: var(--accent-text);
@@ -9359,36 +9420,36 @@ button.calc-field-btn {
   border-bottom: 1px solid var(--border);
 }
 
-.exg-unit {
-  margin-top: var(--sp-3);
-  border-radius: 10px;
-  max-width: 100%;
-}
-
-.exg-unit-focus {
-  outline: 1px solid var(--accent);
-  outline-offset: 6px;
-}
-
-.exg-unit-title {
-  font-size: var(--fs-md);
-  font-weight: 700;
-  margin-bottom: var(--sp-2);
-  /* a unit with one card must not stretch its row with a long title */
-  max-width: 100%;
-}
-
-/* Units flow side by side (most hold one or two boards), cards a fixed width. */
+/* One flowing grid per course: every row full but the last, whatever the
+   units hold. The unit rides on each card (.exg-unit-line), not as a heading
+   that leaves a one-card row under it. */
 .exg-grid {
   list-style: none;
-  display: flex;
-  flex-wrap: wrap;
+  margin-top: var(--sp-3);
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
   gap: var(--sp-3);
 }
 
 .exg-grid > li {
-  width: 262px;
-  max-width: 100%;
+  min-width: 0;
+  border-radius: 10px;
+}
+
+/* A help-sheet unit link: its cards outlined. */
+.exg-in-focus {
+  outline: 1px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.exg-unit-line {
+  margin-bottom: calc(-1 * var(--sp-1));
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .exg-card {
@@ -9528,21 +9589,27 @@ button.calc-field-btn {
 }
 
 .tnote-title {
+  flex: none;
   font-size: var(--fs-sm);
   font-weight: 700;
   margin-right: auto;
 }
 
-.tnote-x {
-  padding: 0 6px;
+/* "Hide note" / "Show note": a quiet text button at the card's right. */
+.tnote-toggle {
+  flex: none;
+  padding: 2px 6px;
   border-radius: 6px;
   color: var(--muted);
-  font-size: var(--fs-lg);
-  line-height: 1.2;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
 }
 
-.tnote-x:hover,
-.tnote-x:focus-visible {
+.tnote-head .tnote-toggle:hover,
+.tnote-head .tnote-toggle:focus-visible,
+.tnote-line:hover .tnote-toggle,
+.tnote-line:focus-visible .tnote-toggle {
   background: rgba(255, 255, 255, 0.07);
   color: var(--text);
 }
@@ -9551,25 +9618,38 @@ button.calc-field-btn {
   margin-top: var(--sp-1);
   font-size: var(--fs-sm);
   line-height: 1.5;
+  /* A long note scrolls in its card: on a 768-px-tall iPad it took ~40% of
+     the sidebar. Short notes are untouched. */
+  max-height: clamp(6em, 15vh, 16em);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
-.tnote-chip {
-  align-self: flex-start;
-  display: inline-flex;
+/* Folded: one line — the title, the note's first words, "Show note". */
+.tnote-line {
+  display: flex;
   align-items: center;
-  gap: 6px;
-  margin: var(--sp-2) var(--sp-3) 0;
-  padding: 2px var(--sp-2);
-  border-radius: 999px;
-  border: 1px solid rgba(249, 168, 37, 0.45);
+  gap: var(--sp-2);
+  width: calc(100% - 2 * var(--sp-3));
+  padding-top: var(--sp-1);
+  padding-bottom: var(--sp-1);
   color: #f9a825;
-  font-size: var(--fs-xs);
-  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
 }
 
-.tnote-chip:hover,
-.tnote-chip:focus-visible {
-  background: rgba(249, 168, 37, 0.12);
+.tnote-line .tnote-title {
+  margin-right: 0;
+}
+
+.tnote-peek {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ============================================================

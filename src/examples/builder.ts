@@ -891,7 +891,7 @@ export class ExampleBoard {
     const measure = measureOf(o.measure)
     if (measure) shape.measure = measure
     if (o.centres && o.centres.length > 0) {
-      if (outcome.kind !== 'polygon') throw new Error(`example: only a triangle has centres (“${src}”)`)
+      if (outcome.kind !== 'polygon') throw new Error(`example: only a triangle has centers (“${src}”)`)
       shape.measure = { ...(shape.measure ?? {}), centres: CENTRE_FLAGS.filter((f) => o.centres!.includes(f)) }
     }
     if (o.sym) {
@@ -1033,20 +1033,20 @@ export class ExampleBoard {
     return this.kind === 'number-line' ? { x: [-10, 10] } : { x: [-10, 10], y: [-7, 7] }
   }
 
-  /** Centre and scale for the declared window on the nominal example screen. */
-  private viewport(): BoardInput['viewport'] {
+  /** Centre and scale for the declared window on a screen (the nominal example screen unless told). */
+  private viewport(screen: { widthPx: number; heightPx: number } = EXAMPLE_SCREEN): BoardInput['viewport'] {
     const w = this.window()
     const cx = (w.x[0] + w.x[1]) / 2
-    const ppuX = EXAMPLE_SCREEN.widthPx / Math.max(1e-6, w.x[1] - w.x[0])
+    const ppuX = screen.widthPx / Math.max(1e-6, w.x[1] - w.x[0])
     if (this.kind === 'number-line' || !w.y) return { center: { x: cx, y: 0 }, pxPerUnit: ppuX }
     const cy = (w.y[0] + w.y[1]) / 2
-    const ppuY = EXAMPLE_SCREEN.heightPx / Math.max(1e-6, w.y[1] - w.y[0])
+    const ppuY = screen.heightPx / Math.max(1e-6, w.y[1] - w.y[0])
     if (w.independent) return { center: { x: cx, y: cy }, pxPerUnit: ppuX, pxPerUnitY: ppuY }
     return { center: { x: cx, y: cy }, pxPerUnit: Math.min(ppuX, ppuY) }
   }
 
   /** The board as the serializer takes it — what the App's currentBoardInput would hand over. */
-  toInput(note?: string): BoardInput {
+  toInput(note?: string, screen?: { widthPx: number; heightPx: number }): BoardInput {
     const curveViews: Record<string, CurveView> = {}
     for (const c of this.curves) if (this.views[c.id]) curveViews[c.id] = this.views[c.id]
     return {
@@ -1071,7 +1071,7 @@ export class ExampleBoard {
       grid: this.ruling,
       figure: this.figureStyle,
       curveViews,
-      viewport: this.viewport(),
+      viewport: this.viewport(screen),
       selectedId: this.selected,
       mode: 'draw',
       ...(note ? { note } : {}),

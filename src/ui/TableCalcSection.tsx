@@ -147,7 +147,7 @@ export function TableCalcSection({ data, card, onCalc, onSort }: Props) {
           </div>
 
           {(v.mvt || v.ivt) && (
-            <label className="te-check" onClick={stop} title="A table cannot show continuity or differentiability: tick this only when the problem states it">
+            <label className="te-check" onClick={stop} title="A table cannot show continuity or differentiability: check this only when the problem states it">
               <input
                 type="checkbox"
                 checked={card.diff}

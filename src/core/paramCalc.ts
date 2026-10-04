@@ -1009,10 +1009,10 @@ export function arcLengthOf(
       const d = out.displacement.length
       out.compare =
         disp <= 1e-9 * Math.max(1, L)
-          ? `The particle ends where it started: the displacement is 0, but the distance travelled is ${length.exact ? length.text : `≈ ${decimal(L)}`}.`
+          ? `The particle ends where it started: the displacement is 0, but the distance traveled is ${length.exact ? length.text : `≈ ${decimal(L)}`}.`
           : L - disp <= 1e-7 * Math.max(1, L)
-          ? 'The distance travelled equals the length of the displacement: the particle moves in one straight direction.'
-          : `The distance travelled (${length.exact ? length.text : `≈ ${decimal(L)}`}) is more than the length of the displacement (${d.exact ? d.text : `≈ ${decimal(disp)}`}): the path is not one straight run.`
+          ? 'The distance traveled equals the length of the displacement: the particle moves in one straight direction.'
+          : `The distance traveled (${length.exact ? length.text : `≈ ${decimal(L)}`}) is more than the length of the displacement (${d.exact ? d.text : `≈ ${decimal(disp)}`}): the path is not one straight run.`
     }
   }
   return out

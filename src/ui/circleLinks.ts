@@ -532,7 +532,7 @@ export function circleSentences(
       .filter((r): r is Extract<PointRow, { ok: true }> => r.ok)
       .map((r) => `${r.name}${r.p.coords.text.startsWith('≈') ? ' ' : ''}${r.p.coords.text}`)
     out.push({
-      text: `On the circle ${p.circle.equation} (centre O${p.circle.centreText.text}, radius ${p.circle.radius.text}) the points ${ptsText.join(', ')} are marked.`,
+      text: `On the circle ${p.circle.equation} (center O${p.circle.centreText.text}, radius ${p.circle.radius.text}) the points ${ptsText.join(', ')} are marked.`,
     })
     const ok = <T,>(x: T | { error: string } | null): x is T => x !== null && !(typeof x === 'object' && 'error' in (x as object))
     if (ok<InscribedReport>(p.angles)) {

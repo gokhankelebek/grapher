@@ -191,7 +191,7 @@ export function useShapes({ board, refs, derived, notices, history, editing, cal
       if (!now) return
       const i = CURVE_COLORS.indexOf(now.color)
       const next = CURVE_COLORS[(i + 1) % CURVE_COLORS.length]
-      commitState({ shapes: mapShape(id, (s) => ({ ...s, color: next })) }, 'change colour')
+      commitState({ shapes: mapShape(id, (s) => ({ ...s, color: next })) }, 'change color')
     },
     [commitState, mapShape],
   )

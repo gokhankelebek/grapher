@@ -88,7 +88,7 @@ describe('the card', () => {
     // one low score on an otherwise even class: the shape checks see no skew, the fences see the outlier
     expect(c.sets[0].shape).toBe('Period 1 appears roughly symmetric')
     expect(c.sets[0].shapeReason).toMatch(/^mean 73\.05 < median 74\.5/)
-    expect(c.sets[0].recommend).toBe('Use the median and IQR to describe its centre and spread: it has an outlier, and the median and IQR are resistant to extreme values.')
+    expect(c.sets[0].recommend).toBe('Use the median and IQR to describe its center and spread: it has an outlier, and the median and IQR are resistant to extreme values.')
     expect(c.sets[1].shape).toBe('Period 2 appears roughly symmetric')
     expect(c.sets[1].recommend).toMatch(/mean and standard deviation/)
     expect(c.compare).toMatch(/^Period 2 has a higher median \(82\.5 vs 74\.5\) and a larger IQR \(10 vs 5\) than Period 1/)

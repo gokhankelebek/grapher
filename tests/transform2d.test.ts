@@ -360,7 +360,7 @@ describe('what a transformation preserves', () => {
     expect(checks.filter((c) => c.ok === false)).toEqual([])
     expect(checks.find((c) => c.kind === 'length')?.text).toBe('A′B′ = AB = 4')
     expect(checks.some((c) => c.kind === 'parallel' && c.text.startsWith('AB ‖ CD'))).toBe(true)
-    expect(checks.find((c) => c.kind === 'fixed')?.text).toBe('The centre O (the origin) stays fixed')
+    expect(checks.find((c) => c.kind === 'fixed')?.text).toBe('The center O (the origin) stays fixed')
   })
 
   it('a dilation scales lengths by k and sends each side to a parallel line', () => {

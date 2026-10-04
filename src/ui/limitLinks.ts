@@ -421,7 +421,7 @@ function klassText(res: LimitResult, fName: string): string | null {
     case 'undefined':
       return `${fName} is not defined near x = ${at}`
     case 'unknown':
-      return `The behaviour of ${fName} at x = ${at} could not be classified`
+      return `The behavior of ${fName} at x = ${at} could not be classified`
     case 'infinity':
       return null
   }

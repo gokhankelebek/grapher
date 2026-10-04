@@ -138,7 +138,10 @@ describe('pointText — exact form first, decimal beside it', () => {
 
   it('a fraction or a radical is kept, however short', () => {
     const half = pt({ kind: 'zero', pos: { x: 1.5, y: 0 }, label: 'zero', exactX: '3/2' })
-    expect(pointText(half)).toBe('3/2 ≈ 1.500')
+    expect(pointText(half)).toBe('3/2 ≈ 1.5')
+    // a closed form whose decimal does not terminate keeps its four digits
+    const third = pt({ kind: 'zero', pos: { x: 1 / 3, y: 0 }, label: 'zero', exactX: '1/3' })
+    expect(pointText(third)).toBe('1/3 ≈ 0.3333')
   })
 
   it('a chip drops the decimal — it is a label, not a table', () => {
@@ -183,7 +186,7 @@ describe('pointText — exact form first, decimal beside it', () => {
       exactY: '3.27',
     })
     // x is floored by the curve's x-range, y by its height — never x by height.
-    expect(pointParts(tiny, { scale: 6.5, xScale: 16 }).decimal).toBe('(0, 3.270)')
+    expect(pointParts(tiny, { scale: 6.5, xScale: 16 }).decimal).toBe('(0, 3.27)')
     const nearPole = pt({ kind: 'inflection', pos: { x: -0.195, y: 2.211 }, label: 'inflection', exact: false })
     expect(pointParts(nearPole, { scale: 16000, xScale: 16 }).decimal).toBe('(−0.1950, 2.211)')
   })

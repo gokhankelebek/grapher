@@ -685,7 +685,7 @@ export function paramFeatures(curve: FittedCurve, models: Record<string, ModelSp
       const disp = Math.hypot(end.x - start.x, end.y - start.y)
       if (Number.isFinite(disp)) {
         const D = fullText(disp)
-        sentences.push(`displacement ${D.exact ? '=' : '≈'} ${D.text}; distance travelled ${L.exact ? '=' : '≈'} ${L.text}`)
+        sentences.push(`displacement ${D.exact ? '=' : '≈'} ${D.text}; distance traveled ${L.exact ? '=' : '≈'} ${L.text}`)
       }
     }
   }

@@ -44,8 +44,8 @@ export const FIGURE_CHOICES: readonly FigureStyleId[] = ['screen', 'textbook', '
  * it is asked.
  */
 export const FIGURE_BLURB: Record<FigureStyleId, string> = {
-  screen: 'Screen — the PNG comes out as the board looks: your theme, your curve colours',
-  textbook: 'Textbook — white, unit grid, black axes, curves in print colours',
+  screen: 'Screen — the PNG comes out as the board looks: your theme, your curve colors',
+  textbook: 'Textbook — white, unit grid, black axes, curves in print colors',
   sat: 'SAT — unit grid, black axes, a number on every tick, all curves black',
   ap: 'AP Calculus — white, no grid: bare axes with ticks, O at the origin, all curves black',
 }

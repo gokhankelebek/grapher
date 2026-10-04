@@ -2223,8 +2223,8 @@ export function CurveCard({
         <button
           className="color-dot"
           style={{ background: ink(curve.color) }}
-          title="Change colour"
-          aria-label="Change curve colour"
+          title="Change color"
+          aria-label="Change curve color"
           onClick={(e) => {
             e.stopPropagation()
             onCycleColor()

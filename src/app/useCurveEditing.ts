@@ -321,7 +321,7 @@ export function useCurveEditing({ board, session, refs, derived, notices, histor
             return { ...c, color: next }
           }),
         },
-        'change colour',
+        'change color',
       )
     },
     [commitState],

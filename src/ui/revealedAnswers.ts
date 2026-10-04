@@ -114,9 +114,9 @@ const SHAPE_WORD: Record<string, string> = {
   symmetry: 'symmetry',
   compare: 'congruence / similarity',
   centroid: 'centroid',
-  circumcentre: 'circumcentre',
-  incentre: 'incentre',
-  orthocentre: 'orthocentre',
+  circumcentre: 'circumcenter',
+  incentre: 'incenter',
+  orthocentre: 'orthocenter',
   euler: 'Euler line',
 }
 

@@ -528,7 +528,7 @@ export function motionWords(m: Motion): string {
     case 'dilate': {
       const k = numForm(m.k)
       const what = Math.abs(m.k) > 1 ? 'an enlargement' : Math.abs(m.k) < 1 ? 'a reduction' : 'a dilation'
-      return `a dilation with scale factor ${k.text} centred at ${centreWords(m.center)} (${what}${m.k < 0 ? ' through the centre' : ''})`
+      return `a dilation with scale factor ${k.text} centered at ${centreWords(m.center)} (${what}${m.k < 0 ? ' through the center' : ''})`
     }
   }
 }
@@ -1533,7 +1533,7 @@ export function preservedChecks(
     out.push({
       kind: 'fixed',
       ok: Math.hypot(c.x - m.center.x, c.y - m.center.y) < 1e-9,
-      text: `The centre ${isOrigin(m.center) ? 'O (the origin)' : pointText(m.center).text} stays fixed`,
+      text: `The center ${isOrigin(m.center) ? 'O (the origin)' : pointText(m.center).text} stays fixed`,
     })
   }
   return out

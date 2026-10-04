@@ -98,8 +98,8 @@ export function CardShell(p: Shell) {
         <button
           className="color-dot"
           style={{ background: ink(p.color) }}
-          title="Change colour"
-          aria-label="Change colour"
+          title="Change color"
+          aria-label="Change color"
           onClick={(e) => {
             e.stopPropagation()
             p.onCycleColor()
@@ -512,7 +512,7 @@ export function SimCard(props: SimCardProps) {
       <Seg
         options={[
           { v: 'sample', text: 'Sampling', title: 'Repeated samples from a population' },
-          { v: 'compare', text: 'Compare treatments', title: 'A randomisation test for two groups' },
+          { v: 'compare', text: 'Compare treatments', title: 'A randomization test for two groups' },
         ]}
         value={s.mode}
         label="Simulation"
@@ -609,7 +609,7 @@ export function SimCard(props: SimCardProps) {
         </CardSection>
       )}
 
-      <CardSection kind="stat-sim-run" title="Run" summary={`${s.mode === 'sample' ? `n = ${s.n} · ` : ''}${s.reps} ${s.mode === 'sample' ? 'samples' : 're-randomisations'} · seed ${s.seed}`}>
+      <CardSection kind="stat-sim-run" title="Run" summary={`${s.mode === 'sample' ? `n = ${s.n} · ` : ''}${s.reps} ${s.mode === 'sample' ? 'samples' : 're-randomizations'} · seed ${s.seed}`}>
         <div className="rr-givens">
           {s.mode === 'sample' && (
             <label className="rr-given" onClick={stop} title="Sample size">
@@ -623,7 +623,7 @@ export function SimCard(props: SimCardProps) {
               />
             </label>
           )}
-          <label className="rr-given" onClick={stop} title="How many samples (or re-randomisations)">
+          <label className="rr-given" onClick={stop} title="How many samples (or re-randomizations)">
             <span className="calc-tag">{s.mode === 'sample' ? 'samples' : 'times'}</span>
             <select
               className="calc-select"

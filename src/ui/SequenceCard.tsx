@@ -236,8 +236,8 @@ export function SequenceCard({
         <button
           className="color-dot"
           style={{ background: ink(seq.color) }}
-          title="Change colour"
-          aria-label="Change sequence colour"
+          title="Change color"
+          aria-label="Change sequence color"
           onClick={(e) => {
             e.stopPropagation()
             onCycleColor()

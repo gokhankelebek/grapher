@@ -388,7 +388,7 @@ export function bankFigure(m: DocModel, o: BankOptions): BankFigure {
       student.scene = { ...student.scene, shapes: [...(student.scene.shapes ?? []), shape] }
       if (fig !== student) fig.scene = { ...fig.scene, shapes: [...(fig.scene.shapes ?? []), shape] }
       labelled = true
-      notes.push(`The student figure labelled no point, so ${added.label} is labelled — ${added.why}.`)
+      notes.push(`The student figure labeled no point, so ${added.label} is labeled — ${added.why}.`)
     } else {
       notes.push('The student figure labels no point, and no neutral point was found to label. Add one (Build ▾ → Shape: A = (a, b)) before banking it.')
     }

@@ -202,7 +202,7 @@ describe('house style', () => {
     expect(r.scene.styles[g.id]?.dash).toBeUndefined()
   })
 
-  it('every colour in the TikZ is a grey', () => {
+  it('every color in the TikZ is a gray', () => {
     const tex = bankFigure(three, { ...STUDENT, answers: true }).block
     const colours = [...tex.matchAll(/\\definecolor\{[^}]+\}\{HTML\}\{([0-9A-F]{6})\}/g)].map((m) => m[1])
     expect(colours.length).toBeGreaterThan(0)
@@ -235,9 +235,9 @@ describe('the student figure', () => {
     expect(figureHasLabelledPoint(s)).toBe(true)
     // the origin is a zero and the inflection point, ±1 are extrema: (2, 2) gives nothing away
     expect(r.added).toMatchObject({ x: 2, y: 2, label: '(2, 2)', curveName: 'f' })
-    expect(r.notes.join(' ')).toContain('(2, 2) is labelled')
+    expect(r.notes.join(' ')).toContain('(2, 2) is labeled')
     expect(r.block).toContain('$(2, 2)$')
-    expect(r.figuredesc).toContain('labelled point (2, 2)')
+    expect(r.figuredesc).toContain('labeled point (2, 2)')
   })
 
   it('prefers a y-intercept that is not an answer', () => {
@@ -249,7 +249,7 @@ describe('the student figure', () => {
   })
 
   it('adds nothing when the document labels a point of its own', () => {
-    const m = model('Labelled', (b) => {
+    const m = model('Labeled', (b) => {
       b.frame([-3, 3], [-4, 4])
       b.line('f(x) = x^3 - 3x')
       b.shape('A = (2, 2)')
@@ -266,7 +266,7 @@ describe('the student figure', () => {
     expect(r.scene.figure).toBeUndefined()
   })
 
-  it('the key figure has the answers, and the same labelled point', () => {
+  it('the key figure has the answers, and the same labeled point', () => {
     const r = bankFigure(cubic(), { ...STUDENT, answers: true })
     expect(r.scene.analysis?.points.length).toBeGreaterThan(0)
     expect(r.scene.shapes?.some((sh) => sh.id === ADDED_POINT_ID)).toBe(true)

@@ -430,7 +430,7 @@ export function useStats({ board, refs, notices, history, calc, viewport }: Stat
               patchStat(s.id, { hidden: s.hidden ? undefined : true }, s.hidden ? `show ${statName(s).toLowerCase()}` : `hide ${statName(s).toLowerCase()}`),
             onCycleColor: () => {
               const i = CURVE_COLORS.indexOf(s.color)
-              patchStat(s.id, { color: CURVE_COLORS[(i + 1) % CURVE_COLORS.length] }, 'change colour')
+              patchStat(s.id, { color: CURVE_COLORS[(i + 1) % CURVE_COLORS.length] }, 'change color')
             },
             onZoom: () => zoomTo(s.id),
           }

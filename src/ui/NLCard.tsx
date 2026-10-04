@@ -312,8 +312,8 @@ export function NLCard({
         <button
           className="color-dot"
           style={{ background: ink(item.color) }}
-          title="Change colour"
-          aria-label="Change item colour"
+          title="Change color"
+          aria-label="Change item color"
           onClick={(e) => {
             e.stopPropagation()
             onCycleColor()

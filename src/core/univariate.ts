@@ -270,7 +270,7 @@ export function recommend(s: Summary, shape: Shape, f: Fences): Recommendation {
           : `it ${shape.words}`
     return {
       use: 'median-iqr',
-      sentence: `Use the median and IQR to describe its centre and spread: ${why}, and the median and IQR are resistant to extreme values.`,
+      sentence: `Use the median and IQR to describe its center and spread: ${why}, and the median and IQR are resistant to extreme values.`,
     }
   }
   if (shape.kind === 'few' || shape.kind === 'constant' || s.n < 2) {
@@ -278,7 +278,7 @@ export function recommend(s: Summary, shape: Shape, f: Fences): Recommendation {
   }
   return {
     use: 'mean-sd',
-    sentence: 'Use the mean and standard deviation to describe its centre and spread: it appears roughly symmetric with no outliers.',
+    sentence: 'Use the mean and standard deviation to describe its center and spread: it appears roughly symmetric with no outliers.',
   }
 }
 
@@ -335,7 +335,7 @@ export function compareSentence(sets: readonly NamedSummary[], fmt: (v: number) 
           ? 'its values are typically higher, with the same spread'
           : vary
             ? `typical values are the same, but ${X.name}’s are ${vary}`
-            : 'the two sets have the same centre and spread'
+            : 'the two sets have the same center and spread'
     return `${X.name} has ${centre} and ${spread} than ${Y.name}: ${tail}. (Compared by ${why}.)`
   }
   const by = (f: (x: NamedSummary) => number) => live.slice().sort((p, q) => f(q) - f(p))
@@ -391,7 +391,7 @@ export function exclusionEffect(values: readonly number[], keep: readonly boolea
   if (removed.length === 0) {
     sentence = 'Nothing is left out.'
   } else if (after.n === 0) {
-    sentence = 'Every value is left out: there is nothing to summarise.'
+    sentence = 'Every value is left out: there is nothing to summarize.'
   } else {
     const what = removed.length === 1 ? fmt(removed[0]) : `${removed.length} values (${removed.slice(0, 4).map(fmt).join(', ')}${removed.length > 4 ? ', …' : ''})`
     /** "raised the mean from 74.2 to 76", "left the median at 77", "made the SD (Sx) undefined". */

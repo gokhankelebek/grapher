@@ -258,7 +258,7 @@ export const EXAMPLE_DEFS: readonly ExampleDef[] = [
     title: "Slope field and Euler's method",
     short: "Euler with h = 0.5 and 0.25",
     note:
-      "Two Euler runs from (0, 1) along dy/dx = x + y — h = 0.5 (two steps, labelled) and h = 0.25 (four) — with the true solution dashed. Ask the class to do the h = 0.5 table by hand, then explain why both runs fall below the true curve here (it is concave up).",
+      "Two Euler runs from (0, 1) along dy/dx = x + y — h = 0.5 (two steps, labeled) and h = 0.25 (four) — with the true solution dashed. Ask the class to do the h = 0.5 table by hand, then explain why both runs fall below the true curve here (it is concave up).",
     keywords: ['euler', 'slope field', 'differential equation', 'step size', 'approximation'],
     build: (b) => {
       b.frame([-1.5, 2], [-1, 4.5])
@@ -463,7 +463,7 @@ export const EXAMPLE_DEFS: readonly ExampleDef[] = [
     title: 'A polynomial from its zeros',
     short: 'polynomial from its zeros',
     note:
-      'f is built from its zeros: −2 with multiplicity 2 (touches), 1 with multiplicity 3 (flattens through) and 3 (crosses). Ask the class for the degree and the end behaviour from the leading term before zooming out, then edit a multiplicity on the card.',
+      'f is built from its zeros: −2 with multiplicity 2 (touches), 1 with multiplicity 3 (flattens through) and 3 (crosses). Ask the class for the degree and the end behavior from the leading term before zooming out, then edit a multiplicity on the card.',
     keywords: ['zeros', 'roots', 'multiplicity', 'end behavior', 'factored form', 'polynomial'],
     build: (b) => {
       b.frame([-3.5, 4], [-4, 5])
@@ -528,12 +528,12 @@ export const EXAMPLE_DEFS: readonly ExampleDef[] = [
     title: 'Logistic regression from a data table',
     short: 'logistic regression from data',
     note:
-      'The table is the number of students who have heard a rumour, t days after it starts; the logistic regression levels off at its carrying capacity. Ask the class to read the limiting value from the equation and to predict when half the school has heard it — then check with the curve.',
+      'The table is the number of students who have heard a rumor, t days after it starts; the logistic regression levels off at its carrying capacity. Ask the class to read the limiting value from the equation and to predict when half the school has heard it — then check with the curve.',
     keywords: ['regression', 'logistic', 'data', 'model', 'carrying capacity', 'scatter plot'],
     build: (b) => {
       b.frame([-1, 18], [-15, 230], { independent: true })
       b.table(
-        'Rumour',
+        'Rumor',
         [
           [0, 12], [2, 25], [4, 48], [6, 82], [8, 118], [10, 148], [12, 167], [14, 178], [16, 184],
         ],
@@ -718,7 +718,7 @@ export const EXAMPLE_DEFS: readonly ExampleDef[] = [
     title: 'Comparing two classes with box plots',
     short: 'two classes, one outlier',
     note:
-      'The same test in two classes: Period 1 is tightly clustered except for one score of 42, an outlier beyond the lower 1.5·IQR fence, and Period 4 is more spread out. Ask the class which measures of centre and spread are fair to compare here and why, then leave the outlier out and watch which numbers change.',
+      'The same test in two classes: Period 1 is tightly clustered except for one score of 42, an outlier beyond the lower 1.5·IQR fence, and Period 4 is more spread out. Ask the class which measures of center and spread are fair to compare here and why, then leave the outlier out and watch which numbers change.',
     keywords: ['box plot', 'dot plot', 'outlier', 'iqr', 'median', 'mean', 'compare data sets', 'parallel box plots', 'five-number summary', 'S-ID.1', 'S-ID.2', 'S-ID.3'],
     build: (b) => {
       b.dataPlot(
@@ -1060,7 +1060,7 @@ export const EXAMPLE_DEFS: readonly ExampleDef[] = [
     title: 'A circle from its general equation',
     short: 'circle by completing the square',
     note:
-      'The line was typed in general form, x² + y² − 2x + 4y − 4 = 0; the card completes the square to (x − 1)² + (y + 2)² = 9, and the construction shows the centre (1, −2) and the radius 3. Ask the class to complete the square by hand before you open the card.',
+      'The line was typed in general form, x² + y² − 2x + 4y − 4 = 0; the card completes the square to (x − 1)² + (y + 2)² = 9, and the construction shows the center (1, −2) and the radius 3. Ask the class to complete the square by hand before you open the card.',
     keywords: ['circle', 'conic', 'completing the square', 'center', 'radius', 'general form', 'standard form'],
     build: (b) => {
       b.frame([-4, 6], [-6, 2])
@@ -1109,10 +1109,10 @@ export const EXAMPLE_DEFS: readonly ExampleDef[] = [
     course: 'math3',
     unit: 'M3',
     help: ['m3-centres'],
-    title: 'Centres of an obtuse triangle and the Euler line',
-    short: 'four centres and the Euler line',
+    title: 'Centers of an obtuse triangle and the Euler line',
+    short: 'four centers and the Euler line',
     note:
-      'ABC is obtuse at C, so the circumcentre O (2, −2) and the orthocentre H (0, 6) fall outside it while the centroid G (4/3, 2/3) and the incentre I stay inside. O, G and H lie on the Euler line y = −4x + 6 with HG = 2·GO. Ask the class to check O by showing OA = OB = OC = 2√5, then to drag C up until the triangle is acute and watch O and H move inside.',
+      'ABC is obtuse at C, so the circumcenter O (2, −2) and the orthocenter H (0, 6) fall outside it while the centroid G (4/3, 2/3) and the incenter I stay inside. O, G and H lie on the Euler line y = −4x + 6 with HG = 2·GO. Ask the class to check O by showing OA = OB = OC = 2√5, then to drag C up until the triangle is acute and watch O and H move inside.',
     keywords: [
       'centroid', 'circumcenter', 'circumcentre', 'incenter', 'incentre', 'orthocenter', 'orthocentre', 'median',
       'perpendicular bisector', 'angle bisector', 'altitude', 'circumscribed circle', 'inscribed circle',

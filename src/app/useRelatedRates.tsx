@@ -256,7 +256,7 @@ export function useRelatedRates({ board, refs, notices, history, calc, viewport 
             }
             onCycleColor={() => {
               const i = CURVE_COLORS.indexOf(r.color)
-              patchRelatedRates(r.id, { color: CURVE_COLORS[(i + 1) % CURVE_COLORS.length] }, 'change colour')
+              patchRelatedRates(r.id, { color: CURVE_COLORS[(i + 1) % CURVE_COLORS.length] }, 'change color')
             }}
             onZoom={() => frameBox(relatedRatesBox(r))}
             onScenario={(sc: RRScenario) => {

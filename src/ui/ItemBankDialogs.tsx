@@ -182,8 +182,8 @@ export function CopyForBankDialog({ docName, graph, build, copy, download, onClo
           <span>
             <strong>Use house style</strong>
             <span className="share-sub">
-              Grayscale ink, curves told apart by dashes rather than colour, labelled axes with a scale, and at
-              least one labelled point.
+              Grayscale ink, curves told apart by dashes rather than color, labeled axes with a scale, and at
+              least one labeled point.
             </span>
           </span>
         </label>

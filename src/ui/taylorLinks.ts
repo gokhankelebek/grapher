@@ -337,7 +337,7 @@ export function iocLine(conv: Convergence | null): { text: string; note: string 
   }
   return {
     text,
-    note: `The series' behaviour at ${unknown.join(' and ')} could not be decided from its terms.`,
+    note: `The series' behavior at ${unknown.join(' and ')} could not be decided from its terms.`,
   }
 }
 

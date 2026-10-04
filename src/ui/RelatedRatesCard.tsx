@@ -7,7 +7,7 @@ import { Latex } from './Latex'
 import { parseNumeric } from './numeric'
 import type { BoardRelatedRates, RelatedRatesCardData, RRSpeed } from './relatedRatesLinks'
 import { RR_SPEEDS } from './relatedRatesLinks'
-import { RR_DEFS, RR_SCENARIOS, dec } from '../core/relatedRates'
+import { RR_DEFS, RR_SCENARIOS, dec, decExact } from '../core/relatedRates'
 import type { RRScenario } from '../core/relatedRates'
 import { useInk } from './inkContext'
 
@@ -188,8 +188,8 @@ export function RelatedRatesCard(props: Props) {
         <button
           className="color-dot"
           style={{ background: ink(rr.color) }}
-          title="Change colour"
-          aria-label="Change colour"
+          title="Change color"
+          aria-label="Change color"
           onClick={(e) => {
             e.stopPropagation()
             props.onCycleColor()
@@ -329,7 +329,7 @@ export function RelatedRatesCard(props: Props) {
             )}
           </CardSection>
 
-          <CardSection kind="rr-instant" title="Instant" summary={`t = ${dec(s.t, 2)} ${def.timeUnit}`}>
+          <CardSection kind="rr-instant" title="Instant" summary={`t = ${decExact(s.t, 2)} ${def.timeUnit}`}>
             <div className="mo-player rr-player">
               <button
                 type="button"
@@ -434,7 +434,7 @@ export function RelatedRatesCard(props: Props) {
             {card.when && !card.when.ok && <div className="expr-error">{card.when.error}.</div>}
             {card.when && card.when.ok && card.when.t !== null && (
               <div className="field-hint" data-testid="rr-when-t">
-                {`${def.quantities.find((q) => q.key === card.when!.q)?.label} = ${Number(card.when.v.toPrecision(6))} at t = ${dec(card.when.t, 3)} ${def.timeUnit}`}
+                {`${def.quantities.find((q) => q.key === card.when!.q)?.label} = ${Number(card.when.v.toPrecision(6))} at t = ${decExact(card.when.t, 3)} ${def.timeUnit}`}
               </div>
             )}
             <div className="uc-toggles">

@@ -175,9 +175,9 @@ function footOn(p: Vec2, u: Vec2, v: Vec2): { at: Vec2; off: boolean } {
 
 const CENTRE_TEXT: Record<CentreKey, { letter: string; name: string; lines: string }> = {
   centroid: { letter: 'G', name: 'centroid', lines: 'medians' },
-  circumcentre: { letter: 'O', name: 'circumcentre', lines: 'perpendicular bisectors' },
-  incentre: { letter: 'I', name: 'incentre', lines: 'angle bisectors' },
-  orthocentre: { letter: 'H', name: 'orthocentre', lines: 'altitudes' },
+  circumcentre: { letter: 'O', name: 'circumcenter', lines: 'perpendicular bisectors' },
+  incentre: { letter: 'I', name: 'incenter', lines: 'angle bisectors' },
+  orthocentre: { letter: 'H', name: 'orthocenter', lines: 'altitudes' },
 }
 
 export function centreLetter(k: CentreKey): string {
@@ -341,20 +341,20 @@ export function triangleCentres(ptsIn: readonly Vec2[], labels?: readonly string
     return `${names[j]}${names[k]}`
   }
   if (equilateral) {
-    notes.push(`${tri3} is equilateral, so its centroid, circumcentre, incentre and orthocentre are one point, ${centroidPm.text}.`)
+    notes.push(`${tri3} is equilateral, so its centroid, circumcenter, incenter and orthocenter are one point, ${centroidPm.text}.`)
   } else if (kind === 'right') {
     const hyp = side(rightAt)
     const hypLen = distance(tri[(rightAt + 1) % 3], tri[(rightAt + 2) % 3])
     notes.push(
-      `${tri3} is right-angled at ${names[rightAt]}, so the circumcentre O is the midpoint of the hypotenuse ${hyp} and R = ${hyp}/2 ${hypLen.exact && circumradius.exact ? `= ${circumradius.text}` : eqMeasure(circumradius)}.`,
+      `${tri3} is a right triangle with the right angle at ${names[rightAt]}, so the circumcenter O is the midpoint of the hypotenuse ${hyp} and R = ${hyp}/2 ${hypLen.exact && circumradius.exact ? `= ${circumradius.text}` : eqMeasure(circumradius)}.`,
     )
-    notes.push(`The orthocentre H is the right-angle vertex ${names[rightAt]}: two of the altitudes are the legs.`)
+    notes.push(`The orthocenter H is the right-angle vertex ${names[rightAt]}: two of the altitudes are the legs.`)
   } else if (kind === 'obtuse') {
     notes.push(
-      `${tri3} is obtuse at ${names[obtuseAt]} (${degText(angles[obtuseAt]).exact ? '' : '≈ '}${degText(angles[obtuseAt]).text}), so the circumcentre O and the orthocentre H lie outside the triangle.`,
+      `${tri3} is obtuse at ${names[obtuseAt]} (${degText(angles[obtuseAt]).exact ? '' : '≈ '}${degText(angles[obtuseAt]).text}), so the circumcenter O and the orthocenter H lie outside the triangle.`,
     )
   } else {
-    notes.push(`${tri3} is acute, so all four centres lie inside it.`)
+    notes.push(`${tri3} is acute, so all four centers lie inside it.`)
   }
   if (apex >= 0) {
     notes.push(

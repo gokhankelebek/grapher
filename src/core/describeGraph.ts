@@ -533,7 +533,7 @@ function curveClauses(c: DescribeCurve, answers: boolean, multi: boolean, group:
     const pts = labelled.map((p) => `${p.label && p.label.length <= 2 ? `${p.label} ` : ''}${pointShort(p.x, p.y, p.exactX, p.exactY)}`)
     add(answers ? 4 : 1, answers
       ? `passes through ${list(pts)}`
-      : `the curve passes through the labelled ${plural(pts.length, 'point', 'points')} ${list(pts)}`)
+      : `the curve passes through the labeled ${plural(pts.length, 'point', 'points')} ${list(pts)}`)
   }
   return out
 }
@@ -573,7 +573,7 @@ function sceneClauses(input: DescribeInput, answers: boolean): Clause[] {
   if (inters.length) {
     const names = new Set(inters.map((p) => `${p.a}\u0000${p.b}`))
     const who = names.size === 1 && inters[0].a && inters[0].b ? `${inters[0].a} and ${inters[0].b} meet` : 'curves meet'
-    add(7, `${answers ? who : 'labelled intersection'}${answers ? '' : plural(inters.length, '', 's')} at ${capped(inters.map((p) => `${p.label && !answers ? `${p.label} ` : ''}${pointShort(p.x, p.y, p.exactX, p.exactY)}`), FD_LIST)}`)
+    add(7, `${answers ? who : 'labeled intersection'}${answers ? '' : plural(inters.length, '', 's')} at ${capped(inters.map((p) => `${p.label && !answers ? `${p.label} ` : ''}${pointShort(p.x, p.y, p.exactX, p.exactY)}`), FD_LIST)}`)
   }
   for (const r of input.regions ?? []) {
     const between = r.lower ? `between ${r.upper} and ${r.lower}` : `under ${r.upper}`
@@ -845,7 +845,7 @@ function curveLong(c: DescribeCurve, answers: boolean): string {
   const labelled = labelledPoints(c).filter((p) => answers ? !said.some((q) => samePoint(q, p)) || !!p.label : true)
   if (labelled.length) {
     const pts = labelled.map((p) => `${p.label && p.label.length <= 3 ? `${p.label} at ` : ''}${pointSpoken(p.x, p.y, p.exactX, p.exactY)}`)
-    s.push(sentence(`It passes through the labelled ${plural(labelled.length, 'point', 'points')} ${list(pts)}`))
+    s.push(sentence(`It passes through the labeled ${plural(labelled.length, 'point', 'points')} ${list(pts)}`))
   }
   if (answers) for (const n of c.notes ?? []) s.push(sentence(n))
   return s.join(' ')

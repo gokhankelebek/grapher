@@ -146,7 +146,7 @@ export function SystemCard({ data, system, hidden, onSolution, onTest, onObjecti
                   if (system?.objective && draft !== system.objective.src) commit()
                 }}
               />
-              <div className="seg" role="group" aria-label="Maximise or minimise">
+              <div className="seg" role="group" aria-label="Maximize or minimize">
                 {(['max', 'min'] as const).map((g) => (
                   <button
                     key={g}

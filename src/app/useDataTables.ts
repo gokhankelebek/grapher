@@ -268,7 +268,7 @@ export function useDataTables({ board, docState, refs, derived, notices, history
             follow.has(c.id) && c.color === d.color ? { ...c, color: next } : c,
           ),
         },
-        'change colour',
+        'change color',
       )
     },
     [commitState, mapData],

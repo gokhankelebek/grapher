@@ -404,7 +404,7 @@ export function useTypedLines({ board, refs, derived, notices, history, editing,
       if (!now) return
       const i = CURVE_COLORS.indexOf(now.color)
       const next = CURVE_COLORS[(i + 1) % CURVE_COLORS.length]
-      commitState({ sequences: mapSeq(id, (q) => ({ ...q, color: next })) }, 'change colour')
+      commitState({ sequences: mapSeq(id, (q) => ({ ...q, color: next })) }, 'change color')
     },
     [commitState, mapSeq],
   )

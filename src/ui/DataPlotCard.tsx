@@ -294,7 +294,7 @@ export function DataPlotCard(props: DataPlotCardProps) {
       )}
 
       {card.ok && (
-        <CardSection kind="stat-data-shape" title="Shape and centre" answerKey={ak} summary={card.sets.map((s) => s.shape).join('; ')}>
+        <CardSection kind="stat-data-shape" title="Shape and center" answerKey={ak} summary={card.sets.map((s) => s.shape).join('; ')}>
           <Answer k={ak} block what="the shape">
             <div className="uc-facts" data-testid="dp-shape">
               {card.sets.map((s, i) =>

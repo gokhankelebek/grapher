@@ -299,7 +299,7 @@ export function useCommands({ board, docState, session, refs, derived, notices, 
         if (sh && !(sh.measure?.centres && sh.measure.centres.length > 0)) {
           let next = sh.measure
           for (const f of ['centroid', 'circumcentre', 'incentre', 'orthocentre'] as const) next = toggleCentre(next, f)
-          shapesApi?.setShapeMeasure(id, next, 'show triangle centres')
+          shapesApi?.setShapeMeasure(id, next, 'show triangle centers')
         }
       }
       // a card already open keeps its sections' state: tell this one to open
@@ -363,8 +363,8 @@ export function useCommands({ board, docState, session, refs, derived, notices, 
       setCurvePalette(p)
       showToast(
         p === 'safe'
-          ? 'Colour-blind-safe colours on — every curve has its own dash pattern too.'
-          : 'Standard curve colours.',
+          ? 'Color-blind-safe colors on — every curve has its own dash pattern too.'
+          : 'Standard curve colors.',
         { ms: 2200 },
       )
     },

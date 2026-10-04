@@ -199,8 +199,8 @@ export function UnitCircleCard({
         <button
           className="color-dot"
           style={{ background: ink(uc.color) }}
-          title="Change colour"
-          aria-label="Change unit circle colour"
+          title="Change color"
+          aria-label="Change unit circle color"
           onClick={(e) => {
             e.stopPropagation()
             onCycleColor()
@@ -378,7 +378,7 @@ export function UnitCircleCard({
 
           <CardSection kind="uc-show" title="Show" summary={uc.unwrap ? `unwrap ${uc.unwrap}` : null}>
             <div className="uc-toggles">
-              {check('triangle', 'reference triangle', 'The legs cos θ and sin θ, labelled')}
+              {check('triangle', 'reference triangle', 'The legs cos θ and sin θ, labeled')}
               {check('ref', 'reference angle θ′', 'The acute angle to the x-axis')}
               {check('astc', 'ASTC signs', 'All Students Take Calculus: which functions are positive in each quadrant')}
               {check('tan', 'tan θ on x = 1', 'The tangent segment from (1, 0) to (1, tan θ)')}
@@ -501,7 +501,7 @@ export function UnitCircleCard({
                   </Answer>
                 )}
                 <div className="uc-toggles">
-                  {check('other', 'show the other solution (greyed)', 'The other angle in one turn with the same value')}
+                  {check('other', 'show the other solution (grayed)', 'The other angle in one turn with the same value')}
                 </div>
               </div>
             )}

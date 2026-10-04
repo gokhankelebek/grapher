@@ -161,7 +161,7 @@ export function FigurePicker({
             <span className="exp-check-note" data-testid="figure-preview-note">
               {preview
                 ? `Previewing the ${FIGURE_STYLES[value].name} figure — the board goes back to your theme when you close this`
-                : `The ${FIGURE_STYLES[value].name} style is how the PNG and the copy come out; the board keeps your theme. Tick this to see it.`}
+                : `The ${FIGURE_STYLES[value].name} style is how the PNG and the copy come out; the board keeps your theme. Check this box to see it.`}
             </span>
           </span>
         </label>

@@ -548,7 +548,7 @@ function SquareSteps({ src, curveId }: { src: string; curveId?: string }) {
         ))}
       </ol>
       <div className="calc-fact calc-fact-lead">
-        Centre {sq.centreText}, radius r = √{sq.r2Text}
+        Center {sq.centreText}, radius r = √{sq.r2Text}
         {sq.radiusText !== `√${sq.r2Text}` ? ` = ${sq.radiusText}` : ''}
       </div>
     </>

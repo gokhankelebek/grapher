@@ -204,8 +204,8 @@ export function SolveCard({
         <button
           className="color-dot"
           style={{ background: ink(item.color) }}
-          title="Change colour"
-          aria-label="Change item colour"
+          title="Change color"
+          aria-label="Change item color"
           onClick={(e) => {
             e.stopPropagation()
             onCycleColor()
@@ -389,7 +389,7 @@ export function SolveCard({
         <div className="solve-controls" onClick={(e) => e.stopPropagation()}>
           {chip('signs', 'sign row', 'The + / − row above the line, with 0 and und at the critical values')}
           {chip('tests', 'test points', 'Mark each test point on the line (t = 0)')}
-          {hasDistance && chip('distance', 'distance', 'Read |x − a| < b as a distance: the centre and a bracket of radius b')}
+          {hasDistance && chip('distance', 'distance', 'Read |x − a| < b as a distance: the center and a bracket of radius b')}
           {compound && chip('stacked', 'stacked', 'One line per clause (A, B), then the combined set')}
           {canGraph && (
             <button

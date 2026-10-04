@@ -179,7 +179,7 @@ function SettingsMenu({
               onClick={pick(() => onCurvePalette(safe ? 'standard' : 'safe'))}
             >
               <span className="tb-more-check" aria-hidden="true">{safe ? '✓' : ''}</span>
-              Colour-blind-safe colours
+              Color-blind-safe colors
             </button>
           )}
           {teacher && (settings.onBackup || settings.onRestore) && <div className="doc-menu-sep" role="separator" />}

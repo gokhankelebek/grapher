@@ -165,8 +165,8 @@ interface Props {
 }
 
 const CURVE_PALETTE_CHOICES: { value: CurvePalette; label: string; title: string }[] = [
-  { value: 'standard', label: 'Standard', title: 'The board’s own neon colours' },
-  { value: 'safe', label: 'Colour-blind safe', title: 'Okabe–Ito colours and a dash pattern per curve, so no curve is told apart by colour alone' },
+  { value: 'standard', label: 'Standard', title: 'The board’s own neon colors' },
+  { value: 'safe', label: 'Color-blind safe', title: 'Okabe–Ito colors and a dash pattern per curve, so no curve is told apart by color alone' },
 ]
 
 /** The three states, in the order the segment shows them. */
@@ -602,7 +602,7 @@ export function ExportMenu({
           {onCurvePalette && (
             <>
               <div className="exp-menu-sep" />
-              <div className="exp-title" id={`${uid}-palette`}>Curve colours</div>
+              <div className="exp-title" id={`${uid}-palette`}>Curve colors</div>
               <div
                 className="seg exp-seg"
                 role="group"
@@ -624,9 +624,9 @@ export function ExportMenu({
                 ))}
               </div>
               <div className="exp-note">
-                Colour-blind safe uses the Okabe–Ito colours, readable on the dark board and on paper,
+                Color-blind safe uses the Okabe–Ito colors, readable on the dark board and on paper,
                 and gives every curve its own dash pattern — on screen and in every export. Your
-                documents keep their colours.
+                documents keep their colors.
               </div>
             </>
           )}
@@ -790,7 +790,7 @@ export function ExportMenu({
               data-testid="export-theme-light"
               disabled={groundLocked}
               onClick={() => onChange({ ...settings, theme: 'light' })}
-              title="White ground with print-safe curve colours — for worksheets and copiers"
+              title="White ground with print-safe curve colors — for worksheets and copiers"
             >
               Light
             </button>
@@ -812,7 +812,7 @@ export function ExportMenu({
 
           {format === 'pgfplots' && (
             <div className="exp-note">
-              pgfplots draws its own axes: the margin does not apply, and the colours follow the
+              pgfplots draws its own axes: the margin does not apply, and the colors follow the
               ground chosen here.
             </div>
           )}

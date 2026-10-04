@@ -133,7 +133,7 @@ export function treeEventName(p: BoardProb): string {
 }
 
 export function treePresetsOf(p: BoardProb): Preset[] {
-  return treePresets(treeOf(p), p.tree.mode === 'bag' ? 'colour' : 'outcome')
+  return treePresets(treeOf(p), p.tree.mode === 'bag' ? 'color' : 'outcome')
 }
 
 // ---------------------------------------------------------------------------
@@ -521,7 +521,7 @@ function vennFigure(p: BoardProb, index: number): StatsFigure {
     note(prims, s.x0 + 0.2, y, w.regions, true)
     y -= step * 1.3
     if (w.rule && w.rule.length <= 44) {
-      note(prims, s.x0, y, w.rule.startsWith(`P(${w.text}) = 1`) ? 'Complement rule:' : 'Addition Rule:', false)
+      note(prims, s.x0, y, w.rule.startsWith(`P(${w.text}) = 1`) ? 'Complement Rule:' : 'Addition Rule:', false)
       y -= step
       note(prims, s.x0 + 0.2, y, w.rule, false)
       y -= step
@@ -957,7 +957,7 @@ export function probDescribe(p: BoardProb): DescribeStat {
     const w = ev.working
     if (w && ev.parse.ok) {
       lines.push({ text: `The event ${w.text} — ${eventWords(ev.parse.node)} — is shaded.` })
-      if (w.p) lines.push({ text: `P(${w.text}) = ${fracText(w.p)}${w.rule ? `; by ${w.rule.includes(' = 1 − ') ? 'the complement rule' : 'the Addition Rule'}, ${w.rule} ${w.ruleNumbers}` : ''}.`, answer: true })
+      if (w.p) lines.push({ text: `P(${w.text}) = ${fracText(w.p)}${w.rule ? `; by ${w.rule.includes(' = 1 − ') ? 'the Complement Rule' : 'the Addition Rule'}, ${w.rule} ${w.ruleNumbers}` : ''}.`, answer: true })
     }
   } else {
     const tree = treeOf(p)
@@ -993,8 +993,9 @@ export function settleProb(p: BoardProb): BoardProb {
   const leaves = new Set(tree.leaves.map((l) => l.key))
   const t = { ...p.tree }
   if (t.event) {
-    // "both Red" on two draws is "all Red" on three
-    const norm = (s: string): string => s.replace(/^(both|all) /, 'every ')
+    // "both Red" on two draws is "all Red" on three; a document saved before
+    // the US spelling still names "same colour", which is "same color"
+    const norm = (s: string): string => s.replace(/^(both|all) /, 'every ').replace(/\bcolour(s?)$/, 'color$1')
     const want = norm(t.event)
     const pr = treePresetsOf(p).find((x) => norm(x.name) === want)
     if (pr) {

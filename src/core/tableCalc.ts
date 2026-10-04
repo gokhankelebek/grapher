@@ -942,7 +942,7 @@ export function tableMvt(pts: readonly TablePt[], i: number, j: number, differen
     ? `Because ${f} is differentiable, ${f} is continuous on ${range(A, B)} and differentiable on ${open}. By the Mean Value Theorem there is a value c in ${open} with ${f}′(c) = ${withUnit(`${w.text}`, unit)}.${
         rolle ? ` (Here ${f}(${A.xText}) = ${f}(${B.xText}), so ${f}′(c) = 0: Rolle's theorem.)` : ''
       }`
-    : `The Mean Value Theorem needs ${f} continuous on ${range(A, B)} and differentiable on ${open}, which a table cannot show. If the problem states that ${f} is differentiable, tick it above; the average rate of change on ${range(A, B)} is ${w.result.short}${unit ? ` ${unit}` : ''} either way.`
+    : `The Mean Value Theorem needs ${f} continuous on ${range(A, B)} and differentiable on ${open}, which a table cannot show. If the problem states that ${f} is differentiable, check the box above; the average rate of change on ${range(A, B)} is ${w.result.short}${unit ? ` ${unit}` : ''} either way.`
   return {
     ok: true,
     slope: w.value,
@@ -1002,7 +1002,7 @@ export function tableIvt(
   } else if (!between) {
     statement = `The Intermediate Value Theorem does not apply: ${T} is not between ${vals}. (${f} may still take the value ${T}; the theorem just does not promise it.)`
   } else if (!differentiable) {
-    statement = `The Intermediate Value Theorem needs ${f} continuous on ${range(A, B)}, which a table cannot show. If the problem states that ${f} is differentiable (so continuous), tick it above.`
+    statement = `The Intermediate Value Theorem needs ${f} continuous on ${range(A, B)}, which a table cannot show. If the problem states that ${f} is differentiable (so continuous), check the box above.`
   } else {
     statement = `Because ${f} is differentiable, ${f} is continuous on ${range(A, B)}. Since ${f}(${lo.xText}) = ${lo.yText} < ${T} < ${hi.yText} = ${f}(${hi.xText}), by the Intermediate Value Theorem there is a value c in ${open} with ${f}(c) = ${withUnit(T, unit)}.`
   }

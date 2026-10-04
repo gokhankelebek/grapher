@@ -279,7 +279,7 @@ function render(s: BoardScene): MockCtx {
 describe('drawing', () => {
   it('the ladder at x = 6: live values and rates on the picture, and the mini-graph', () => {
     const texts = render(scene(newRelatedRates('R1'))).texts.map((t) => t.text)
-    for (const t of ['x = 6.0 ft', 'y = 8.0 ft', 'L = 10.0 ft', 'dx/dt = 2 ft/s', 'dy/dt = −3/2 ft/s', 't = 2.50 s · dy/dt = −3/2 ft/s']) {
+    for (const t of ['x = 6.0 ft', 'y = 8.0 ft', 'L = 10.0 ft', 'dx/dt = 2 ft/s', 'dy/dt = −3/2 ft/s', 't = 2.5 s · dy/dt = −3/2 ft/s']) {
       expect(texts, t).toContain(t)
     }
     expect(texts.some((t) => t.startsWith('dy/dt (ft/s)'))).toBe(true)

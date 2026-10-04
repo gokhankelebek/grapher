@@ -304,7 +304,7 @@ export function useUnitCircle({ board, refs, derived, notices, history, calc, vi
             }
             onCycleColor={() => {
               const i = CURVE_COLORS.indexOf(u.color)
-              patchUnitCircle(u.id, { color: CURVE_COLORS[(i + 1) % CURVE_COLORS.length] }, 'change colour')
+              patchUnitCircle(u.id, { color: CURVE_COLORS[(i + 1) % CURVE_COLORS.length] }, 'change color')
             }}
             onZoom={() => zoomToUnitCircle(u.id)}
             onTheta={(t) => setUnitCircleTheta(u.id, t)}

@@ -734,11 +734,11 @@ export function describeStats(list: readonly DescribeStat[]): DescribeExtra[] {
     } else {
       const plot = s.plot === 'dots' ? 'A dot plot' : 'A histogram'
       out.push({
-        text: `${plot} shows the difference in means after each of ${s.reps} re-randomisations of two groups of ${s.nA} and ${s.nB}, with the observed difference ${sNum(s.observed, 3)} marked.`,
+        text: `${plot} shows the difference in means after each of ${s.reps} re-randomizations of two groups of ${s.nA} and ${s.nB}, with the observed difference ${sNum(s.observed, 3)} marked.`,
       })
       const dir = s.tail === 'two' ? 'at least as extreme as' : s.tail === 'upper' ? 'at least as large as' : 'at most'
       out.push({
-        text: `In ${s.extreme} of ${s.reps} re-randomisations the difference was ${dir} the observed one, so the p-value is about ${fixedN(s.p, 3)}.`,
+        text: `In ${s.extreme} of ${s.reps} re-randomizations the difference was ${dir} the observed one, so the p-value is about ${fixedN(s.p, 3)}.`,
         answer: true,
       })
     }
@@ -875,9 +875,9 @@ function centreSentences(pts: readonly Vec2[], labels: readonly string[] | undef
   const tri = `△${t.names.join('')}`
   const drawn: Record<string, string> = {
     centroid: 'the medians and the centroid G',
-    circumcentre: 'the perpendicular bisectors, the circumscribed circle and the circumcentre O',
-    incentre: 'the angle bisectors, the inscribed circle and the incentre I',
-    orthocentre: 'the altitudes and the orthocentre H',
+    circumcentre: 'the perpendicular bisectors, the circumscribed circle and the circumcenter O',
+    incentre: 'the angle bisectors, the inscribed circle and the incenter I',
+    orthocentre: 'the altitudes and the orthocenter H',
     euler: 'the Euler line',
   }
   const list = flags.map((f) => drawn[f]).filter((x): x is string => !!x)
@@ -897,7 +897,7 @@ function centreSentences(pts: readonly Vec2[], labels: readonly string[] | undef
   if (facts.length > 0) out.push({ text: `${capitalFirst(facts.join('; '))}.`, answer: true })
   if (flags.includes('euler')) {
     out.push({
-      text: t.euler ? `O, G and H lie on the Euler line ${t.euler.line.slopeIntercept.text}, and ${t.euler.ratioText}.` : `${tri} is equilateral: all four centres coincide.`,
+      text: t.euler ? `O, G and H lie on the Euler line ${t.euler.line.slopeIntercept.text}, and ${t.euler.ratioText}.` : `${tri} is equilateral: all four centers coincide.`,
       answer: true,
     })
   }
@@ -916,7 +916,7 @@ function xformSentences(s: Exclude<Shape, { kind: 'vector' }>): DescribeExtra[] 
       out.push({ text: `${capitalFirst(im.name)} is the image of ${im.of} under ${im.words}, drawn dashed: ${im.notation}: ${im.rule}.`, answer: true })
     }
     if (a?.mirror) out.push({ text: `The mirror line ${a.mirror.label} is drawn.` })
-    if (a?.center) out.push({ text: `The centre ${a.center.label === 'O' ? 'O, the origin' : a.center.label} is marked.` })
+    if (a?.center) out.push({ text: `The center ${a.center.label === 'O' ? 'O, the origin' : a.center.label} is marked.` })
     if (a?.vector) out.push({ text: `The translation vector ${a.vector.label} is drawn.` })
   }
   if (a?.symLines && a.symText) {

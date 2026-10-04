@@ -136,10 +136,10 @@ describe('describeScene — the bank example (plain data)', () => {
     )
   })
 
-  it('answers: false is the student copy — window, scale, the labelled point, nothing computed', () => {
+  it('answers: false is the student copy — window, scale, the labeled point, nothing computed', () => {
     const d = describeScene({ ...scene, window: { ...scene.window, xStep: 1 } }, { answers: false })
     expect(d.figuredesc).toBe(
-      'Graph of f′ on [−3, 4] × [−2, 5]; x-axis marked every 1 unit; the curve passes through the labelled point (0, 2).',
+      'Graph of f′ on [−3, 4] × [−2, 5]; x-axis marked every 1 unit; the curve passes through the labeled point (0, 2).',
     )
     expect(d.long).not.toMatch(/−0\.5|−1\.5|zero|maximum|minimum|crosses/)
     expect(d.long).toContain('(0, 2)')
@@ -153,7 +153,7 @@ describe('describeScene — the bank example (plain data)', () => {
     expect(paras[1]).toMatch(/^Curve f′: y = f′\(x\), a function\./)
     expect(paras[1]).toContain('It crosses the x-axis at x = −2 and x = 1.')
     expect(paras[1]).toContain('a relative maximum at (−0.5, 3) and a relative minimum at (3, −1.5)')
-    expect(paras[1]).toContain('labelled point (0, 2)')
+    expect(paras[1]).toContain('labeled point (0, 2)')
   })
 
   it('never contains a newline in figuredesc', () => {
@@ -331,12 +331,12 @@ describe('describeCurves — calculus objects', () => {
     expect(d.figuredesc).toContain('f and g meet at (0, 0) and (2, 4)')
   })
 
-  it('student copy: the shaded region without its area, intersections only when labelled', () => {
+  it('student copy: the shaded region without its area, intersections only when labeled', () => {
     const s = describeCurves(input(b, W, { calc }), { answers: false })
     expect(s.figuredesc).toBe('Graphs of f and g on [−1, 3] × [−1, 5]; both axes marked every 1 unit; shaded region R between g and f on [0, 2].')
     expect(s.long).not.toMatch(/4\/3|intersect/)
     const labelled = describeCurves(input(b, W, { calc, labelledIntersections: [{ x: 2, y: 4, label: 'P' }] }), { answers: false })
-    expect(labelled.figuredesc).toContain('labelled intersection at P (2, 4)')
+    expect(labelled.figuredesc).toContain('labeled intersection at P (2, 4)')
     expect(labelled.figuredesc).not.toContain('(0, 0)')
   })
 
@@ -388,7 +388,7 @@ describe('describeCurves — π, polar and conics', () => {
     expect(d.figuredesc).toContain('[0, 6.28]')
   })
 
-  it('a circle: kind, centre and radius', () => {
+  it('a circle: kind, center and radius', () => {
     const d = describeCurves(input(board(['x^2 + y^2 = 25']), { xMin: -6, xMax: 6, yMin: -6, yMax: 6 }))
     expect(d.long).toContain('a circle')
     expect(d.long).toContain('Its center is at (0, 0).')

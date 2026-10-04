@@ -41,7 +41,7 @@ const PANELS = [
     id: 'teach',
     title: 'Teach',
     img: teachImg,
-    alt: 'Presentation mode with large type: the bar reads “3 of 15 revealed” with a Next button, the revealed zeros are labelled on the curve and the rest are question marks.',
+    alt: 'Presentation mode with large type: the bar reads “3 of 15 revealed” with a Next button, the revealed zeros are labeled on the curve and the rest are question marks.',
     text: 'Hide the answers with Reveal, then step through them full-screen in Present mode, or send students a view-only link.',
   },
   {

@@ -608,7 +608,7 @@ function TreeBody({
       <CardSection kind="prob-tree-build" title="Build" summary={t.mode === 'bag' ? `${t.bag.map((b) => `${b.count} ${b.name}`).join(', ')} · ${t.draws} draws` : `${stages.length} stages`}>
         <Seg<'bag' | 'manual'>
           options={[
-            { v: 'bag', text: 'From a bag', title: 'Counts per colour, the number of draws, with or without replacement' },
+            { v: 'bag', text: 'From a bag', title: 'Counts per color, the number of draws, with or without replacement' },
             { v: 'manual', text: 'Type the stages', title: 'Outcomes and probabilities stage by stage' },
           ]}
           value={t.mode}
@@ -621,7 +621,7 @@ function TreeBody({
             <div className="prob-bag" data-testid="prob-bag">
               {t.bag.map((b, i) => (
                 <div key={i} className="prob-bag-row">
-                  <TextField value={b.name} label={`colour ${i + 1}`} testId="prob-bag-name" onCommit={(v) => v && rebuildTree({ bag: t.bag.map((x, k) => (k === i ? { ...x, name: v } : x)) }, `rename ${b.name}`)} />
+                  <TextField value={b.name} label={`color ${i + 1}`} testId="prob-bag-name" onCommit={(v) => v && rebuildTree({ bag: t.bag.map((x, k) => (k === i ? { ...x, name: v } : x)) }, `rename ${b.name}`)} />
                   <TextField
                     value={String(b.count)}
                     label={`how many ${b.name}`}
@@ -654,11 +654,11 @@ function TreeBody({
                   onClick={(e) => {
                     e.stopPropagation()
                     const names = ['Red', 'Blue', 'Green', 'Yellow', 'White', 'Black']
-                    const name = names.find((n) => !t.bag.some((b) => b.name === n)) ?? `Colour ${t.bag.length + 1}`
+                    const name = names.find((n) => !t.bag.some((b) => b.name === n)) ?? `Color ${t.bag.length + 1}`
                     rebuildTree({ bag: [...t.bag, { name, count: 1 }] }, `add ${name}`)
                   }}
                 >
-                  + colour
+                  + color
                 </button>
               )}
             </div>

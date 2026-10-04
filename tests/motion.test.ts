@@ -222,7 +222,7 @@ describe('paramFeatures', () => {
     expect(f.verticalTangents).toEqual([])
     expect(f.arcLength).toBeCloseTo(8, 9)
     expect(f.sentences).toContain('arc length = 8 over 0 ≤ t ≤ 2π')
-    expect(f.sentences).toContain('displacement = 2π; distance travelled = 8')
+    expect(f.sentences).toContain('displacement = 2π; distance traveled = 8')
   })
 
   it('a constant component has no isolated tangents', () => {
@@ -402,7 +402,7 @@ describe('families', () => {
     expect(v.x).toBeCloseTo(3 * Math.cos(0.5), 14)
   })
 
-  it('every polar family is recognised by describePolar', () => {
+  it('every polar family is recognized by describePolar', () => {
     const want: Record<string, RegExp> = {
       roseCos: /^a rose with 3 petals, each of length 2/,
       roseSin: /^a rose with 4 petals, each of length 2/,

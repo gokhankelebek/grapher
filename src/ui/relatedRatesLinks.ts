@@ -29,6 +29,7 @@ import {
   rateSeries,
   rrState,
   solveWhen,
+  decExact,
 } from '../core/relatedRates'
 import type { Formula, Params, RRScenario, RRScenarioDef, RRState } from '../core/relatedRates'
 import type { RRGraph, RRPrim, RelatedRatesFigure } from '../render/relatedRates'
@@ -209,7 +210,7 @@ export function relatedRatesFigure(rr: BoardRelatedRates, opts: FigureOpts = {})
     color: rr.color,
     prims,
     graph,
-    title: { at: { x: (sb.x0 + sb.x1) / 2, y: sb.y1 }, text: `t = ${dec(s.t, 2)} ${def.timeUnit} · ${unknown}` },
+    title: { at: { x: (sb.x0 + sb.x1) / 2, y: sb.y1 }, text: `t = ${decExact(s.t, 2)} ${def.timeUnit} · ${unknown}` },
     answers: def.extra ? [def.unknown.label, def.extra.label] : [def.unknown.label],
   }
 }
@@ -417,7 +418,7 @@ export function relatedRatesCard(rr: BoardRelatedRates, playT: number | null = n
   const quantities = def.quantities.map((q) => ({
     key: q.key,
     label: q.label,
-    text: `${dec(state.q[q.key], 3)} ${q.unit}`,
+    text: `${decExact(state.q[q.key], 3)} ${q.unit}`,
   }))
   let unknown: RelatedRatesCardData['unknown'] = null
   if (state.valid && Number.isFinite(state.unknown)) {
@@ -448,14 +449,14 @@ export function relatedRatesCard(rr: BoardRelatedRates, playT: number | null = n
     const at =
       when && when.ok && when.t !== null && Math.abs(when.t - state.t) <= 1e-9 * Math.max(1, tMax)
         ? `When ${qLabel(def, when.q)} = ${dec(when.v, 3).replace(/\.?0+$/, '')} ${qUnit(def, when.q)}`
-        : `At t = ${dec(state.t, 2)} ${def.timeUnit}`
+        : `At t = ${decExact(state.t, 2)} ${def.timeUnit}`
     const what = def.unknown.label.replace(/^d/, '').replace(/\/dt$/, '')
     const mag = rateText(Math.abs(state.unknown))
     const trend = state.unknown > 0 ? `is increasing at ${mag}` : state.unknown < 0 ? `is decreasing at ${mag}` : 'is not changing'
     answer = `${at}, ${def.unknown.label} = ${unknown.text} ${unknown.unit}: ${what} ${trend}${state.unknown === 0 ? '' : ` ${def.unknown.unit}`}.`
   }
   const substituted = state.valid ? def.substituted(rr.params, state) : null
-  const summary = `${def.title} · t = ${dec(state.t, 2)} ${def.timeUnit}${
+  const summary = `${def.title} · t = ${decExact(state.t, 2)} ${def.timeUnit}${
     unknown ? ` · ${def.unknown.label} = ${unknown.text} ${unknown.unit}` : ''
   }`
   return {

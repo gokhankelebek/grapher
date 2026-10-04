@@ -70,6 +70,7 @@ import { BuildFocus } from './ui/BuildMenu'
 import { FirstRun } from './ui/FirstRun'
 import { AboutDialog } from './ui/AboutDialog'
 import { coursesLabel, galleryFilterFor } from './ui/courses'
+import { listDocs } from './ui/storage'
 import { BRAND } from './brand'
 import { examplesLib } from './app/useExamples'
 import { itemBankLib } from './app/useItemBank'
@@ -1220,6 +1221,8 @@ export default function App() {
             screen={{ widthPx: vpRef.current.widthPx, heightPx: vpRef.current.heightPx }}
             onClose={() => setWorksheetOpen(false)}
             toast={(msg) => showToast(msg)}
+            courses={galleryFilterFor(focus.courses)}
+            onDocsChanged={() => docState.setDocs(listDocs())}
           />
         )}
 

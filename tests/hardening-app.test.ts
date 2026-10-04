@@ -295,14 +295,14 @@ describe('a hidden parent is not "f"', () => {
 // ---------------------------------------------------------------------------
 
 describe('implicit tangent legend', () => {
-  it('reads "tangent at (1, 2)", not "tangent at x = 1.00"', () => {
+  it('reads "tangent at (1, 2)", not "tangent at x = 1"', () => {
     const link: TangentLink = { kind: 'tangent', id: 't', parentId: 'c', curveId: 'L', x: 1, y: 2 }
     const [e] = labelLegend([{ id: 'L', color: '#fff', tex: 'y = x', text: 'y = x' }], [link])
     expect(e.text).toBe('tangent at (1, 2)')
-    expect(e.tex).not.toContain('x = 1.00')
+    expect(e.tex).not.toContain('x = 1')
     const explicit: TangentLink = { kind: 'tangent', id: 't', parentId: 'c', curveId: 'L', x: 1 }
     const [e2] = labelLegend([{ id: 'L', color: '#fff', tex: 'y = x', text: 'y = x' }], [explicit])
-    expect(e2.text).toBe('tangent at x = 1.00')
+    expect(e2.text).toBe('tangent at x = 1')
   })
 })
 
@@ -393,7 +393,7 @@ describe('damaged related-rates and system fields are reported, not fixed silent
     expect(problems).toEqual([])
   })
 
-  it('bad t, when, pause, graph, colour and givens are each reported', () => {
+  it('bad t, when, pause, graph, color and givens are each reported', () => {
     const problems: string[] = []
     const out = storedToRelatedRates(
       { ...good, t: 'soon', when: { q: 'nope', v: 1 }, pause: 'yes', graph: 0, color: 'banana', params: 'x' },
@@ -406,10 +406,10 @@ describe('damaged related-rates and system fields are reported, not fixed silent
       expect(out.rr.when).toBeUndefined()
     }
     const all = problems.join(' ')
-    for (const word of ['instant t', '“when”', 'pause', 'graph', 'colour', 'givens']) expect(all).toContain(word)
+    for (const word of ['instant t', '“when”', 'pause', 'graph', 'color', 'givens']) expect(all).toContain(word)
   })
 
-  it('a colour must be a colour; a real one is kept', () => {
+  it('a color must be a color; a real one is kept', () => {
     const p1: string[] = []
     const a = storedToRelatedRates({ ...good, color: 'url(javascript:1)' }, p1)
     expect('rr' in a && a.rr.color).toBe('#38bdf8')
@@ -444,7 +444,7 @@ describe('damaged related-rates and system fields are reported, not fixed silent
     const stored = boardToStored(input())
     const res = load({ ...stored, relatedRates: { ...good, color: 'banana' }, system: { iso: 'yes' } })
     expect(res.degraded).toBe(true)
-    expect(res.problems.join(' ')).toMatch(/related-rates problem’s colour/)
+    expect(res.problems.join(' ')).toMatch(/related-rates problem’s color/)
     expect(res.problems.join(' ')).toMatch(/inequality system’s iso-profit/)
   })
 })

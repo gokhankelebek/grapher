@@ -455,7 +455,7 @@ export function growthReason(F: Asym | null, G: Asym | null, leader: 'f' | 'g', 
   const l = leader === 'f' ? lead(G) : lead(F)
   const lName = (leader === 'f' ? names?.g : names?.f) ?? 'the other'
   const bothPoly = poly(F) && poly(G)
-  if (!w && !l) return 'by their end behaviour'
+  if (!w && !l) return 'by their end behavior'
   if (!l) return 'it stays positive for large x'
   if (!w) return `${lName} stays negative for large x`
   const c = cmpOrd(w, l)

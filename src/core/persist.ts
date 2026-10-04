@@ -1050,7 +1050,7 @@ export function storedToUnitCircle(raw: unknown): { circle: BoardUnitCircle } | 
   const { id, cx, cy, theta } = raw
   if (!isStr(id) || !id) return { error: 'it had no id' }
   if (!isNum(cx) || !isNum(cy) || Math.abs(cx) > UC_COORD_LIMIT || Math.abs(cy) > UC_COORD_LIMIT) {
-    return { error: 'its centre was unreadable' }
+    return { error: 'its center was unreadable' }
   }
   if (!isNum(theta) || Math.abs(theta) > UC_THETA_LIMIT) return { error: 'its angle was unreadable' }
   const show: UnitCircleShow = { ...UC_SHOW_DEFAULT }
@@ -1136,7 +1136,7 @@ export function storedToSystem(raw: unknown, problems?: string[]): BoardIneqSyst
   }
   if (isObj(raw.objective) && isStr(raw.objective.src) && raw.objective.src.trim() !== '') {
     const g = raw.objective.goal
-    if (g !== undefined && g !== 'min' && g !== 'max') say('objective goal was unreadable; it maximises')
+    if (g !== undefined && g !== 'min' && g !== 'max') say('objective goal was unreadable; it maximizes')
     out.objective = { src: raw.objective.src.slice(0, 200), goal: g === 'min' ? 'min' : 'max' }
   } else if (raw.objective !== undefined) {
     say('objective was unreadable, so it was removed')
@@ -1252,7 +1252,7 @@ export function storedToRelatedRates(
   const tOk = isNum(t) && Math.abs(t) <= RR_T_LIMIT
   if (!tOk) say('instant t was unreadable; it starts at 0')
   const colorOk = raw.color === undefined || isColorString(raw.color)
-  if (!colorOk) say('colour was not a colour; the default was used')
+  if (!colorOk) say('color was not a color; the default was used')
   const rr: BoardRelatedRates = {
     id,
     scenario: sc,
@@ -2378,7 +2378,8 @@ export function decimate(points: Vec2[], max = MAX_STORED_STROKE): Vec2[] {
   return out
 }
 
-const newId = (): string =>
+/** A fresh document id (also used for a new worksheet's own documents, src/examples/sampleWorksheet.ts). */
+export const newId = (): string =>
   `d${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 
 // ------------------------------------------------------------------ save side
@@ -3742,7 +3743,7 @@ export function hydrateDoc(rawDoc: unknown, opts: HydrateOptions = {}): LoadResu
   const version = isNum(rawDoc.version) ? rawDoc.version : 0
   if (version > SCHEMA_VERSION) {
     problems.push(
-      `This document was saved by a newer version of Grapher (format ${version}; this app reads ${SCHEMA_VERSION}). Anything it doesn't recognise was skipped.`,
+      `This document was saved by a newer version of Grapher (format ${version}; this app reads ${SCHEMA_VERSION}). Anything it doesn't recognize was skipped.`,
     )
     degraded = true
   } else if (version < SILENT_UPGRADE_FROM) {

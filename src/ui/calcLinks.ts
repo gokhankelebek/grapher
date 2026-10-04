@@ -408,7 +408,12 @@ export function overlaysFor(
 
 const MINUS = '−'
 
-/** A readout number: fixed places, a real minus sign, never "-0.000". */
+/**
+ * A readout number: up to `places` decimals, a real minus sign, never
+ * "-0.000". A value the decimals state EXACTLY drops its trailing zeros —
+ * "slope 2", "b = 3", "a = −3.5", never "2.00" beside "0" — while an
+ * approximation keeps every place it was rounded to ("2.667").
+ */
 export function fixed(v: number, places: number): string {
   if (!Number.isFinite(v)) return '—'
   const mag = Math.abs(v)
@@ -417,7 +422,8 @@ export function fixed(v: number, places: number): string {
     if (mag < 1) return `0.${'0'.repeat(places)}`
     return v.toExponential(Math.max(1, places - 1)).replace('-', MINUS)
   }
-  const s = v.toFixed(places)
+  let s = v.toFixed(places)
+  if (s.includes('.') && Math.abs(Number(s) - v) <= 1e-9 * Math.max(1, mag)) s = s.replace(/\.?0+$/, '')
   const cleaned = /^-0\.?0*$/.test(s) ? s.slice(1) : s
   return cleaned.replace('-', MINUS)
 }

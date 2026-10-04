@@ -1,8 +1,9 @@
 // ============================================================================
 // src/ui/ExampleGallery.tsx — Document menu → Examples…: ready-to-teach boards.
 //
-// A full-window sheet over the board, grouped by course and unit (the help
-// sheet's units). Each card is a thumbnail of the example's figure — drawn by
+// A full-window sheet over the board, grouped by course: one flowing grid of
+// cards per course, in unit order (the help sheet's units), each card naming
+// its unit. Each card is a thumbnail of the example's figure — drawn by
 // docScene, the worksheet's own pure path from a stored document to a figure
 // — its title, its unit tag and its teacher note. Clicking a card opens the
 // example as a NEW document copy (src/app/useExamples.ts); the teacher's own
@@ -37,9 +38,6 @@ interface Props {
 
 /** CSS width a thumbnail is drawn at; the figure's text is set for this size. */
 const THUMB_W = 280
-/** A card's width and the gap between cards (styles.css .exg-grid). */
-const CARD_W = 262
-const CARD_GAP = 12
 
 // ---- the thumbnail queue: one figure per frame, each recorded once.
 const LISTS = new Map<string, DisplayList | null>()
@@ -278,36 +276,38 @@ export function ExampleGallery({ focusSection = null, defaultCourses = null, onO
           {groups.map((g) => (
             <section key={g.course} className="exg-course" data-course={g.course} aria-label={COURSE_NAMES[g.course]}>
               <h3 className="exg-course-title">{COURSE_NAMES[g.course]}</h3>
-              {g.units.map((u) => (
-                <div
-                  key={u.id}
-                  className={`exg-unit${u.id === focusSection ? ' exg-unit-focus' : ''}`}
-                  data-section={u.id}
-                  style={{ width: `min(100%, ${u.examples.length * CARD_W + (u.examples.length - 1) * CARD_GAP}px)` }}
-                >
-                  <h4 className="exg-unit-title">{u.title}</h4>
-                  <ul className="exg-grid">
-                    {u.examples.map((d) => (
-                      <li key={d.id}>
-                        <button
-                          type="button"
-                          className="exg-card"
-                          data-example={d.id}
-                          title={`Open a copy of “${d.title}”`}
-                          onClick={() => onOpen(d.id)}
-                        >
-                          <Thumb def={d} defs={defs} />
-                          <span className="exg-card-top">
-                            <span className="exg-tag">{d.unit}</span>
-                            <span className="exg-card-title">{d.title}</span>
-                          </span>
-                          <span className="exg-note">{d.note}</span>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ))}
+              {/* One flowing grid per course: cards in unit order, each with its unit
+                  above the title — no unit heading leaves a half-empty row. */}
+              <ul className="exg-grid">
+                {g.units.flatMap((u) =>
+                  u.examples.map((d, k) => (
+                    <li
+                      key={d.id}
+                      className={u.id === focusSection ? 'exg-in-focus' : undefined}
+                      data-unit={u.id}
+                      data-section={k === 0 ? u.id : undefined}
+                    >
+                      <button
+                        type="button"
+                        className="exg-card"
+                        data-example={d.id}
+                        title={`Open a copy of “${d.title}”`}
+                        onClick={() => onOpen(d.id)}
+                      >
+                        <Thumb def={d} defs={defs} />
+                        <span className="exg-unit-line" title={u.title}>
+                          {u.title}
+                        </span>
+                        <span className="exg-card-top">
+                          <span className="exg-tag">{d.unit}</span>
+                          <span className="exg-card-title">{d.title}</span>
+                        </span>
+                        <span className="exg-note">{d.note}</span>
+                      </button>
+                    </li>
+                  )),
+                )}
+              </ul>
             </section>
           ))}
         </div>

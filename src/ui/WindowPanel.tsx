@@ -164,7 +164,7 @@ export function WindowPanel({ view }: { view: ViewSettings }) {
             type="button"
             className="seg-btn win-btn"
             data-testid="view-window-square"
-            title="Equal axes, same centre, with the whole window still in view"
+            title="Equal axes, same center, with the whole window still in view"
             onClick={() => {
               setDrafts({})
               setError(null)

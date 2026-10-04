@@ -28,7 +28,7 @@ import { toPgfplots } from '../src/ui/pgfplotsExport'
 import { COMMANDS, HELP_SECTIONS } from '../src/ui/commands'
 import { buildExample, exampleById } from '../src/examples'
 
-const META: DocMeta = { id: 'D1', name: 'Centres', createdAt: 1000, modifiedAt: 1000 }
+const META: DocMeta = { id: 'D1', name: 'Centers', createdAt: 1000, modifiedAt: 1000 }
 const models: Record<string, ModelSpec> = { ...MODELS }
 let n = 0
 
@@ -72,8 +72,8 @@ const labels = (ovs: readonly Overlay[]) =>
 // Triangle centres
 // ---------------------------------------------------------------------------
 
-describe('triangle centres on the board', () => {
-  it('compiles the centres of every triangle; the flags say what is drawn', () => {
+describe('triangle centers on the board', () => {
+  it('compiles the centers of every triangle; the flags say what is drawn', () => {
     const shapes = [tri({ measure: { centres: [...ALL] } })]
     const c = compileShapes(shapes).get('T')!
     expect(c.centres!.circumcentre.pt.text).toBe('(2, −2)')
@@ -88,7 +88,7 @@ describe('triangle centres on the board', () => {
     expect(centreOverlays([tri()], compileShapes([tri()]))).toEqual([])
   })
 
-  it('draws each centre with its lines and an answer chip; the Euler line through O, G, H', () => {
+  it('draws each center with its lines and an answer chip; the Euler line through O, G, H', () => {
     const shapes = [tri({ measure: { centres: [...ALL] } })]
     const ovs = centreOverlays(shapes, compileShapes(shapes))
     const chips = labels(ovs)
@@ -113,13 +113,13 @@ describe('triangle centres on the board', () => {
     expect(line.kind === 'line' && line.at.x).toBeCloseTo(0, 12)
   })
 
-  it('an equilateral triangle says the centres coincide', () => {
+  it('an equilateral triangle says the centers coincide', () => {
     const shapes = [tri({ src: 'ABC = (0,0) (2,0) (1,sqrt(3))', measure: { centres: ['euler'] } })]
     const chips = labels(centreOverlays(shapes, compileShapes(shapes)))
     expect(chips.map((l) => l.text)).toContain('G = O = I = H')
   })
 
-  it('dragging a vertex moves every centre (recomputed from the vertices)', () => {
+  it('dragging a vertex moves every center (recomputed from the vertices)', () => {
     const a = compileShapes([tri({ measure: { centres: ['circumcentre'] } })]).get('T')!.centres!
     const b = compileShapes([tri({ src: 'ABC = (-2,0) (6,0) (0,6)', measure: { centres: ['circumcentre'] } })]).get('T')!.centres!
     expect(a.circumcentre.where).toBe('outside')
@@ -127,7 +127,7 @@ describe('triangle centres on the board', () => {
     expect(b.circumcentre.pt.text).toBe('(2, 2)')
   })
 
-  it('toggles keep the measurements, and the measurements keep the centres', () => {
+  it('toggles keep the measurements, and the measurements keep the centers', () => {
     const m = toggleCentre(undefined, 'centroid')
     expect(m).toEqual({ centres: ['centroid'] })
     expect(toggleCentre(m, 'centroid')).toBeUndefined()
@@ -139,8 +139,8 @@ describe('triangle centres on the board', () => {
   })
 })
 
-describe('triangle centres: persistence', () => {
-  it('writes the centres only when one is on; old documents are byte-identical', () => {
+describe('triangle centers: persistence', () => {
+  it('writes the centers only when one is on; old documents are byte-identical', () => {
     const before = save(board({ shapes: [tri()] }))
     expect(before).not.toContain('centres')
     const on = toggleCentre(undefined, 'orthocentre')
@@ -158,9 +158,9 @@ describe('triangle centres: persistence', () => {
   })
 })
 
-describe('triangle centres: reveal, words, exports', () => {
+describe('triangle centers: reveal, words, exports', () => {
   const shapes = [tri({ measure: { centres: [...ALL] } })]
-  it('each centre is an answer, in card order', () => {
+  it('each center is an answer, in card order', () => {
     expect(measureAnswerParts('polygon', { centres: [...ALL] }, undefined)).toEqual([...ALL])
     expect(measureAnswerParts('polygon', { show: ['area'], centres: ['euler'] }, undefined)).toEqual(['area', 'euler'])
   })
@@ -185,11 +185,11 @@ describe('triangle centres: reveal, words, exports', () => {
     expect(labels(shown.overlays!).map((l) => l.text)).toContain('H (0, 6)')
     expect(labels(shown.overlays!).map((l) => l.text)).not.toContain('G (4/3, 2/3)')
   })
-  it('describes what is drawn always, and where the centres are only as answers', () => {
+  it('describes what is drawn always, and where the centers are only as answers', () => {
     const m = docModelFromJSON(save(board({ shapes })), { screen: { widthPx: 800, heightPx: 600 } })!
     const key = describeBoard(m, { answers: true }).long
     expect(key).toContain('The medians and the centroid G')
-    expect(key).toContain('the circumcentre O is at (2, −2), outside the triangle with circumradius 2√5 ≈ 4.47')
+    expect(key).toContain('the circumcenter O is at (2, −2), outside the triangle with circumradius 2√5 ≈ 4.47')
     expect(key).toContain('Euler line y = −4x + 6')
     const student = describeBoard(m, { answers: false }).long
     expect(student).toContain('The medians and the centroid G')
@@ -334,7 +334,7 @@ describe('circle theorems: reveal, words, exports', () => {
   it('describes the figures always and their values only as answers', () => {
     const m = docModelFromJSON(save(board({ curves: [C36], exprSources: SRC, curveViews: { C: { circle: view } } })))!
     const key = describeBoard(m, { answers: true }).long
-    expect(key).toContain('On the circle x² + y² = 36 (centre O(0, 0), radius 6) the points P(3√3, 3), Q(−3√3, 3), R(0, −6) are marked.')
+    expect(key).toContain('On the circle x² + y² = 36 (center O(0, 0), radius 6) the points P(3√3, 3), Q(−3√3, 3), R(0, −6) are marked.')
     expect(key).toContain('the central angle is 120° and the inscribed angle is 60°')
     expect(key).toContain('The arc length is 4π and the sector area is 12π.')
     const student = describeBoard(m, { answers: false }).long

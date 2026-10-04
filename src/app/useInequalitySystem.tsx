@@ -119,7 +119,7 @@ export function useInequalitySystem({ board, refs, derived, history }: Inequalit
           }
           const o = parseObjective(src)
           if (!o.ok) return o.error
-          patchSystem({ objective: { src: src.trim(), goal } }, goal === 'max' ? 'maximise' : 'minimise')
+          patchSystem({ objective: { src: src.trim(), goal } }, goal === 'max' ? 'maximize' : 'minimize')
           return null
         }}
         onIso={(on) => patchSystem({ iso: on ? true : undefined }, on ? 'iso-profit line' : 'no iso-profit line')}
