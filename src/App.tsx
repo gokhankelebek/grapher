@@ -65,6 +65,12 @@ import { useCommands } from './app/useCommands'
 import { useKeyboard } from './app/useKeyboard'
 import { usePresentation } from './app/usePresentation'
 import { usePresentAnswers } from './app/usePresentAnswers'
+import { feedbackHref, useCourseFocus } from './app/useCourseFocus'
+import { BuildFocus } from './ui/BuildMenu'
+import { FirstRun } from './ui/FirstRun'
+import { AboutDialog } from './ui/AboutDialog'
+import { coursesLabel, galleryFilterFor } from './ui/courses'
+import { BRAND } from './brand'
 import { examplesLib } from './app/useExamples'
 import { itemBankLib } from './app/useItemBank'
 import { LazyWait, lazyComponent, lazyModule, prefetchLazyModules } from './ui/lazyLoad'
@@ -188,11 +194,13 @@ export default function App() {
   const itemBank = useItemBank({
     refs, derived, notices, persistence, overlaysApi, examples: examplesApi,
   })
+  // First run, the teacher's courses, backups and About (before ⌘K, which offers them)
+  const focus = useCourseFocus({ docState, refs, notices, persistence, docActions, examples: examplesApi })
   const commandsApi = useCommands({
     board, docState, session, refs, derived, notices, history, docActions, editing, calc, fieldsApi,
     typed, tables, domain, numberLine, viewport: viewportFit, unitCircle, rates, overlaysApi, naming, revealMode,
     exporter, figureSettings, editors, examples: examplesApi, itemBank, describer, statsApi, shapesApi,
-    circleViewsApi,
+    circleViewsApi, focus,
   })
   useKeyboard({
     board, docState, session, refs, history, editing, calc, revealMode, figureSettings, editors,
@@ -269,7 +277,7 @@ export default function App() {
     addDataTable, setDataCellText, setDataLabel, removeDataRowAt, pasteData, toggleDataVisible,
     cycleDataColor, setDataMarker, deleteData, duplicateData, addRegression, removeRegression,
     setRegressionDigits, toggleResiduals, toggleResidualPlot, refitRegression, scatterScene, dataCardFor, seqCardFor,
-    seqDefaultName,
+    seqDefaultName, setTableCalc, sortTableByX,
   } = tables
   const {
     buildFromRoots, restateFactors, dropFactorThrough, factorThroughFor, buildExponential,
@@ -317,6 +325,18 @@ export default function App() {
   } = figureSettings
   const { endDrop, keepDropAlive } = fileDrop
   const { showBuilder } = editors
+  /** Build ▾'s courses and its non-builder rows (src/ui/BuildMenu.tsx BuildFocus). */
+  const buildFocus = useMemo(
+    () => ({
+      courses: focus.courses,
+      onTypeLine: editors.typeLine,
+      onSolveInequality: () => {
+        setBoardKind('number-line')
+        editors.typeLine()
+      },
+    }),
+    [focus.courses, editors.typeLine, setBoardKind],
+  )
   const { mac, commandCtx, runCommand, doFromHelp } = commandsApi
   const {
     canUndo, canRedo, present, legendShown, changePresentType, hasBoardContent, answerBoard,
@@ -357,6 +377,7 @@ export default function App() {
       <InkContext.Provider value={cardInk}>
       <RevealContext.Provider value={revealApi}>
       <AnswerContext.Provider value={answerBoard}>
+      <BuildFocus.Provider value={buildFocus}>
       <Sidebar
         open={sidebarOpen && !presentMode}
         docId={docMeta.id}
@@ -582,7 +603,10 @@ export default function App() {
         onRegressionResiduals={toggleResiduals}
         onRegressionResidualPlot={toggleResidualPlot}
         onRegressionRefit={refitRegression}
+        onDataCalc={setTableCalc}
+        onDataSortX={sortTableByX}
       />
+      </BuildFocus.Provider>
       </AnswerContext.Provider>
 
       {sidebarOpen && !presentMode && (
@@ -807,7 +831,10 @@ export default function App() {
               onDuplicate={duplicateDocument}
               onDelete={deleteDocument}
               onExport={exportDocument}
-              onImport={importDocument}
+              onImport={focus.restoreFromFile /* a document, or a full backup */}
+              backupDue={focus.backupDue}
+              onBackupAll={focus.saveBackup}
+              onSnoozeBackup={focus.snoozeBackup}
               onWorksheet={student ? undefined : openWorksheet}
               onExamples={openGallery}
               onGraphFromItem={student ? undefined : openGraphFromItem}
@@ -818,6 +845,19 @@ export default function App() {
             />
           }
           student={student}
+          brand={BRAND}
+          onExamples={openGallery}
+          settings={{
+            brand: BRAND,
+            coursesLabel: coursesLabel(focus.courses),
+            onCourses: focus.openCourses,
+            tipDue: focus.tipDue,
+            onDismissTip: focus.dismissTip,
+            onBackup: focus.saveBackup,
+            onRestore: focus.pickRestore,
+            onAbout: focus.openAbout,
+            feedbackHref: feedbackHref(),
+          }}
           exportMenu={
             // A student gets none of these: Reveal off and Download would both
             // put every answer up, and Present is the teacher's projector.
@@ -848,7 +888,7 @@ export default function App() {
                   />
                   <circle cx="8" cy="11.6" r="0.85" fill="currentColor" />
                 </svg>
-                Reveal
+                <span className="tb-label tb-reveal-label">Reveal</span>
               </button>
               <button
                 className="tb-btn tb-icon"
@@ -1183,7 +1223,38 @@ export default function App() {
           />
         )}
 
-        {galleryOpen && <ExampleGallery onOpen={openExample} onClose={closeGallery} />}
+        {galleryOpen && (
+          <ExampleGallery defaultCourses={galleryFilterFor(focus.courses)} onOpen={openExample} onClose={closeGallery} />
+        )}
+
+        {/* First run ("What do you teach?") and Settings → Your courses. */}
+        {focus.chooser && (
+          <FirstRun
+            mode={focus.chooser}
+            initial={focus.courses ?? []}
+            onFinish={focus.finishFirstRun}
+            onSave={(next) => {
+              focus.chooseCourses(next)
+              focus.closeChooser()
+              showToast(next.length > 0 ? `Your courses: ${coursesLabel(next)}.` : 'No courses chosen — everything is shown.', { ms: 2600 })
+            }}
+            onCancel={focus.closeChooser}
+          />
+        )}
+        {focus.aboutOpen && <AboutDialog onBackup={student ? undefined : focus.saveBackup} onClose={focus.closeAbout} />}
+
+        {/* Once, after the first saved edit: the honest truth about storage. */}
+        {focus.storageNotice && !presentMode && (
+          <div className="storage-note" role="status" data-testid="storage-notice">
+            <span className="storage-note-text">Your graphs are saved in this browser only.</span>
+            <button className="storage-note-action" onClick={focus.saveBackup}>
+              Save a backup →
+            </button>
+            <button className="storage-note-x" onClick={focus.dismissStorageNotice} aria-label="Dismiss" title="Dismiss">
+              ×
+            </button>
+          </div>
+        )}
         {bankOpen && (
           <CopyForBankDialog
             docName={docMeta.name}
@@ -1296,6 +1367,15 @@ export default function App() {
             setHelpOpen(false)
             openExample(id)
           }}
+          courses={focus.courses}
+          onCourses={
+            student
+              ? undefined
+              : () => {
+                  setHelpOpen(false)
+                  focus.openCourses()
+                }
+          }
           onClose={() => setHelpOpen(false)}
         />
       )}

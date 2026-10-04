@@ -59,6 +59,10 @@
 //                                central), tangent, sector (arc length and
 //                                area), chords, external (tangents from a
 //                                point), square (completing the square)
+//   tcalc:<tableId>:<part>       calculus on a data table: sum (a Riemann or
+//                                trapezoidal sum, its terms and value), deriv
+//                                (the difference quotient), avg (the average
+//                                value), mvt, ivt (the theorems' conclusions)
 //
 // An index key is the point's rank among the points of its kind sorted by
 // x, so the same answer keeps its key across re-renders and recomputation
@@ -128,6 +132,10 @@ export const complexKey = (curveId: string): string => `curve:${curveId}:complex
 /** The parts of a circle's Circle theorems section that are answers. */
 export type CirclePart = 'angles' | 'tangent' | 'sector' | 'chords' | 'external' | 'square'
 export const circleKey = (curveId: string, part: CirclePart): string => `circle:${curveId}:${part}`
+
+/** The parts of a data table's "Calculus on this table" that are answers, each revealed on its own. */
+export type TableCalcPart = 'sum' | 'deriv' | 'avg' | 'mvt' | 'ivt'
+export const tableCalcKey = (tableId: string, part: TableCalcPart): string => `tcalc:${tableId}:${part}`
 
 /** The parts of a shape's measurements that are answers, each revealed on its own. */
 export type ShapePart =

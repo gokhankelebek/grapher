@@ -20,6 +20,7 @@ import type { ExpSpec } from '../core/exponential'
 import type { LogisticSpec } from '../core/logistic'
 import type { LogSpec } from '../core/logarithmic'
 import type { ShapeMeasureSettings, StyleMap } from '../core/persist'
+import type { TableCalcNext } from './tableCalcLinks'
 import type { XformAid, XformOp } from '../core/types'
 import type { NLPart } from '../render/numberline'
 import type { DomainActions, DomainPanel, SetNotation } from './domainLinks'
@@ -386,6 +387,10 @@ interface Props {
   onRegressionResiduals?(id: string, regId: string): void
   onRegressionResidualPlot?(id: string, regId: string): void
   onRegressionRefit?(id: string, regId: string): void
+  /** "Calculus on this table": a table's next calculus settings. */
+  onDataCalc?(id: string, next: TableCalcNext, label: string): void
+  /** "Sort by x" on a table. */
+  onDataSortX?(id: string): void
   /**
    * What each card is called (f, g, f′, f⁻¹), keyed by curve id — shown as the
    * chip in its header. Absent: no chips.
@@ -621,6 +626,8 @@ export function Sidebar({
   onRegressionResiduals = noop,
   onRegressionResidualPlot = noop,
   onRegressionRefit = noop,
+  onDataCalc,
+  onDataSortX,
   cardNames,
   storedNames,
   onRename,
@@ -1031,6 +1038,8 @@ export function Sidebar({
                   onResiduals={(regId) => onRegressionResiduals(table.id, regId)}
                   onResidualPlot={(regId) => onRegressionResidualPlot(table.id, regId)}
                   onRefit={(regId) => onRegressionRefit(table.id, regId)}
+                  onCalc={onDataCalc ? (next, label) => onDataCalc(table.id, next, label) : undefined}
+                  onSortX={onDataSortX ? () => onDataSortX(table.id) : undefined}
                 />
               )
             })}

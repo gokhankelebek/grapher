@@ -24,6 +24,7 @@ import type { Overlay } from '../ui/renderBoard'
 import { seriesOverlays } from '../ui/seqLinks'
 import { signRange } from '../ui/signChartLinks'
 import { tableOverlays } from '../ui/valueTableLinks'
+import { tableCalcOverlays } from '../ui/tableCalcLinks'
 import { extraneousOverlays } from '../ui/nlSolve'
 import { anyCentres, centreOverlays } from '../ui/centreLinks'
 import { circleOverlays } from '../ui/circleLinks'
@@ -57,7 +58,7 @@ export interface BoardOverlaysDeps {
 const EMPTY_MARKS: Overlay[] = []
 
 export function useBoardOverlays({ board, docState, session, derived, calc, tables, domain, system, shapesApi }: BoardOverlaysDeps) {
-  const { curves, kind, motionPlay, motionPlayRef, lens, calcLinks, sequences, playEpoch, valueTables, shapes, circleViews, items } = board
+  const { curves, kind, motionPlay, motionPlayRef, lens, calcLinks, sequences, playEpoch, valueTables, shapes, circleViews, items, dataSets } = board
   const shapeCompiled = shapesApi?.shapeCompiled
   const { exprSources, displaySources, names, calls, inverses } = docState
   const { markersOn, canvasTheme, exportFormat, latexWidthCm, exportSettings, curvePalette } = session
@@ -267,6 +268,20 @@ export function useBoardOverlays({ board, docState, session, derived, calc, tabl
     }
   }, [kind, items, curves, exprSources, models])
 
+  /**
+   * Calculus on a data table: the rectangles or trapezoids, the secants, the
+   * average-value line and their chips (answers). FIGURE: it exports.
+   */
+  const tableCalcMarks = useMemo<Overlay[]>(() => {
+    if (kind !== 'cartesian' || !dataSets.some((d) => d.calc && d.visible)) return EMPTY_MARKS
+    try {
+      const out = tableCalcOverlays(dataSets)
+      return out.length > 0 ? out : EMPTY_MARKS
+    } catch {
+      return EMPTY_MARKS
+    }
+  }, [kind, dataSets])
+
   /** Σ aₙ on the board: staircase bars, the joined sums, the band, y = S. */
   const seriesMarks = useMemo<Overlay[]>(
     () => (kind === 'cartesian' && sequences.some((q) => q.series) ? seriesOverlays(sequences, seqCompiled) : []),
@@ -298,16 +313,16 @@ export function useBoardOverlays({ board, docState, session, derived, calc, tabl
         : []
     const more =
       motionAreaOverlays.length + domainOverlays.length + sysOverlays.length + seriesMarks.length + tableMarks.length +
-      centreMarks.length + circleMarks.length + extraneousMarks.length
+      centreMarks.length + circleMarks.length + extraneousMarks.length + tableCalcMarks.length
     if (more === 0) return base
     // The ghost goes first (under everything else); the marks sort themselves
     // onto the curves by kind.
     return [
       ...domainOverlays, ...base, ...motionAreaOverlays, ...sysOverlays, ...seriesMarks, ...tableMarks,
-      ...circleMarks, ...centreMarks, ...extraneousMarks,
+      ...circleMarks, ...centreMarks, ...extraneousMarks, ...tableCalcMarks,
     ]
     // depKeys: a secant, limit or volume on p(x) = h(x) + 1 moves when h is retyped.
-  }, [kind, calcLinks, curves, models, motionAreaOverlays, bandSpan, domainOverlays, sysOverlays, seriesMarks, tableMarks, circleMarks, centreMarks, extraneousMarks, implicitSources, implicitBox, depKeys])
+  }, [kind, calcLinks, curves, models, motionAreaOverlays, bandSpan, domainOverlays, sysOverlays, seriesMarks, tableMarks, circleMarks, centreMarks, extraneousMarks, tableCalcMarks, implicitSources, implicitBox, depKeys])
   const overlaysRef = useRef<Overlay[]>(overlays)
   overlaysRef.current = overlays
   /**

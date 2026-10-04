@@ -30,6 +30,8 @@ import {
 } from './commands'
 import type { Command, CommandContext, HelpEntry } from './commands'
 import { examplesForSection } from '../examples'
+import { coursesLabel, helpOpensOn } from './courses'
+import type { CourseId } from './courses'
 import { prefersReducedMotion } from './motionPref'
 
 interface Props {
@@ -41,6 +43,10 @@ interface Props {
   onPalette(): void
   /** "See an example" on a unit: open that example (as a copy). Absent = no links. */
   onExample?(id: string): void
+  /** The teacher's courses: the sheet opens on the first one's section. */
+  courses?: readonly CourseId[]
+  /** "Your courses — Change": the course chooser. Absent: not offered (a student). */
+  onCourses?(): void
   onClose(): void
 }
 
@@ -94,7 +100,7 @@ const RESERVED_GLYPH: Record<string, string> = {
   Alt: 'Alt',
 }
 
-export function HelpSheet({ ctx, mac, onDo, onPalette, onExample, onClose }: Props) {
+export function HelpSheet({ ctx, mac, onDo, onPalette, onExample, courses, onCourses, onClose }: Props) {
   const [query, setQuery] = useState('')
   const [large, setLarge] = useState(ctx.presentMode)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -106,6 +112,9 @@ export function HelpSheet({ ctx, mac, onDo, onPalette, onExample, onClose }: Pro
   useLayoutEffect(() => {
     const prev = document.activeElement
     searchRef.current?.focus()
+    // Open on the teacher's first course (the top for everyone else).
+    const home = helpOpensOn(courses)
+    if (home) rootRef.current?.querySelector<HTMLElement>(`[data-course="${home}"]`)?.scrollIntoView({ block: 'start' })
     return () => {
       if (prev instanceof HTMLElement && prev.isConnected) prev.focus()
     }
@@ -201,7 +210,7 @@ export function HelpSheet({ ctx, mac, onDo, onPalette, onExample, onClose }: Pro
     )
   }
 
-  const courses = HELP_COURSES.filter((c) => sections.some((s) => s.course === c))
+  const courseNames = HELP_COURSES.filter((c) => sections.some((s) => s.course === c))
   const titleId = `${uid}-title`
 
   return (
@@ -256,9 +265,18 @@ export function HelpSheet({ ctx, mac, onDo, onPalette, onExample, onClose }: Pro
           Press <kbd>{formatShortcut('Mod+K', mac)}</kbd> (or <kbd>/</kbd>) anywhere and type what you want: “derivative”,
           “area between”, “share”. Calculus tools act on the selected curve.
         </p>
-        {courses.length > 1 && (
+        {onCourses && (
+          <p className="hs-courses" data-testid="help-courses">
+            <span className="hs-courses-label">Your courses:</span>{' '}
+            <span className="hs-courses-val">{coursesLabel(courses) || 'none chosen — everything is shown'}</span>{' '}
+            <button type="button" className="hs-courses-change" onClick={onCourses}>
+              Change
+            </button>
+          </p>
+        )}
+        {courseNames.length > 1 && (
           <nav className="hs-nav" aria-label="Jump to a course">
-            {courses.map((c) => (
+            {courseNames.map((c) => (
               <button key={c} type="button" className="hs-chip" onClick={() => jump(c)}>
                 {c}
               </button>

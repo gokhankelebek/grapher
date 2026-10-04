@@ -49,6 +49,7 @@ import { measureAnswerParts } from '../ui/shapeMeasure'
 import { shapeKey } from '../ui/reveal'
 import { residualPlotReg } from '../ui/dataLinks'
 import { residFigId } from '../ui/residualLinks'
+import { tableCalcKeys } from '../ui/tableCalcLinks'
 import { familyKeyOf } from '../ui/familyFacts'
 
 /** What useRevealMode reads from the hooks App calls before it. */
@@ -117,6 +118,8 @@ export function useRevealMode({ board, docState, session, derived, editing, syst
     // a residual plot's verdict (and the table card's r in words)
     const curveIds = new Set(curves.map((c) => c.id))
     for (const d of dataSets) if (d.visible && residualPlotReg(d, curveIds)) after.push(statKey(residFigId(d.id)))
+    // calculus on a data table: its sum, derivative estimate, average value, MVT, IVT
+    for (const d of dataSets) if (d.visible && d.calc) after.push(...tableCalcKeys(d))
     if (sysCard?.lp) after.push(SYSTEM_KEY)
     // a solved equation's extraneous candidates drawn by Show on graph
     for (const ov of boardOverlays) {

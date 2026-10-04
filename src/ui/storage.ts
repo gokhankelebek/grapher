@@ -22,6 +22,8 @@ import { clampFitSettings, defaultFit, isAspect } from './exportFit'
 import type { WheelPref } from './gestures'
 import type { ExportFormat } from './vectorExport'
 import { DEFAULT_LATEX_WIDTH_CM, clampLatexWidth, isExportFormat } from './vectorExport'
+import type { CourseId } from './courses'
+import { cleanCourses } from './courses'
 
 const PREFIX = 'grapher.v1'
 const INDEX_KEY = `${PREFIX}.index`
@@ -393,6 +395,22 @@ export interface Prefs {
    * not a lesson's, so it lives here and never in a document.
    */
   curvePalette: CurvePalette
+  /**
+   * "What do you teach?" (src/ui/courses.ts): the courses that tailor the
+   * Build menu, the gallery's filter and where the help sheet opens. ABSENT
+   * means never asked — every teacher from before the chooser existed — and
+   * an empty list means asked and skipped. Optional, like every key below:
+   * a prefs record written before they existed reads exactly as it did.
+   */
+  courses?: CourseId[]
+  /** The settings menu's one-time "Tell Grapher what you teach" tip was put aside. */
+  coursesTipDone?: boolean
+  /** The one-time "saved in this browser only" notice has been shown. */
+  storageNoticeDone?: boolean
+  /** When a full backup (every document) was last saved. */
+  lastBackupAt?: number
+  /** When the document menu's backup reminder was last put aside ("Not now"). */
+  backupRemindAt?: number
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -455,10 +473,27 @@ export function readPrefs(): Prefs {
       sections: sectionsOf(parsed.sections),
       recentCommands: recentOf(parsed.recentCommands),
       curvePalette: isCurvePalette(parsed.curvePalette) ? parsed.curvePalette : DEFAULT_PREFS.curvePalette,
+      ...optionalPrefsOf(parsed),
     }
   } catch {
     return { ...DEFAULT_PREFS, exportByDoc: {}, sections: {}, recentCommands: [] }
   }
+}
+
+/** The optional keys (courses, tips, backup timestamps): present only when valid. */
+function optionalPrefsOf(parsed: Record<string, unknown>): Partial<Prefs> {
+  const out: Partial<Prefs> = {}
+  const courses = cleanCourses(parsed.courses)
+  if (courses) out.courses = courses
+  if (parsed.coursesTipDone === true) out.coursesTipDone = true
+  if (parsed.storageNoticeDone === true) out.storageNoticeDone = true
+  const stamp = (v: unknown): number | undefined =>
+    typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined
+  const lastBackupAt = stamp(parsed.lastBackupAt)
+  if (lastBackupAt !== undefined) out.lastBackupAt = lastBackupAt
+  const backupRemindAt = stamp(parsed.backupRemindAt)
+  if (backupRemindAt !== undefined) out.backupRemindAt = backupRemindAt
+  return out
 }
 
 /** How many recently run palette commands are remembered. */

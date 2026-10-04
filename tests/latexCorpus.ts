@@ -411,6 +411,34 @@ export function corpusDocs(): CorpusDoc[] {
     )
   }
 
+  // ---- calculus on a data table (AP free response): unequal widths, a left
+  // sum's rectangles, the trapezoids of another, a secant, the average value,
+  // the MVT and the IVT — headers with units and characters LaTeX dislikes
+  {
+    const rows = [['0', '4.3'], ['2', '5.0'], ['5', '5.9'], ['9', '7.1'], ['12', '8.4']].map(([x, y]) => ({ x, y }))
+    out.push(
+      doc('tablecalc', 'Calculus on a table: L₄, r′(7), the average value, MVT and IVT', input({
+        viewport: { center: { x: 6, y: 4.5 }, pxPerUnit: 40, pxPerUnitY: 40 },
+        data: [{
+          id: 'T7', name: 'Water #1 & 50%', xLabel: 't (min)', yLabel: 'r(t) (gal/min)', color: '#4f9cf9', visible: true,
+          rows, regressions: [],
+          calc: { sum: {}, der: { c: '7' }, avg: {}, mvt: { a: 2, b: 9 }, ivt: { a: 2, b: 9, y: '6' }, diff: true },
+        }],
+      })),
+    )
+    out.push(
+      doc('tabletrap', 'A velocity table: T₄ and v′(12)', input({
+        viewport: { center: { x: 10, y: 12 }, pxPerUnit: 20, pxPerUnitY: 10 },
+        data: [{
+          id: 'T8', name: 'Velocity', xLabel: 't (sec)', yLabel: 'v(t) (ft/sec)', color: '#f97316', visible: true,
+          rows: [['0', '12'], ['4', '20'], ['10', '26'], ['16', '20'], ['20', '8']].map(([x, y]) => ({ x, y })),
+          regressions: [],
+          calc: { sum: { m: 'trapezoid' }, der: { c: '12' }, mvt: { a: 4, b: 16 }, diff: true },
+        }],
+      })),
+    )
+  }
+
   // ---- probability (NC Math 2): a two-way table with column percentages and
   // P(B|A); a three-set Venn diagram with an event; a tree without replacement
   // and a typed dependent tree — labels carrying characters LaTeX dislikes
@@ -650,7 +678,7 @@ export function sheetExports(models: Map<string, DocModel>): CorpusTex[] {
       title: 'Warm-up',
       cols: 1,
       style: 'textbook',
-      items: [{ docId: 'data', caption: 'Population, 50% growth?' }, { docId: 'shapes' }, { docId: 'measure', caption: 'Classify ABCD; find sin E.' }],
+      items: [{ docId: 'data', caption: 'Population, 50% growth?' }, { docId: 'shapes' }, { docId: 'measure', caption: 'Classify ABCD; find sin E.' }, { docId: 'tablecalc', caption: 'Estimate ∫₀¹² r(t) dt with a left sum.' }],
     },
   ]
   const out: CorpusTex[] = []

@@ -146,6 +146,11 @@ export interface CommandActions {
   openCircleTool?(curveId: string, flag: 'angles' | 'tangent' | 'sector' | 'chords' | 'external'): void
   /** A function's card with its Table section open, at one of its tools. */
   openTableTool?(curveId: string, tool: TableTool): void
+  /**
+   * A data table's "Calculus on this table" with one tool switched on: the
+   * selected table, else the first one, else a new empty table.
+   */
+  openTableCalc?(tool: 'sum' | 'deriv' | 'avg' | 'mvt' | 'ivt'): void
   /** A curve's card with one of its sections ('complex-zeros' …) open and in view. */
   openCardSection?(curveId: string, kind: string): void
   solveGraph(itemId: string): void
@@ -192,6 +197,17 @@ export interface CommandActions {
   // ---- accessibility
   /** "Describe this graph": the board in words, with Copy. */
   describe(): void
+  // ---- settings (src/app/useCourseFocus.ts). Optional: older callers and tests omit them.
+  /** Settings → Your courses: the course chooser. */
+  openCourses?(): void
+  /** Settings → Save a backup: every document and worksheet, one .json file. */
+  backupAll?(): void
+  /** Settings → Restore from backup…: the file picker. */
+  restoreBackup?(): void
+  /** Settings → About & privacy. */
+  about?(): void
+  /** Settings → Feedback. */
+  feedback?(): void
   /** Curve colours: standard, or colour-blind safe (a preference). */
   setCurvePalette(palette: 'standard' | 'safe'): void
 }
@@ -839,6 +855,64 @@ export const COMMANDS: readonly Command[] = [
     when: graphEdit,
     run: (ctx) => ctx.actions.addDataTable(),
   },
+  // ---- calculus on a data table (AP free response: a table, unequal widths)
+  {
+    id: 'table-riemann',
+    title: 'Riemann sum from a table',
+    description: 'Left, right, midpoint or trapezoidal sum over a data table’s rows — unequal widths, the Σ and every term written out, with units',
+    keywords: [
+      'riemann sum table', 'table riemann', 'left sum', 'right sum', 'trapezoid', 'trapezoidal sum', 'trapezoidal rule',
+      'midpoint sum', 'unequal widths', 'unequal subintervals', 'data table integral', 'approximate integral',
+      'summation notation', 'sigma', 'free response', 'frq', 'rate table', 'accumulation from data',
+    ],
+    group: 'Calculus',
+    path: 'Data table card → Calculus on this table → Σ sum',
+    when: graphEdit,
+    run: (ctx) => ctx.actions.openTableCalc?.('sum'),
+  },
+  {
+    id: 'table-derivative',
+    title: 'Derivative estimate from a table',
+    description: 'r′(c) ≈ (r(b) − r(a))/(b − a) from the rows around c, with the units and the secant drawn',
+    keywords: [
+      'difference quotient table', 'estimate derivative', 'derivative from table', 'rate of change table',
+      'approximate derivative', 'secant from data', 'symmetric difference quotient', 'free response', 'frq',
+    ],
+    group: 'Calculus',
+    path: 'Data table card → Calculus on this table → r′(c) ≈',
+    when: graphEdit,
+    run: (ctx) => ctx.actions.openTableCalc?.('deriv'),
+  },
+  {
+    id: 'table-average-value',
+    title: 'Average value from a table',
+    description: 'The average value on [a, b] as a trapezoidal sum divided by b − a, the work shown',
+    keywords: ['average value table', 'average value', 'average rate', 'trapezoidal sum average', 'mean value of a function', 'free response', 'frq'],
+    group: 'Calculus',
+    path: 'Data table card → Calculus on this table → average value',
+    when: graphEdit,
+    run: (ctx) => ctx.actions.openTableCalc?.('avg'),
+  },
+  {
+    id: 'table-mvt',
+    title: 'Mean Value Theorem on a table',
+    description: '“Must there be a time when r′(c) = …?” — the MVT for two rows, stated only when r is granted differentiable',
+    keywords: ['mean value theorem table', 'mvt table', 'must there be', 'justify', 'rolle', 'rolles theorem', 'free response', 'frq'],
+    group: 'Calculus',
+    path: 'Data table card → Calculus on this table → MVT',
+    when: graphEdit,
+    run: (ctx) => ctx.actions.openTableCalc?.('mvt'),
+  },
+  {
+    id: 'table-ivt',
+    title: 'Intermediate Value Theorem on a table',
+    description: '“Must there be a time when r(c) = 15?” — the IVT between two rows, stated only when continuity is granted',
+    keywords: ['intermediate value theorem table', 'ivt table', 'must there be', 'justify', 'continuity', 'free response', 'frq'],
+    group: 'Calculus',
+    path: 'Data table card → Calculus on this table → IVT',
+    when: graphEdit,
+    run: (ctx) => ctx.actions.openTableCalc?.('ivt'),
+  },
   {
     id: 'build-unit-circle',
     title: 'Unit circle',
@@ -1149,7 +1223,7 @@ export const COMMANDS: readonly Command[] = [
       'what can it do', 'unit', 'ap calculus', 'precalculus', 'math 3',
     ],
     group: 'Document',
-    path: 'Document menu → Examples…',
+    path: 'Toolbar → Examples (or Document menu → Examples…)',
     when: always,
     run: (ctx) => ctx.actions.openExamples(),
   },
@@ -1178,11 +1252,11 @@ export const COMMANDS: readonly Command[] = [
   },
   {
     id: 'doc-backup',
-    title: 'Save a backup…',
+    title: 'Save a backup of this document…',
     description: 'Download this document as a .json file you can import later',
     keywords: ['backup', 'save', 'save file', 'json', 'export document', 'download document', 'keep'],
     group: 'Document',
-    path: 'Document menu → Save a backup…',
+    path: 'Document menu → Save a backup of this document…',
     when: always,
     run: (ctx) => ctx.actions.backup(),
   },
@@ -1195,6 +1269,62 @@ export const COMMANDS: readonly Command[] = [
     path: 'Document menu → Import from file…',
     when: always,
     run: (ctx) => ctx.actions.importFile(),
+  },
+  {
+    id: 'settings-courses',
+    title: 'Your courses…',
+    description: 'Tell Grapher what you teach: your courses’ tools come first in Build, examples and help',
+    keywords: [
+      'courses', 'my courses', 'your courses', 'what i teach', 'course', 'ap calculus', 'ap precalculus',
+      'nc math', 'focus', 'personalise', 'personalize', 'preferences', 'settings', 'first run', 'welcome',
+    ],
+    group: 'Document',
+    path: 'Toolbar → Settings ⚙ → Your courses…',
+    when: (ctx) => !ctx.student,
+    run: (ctx) => ctx.actions.openCourses?.(),
+  },
+  {
+    id: 'backup-save',
+    title: 'Save a backup of every document',
+    description: 'Every document and worksheet in this browser, as one .json file — your graphs live only here',
+    keywords: [
+      'backup', 'back up', 'save backup', 'all documents', 'everything', 'export all', 'download all', 'keep safe',
+      'new computer', 'chromebook', 'cleared', 'json',
+    ],
+    group: 'Document',
+    path: 'Toolbar → Settings ⚙ → Save a backup',
+    when: (ctx) => !ctx.student,
+    run: (ctx) => ctx.actions.backupAll?.(),
+  },
+  {
+    id: 'backup-restore',
+    title: 'Restore from backup…',
+    description: 'Bring back the documents in a backup file, beside the ones here — nothing is overwritten',
+    keywords: ['restore', 'restore backup', 'recover', 'bring back', 'backup file', 'import all', 'new computer', 'json'],
+    group: 'Document',
+    path: 'Toolbar → Settings ⚙ → Restore from backup…',
+    when: (ctx) => !ctx.student,
+    run: (ctx) => ctx.actions.restoreBackup?.(),
+  },
+  {
+    id: 'about',
+    title: 'About & privacy',
+    description: 'What this is, who it is for, and what happens to your data (nothing leaves your device)',
+    keywords: ['about', 'privacy', 'data', 'version', 'source', 'github', 'who made', 'cookies', 'analytics', 'account'],
+    group: 'Document',
+    path: 'Toolbar → Settings ⚙ → About & privacy…',
+    when: always,
+    run: (ctx) => ctx.actions.about?.(),
+  },
+  {
+    id: 'feedback',
+    title: 'Send feedback',
+    description: 'Report a bug or ask for something — opens in a new tab',
+    keywords: ['feedback', 'bug', 'report', 'issue', 'suggestion', 'contact', 'request', 'problem'],
+    group: 'Document',
+    path: 'Toolbar → Settings ⚙ → Feedback',
+    when: (ctx) => !ctx.student,
+    run: (ctx) => ctx.actions.feedback?.(),
   },
   {
     id: 'doc-make-copy',
@@ -1300,7 +1430,7 @@ export const COMMANDS: readonly Command[] = [
     description: 'The board’s ground on screen (exports have their own)',
     keywords: ['dark', 'light', 'theme', 'dark mode', 'light mode', 'background', 'white board', 'black board', 'contrast'],
     group: 'View',
-    path: 'Toolbar → ☾ / ☀',
+    path: 'Toolbar → Settings ⚙ → Light canvas',
     when: always,
     run: (ctx) => ctx.actions.toggleTheme(),
   },
@@ -1313,7 +1443,7 @@ export const COMMANDS: readonly Command[] = [
       'blind', 'low vision', 'read aloud', 'words', 'text version', 'accommodation', 'iep', '504',
     ],
     group: 'View',
-    path: 'Toolbar → ⋯ → Describe this graph',
+    path: 'Toolbar → Settings ⚙ → Describe this graph',
     when: always,
     run: (ctx) => ctx.actions.describe(),
   },
@@ -1529,6 +1659,7 @@ export function targetNoun(kind: TargetKind): string {
  */
 export const STUDENT_COMMANDS: ReadonlySet<string> = new Set([
   'help',
+  'about',
   'palette',
   'view-describe',
   'view-colour-safe',
@@ -1896,11 +2027,13 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     { id: 'calc-limit', note: 'One- and two-sided limits, a table of values, ε–δ, limits at ±∞' },
     { id: 'view-analysis', note: 'Holes, jumps and asymptotes marked on the graph' },
     { id: 'build-piecewise', note: 'Build a piecewise function to test continuity at a seam' },
+    { id: 'table-ivt', note: 'From a data table: “must there be a time when r(t) = 15?”, justified with the IVT' },
   ] },
   { id: 'calc-2', course: 'AP Calculus AB / BC', title: 'Unit 2 · Differentiation: definition and basic rules', entries: [
     { id: 'calc-secant', note: 'Average rate of change → the difference quotient' },
     { id: 'calc-tangent' },
     { id: 'calc-derivative' },
+    { id: 'table-derivative', note: 'From a data table: r′(c) by the difference quotient of the rows around c, with units' },
   ] },
   { id: 'calc-3', course: 'AP Calculus AB / BC', title: 'Unit 3 · Composite, implicit and inverse functions', entries: [
     { id: 'calc-tangent', note: 'On an implicit curve (x² + y² = 25): dy/dx by implicit differentiation' },
@@ -1915,9 +2048,11 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     { id: 'calc-secant', note: 'The Mean Value Theorem point c' },
     { id: 'calc-signchart', note: 'Increasing / decreasing, concavity, the first and second derivative tests' },
     { id: 'view-analysis', note: 'Extrema and inflection points on the graph' },
+    { id: 'table-mvt', note: 'From a data table: “must there be a time when r′(t) = …?”, justified with the MVT' },
   ] },
   { id: 'calc-6', course: 'AP Calculus AB / BC', title: 'Unit 6 · Integration and accumulation of change', entries: [
     { id: 'calc-riemann' },
+    { id: 'table-riemann', note: 'From a data table with unequal widths: L, R, M, T written out term by term, in Σ notation, with units' },
     { id: 'calc-area' },
     { id: 'calc-accumulation' },
   ] },
@@ -1929,6 +2064,7 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
   ] },
   { id: 'calc-8', course: 'AP Calculus AB / BC', title: 'Unit 8 · Applications of integration', entries: [
     { id: 'calc-secant', note: 'Average value of a function on [a, b]' },
+    { id: 'table-average-value', note: 'From a data table: the average value as a trapezoidal sum over b − a' },
     { id: 'calc-between' },
     { id: 'calc-volume' },
   ] },
@@ -2163,6 +2299,11 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     { id: 'doc-duplicate' },
     { id: 'doc-backup' },
     { id: 'doc-import' },
+    { id: 'backup-save', note: 'Your graphs live only in this browser — a cleared Chromebook starts empty. Keep this file.' },
+    { id: 'backup-restore' },
+    { id: 'settings-courses' },
+    { id: 'about' },
+    { id: 'feedback' },
   ] },
   // ---------------------------------------------------- In class
   { id: 'class', course: 'In class', title: 'Presentation, reveal and sharing', entries: [

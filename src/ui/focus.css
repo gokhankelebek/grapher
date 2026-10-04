@@ -1,0 +1,679 @@
+/* ============================================================
+   First run, course focus, settings menu, backups, About.
+
+   Loaded after styles.css (src/platform/Workspace.tsx), in the same dark
+   neon vocabulary: the --panel surfaces, the accent ring, the hs-chip pills.
+   ============================================================ */
+
+/* ------------------------------------------------ first run ("What do you teach?") */
+
+.fr-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-4);
+  overflow-y: auto;
+  /* The grid stays faintly visible behind: this is the board, about to start. */
+  background:
+    radial-gradient(ellipse at 50% 40%, rgba(79, 156, 249, 0.1), transparent 60%),
+    rgba(8, 10, 16, 0.82);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+
+.fr {
+  width: min(640px, 100%);
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  margin: auto;
+  padding: var(--sp-6);
+  border-radius: 16px;
+  background: rgba(19, 23, 34, 0.97);
+  border: 1px solid var(--border-strong);
+  box-shadow:
+    0 0 0 1px rgba(79, 156, 249, 0.08),
+    0 0 48px rgba(79, 156, 249, 0.12),
+    var(--shadow);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  animation: pop-in 0.18s var(--ease) both;
+}
+
+.fr:focus {
+  outline: none;
+}
+
+.fr-brand {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.fr-brand-name {
+  font-weight: 700;
+  background: linear-gradient(120deg, #7db4ff, #4f9cf9 55%, #2dd4bf);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.fr-title {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+
+.fr-lede {
+  color: var(--muted);
+  font-size: var(--fs-lg);
+  line-height: 1.5;
+}
+
+.fr-chips {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-2);
+}
+
+.fr-chip {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 48px;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: var(--fs-lg);
+  font-weight: 500;
+  text-align: left;
+  transition:
+    background 0.15s var(--ease),
+    border-color 0.15s var(--ease),
+    box-shadow 0.15s var(--ease);
+}
+
+.fr-chip:hover {
+  border-color: var(--border-strong);
+  background: var(--panel-3);
+}
+
+.fr-chip-on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 16px rgba(79, 156, 249, 0.25);
+}
+
+.fr-chip-on:hover {
+  background: rgba(79, 156, 249, 0.22);
+}
+
+.fr-chip-tick {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  color: #fff;
+  font-size: var(--fs-md);
+  font-weight: 700;
+}
+
+.fr-chip-on .fr-chip-tick {
+  border-color: var(--accent);
+  background: var(--accent-strong);
+}
+
+.fr-chip-other {
+  color: var(--muted);
+}
+
+.fr-chip-other.fr-chip-on {
+  color: var(--text);
+}
+
+.fr-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.fr-primary {
+  min-height: 44px;
+  padding: 0 var(--sp-6);
+  border-radius: 10px;
+  background: var(--accent-strong);
+  color: #fff;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  box-shadow: 0 0 20px rgba(79, 156, 249, 0.3);
+}
+
+.fr-primary:hover {
+  background: #3a82e6;
+}
+
+.fr-link {
+  min-height: 44px;
+  padding: 0 var(--sp-3);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: var(--fs-md);
+}
+
+.fr-link:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.fr-note {
+  color: var(--faint);
+  font-size: var(--fs-sm);
+}
+
+.fr-starts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-3);
+}
+
+.fr-start {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  min-height: 168px;
+  padding: var(--sp-4);
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  text-align: left;
+  transition:
+    background 0.15s var(--ease),
+    border-color 0.15s var(--ease),
+    box-shadow 0.15s var(--ease),
+    transform 0.15s var(--ease);
+}
+
+.fr-start:hover,
+.fr-start:focus-visible {
+  border-color: var(--accent);
+  background: var(--panel-3);
+  box-shadow: 0 0 24px rgba(79, 156, 249, 0.22);
+}
+
+.fr-start-icon {
+  color: var(--accent-text);
+  filter: drop-shadow(0 0 6px rgba(79, 156, 249, 0.55));
+}
+
+.fr-start-title {
+  font-size: var(--fs-xl);
+  font-weight: 650;
+}
+
+.fr-start-text {
+  color: var(--muted);
+  font-size: var(--fs-md);
+  line-height: 1.45;
+}
+
+@media (max-width: 640px) {
+  .fr {
+    padding: var(--sp-4);
+  }
+
+  .fr-chips,
+  .fr-starts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .fr-start {
+    min-height: 0;
+  }
+}
+
+@media (max-height: 640px) {
+  .fr-start {
+    min-height: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fr {
+    animation: none;
+  }
+}
+
+/* ------------------------------------------------ toolbar: Examples + settings */
+
+.tb-examples svg {
+  color: var(--accent-text);
+  opacity: 0.9;
+}
+
+.tb-examples:hover:not(:disabled) svg {
+  opacity: 1;
+}
+
+/* Undo / Redo are words on a wide toolbar; the arrows appear only when the
+   words go (below). */
+.tb-undo {
+  display: flex;
+  align-items: center;
+}
+
+.tb-undo-icon {
+  display: none;
+}
+
+.tb-settings {
+  position: relative;
+}
+
+.tb-settings > .tb-btn {
+  position: relative;
+}
+
+/* The one-time tip ("Tell Grapher what you teach"): a dot on the gear. */
+.tb-tip-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #2dd4bf;
+  box-shadow: 0 0 6px rgba(45, 212, 191, 0.8);
+}
+
+.tb-settings-menu {
+  display: flex;
+  flex-direction: column;
+  width: 300px;
+  max-height: calc(100vh - var(--toolbar-h) - 24px);
+  overflow-y: auto;
+}
+
+.tb-tip {
+  display: flex;
+  align-items: flex-start;
+  gap: 2px;
+  margin-bottom: var(--sp-2);
+  border-radius: 8px;
+  border: 1px solid rgba(45, 212, 191, 0.45);
+  background: rgba(45, 212, 191, 0.08);
+}
+
+.tb-tip-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tb-tip-text {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.tb-tip-x {
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: var(--fs-xl);
+  line-height: 1;
+}
+
+.tb-tip-x:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.tb-set-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.tb-set-row > span:first-child {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.tb-set-val {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.tb-set-link {
+  display: block;
+  text-decoration: none;
+}
+
+/* One row at 1024 px (iPad landscape, a Chromebook with the sidebar open):
+   the brand already goes at this width; Undo / Redo become arrows, and the
+   Examples and Reveal labels go — their icons and tooltips stay. */
+@media (max-width: 1180px) {
+  .tb-undo .tb-label {
+    display: none;
+  }
+
+  .tb-undo-icon {
+    display: block;
+  }
+}
+
+@media (max-width: 1024px) {
+  :root {
+    --toolbar-h: 55px; /* measured: one row again */
+  }
+
+  .tb-examples .tb-label,
+  .tb-reveal-label {
+    display: none;
+  }
+
+  .doc-name {
+    max-width: 140px;
+  }
+}
+
+@media (pointer: coarse) and (max-width: 1024px) {
+  :root {
+    --toolbar-h: 72px; /* one row of 44px touch targets */
+  }
+
+  /* 44px carets on a touch screen: the name gives the room back. */
+  .doc-name {
+    max-width: 110px;
+  }
+}
+
+/* ------------------------------------------------------------ Build ▾ sections */
+
+.build-menu {
+  max-height: min(70vh, calc(100vh - 160px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  min-width: 232px;
+}
+
+.build-sec + .build-sec,
+.build-sec + .build-more,
+.build-sec + .build-more-body {
+  margin-top: var(--sp-2);
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--border-soft);
+}
+
+.build-more-body > .build-sec:first-child {
+  margin-top: 0;
+}
+
+.build-sec-title {
+  padding: 2px var(--sp-2) var(--sp-1);
+  color: var(--faint);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.build-more {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--accent-text);
+}
+
+.build-more-hint {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  white-space: normal;
+}
+
+/* ------------------------------------------------------------ gallery filter */
+
+.exg-filter {
+  align-items: center;
+}
+
+.exg-filter-label {
+  color: var(--faint);
+  font-size: var(--fs-sm);
+}
+
+.exg-chip {
+  min-height: 28px;
+}
+
+.exg-chip-on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.exg-jump {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-left: var(--sp-3);
+}
+
+.exg-jump-btn,
+.exg-link {
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.exg-elsewhere {
+  margin-top: var(--sp-3);
+  color: var(--muted);
+}
+
+@media (pointer: coarse) {
+  .exg-chip {
+    min-height: 40px;
+  }
+}
+
+/* ------------------------------------------------------------ help: your courses */
+
+.hs-courses {
+  padding: var(--sp-2) var(--sp-4) 0;
+  color: var(--muted);
+  font-size: var(--fs-md);
+}
+
+.hs-courses-val {
+  color: var(--text);
+}
+
+.hs-courses-change {
+  margin-left: var(--sp-1);
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ------------------------------------------------------------ backups */
+
+.doc-backup-nudge {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: 8px;
+  border: 1px solid rgba(45, 212, 191, 0.4);
+  background: rgba(45, 212, 191, 0.07);
+}
+
+.doc-backup-text {
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+}
+
+.doc-backup-actions {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.doc-backup-yes,
+.doc-backup-no {
+  padding: 4px var(--sp-2);
+  border-radius: 6px;
+  font-size: var(--fs-sm);
+}
+
+.doc-backup-yes {
+  background: var(--accent-strong);
+  color: #fff;
+  font-weight: 600;
+}
+
+.doc-backup-no {
+  color: var(--muted);
+}
+
+.doc-backup-no:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+/* "Your graphs are saved in this browser only." — once, quiet, bottom-left. */
+.storage-note {
+  position: absolute;
+  left: var(--sp-4);
+  bottom: calc(var(--sp-4) + var(--sign-band, 0px));
+  z-index: 21;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  max-width: min(460px, calc(100% - 96px));
+  padding: 6px 6px 6px var(--sp-3);
+  border-radius: 10px;
+  background: rgba(19, 23, 34, 0.94);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  animation: pop-in 0.18s var(--ease) both;
+}
+
+.storage-note-text {
+  min-width: 0;
+}
+
+.storage-note-action {
+  flex: 0 0 auto;
+  padding: 4px var(--sp-2);
+  border-radius: 6px;
+  color: var(--accent-text);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.storage-note-action:hover {
+  background: var(--accent-soft);
+}
+
+.storage-note-x {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: var(--fs-lg);
+  line-height: 1;
+}
+
+.storage-note-x:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+@media (max-width: 540px) {
+  .storage-note {
+    bottom: calc(var(--toolbar-reserve) + var(--sp-2));
+  }
+}
+
+/* ------------------------------------------------------------ About */
+
+.about-tag {
+  font-size: var(--fs-xl);
+  font-weight: 650;
+  background: linear-gradient(120deg, #7db4ff, #4f9cf9 55%, #2dd4bf);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.about-trust {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.about-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border-radius: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border-soft);
+}
+
+.about-h {
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.about-action {
+  align-self: flex-start;
+  padding: 6px var(--sp-3);
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+}
+
+.about-action:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.about-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+  list-style: none;
+}
+
+.about-links a {
+  color: var(--accent-text);
+}

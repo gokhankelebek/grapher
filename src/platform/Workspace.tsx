@@ -3,4 +3,5 @@
 import App from '../App'
 import 'katex/dist/katex.min.css'
 import '../ui/styles.css'
+import '../ui/focus.css'
 export default App

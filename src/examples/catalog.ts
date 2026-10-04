@@ -226,6 +226,31 @@ export const EXAMPLE_DEFS: readonly ExampleDef[] = [
     },
   },
   {
+    id: 'calc-u6-table-riemann',
+    course: 'calc',
+    unit: 'U6',
+    help: ['calc-6', 'calc-8'],
+    title: 'Riemann sums from a table, unequal widths',
+    short: 'Riemann sums from a rate table',
+    note:
+      'Water flows into a tank at r(t) gallons per minute, measured at t = 0, 2, 5, 9 and 12, unequal gaps as on the AP exam. The card writes the left sum out term by term, L₄ = (2)(4.3) + (3)(5.0) + (4)(5.9) + (3)(7.1) = 68.5 gallons, beside R₄ = 81.3 and T₄ = 74.9, and the average rate T₄/12 = 749/120 ≈ 6.242 gal/min. Ask why the left sum is an underestimate only if r is increasing, and why this table allows no midpoint sum.',
+    keywords: ['riemann sum', 'table', 'unequal widths', 'unequal subintervals', 'trapezoidal sum', 'left sum', 'right sum', 'average value', 'free response', 'rate in', 'tank'],
+    build: (b) => {
+      b.frame([-1.5, 14.5], [-1.2, 10.5])
+      b.table(
+        'Water in',
+        [
+          [0, '4.3'],
+          [2, '5.0'],
+          [5, '5.9'],
+          [9, '7.1'],
+          [12, '8.4'],
+        ],
+        { xLabel: 't (min)', yLabel: 'r(t) (gal/min)', calc: { sum: {}, avg: {} } },
+      )
+    },
+  },
+  {
     id: 'calc-u7-euler',
     course: 'calc',
     unit: 'U7',
@@ -313,6 +338,35 @@ export const EXAMPLE_DEFS: readonly ExampleDef[] = [
       b.frame([-1, 5], [-1, 3])
       const f = b.line('f(x) = sqrt(x)')
       b.volume(f, 0, 4, { method: 'section', section: 'square', x: 2 })
+    },
+  },
+  {
+    id: 'calc-u8-table-velocity',
+    course: 'calc',
+    unit: 'U8',
+    help: ['calc-8', 'calc-5', 'calc-2'],
+    title: 'A velocity table: displacement, v′ and the MVT',
+    short: 'velocity table and the MVT',
+    note:
+      'A car’s velocity v(t) in ft/sec is measured at t = 0, 4, 10, 16 and 20 seconds. The trapezoidal sum T₄ = 396 estimates the displacement, ∫₀²⁰ v(t) dt ≈ 396 feet; the secant from t = 10 to 16 gives v′(12) ≈ (20 − 26)/(16 − 10) = −1 ft/sec per sec; and with v granted differentiable, the MVT on [4, 16] promises a time c with v′(c) = 0, because v(4) = v(16) = 20. Ask the class to write the MVT justification before revealing it, and to say why T₄ would be an underestimate if v were concave down.',
+    keywords: ['velocity', 'table', 'mean value theorem', 'mvt', 'difference quotient', 'acceleration', 'displacement', 'trapezoidal sum', 'free response', 'rolle'],
+    build: (b) => {
+      b.frame([-2, 23], [-3.5, 31])
+      b.table(
+        'Velocity',
+        [
+          [0, 12],
+          [4, 20],
+          [10, 26],
+          [16, 20],
+          [20, 8],
+        ],
+        {
+          xLabel: 't (sec)',
+          yLabel: 'v(t) (ft/sec)',
+          calc: { sum: { m: 'trapezoid' }, der: { c: '12' }, mvt: { a: 4, b: 16 }, diff: true },
+        },
+      )
     },
   },
   {

@@ -77,7 +77,8 @@ import {
 import type { CentreFlag, FigureStyleId, MeasureFlag, NLItem, XformAid } from '../core/types'
 import { CENTRE_FLAGS, MEASURE_FLAGS } from '../core/types'
 import { cleanXform, NEW_DOC_FIGURE } from '../core/persist'
-import type { CircleView, ShapeMeasureSettings } from '../core/persist'
+import type { CircleView, ShapeMeasureSettings, TableCalcView } from '../core/persist'
+import { normalizeTableCalc } from '../core/persist'
 import { parseXformCommand, resolveOp } from '../core/parse/xform'
 import type { BoardStat, DataDist, DataPlotSet } from '../core/statsPersist'
 import { newProb } from '../core/probPersist'
@@ -705,6 +706,8 @@ export class ExampleBoard {
       residuals?: RegressionKind
       /** The residual plot of this fit, in a panel under the scatter plot — framed with it, as the App frames it. */
       residualPlot?: RegressionKind
+      /** "Calculus on this table": the tools switched on (src/ui/tableCalcLinks.ts). */
+      calc?: TableCalcView
     } = {},
   ): string {
     this.requireGraph('a data table')
@@ -719,6 +722,11 @@ export class ExampleBoard {
       color,
       visible: true,
       regressions: [],
+    }
+    if (o.calc) {
+      const calc = normalizeTableCalc(o.calc)
+      if (!calc) throw new Error('example: an empty calc setting')
+      table.calc = calc
     }
     // The table first, so the regression curve's colour is the table's own.
     this.data.push(table)
@@ -744,7 +752,7 @@ export class ExampleBoard {
         throw new Error(`example: residuals of a ${want} fit the table does not have`)
       }
     }
-    if (o.residualPlot && !this.win) {
+    if ((o.residualPlot || o.calc) && !this.win) {
       const box = dataBox(table)
       if (box) this.win = { x: [box.min.x, box.max.x], y: [box.min.y, box.max.y], independent: true }
     }

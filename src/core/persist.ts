@@ -793,6 +793,68 @@ export interface BoardData {
   /** Absent = dot. */
   marker?: DataMarker
   regressions: DataRegression[]
+  /** "Calculus on this table": the teacher's choices (see TableCalcView). Absent = none. */
+  calc?: TableCalcView
+}
+
+/**
+ * "Calculus on this table" (src/ui/tableCalcLinks.ts): which tools are on and
+ * what the teacher chose for them — a method, an interval or a pair of rows by
+ * their x VALUES, a typed c or target value, the granted hypothesis. Never a
+ * computed value: the sums, quotients and theorems are worked out from the
+ * rows on every change. Every field absent at its default, so a table nobody
+ * asked for calculus on stores nothing.
+ */
+export interface TableCalcView {
+  /** A Riemann / trapezoidal sum: method (absent = left) on [a, b] (absent = the table's ends). */
+  sum?: { m?: RiemannMethod; a?: number; b?: number }
+  /** r′(c) by a difference quotient; c as typed. */
+  der?: { c: string }
+  /** The average value on [a, b] (absent = the table's ends). */
+  avg?: { a?: number; b?: number }
+  /** The Mean Value Theorem on the rows a and b (absent = the table's ends). */
+  mvt?: { a?: number; b?: number }
+  /** The Intermediate Value Theorem on the rows a and b for the value y, as typed. */
+  ivt?: { a?: number; b?: number; y?: string }
+  /** The teacher grants that r is differentiable (hence continuous) on the table's interval. */
+  diff?: true
+}
+
+const TABLE_CALC_METHODS: readonly RiemannMethod[] = ['left', 'right', 'midpoint', 'trapezoid']
+/** A typed c or target longer than this is not one anybody typed. */
+const MAX_TABLE_CALC_TEXT = 40
+
+/** One table's calculus settings with every default dropped, or null when nothing is left. */
+export function normalizeTableCalc(v: unknown): TableCalcView | null {
+  if (!isObj(v)) return null
+  const out: TableCalcView = {}
+  const ends = (o: Record<string, unknown>): { a?: number; b?: number } => {
+    const r: { a?: number; b?: number } = {}
+    if (isNum(o.a)) r.a = o.a
+    if (isNum(o.b)) r.b = o.b
+    return r
+  }
+  const text = (t: unknown): string | null =>
+    typeof t === 'string' && t.trim() !== '' && t.length <= MAX_TABLE_CALC_TEXT ? t : null
+  if (isObj(v.sum)) {
+    const sum: { m?: RiemannMethod; a?: number; b?: number } = {}
+    if (typeof v.sum.m === 'string' && v.sum.m !== 'left' && (TABLE_CALC_METHODS as readonly string[]).includes(v.sum.m)) {
+      sum.m = v.sum.m as RiemannMethod
+    }
+    out.sum = { ...sum, ...ends(v.sum) }
+  }
+  if (isObj(v.der)) {
+    const c = text(v.der.c)
+    if (c !== null) out.der = { c }
+  }
+  if (isObj(v.avg)) out.avg = ends(v.avg)
+  if (isObj(v.mvt)) out.mvt = ends(v.mvt)
+  if (isObj(v.ivt)) {
+    const y = text(v.ivt.y)
+    out.ivt = { ...ends(v.ivt), ...(y !== null ? { y } : {}) }
+  }
+  if (v.diff === true) out.diff = true
+  return Object.keys(out).length > 0 ? out : null
 }
 
 // --- sequences ----------------------------------------------------------------
@@ -1921,6 +1983,8 @@ export interface StoredData {
   marker?: DataMarker
   /** Omitted when there are none. */
   regressions?: StoredRegression[]
+  /** "Calculus on this table": written only when a tool is on. */
+  calc?: TableCalcView
 }
 
 export interface StoredRegression {
@@ -2664,6 +2728,8 @@ export function dataToStored(d: BoardData): StoredData {
       return sr
     })
   }
+  const calc = normalizeTableCalc(d.calc)
+  if (calc) out.calc = calc
   return out
 }
 
@@ -2737,6 +2803,8 @@ export function storedToData(
   if (isStr(raw.marker) && (DATA_MARKERS as readonly string[]).includes(raw.marker) && raw.marker !== 'dot') {
     data.marker = raw.marker as DataMarker
   }
+  const calc = normalizeTableCalc(raw.calc)
+  if (calc) data.calc = calc
   return { data, droppedRegressions }
 }
 

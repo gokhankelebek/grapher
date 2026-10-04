@@ -27,6 +27,8 @@ import { useInk } from './inkContext'
 import { Answer } from './RevealAnswer'
 import { statKey } from './reveal'
 import { CAUSATION, R_THRESHOLDS } from '../core/residuals'
+import type { TableCalcNext } from './tableCalcLinks'
+import { TableCalcSection } from './TableCalcSection'
 
 // ============================================================================
 // src/ui/DataCard.tsx — a data table in the sidebar.
@@ -85,6 +87,10 @@ interface Props {
   onResidualPlot?(regId: string): void
   /** Re-attach a detached regression: its curve follows the table again. */
   onRefit(regId: string): void
+  /** "Calculus on this table": the next settings (undefined: every tool off). */
+  onCalc?(next: TableCalcNext, label: string): void
+  /** "Sort by x". */
+  onSortX?(): void
 }
 
 export function DataCard({
@@ -108,6 +114,8 @@ export function DataCard({
   onResiduals,
   onResidualPlot,
   onRefit,
+  onCalc,
+  onSortX,
 }: Props) {
   const ink = useInk()
   const rootRef = useRef<HTMLDivElement>(null)
@@ -640,6 +648,10 @@ export function DataCard({
               </div>
             )}
           </div>
+
+          {card.calc && onCalc && (
+            <TableCalcSection data={data} card={card.calc} onCalc={onCalc} onSort={onSortX ?? (() => {})} />
+          )}
         </div>
       )}
     </div>

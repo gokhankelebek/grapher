@@ -45,6 +45,15 @@ interface Props {
    * of it either — a backup imported back would open with every answer up.
    */
   student?: boolean
+  /**
+   * The gentle backup reminder (src/ui/courses.ts backupReminderDue): more
+   * than five documents and two weeks since the last backup or "Not now".
+   */
+  backupDue?: boolean
+  /** Save a backup of every document (one .json file). */
+  onBackupAll?(): void
+  /** "Not now": the reminder rests for another two weeks. */
+  onSnoozeBackup?(): void
 }
 
 function relativeTime(ts: number): string {
@@ -116,6 +125,9 @@ export function DocMenu({
   shared = null,
   onMakeCopy,
   student = false,
+  backupDue = false,
+  onBackupAll,
+  onSnoozeBackup,
 }: Props) {
   const [open, setOpen] = useState(false)
   const [renaming, setRenaming] = useState(false)
@@ -264,6 +276,23 @@ export function DocMenu({
 
       {open && (
         <div className="doc-menu" role="menu" aria-label="Document menu" ref={menuRef}>
+          {backupDue && !student && !shared && onBackupAll && (
+            <div className="doc-backup-nudge" data-testid="backup-reminder">
+              <span className="doc-backup-text">
+                Your {docs.length} documents live only in this browser. It’s been a while — save a backup?
+              </span>
+              <span className="doc-backup-actions">
+                <button className="doc-backup-yes" role="menuitem" onClick={pick(onBackupAll)}>
+                  Back up all {docs.length}
+                </button>
+                {onSnoozeBackup && (
+                  <button className="doc-backup-no" role="menuitem" onClick={() => onSnoozeBackup()}>
+                    Not now
+                  </button>
+                )}
+              </span>
+            </div>
+          )}
           <div className="doc-menu-actions">
             {shared && onMakeCopy && (
               <button
@@ -335,11 +364,17 @@ export function DocMenu({
                 Worksheet…
               </button>
             )}
-            {/* "Save a backup…" writes a DOCUMENT; Download writes a PNG. The
-                old wording ("Export to file…") was being read as the picture. */}
+            {/* This writes ONE document as a file; Download writes a PNG. The
+                old wording ("Export to file…") was being read as the picture.
+                A backup of EVERY document is Settings → Save a backup. */}
             {!student && (
-              <button className="doc-item" role="menuitem" onClick={pick(onExport)}>
-                Save a backup…
+              <button
+                className="doc-item"
+                role="menuitem"
+                title="This document as a .json file — Import from file opens it again. Settings → Save a backup keeps every document."
+                onClick={pick(onExport)}
+              >
+                Save a backup of this document…
               </button>
             )}
             <button className="doc-item" role="menuitem" onClick={() => fileRef.current?.click()}>

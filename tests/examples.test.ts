@@ -501,7 +501,7 @@ describe('the gallery', () => {
   })
 
   it('the help sheet’s units link to their examples', () => {
-    expect(examplesForSection('calc-5').map((d) => d.id)).toEqual(['calc-u5-graph-of-fprime', 'calc-u5-mvt'])
+    expect(examplesForSection('calc-5').map((d) => d.id)).toEqual(['calc-u5-graph-of-fprime', 'calc-u5-mvt', 'calc-u8-table-velocity'])
     for (const s of ['calc-1', 'calc-2', 'calc-3', 'calc-4', 'calc-5', 'calc-6', 'calc-7', 'calc-8', 'calc-9', 'calc-10', 'pc-1', 'pc-2', 'pc-3']) {
       expect(examplesForSection(s).length, s).toBeGreaterThan(0)
     }

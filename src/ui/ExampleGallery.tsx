@@ -14,8 +14,8 @@
 
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { COURSE_NAMES, EXAMPLE_SCREEN, buildExample, galleryGroups } from '../examples'
-import type { ExampleDef } from '../examples'
+import { COURSE_NAMES, COURSE_ORDER, EXAMPLE_SCREEN, buildExample, galleryGroups, hiddenMatches } from '../examples'
+import type { ExampleCourse, ExampleDef } from '../examples'
 import type { DisplayList } from '../render/vectorCtx'
 import { replayList } from '../render/vectorPage'
 import { docFigure, docModelFromJSON, recordFigure } from './docScene'
@@ -25,6 +25,12 @@ import { prefersReducedMotion } from './motionPref'
 interface Props {
   /** Scroll to (and highlight) the examples of this help-sheet unit. */
   focusSection?: string | null
+  /**
+   * The course filter the gallery opens with: the teacher's courses
+   * (src/ui/courses.ts galleryFilterFor), or null / absent for every course.
+   * A chip row changes it; "All" clears it.
+   */
+  defaultCourses?: readonly ExampleCourse[] | null
   onOpen(id: string): void
   onClose(): void
 }
@@ -102,12 +108,23 @@ function Thumb({ def, defs }: { def: ExampleDef; defs: Map<string, ExampleDef> }
   return <canvas ref={ref} className={`exg-thumb${list === undefined ? ' exg-thumb-wait' : ''}`} aria-hidden="true" />
 }
 
-export function ExampleGallery({ focusSection = null, onOpen, onClose }: Props) {
+export function ExampleGallery({ focusSection = null, defaultCourses = null, onOpen, onClose }: Props) {
   const [query, setQuery] = useState('')
+  // A link to one unit's examples shows every course: the unit asked for may be in any.
+  const [filter, setFilter] = useState<readonly ExampleCourse[] | null>(() =>
+    focusSection || !defaultCourses || defaultCourses.length === 0 ? null : defaultCourses,
+  )
+  const toggleCourse = (c: ExampleCourse): void =>
+    setFilter((f) => {
+      if (!f) return [c]
+      const next = f.includes(c) ? f.filter((x) => x !== c) : COURSE_ORDER.filter((x) => x === c || f.includes(x))
+      return next.length === 0 ? null : next
+    })
   const rootRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const uid = useId()
-  const groups = useMemo(() => galleryGroups(query), [query])
+  const groups = useMemo(() => galleryGroups(query, filter), [query, filter])
+  const elsewhere = useMemo(() => hiddenMatches(query, filter), [query, filter])
   const defs = useMemo(() => {
     const m = new Map<string, ExampleDef>()
     for (const g of galleryGroups()) for (const u of g.units) for (const d of u.examples) m.set(d.id, d)
@@ -207,17 +224,57 @@ export function ExampleGallery({ focusSection = null, onOpen, onClose }: Props) 
           Ready-to-teach boards, one or two per unit. Opening one makes a <strong>copy</strong> in your documents — change
           it freely; the example stays as it is. Each opens with a teacher note at the top of the sidebar.
         </p>
-        {groups.length > 1 && (
-          <nav className="exg-nav" aria-label="Jump to a course">
-            {groups.map((g) => (
-              <button key={g.course} type="button" className="hs-chip" onClick={() => jump(g.course)}>
-                {COURSE_NAMES[g.course]}
+        <nav className="exg-nav exg-filter" aria-label="Show examples for" data-testid="example-filter">
+          <span className="exg-filter-label">Show:</span>
+          <button
+            type="button"
+            className={`hs-chip exg-chip${filter === null ? ' exg-chip-on' : ''}`}
+            aria-pressed={filter === null}
+            data-course-filter="all"
+            onClick={() => setFilter(null)}
+          >
+            All courses
+          </button>
+          {COURSE_ORDER.map((c) => {
+            const on = filter?.includes(c) ?? false
+            return (
+              <button
+                key={c}
+                type="button"
+                className={`hs-chip exg-chip${on ? ' exg-chip-on' : ''}`}
+                aria-pressed={on}
+                data-course-filter={c}
+                onClick={() => toggleCourse(c)}
+              >
+                {COURSE_NAMES[c]}
               </button>
-            ))}
-          </nav>
-        )}
+            )
+          })}
+          {filter === null && groups.length > 1 && (
+            <span className="exg-jump">
+              <span className="exg-filter-label">Jump to:</span>
+              {groups.map((g) => (
+                <button key={g.course} type="button" className="exg-jump-btn" onClick={() => jump(g.course)}>
+                  {COURSE_NAMES[g.course]}
+                </button>
+              ))}
+            </span>
+          )}
+        </nav>
         <div className="exg-body">
-          {count === 0 && <p className="exg-empty">No example matches “{query}”.</p>}
+          {count === 0 && (
+            <p className="exg-empty">
+              {query ? <>No example matches “{query}” in these courses.</> : <>No examples in these courses.</>}
+            </p>
+          )}
+          {filter !== null && elsewhere > 0 && query.trim() !== '' && (
+            <p className="exg-elsewhere" data-testid="example-elsewhere">
+              {elsewhere} more in other courses —{' '}
+              <button type="button" className="exg-link" onClick={() => setFilter(null)}>
+                show all courses
+              </button>
+            </p>
+          )}
           {groups.map((g) => (
             <section key={g.course} className="exg-course" data-course={g.course} aria-label={COURSE_NAMES[g.course]}>
               <h3 className="exg-course-title">{COURSE_NAMES[g.course]}</h3>

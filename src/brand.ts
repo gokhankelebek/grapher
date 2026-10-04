@@ -23,8 +23,17 @@ export const TRUST_LINE = 'Free for teachers. No account. Nothing leaves your de
 /** Where the source lives. */
 export const REPO_URL = 'https://github.com/gokhankelebek/grapher'
 
+/** Where feedback goes while FEEDBACK_URL is empty: the public issue tracker. */
+export const ISSUES_URL = `${REPO_URL}/issues`
+
 /**
  * TODO(feedback): a mailto: or form URL for teacher feedback. Empty until the
  * address is chosen; the footer shows the link only once this is set.
  */
 export const FEEDBACK_URL = ''
+
+/**
+ * The privacy details, said the same way on the landing page's footer and in
+ * the app's About dialog. Keep it literally true.
+ */
+export const PRIVACY_LINE = `${BRAND} has no accounts, no analytics, no cookies and no third-party scripts or fonts. Your work is stored only in this browser. The site is served as static files by GitHub Pages.`

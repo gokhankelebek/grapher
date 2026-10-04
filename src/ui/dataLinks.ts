@@ -30,6 +30,7 @@ import type { ScatterSet } from '../render/scatter'
 import { parseNumeric } from './numeric'
 import type { CorrelationWords, ResidualPattern } from '../core/residuals'
 import { correlationWords, residualPattern } from '../core/residuals'
+import type { TableCalcCard } from './tableCalcLinks'
 
 export type { BoardData, DataMarker, DataRegression, DataRow, RegressionKind, RegressionResult }
 export { REG_DIGITS_DEFAULT, REG_DIGITS_MAX, REG_DIGITS_MIN, clampRegDigits, isRegressionKind }
@@ -438,6 +439,8 @@ export interface DataCardData {
    * the regression whose residual plot — or else residual segments — is on.
    */
   residualCol: (number | null)[] | null
+  /** "Calculus on this table" (src/ui/tableCalcLinks.ts), when the App worked it out. */
+  calc?: TableCalcCard
 }
 
 /** "a linear model", "this quadratic model". */
@@ -763,6 +766,13 @@ export function residualPanelOf(points: Box): ResidualPanel {
  * panel when one is shown. Null for a table with nothing plotted.
  */
 export function dataBox(data: BoardData): Box | null {
+  const box = dataPointsBox(data)
+  // A Riemann or trapezoidal sum on the table draws down to the x-axis.
+  if (!box || !data.calc?.sum) return box
+  return { min: { x: box.min.x, y: Math.min(box.min.y, 0) }, max: { x: box.max.x, y: Math.max(box.max.y, 0) } }
+}
+
+function dataPointsBox(data: BoardData): Box | null {
   const pts = pointsBox(data)
   if (!pts) return null
   if (!residualPlotReg(data)) return pts

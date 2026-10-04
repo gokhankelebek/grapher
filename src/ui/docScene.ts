@@ -90,6 +90,7 @@ import { physicalViewport, recordScene } from './vectorExport'
 import type { Overlay } from '../render/overlays'
 import { viewStatesFrom } from './curveViews'
 import { tableFigures, tableOverlays } from './valueTableLinks'
+import { tableCalcOverlays } from './tableCalcLinks'
 import { anyCentres, centreOverlays } from './centreLinks'
 import { circleOverlays } from './circleLinks'
 import { partnerPolylines, sequenceFigure } from './seqLinks'
@@ -415,9 +416,14 @@ export function docFigure(m: DocModel, o: FigureOptions): DocFigure {
   const circleMarks = cartesian && Object.values(views.circle).some((v) => v.show && v.show.length > 0)
     ? safe(() => circleOverlays(curves, board.exprSources, views.circle), [])
     : []
+  // Calculus on a data table: its rectangles, secants and chips.
+  const tableCalcMarks = cartesian && board.data.some((d) => d.calc && d.visible)
+    ? safe(() => tableCalcOverlays(board.data), [])
+    : []
   // The ghost goes first (under everything else), as the App orders them.
   const allOverlays: Overlay[] = [
     ...domain, ...base, ...polarAreas, ...sysOverlays, ...(seq?.overlays ?? []), ...tableMarks, ...circleMarks, ...centreMarks,
+    ...tableCalcMarks,
   ]
   // A student copy keeps no chip that states an answer (reveal mode's keys).
   // …nor anything belonging to an answer it hides (a transformation image's centres).

@@ -107,14 +107,25 @@ export interface GalleryUnit {
   examples: ExampleDef[]
 }
 
+/** How many examples match `query` in the courses the filter leaves out. */
+export function hiddenMatches(query: string, courses: readonly ExampleCourse[] | null): number {
+  if (!courses) return 0
+  return EXAMPLE_DEFS.filter((d) => !courses.includes(d.course) && exampleMatches(d, query)).length
+}
+
 /**
  * The gallery's groups: course, then unit — each example under its HOME
  * section (its first `help`), units in the order the catalog first reaches
- * them — filtered by the search.
+ * them — filtered by the search, and by the course filter (null: every
+ * course; the gallery opens on the teacher's courses, src/ui/courses.ts).
  */
-export function galleryGroups(query = ''): { course: ExampleCourse; units: GalleryUnit[] }[] {
+export function galleryGroups(
+  query = '',
+  courses: readonly ExampleCourse[] | null = null,
+): { course: ExampleCourse; units: GalleryUnit[] }[] {
   const out: { course: ExampleCourse; units: GalleryUnit[] }[] = []
   for (const course of COURSE_ORDER) {
+    if (courses && !courses.includes(course)) continue
     const units: GalleryUnit[] = []
     for (const def of EXAMPLE_DEFS) {
       if (def.course !== course || !exampleMatches(def, query)) continue

@@ -20,6 +20,7 @@ import { oneToOneText, setRowText } from '../ui/domainLinks'
 import { writeStandard } from '../ui/conicLinks'
 import { solveCached } from '../ui/nlSolve'
 import { revealedLines } from '../ui/revealedAnswers'
+import { tableCalcAnswer } from '../ui/tableCalcLinks'
 import type { AnswerLine, AnswerSources } from '../ui/revealedAnswers'
 import type { CardCalc } from '../ui/calcLinks'
 import type { CirclePanel } from '../ui/circleLinks'
@@ -178,7 +179,7 @@ export function shapePartText(s: Shape | undefined, part: string): string | null
 export function usePresentAnswers(deps: PresentAnswersDeps): AnswerLine[] {
   const { board, docState, session, derived, overlaysApi, panel, valueTablesApi, circleViewsApi } = deps
   const { tables, fieldsApi, system, unitCircle, rates, statsApi, marks, naming, revealInv } = deps
-  const { curves, items, shapes } = board
+  const { curves, items, shapes, dataSets } = board
   const { exprSources, names } = docState
   const { reveal, presentMode, setNotation } = session
   const { models } = derived
@@ -290,6 +291,13 @@ export function usePresentAnswers(deps: PresentAnswersDeps): AnswerLine[] {
                 : 'Shape'
           return { label, value: shapePartText(s, part), color: s?.color ?? shapes.find((x) => x.id === id)?.color ?? null, board: true }
         }
+        if (head === 'tcalc') {
+          // calculus on a data table: the sum, the estimate, the average, a theorem
+          const d = dataSets.find((t) => t.id === id)
+          if (!d) return null
+          const a = tableCalcAnswer(d, part)
+          return { label: a.label, value: a.value, color: a.color, board: part === 'sum' || part === 'deriv' || part === 'avg' }
+        }
         if (head === 'solve') {
           // a number line's solved inequality (or a solved equation's candidate on the graph)
           const it = items.find((i) => i.id === id)
@@ -306,6 +314,6 @@ export function usePresentAnswers(deps: PresentAnswersDeps): AnswerLine[] {
   }, [
     on, revealInv, reveal, curves, items, shapes, boardCurveNames, names, models, domainPanel, setNotation,
     exprSources, calcLines, tablePanelFor, circlePanelFor, overlays, ucFigures, rrFigures, statsFigs,
-    seqCardFor, fieldCardFor, sysCard, screenShapes,
+    seqCardFor, fieldCardFor, sysCard, screenShapes, dataSets,
   ])
 }

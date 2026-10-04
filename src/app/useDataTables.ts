@@ -37,6 +37,9 @@ import type {
   RegressionKind,
 } from '../ui/dataLinks'
 import { solveSpan, spanCovers } from '../ui/fieldLinks'
+import { normalizeTableCalc } from '../core/persist'
+import { sortRowsByX, tableCalcCard } from '../ui/tableCalcLinks'
+import type { TableCalcCard, TableCalcNext } from '../ui/tableCalcLinks'
 import type { Polyline, ScatterSet } from '../ui/renderBoard'
 import {
   compileSequences,
@@ -478,6 +481,47 @@ export function useDataTables({ board, docState, refs, derived, notices, history
     [commitState, mapData],
   )
 
+  /**
+   * "Calculus on this table": the table's next settings, one undo step.
+   * Undefined switches every tool off (and stores nothing).
+   */
+  const setTableCalc = useCallback(
+    (id: string, next: TableCalcNext, label: string): void => {
+      const d = dataRef.current.find((t) => t.id === id)
+      if (!d) return
+      const clean = normalizeTableCalc(typeof next === 'function' ? next(d) : next) ?? undefined
+      if (JSON.stringify(clean ?? null) === JSON.stringify(normalizeTableCalc(d.calc) ?? null)) return
+      const hadSum = !!d.calc?.sum
+      commitState(
+        {
+          data: mapData(id, (t) => {
+            const { calc: _was, ...rest } = t
+            return clean ? { ...rest, calc: clean } : rest
+          }),
+        },
+        label,
+      )
+      // A sum draws down to the axis: make sure the axis is in the frame.
+      if (!hadSum && clean?.sum) {
+        const box = dataBox({ ...d, calc: clean })
+        if (box) frameBoxRef.current(box)
+      }
+    },
+    [commitState, mapData],
+  )
+
+  /** "Sort by x": the rows in increasing x, one undo step. */
+  const sortTableByX = useCallback(
+    (id: string): void => {
+      const d = dataRef.current.find((t) => t.id === id)
+      if (!d) return
+      const rows = sortRowsByX(d.rows)
+      if (rows.every((r, i) => r.x === d.rows[i].x && r.y === d.rows[i].y)) return
+      commitState({ data: mapData(id, (t) => ({ ...t, rows })) }, `sort by ${d.xLabel || 'x'}`)
+    },
+    [commitState, mapData],
+  )
+
   /** Re-attach a detached regression: the next sync writes the fit over the hand edit. */
   const refitRegression = useCallback(
     (id: string, regId: string): void => {
@@ -608,7 +652,16 @@ export function useDataTables({ board, docState, refs, derived, notices, history
 
   const dataCards = useMemo<Record<string, DataCardData>>(() => {
     const out: Record<string, DataCardData> = {}
-    for (const d of dataSets) out[d.id] = dataCard(d, exprSources, curveIdSet, fitCacheRef.current)
+    for (const d of dataSets) {
+      const card = dataCard(d, exprSources, curveIdSet, fitCacheRef.current)
+      let calc: TableCalcCard | undefined
+      try {
+        calc = tableCalcCard(d)
+      } catch {
+        calc = undefined
+      }
+      out[d.id] = calc ? { ...card, calc } : card
+    }
     return out
   }, [dataSets, exprSources, curveIdSet])
 
@@ -670,7 +723,8 @@ export function useDataTables({ board, docState, refs, derived, notices, history
   return {
     addDataTable, addDataTableFrom, setDataCellText, setDataLabel, removeDataRowAt, pasteData, toggleDataVisible,
     cycleDataColor, setDataMarker, deleteData, duplicateData, addRegression, removeRegression,
-    setRegressionDigits, toggleResiduals, toggleResidualPlot, refitRegression, seqCompiled, seqCompiledRef,
+    setRegressionDigits, toggleResiduals, toggleResidualPlot, refitRegression, setTableCalc, sortTableByX,
+    seqCompiled, seqCompiledRef,
     scatterScene, scatterSceneRef, dataCardFor, seqCardFor, seqDefaultName, refreshPartnerSpan,
     partnerLines,
   }

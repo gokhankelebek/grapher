@@ -30,18 +30,51 @@ interface Props {
    * switch and no Undo / Redo — the teacher set the board up for them.
    */
   student?: boolean
+  /** Examples: the gallery of ready-to-teach boards, one click from anywhere. */
+  onExamples?(): void
+  /** The rest of the settings menu: courses, backups, About, Feedback. */
+  settings?: SettingsItems
+  /** The product name shown at the left. */
+  brand?: string
+}
+
+/** What the settings menu offers besides the accessibility tools. */
+export interface SettingsItems {
+  /** "Your courses: AP Calculus · AP Precalculus", or '' when none are chosen. */
+  coursesLabel?: string
+  /** Settings → Your courses… */
+  onCourses?(): void
+  /** The one-time tip for a teacher who was never asked: "Tell Grapher what you teach". */
+  tipDue?: boolean
+  onDismissTip?(): void
+  /** Save a backup (every document) / Restore from backup… */
+  onBackup?(): void
+  onRestore?(): void
+  /** About & privacy… */
+  onAbout?(): void
+  /** Where Feedback goes (a mailto:, a form, or the issue tracker). */
+  feedbackHref?: string
+  /** The product's name, for the tip. */
+  brand?: string
 }
 
 /**
- * The toolbar's ⋯: the accessibility tools, one click from anywhere —
- * "Describe this graph" and the colour-blind-safe palette (both also in ⌘K).
+ * The toolbar's settings menu (the gear): the person's settings in one place —
+ * their courses, the canvas theme, the accessibility tools ("Describe this
+ * graph", colour-blind-safe colours), backups, About & privacy, Feedback.
+ * It replaced two buttons (the moon and a ⋯ whose only item was
+ * accessibility). Everything in it is also in ⌘K.
  */
-function MoreMenu({
+function SettingsMenu({
   onDescribe,
   curvePalette,
   onCurvePalette,
   onHelp,
-}: Pick<Props, 'onDescribe' | 'curvePalette' | 'onCurvePalette' | 'onHelp'>) {
+  canvasTheme,
+  onToggleCanvasTheme,
+  settings = {},
+  student,
+}: Pick<Props, 'onDescribe' | 'curvePalette' | 'onCurvePalette' | 'onHelp' | 'canvasTheme' | 'onToggleCanvasTheme' | 'settings' | 'student'>) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
@@ -59,32 +92,79 @@ function MoreMenu({
   const pick = (fn?: () => void) => (): void => {
     setOpen(false)
     fn?.()
-    // Back to ⋯ — unless what ran opened a dialog that took focus.
+    // Back to the gear — unless what ran opened a dialog that took focus.
     window.setTimeout(() => {
       if (document.activeElement === document.body || !document.activeElement) btnRef.current?.focus()
     }, 0)
   }
   const safe = curvePalette === 'safe'
+  const light = canvasTheme === 'light'
+  const teacher = !student
+  const tip = teacher && settings.tipDue && !!settings.onCourses
   return (
-    <div className="tb-more" ref={wrapRef}>
+    <div className="tb-more tb-settings" ref={wrapRef}>
       <button
         ref={btnRef}
-        className="tb-btn tb-icon"
+        className={`tb-btn tb-icon${tip ? ' tb-settings-tip' : ''}`}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label="More: accessibility"
-        title="More — describe this graph, colour-blind-safe colours"
-        data-testid="toolbar-more"
+        aria-label={tip ? 'Settings (a tip is waiting)' : 'Settings'}
+        title="Settings — your courses, theme, accessibility, backups, about"
+        data-testid="toolbar-settings"
         onClick={() => setOpen((o) => !o)}
       >
-        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <circle cx="3.2" cy="8" r="1.35" fill="currentColor" />
-          <circle cx="8" cy="8" r="1.35" fill="currentColor" />
-          <circle cx="12.8" cy="8" r="1.35" fill="currentColor" />
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path
+            d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"
+            stroke="currentColor"
+            strokeWidth="1.7"
+          />
+          <path
+            d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.6-2-3.4-2.4.9a7.7 7.7 0 0 0-2.6-1.5L14 2.4h-4l-.4 2.5A7.7 7.7 0 0 0 7 6.4l-2.4-.9-2 3.4 2 1.6a7.6 7.6 0 0 0 0 3l-2 1.6 2 3.4 2.4-.9a7.7 7.7 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.7 7.7 0 0 0 2.6-1.5l2.4.9 2-3.4-2-1.6Z"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinejoin="round"
+          />
         </svg>
+        {tip && <span className="tb-tip-dot" aria-hidden="true" />}
       </button>
       {open && (
-        <div className="doc-menu tb-more-menu" role="menu" aria-label="More" ref={menuRef}>
+        <div className="doc-menu tb-more-menu tb-settings-menu" role="menu" aria-label="Settings" ref={menuRef}>
+          {tip && (
+            <div className="tb-tip" data-testid="courses-tip">
+              <button className="doc-item tb-tip-main" role="menuitem" onClick={pick(settings.onCourses)}>
+                <strong>Tell {settings.brand ?? 'Grapher'} what you teach</strong>
+                <span className="tb-tip-text">Your courses’ tools and examples come first.</span>
+              </button>
+              <button
+                className="tb-tip-x"
+                role="menuitem"
+                aria-label="Dismiss the tip"
+                title="Dismiss"
+                onClick={() => settings.onDismissTip?.()}
+              >
+                ×
+              </button>
+            </div>
+          )}
+          {teacher && settings.onCourses && (
+            <button className="doc-item tb-set-row" role="menuitem" data-testid="settings-courses" onClick={pick(settings.onCourses)}>
+              <span>Your courses…</span>
+              <span className="tb-set-val">{settings.coursesLabel || 'All'}</span>
+            </button>
+          )}
+          <button
+            className="doc-item"
+            role="menuitemcheckbox"
+            aria-checked={light}
+            data-testid="canvas-theme"
+            data-canvas-theme={canvasTheme}
+            onClick={pick(onToggleCanvasTheme)}
+          >
+            <span className="tb-more-check" aria-hidden="true">{light ? '✓' : ''}</span>
+            Light canvas
+          </button>
+          {(onDescribe || onCurvePalette) && <div className="doc-menu-sep" role="separator" />}
           {onDescribe && (
             <button className="doc-item" role="menuitem" data-testid="more-describe" onClick={pick(onDescribe)}>
               Describe this graph…
@@ -102,10 +182,40 @@ function MoreMenu({
               Colour-blind-safe colours
             </button>
           )}
+          {teacher && (settings.onBackup || settings.onRestore) && <div className="doc-menu-sep" role="separator" />}
+          {teacher && settings.onBackup && (
+            <button className="doc-item" role="menuitem" data-testid="settings-backup" onClick={pick(settings.onBackup)}>
+              Save a backup (.json)
+            </button>
+          )}
+          {teacher && settings.onRestore && (
+            <button className="doc-item" role="menuitem" data-testid="settings-restore" onClick={pick(settings.onRestore)}>
+              Restore from backup…
+            </button>
+          )}
+          <div className="doc-menu-sep" role="separator" />
           {onHelp && (
             <button className="doc-item" role="menuitem" onClick={pick(onHelp)}>
               Keyboard and help…
             </button>
+          )}
+          {settings.onAbout && (
+            <button className="doc-item" role="menuitem" data-testid="settings-about" onClick={pick(settings.onAbout)}>
+              About &amp; privacy…
+            </button>
+          )}
+          {teacher && settings.feedbackHref && (
+            <a
+              className="doc-item tb-set-link"
+              role="menuitem"
+              href={settings.feedbackHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="settings-feedback"
+              onClick={() => setOpen(false)}
+            >
+              Feedback ↗
+            </a>
           )}
         </div>
       )}
@@ -143,6 +253,9 @@ export function Toolbar({
   curvePalette,
   onCurvePalette,
   student = false,
+  onExamples,
+  settings,
+  brand = 'Grapher',
 }: Props) {
   return (
     <div className={`toolbar${student ? ' toolbar-student' : ''}`} data-student={student ? 'true' : undefined}>
@@ -159,8 +272,8 @@ export function Toolbar({
         </svg>
       </button>
 
-      <div className="brand" title="Grapher — sketch to math">
-        Grapher
+      <div className="brand" title={`${brand} — sketch to math`}>
+        {brand}
       </div>
 
       {docMenu && (
@@ -193,46 +306,42 @@ export function Toolbar({
       </button>
       )}
 
-      <button
-        className="tb-btn tb-icon"
-        onClick={onToggleCanvasTheme}
-        aria-pressed={canvasTheme === 'light'}
-        data-testid="canvas-theme"
-        data-canvas-theme={canvasTheme}
-        title={canvasTheme === 'light' ? 'Canvas: light' : 'Canvas: dark'}
-        aria-label="Toggle canvas background"
-      >
-        {canvasTheme === 'light' ? (
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <circle cx="12" cy="12" r="4.2" stroke="currentColor" strokeWidth="1.7" />
-            <path
-              d="M12 2.5v2.4M12 19.1v2.4M2.5 12h2.4M19.1 12h2.4M5.2 5.2l1.7 1.7M17.1 17.1l1.7 1.7M18.8 5.2l-1.7 1.7M6.9 17.1l-1.7 1.7"
-              stroke="currentColor"
-              strokeWidth="1.7"
-              strokeLinecap="round"
-            />
+      {onExamples && !student && (
+        <button
+          className="tb-btn tb-toggle tb-examples"
+          onClick={onExamples}
+          data-testid="toolbar-examples"
+          title="Examples — ready-to-teach boards for every unit, each opens as your own copy"
+        >
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <rect x="1.6" y="2.2" width="5.4" height="5" rx="1.2" stroke="currentColor" strokeWidth="1.3" />
+            <rect x="9" y="2.2" width="5.4" height="5" rx="1.2" stroke="currentColor" strokeWidth="1.3" />
+            <rect x="1.6" y="8.8" width="5.4" height="5" rx="1.2" stroke="currentColor" strokeWidth="1.3" />
+            <rect x="9" y="8.8" width="5.4" height="5" rx="1.2" stroke="currentColor" strokeWidth="1.3" />
           </svg>
-        ) : (
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path
-              d="M20.5 14.6A8.8 8.8 0 0 1 9.4 3.5a8.8 8.8 0 1 0 11.1 11.1Z"
-              stroke="currentColor"
-              strokeWidth="1.7"
-              strokeLinejoin="round"
-            />
-          </svg>
-        )}
-      </button>
+          <span className="tb-label">Examples</span>
+        </button>
+      )}
 
       {!student && (
         <>
           <div className="tb-sep" />
 
-          <button className="tb-btn" onClick={onUndo} disabled={!canUndo} title="Undo (⌘Z)">
-            Undo
+          {/* Words on a wide screen; on an iPad-wide toolbar the words go and
+              the arrows stay (styles: .tb-undo .tb-label), so it fits one row. */}
+          <button className="tb-btn tb-undo" onClick={onUndo} disabled={!canUndo} title="Undo (⌘Z)" aria-label="Undo">
+            <svg className="tb-undo-icon" width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M5.5 3.5 2.5 6.5l3 3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M2.8 6.5h6.7a3.8 3.8 0 0 1 0 7.6H7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+            </svg>
+            <span className="tb-label">Undo</span>
           </button>
-          <button className="tb-btn" onClick={onRedo} disabled={!canRedo} title="Redo (⇧⌘Z)">
-            Redo
+          <button className="tb-btn tb-undo" onClick={onRedo} disabled={!canRedo} title="Redo (⇧⌘Z)" aria-label="Redo">
+            <svg className="tb-undo-icon" width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="m10.5 3.5 3 3-3 3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M13.2 6.5H6.5a3.8 3.8 0 0 0 0 7.6H9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+            </svg>
+            <span className="tb-label">Redo</span>
           </button>
         </>
       )}
@@ -244,9 +353,16 @@ export function Toolbar({
         </>
       )}
 
-      {(onDescribe || onCurvePalette) && (
-        <MoreMenu onDescribe={onDescribe} curvePalette={curvePalette} onCurvePalette={onCurvePalette} onHelp={onHelp} />
-      )}
+      <SettingsMenu
+        onDescribe={onDescribe}
+        curvePalette={curvePalette}
+        onCurvePalette={onCurvePalette}
+        onHelp={onHelp}
+        canvasTheme={canvasTheme}
+        onToggleCanvasTheme={onToggleCanvasTheme}
+        settings={settings}
+        student={student}
+      />
 
       {onHelp && (
         <button

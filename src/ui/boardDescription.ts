@@ -30,6 +30,7 @@ import { viewStatesFrom } from './curveViews'
 import { tableSentences } from './valueTableLinks'
 import { circleSentences } from './circleLinks'
 import { complexSentences } from './complexLinks'
+import { tableCalcSentences } from './tableCalcLinks'
 
 export interface BoardDescription extends GraphDescription {
   /** One short sentence for the board's accessible name (aria-label). */
@@ -117,7 +118,9 @@ function cartesian(m: DocModel, o: DescribeBoardOptions): BoardDescription {
     const n = m.curveNames[c.id] ?? m.names[c.id]
     return n || 'the polynomial'
   })
-  const added = [...tables, ...circles, ...complexes]
+  // Calculus on a data table: what it draws always, what it states as answers.
+  const tableCalc = m.board.data.some((d) => d.calc) ? tableCalcSentences(m.board.data) : []
+  const added = [...tables, ...circles, ...complexes, ...tableCalc]
   const input: AdapterInput = {
     ...base,
     // The board's cards show every equation, so the description states them.

@@ -11,7 +11,7 @@
 // ============================================================================
 
 import { Fragment, useEffect, useState } from 'react'
-import { BRAND, FEEDBACK_URL, REPO_URL, TAGLINE, TRUST_LINE } from '../brand'
+import { BRAND, FEEDBACK_URL, PRIVACY_LINE, REPO_URL, TAGLINE, TRUST_LINE } from '../brand'
 import Demo from './Demo'
 import { appHref } from './route'
 import { browserStorage, savedDocCount } from './returning'
@@ -181,8 +181,7 @@ export default function Landing() {
 
       <footer className="lp-foot">
         <p>
-          <strong>Privacy.</strong> {BRAND} has no accounts, no analytics, no cookies and no third-party scripts or
-          fonts. Your work is stored only in this browser. The site is served as static files by GitHub Pages.
+          <strong>Privacy.</strong> {PRIVACY_LINE}
         </p>
         <ul>
           <li>

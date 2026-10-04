@@ -10364,3 +10364,29 @@ button.calc-field-btn {
   text-align: left;
   border-color: color-mix(in srgb, var(--curve, var(--accent)) 50%, transparent);
 }
+
+/* "Calculus on this table" (src/ui/TableCalcSection.tsx). */
+.tc-seg,
+.tc-range {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.tc-unavailable:not(.calc-chip-on) {
+  opacity: 0.55;
+}
+
+.tc-statement {
+  padding: var(--sp-1) var(--sp-2);
+  border-left: 2px solid var(--accent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--text);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.tc-index {
+  margin-top: 0;
+}

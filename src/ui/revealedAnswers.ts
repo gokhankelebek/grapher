@@ -127,6 +127,7 @@ const OBJECT_WORD: Record<string, string> = {
   series: 'Series',
   euler: 'Euler’s method',
   solve: 'Solution set',
+  tcalc: 'Calculus on a table',
 }
 
 /** Run a reader that may throw; null on failure. */

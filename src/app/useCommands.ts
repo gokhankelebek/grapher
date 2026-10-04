@@ -7,6 +7,7 @@
 // ============================================================================
 
 import { polyOf } from '../ui/valueTableLinks'
+import { partOn, turnOn } from '../ui/tableCalcLinks'
 import { complexZerosOf } from '../ui/complexLinks'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { NL_SOLVE_DEFAULTS } from '../core/types'
@@ -56,6 +57,7 @@ import type { ExamplesApi } from './useExamples'
 import type { ItemBankApi } from './useItemBank'
 import type { GraphDescriptionApi } from './useGraphDescription'
 import type { StatsApi } from './useStats'
+import type { CourseFocusApi } from './useCourseFocus'
 
 const NOOP = (): void => {}
 
@@ -92,9 +94,11 @@ export interface CommandsDeps {
   shapesApi?: ShapesApi
   /** The circles' Circle theorems settings. Optional: tests may omit it. */
   circleViewsApi?: CircleViewsApi
+  /** Courses, backups, About (src/app/useCourseFocus.ts). Optional: tests may omit it. */
+  focus?: CourseFocusApi
 }
 
-export function useCommands({ board, docState, session, refs, derived, notices, history, docActions, editing, calc, fieldsApi, typed, tables, domain, numberLine, viewport, unitCircle, rates, overlaysApi, naming, revealMode, exporter, figureSettings, editors, examples, itemBank, describer, statsApi, shapesApi, circleViewsApi }: CommandsDeps) {
+export function useCommands({ board, docState, session, refs, derived, notices, history, docActions, editing, calc, fieldsApi, typed, tables, domain, numberLine, viewport, unitCircle, rates, overlaysApi, naming, revealMode, exporter, figureSettings, editors, examples, itemBank, describer, statsApi, shapesApi, circleViewsApi, focus }: CommandsDeps) {
   const {
     curves, kind, items, selectedId, setSelectedId, sidebarOpen, setSidebarOpen, lens, fields,
     shapes, dataSets, sequences, boardGrid, figureStyle, previewFigure, setPreviewFigure,
@@ -117,7 +121,7 @@ export function useCommands({ board, docState, session, refs, derived, notices, 
   const { curveLabel, addCalcObject, addAreaBetween } = calc
   const { addEuler } = fieldsApi
   const { toggleSeqSums, toggleSeqSeries } = typed
-  const { addDataTable } = tables
+  const { addDataTable, setTableCalc } = tables
   const { showInverseOf, toggleHlt } = domain
   const { setSolveShow } = numberLine
   const { zoomBy, resetView, fitToContent, graphSolve } = viewport
@@ -238,6 +242,25 @@ export function useCommands({ board, docState, session, refs, derived, notices, 
     toggleSeqSeries,
     toggleSeqSums,
     solveShow: setSolveShow,
+    openTableCalc: (tool) => {
+      revealSidebar()
+      rememberSection('table-calc', true)
+      const openSection = (): void => {
+        window.requestAnimationFrame(() => window.dispatchEvent(new CustomEvent(OPEN_SECTION_EVENT, { detail: 'table-calc' })))
+      }
+      const target = dataSets.find((d) => d.id === selectedId) ?? dataSets[0]
+      if (!target) {
+        // no table yet: a new one, and what to do first
+        showBuilder(null, 'open')
+        addDataTable()
+        openSection()
+        showToast('Type or paste the table first (x increasing), then switch the tool on under “Calculus on this table”.', { ms: 5000 })
+        return
+      }
+      if (!partOn(target.calc, tool)) setTableCalc(target.id, turnOn(target, tool), `table ${tool}`)
+      setSelectedId(target.id)
+      openSection()
+    },
     openTableTool: (id, tool) => {
       revealSidebar()
       rememberSection('table', true)
@@ -331,6 +354,11 @@ export function useCommands({ board, docState, session, refs, derived, notices, 
     resetView,
     help: () => setHelpOpen(true),
     describe: describer.openDescribe,
+    openCourses: focus?.openCourses,
+    backupAll: focus?.saveBackup,
+    restoreBackup: focus?.pickRestore,
+    about: focus?.openAbout,
+    feedback: focus?.openFeedback,
     setCurvePalette: (p) => {
       setCurvePalette(p)
       showToast(
