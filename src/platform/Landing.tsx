@@ -48,7 +48,7 @@ const PANELS = [
     id: 'print',
     title: 'Print',
     img: printImg,
-    alt: 'The worksheet builder: a white Letter page titled “Unit 5 Quiz: Reading the graph of f′” with two figures and their answer key, under buttons for Student PDF, Key PDF, Copy LaTeX, .tex and pgfplots.',
+    alt: 'The worksheet builder’s answer key preview: “Unit 6 Quiz: Riemann sums” marked ANSWER KEY, a rate table’s left Riemann sum L₄ = 68.5 with its data table and worked answer, and a graph of f′ with its sign chart and justifications, under buttons for Student PDF, Key PDF, Copy LaTeX, .tex and pgfplots.',
     text: 'Build a worksheet and its answer key, and export any figure as SVG, PDF or LaTeX/TikZ.',
   },
 ] as const
