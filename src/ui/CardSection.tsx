@@ -19,7 +19,7 @@
 // Taylor polynomials on one card do not fold each other.
 // ============================================================================
 
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import { readPrefs, updatePrefs } from './storage'
 import { useMaskedSummary } from './RevealAnswer'
@@ -63,6 +63,44 @@ export const OPEN_SECTION_EVENT = 'grapher:open-section'
 /** Tests only: forget what this page has read, so the next read is fresh. */
 export function resetSectionMemory(): void {
   remembered = null
+  live = {}
+}
+
+// ---------------------------------------------------------------------------
+// Whether a section of a kind is open RIGHT NOW, for things outside the card
+// that follow it — the transformation's dashed parent and construction arrows
+// are drawn on the board only while its section is open. Every mounted
+// CardSection reports its state here (mount, toggle, the open-section event);
+// a kind with nothing mounted reads as its remembered choice, else its default.
+// ---------------------------------------------------------------------------
+
+let live: Record<string, boolean> = {}
+const listeners = new Set<() => void>()
+
+function reportOpen(kind: string, open: boolean): void {
+  if (live[kind] === open) return
+  live = { ...live, [kind]: open }
+  for (const l of listeners) l()
+}
+
+/** Is a section of this kind open now (see above)? */
+export function sectionOpenNow(kind: string, defaultOpen: boolean): boolean {
+  const v = live[kind]
+  return typeof v === 'boolean' ? v : sectionOpen(kind, defaultOpen)
+}
+
+/** React to a kind of section opening and closing, wherever it is on screen. */
+export function useSectionOpenNow(kind: string, defaultOpen: boolean): boolean {
+  return useSyncExternalStore(
+    (cb) => {
+      listeners.add(cb)
+      return () => {
+        listeners.delete(cb)
+      }
+    },
+    () => sectionOpenNow(kind, defaultOpen),
+    () => sectionOpen(kind, defaultOpen),
+  )
 }
 
 interface Props {
@@ -108,6 +146,9 @@ export function CardSection({
   children,
 }: Props) {
   const [open, setOpen] = useState(() => sectionOpen(kind, defaultOpen))
+  useEffect(() => {
+    reportOpen(kind, open)
+  }, [kind, open])
   const rootRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const onOpen = (e: Event): void => {

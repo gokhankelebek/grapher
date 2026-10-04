@@ -18,6 +18,7 @@ import { parseNumeric } from './numeric'
 import type { CalcChange } from './calcLinks'
 import type { SignChartRow, SignLevel } from './signChartLinks'
 import { levelName } from './signChartLinks'
+import { entryHandlers } from './fieldEntry'
 
 interface Props {
   row: SignChartRow
@@ -88,17 +89,7 @@ export function SignChartSection({ row, onCalcChange, onRemove }: Props) {
             aria-label={title}
             value={edit.text}
             onChange={(e) => setEdit({ which, text: e.target.value, bad: false })}
-            onKeyDown={(e) => {
-              e.stopPropagation()
-              if (e.key === 'Enter') {
-                e.preventDefault()
-                commit()
-              } else if (e.key === 'Escape') {
-                e.preventDefault()
-                setEdit(null)
-              }
-            }}
-            onBlur={() => setEdit(null)}
+            {...entryHandlers(commit, () => setEdit(null))}
           />
         </span>
       )

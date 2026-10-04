@@ -361,7 +361,7 @@ describe('TransformEditor — markup', () => {
   })
 })
 
-function typedCard(src: string): string {
+function typedCard(src: string, over: Record<string, unknown> = {}): string {
   const outcome = parseExpression(src)
   if (!outcome.ok) throw new Error(outcome.error)
   const spec: ModelSpec = outcome.plot.makeModel('expr_1')
@@ -418,6 +418,7 @@ function typedCard(src: string): string {
     onTransformShowParent: NOOP,
     onShowInverse: NOOP,
     onConvertTyped: () => null,
+    ...over,
   }
   return renderToStaticMarkup(
     createElement(CurveCard, props as unknown as Parameters<typeof CurveCard>[0]),
@@ -431,8 +432,16 @@ function section(html: string): string {
 }
 
 describe('the Transformation section on a card', () => {
-  it('y = -2(x-3)^2+1: open, of y = x², numbered steps, the table, features, show parent on', () => {
+  it('y = -2(x-3)^2+1: folded by default (launch polish) — the header only, no table', () => {
     const s = section(typedCard('y = -2(x-3)^2+1'))
+    expect(s).not.toBe('')
+    expect(s).toContain('of y = x²')
+    expect(s.match(/aria-expanded="(true|false)"/)?.[1]).toBe('false')
+    expect(s).not.toContain('<td>(1, −7)</td>')
+  })
+
+  it('y = -2(x-3)^2+1 with "show parent" on: open, of y = x², numbered steps, the table, features, show parent on', () => {
+    const s = section(typedCard('y = -2(x-3)^2+1', { transformShowParent: true }))
     expect(s).not.toBe('')
     expect(s.indexOf('aria-expanded="true"')).toBeGreaterThan(-1)
     expect(s).toContain('of y = x²')
@@ -447,8 +456,8 @@ describe('the Transformation section on a card', () => {
     expect(s).toContain('Drag the vertex')
   })
 
-  it('y = sqrt(4-x): open, a reflection across the y-axis', () => {
-    const s = section(typedCard('y = sqrt(4-x)'))
+  it('y = sqrt(4-x): open (with show parent), a reflection across the y-axis', () => {
+    const s = section(typedCard('y = sqrt(4-x)', { transformShowParent: true }))
     expect(s).not.toBe('')
     expect(s).toContain('of y = √x')
     expect(s).toContain('reflection across the y-axis')

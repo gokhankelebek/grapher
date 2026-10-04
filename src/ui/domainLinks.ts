@@ -514,6 +514,43 @@ export function inverseCurveLine(source: string, fRange: RealSet | null): string
 // ---------------------------------------------------------------------------
 
 /** How the card may restrict this curve's domain. */
+/**
+ * The x-range a SKETCH was drawn over, when its domain is still just that:
+ * the ink's extent with the fitter's 5% run-out at each end (or, at the left,
+ * a square root's or logarithm's own branch point). Null for a typed curve, a
+ * sketch without its ink, or one whose domain the teacher has since set —
+ * restricted from the card or dragged by an end: then the domain IS the
+ * function's, as a typed restriction is.
+ *
+ * Why it matters: a sketched parabola is a function on ℝ that was drawn on
+ * [−3.3, 3.3]. Its card states the FUNCTION's domain, range and one-to-one
+ * (y = x² − 4: ℝ, [−4, ∞), no), and says separately where it was drawn, with
+ * one click to extend it to all x. Before, every one of those facts described
+ * the stroke.
+ */
+export function drawnExtent(curve: FittedCurve): [number, number] | null {
+  if (curve.kind !== 'explicit' || !MODELS[curve.modelId]) return null
+  const d = curve.domain
+  const ink = curve.sourceStroke
+  if (!d || !ink || ink.length < 2 || !Number.isFinite(d[0]) || !Number.isFinite(d[1])) return null
+  let lo = Infinity
+  let hi = -Infinity
+  for (const p of ink) {
+    if (!p || !Number.isFinite(p.x)) continue
+    if (p.x < lo) lo = p.x
+    if (p.x > hi) hi = p.x
+  }
+  const w = hi - lo
+  if (!(w > 0)) return null
+  const a = Math.min(d[0], d[1])
+  const b = Math.max(d[0], d[1])
+  const tol = 0.03 * w
+  const branch = (curve.modelId === 'sqrt' || curve.modelId === 'log') && Math.abs(a - curve.params[1]) <= 1e-9 * Math.max(1, Math.abs(a))
+  const loOk = branch || Math.abs(a - (lo - 0.05 * w)) <= tol || Math.abs(a - lo) <= tol
+  const hiOk = Math.abs(b - (hi + 0.05 * w)) <= tol || Math.abs(b - hi) <= tol
+  return loOk && hiOk ? [a, b] : null
+}
+
 export type RestrictMode =
   | { kind: 'typed'; cond: string | null }
   | { kind: 'sketch'; domain: [number, number] | null }
@@ -567,6 +604,12 @@ export interface DomainPanel {
   hlt: { y: number; verdict: HltVerdict } | null
   reflect: boolean
   inverse: InversePanel | null
+  /**
+   * A sketch still on the piece it was drawn over (drawnExtent): that piece.
+   * The rows above then describe the function, and the card says "drawn on
+   * [a, b]" with an "Extend to all x". Absent otherwise.
+   */
+  drawn?: [number, number] | null
 }
 
 /** What the rows can do. Every id is the panel's `ownerId`. */

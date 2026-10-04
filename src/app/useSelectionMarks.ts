@@ -76,6 +76,7 @@ import type { UnitCircleApi } from './useUnitCircle'
 import type { InequalitySystemApi } from './useInequalitySystem'
 import type { ExtraHandlesApi } from './useExtraHandles'
 import type { StatsApi } from './useStats'
+import { useSectionOpenNow } from '../ui/CardSection'
 
 /** No statistics handles: one array, so the memo below keeps its identity. */
 const NO_HANDLES: ExtraHandle[] = []
@@ -243,6 +244,7 @@ export function useSelectionMarks({ board, docState, session, refs, derived, fie
   // (2^(x−1)+3 is an exponential first) nothing is drawn until the teacher
   // turns "show parent" on in the collapsed section. Screen only: none of it
   // is figure content, none of it reaches an export.
+  const transformSectionOpen = useSectionOpenNow('transform', false)
   const selectedTransform = useMemo<{
     spec: TransformSpec
     id: string
@@ -264,10 +266,15 @@ export function useSelectionMarks({ board, docState, session, refs, derived, fie
     const sinusoidal =
       !factored && !exponential && !logarithmic && safeReadSinusoid(src) !== null
     const primary = transformOpenByDefault(spec, { factored, exponential, logarithmic, sinusoidal })
-    const ghost = showParent[c.id] ?? primary
-    if (!primary && !ghost) return null
-    return { spec, id: c.id, marks: primary || ghost, ghost }
-  }, [kind, selectedCurve, exprSources, showParent, calls])
+    // The section starts folded, and the board draws nothing of the
+    // construction until it is opened (or "show parent" is set on the board):
+    // the ghost, its arrows and the image labels used to clutter the zeros
+    // view, a Riemann sum and Present on every typed x² − 4.
+    const open = primary && transformSectionOpen
+    const ghost = showParent[c.id] ?? open
+    if (!open && !ghost) return null
+    return { spec, id: c.id, marks: open || ghost, ghost }
+  }, [kind, selectedCurve, exprSources, showParent, calls, transformSectionOpen])
 
   ghostActiveRef.current = selectedTransform !== null && selectedTransform.ghost
   useEffect(() => {

@@ -76,7 +76,7 @@ import {
 } from '../core/persist'
 import type { CentreFlag, FigureStyleId, MeasureFlag, NLItem, XformAid } from '../core/types'
 import { CENTRE_FLAGS, MEASURE_FLAGS } from '../core/types'
-import { cleanXform } from '../core/persist'
+import { cleanXform, NEW_DOC_FIGURE } from '../core/persist'
 import type { CircleView, ShapeMeasureSettings } from '../core/persist'
 import { parseXformCommand, resolveOp } from '../core/parse/xform'
 import type { BoardStat, DataDist, DataPlotSet } from '../core/statsPersist'
@@ -151,7 +151,8 @@ export class ExampleBoard {
   private selected: string | null = null
   private win: ExampleWindow | null = null
   private ruling: BoardGrid = 'cartesian'
-  private figureStyle: FigureStyleId = 'screen'
+  // An opened example is a new document: it exports in the new-document style.
+  private figureStyle: FigureStyleId = NEW_DOC_FIGURE
   private axisX: 'auto' | 'pi' | 'decimal' = 'auto'
 
   constructor(kind: BoardKind = 'cartesian') {

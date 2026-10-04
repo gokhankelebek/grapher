@@ -446,10 +446,12 @@ describe('the Riemann readout converges on the integral', () => {
     // L₄ on x² over [0, 2] is the 1.750 an AP class works out by hand;
     // L₈ is 0.25 · (0² + 0.25² + … + 1.75²) = 2.1875.
     expect(riemannReadout(link(4), g, MODELS).value).toBeCloseTo(1.75, 9)
-    expect(riemannReadout(link(4), g, MODELS).text).toBe('L₄ = 1.750 → ∫ = 2.667')
+    // The integral beside the sum, in brackets and exact: an arrow read as
+    // "becomes" (launch polish, 2026-10-04).
+    expect(riemannReadout(link(4), g, MODELS).text).toBe('L₄ = 1.75 (exact ∫₀² = 8/3)')
     const r = riemannReadout(link(8), g, MODELS)
     expect(r.value).toBeCloseTo(2.1875, 9)
-    expect(r.text).toBe('L₈ = 2.188 → ∫ = 2.667')
+    expect(r.text).toBe('L₈ = 2.188 (exact ∫₀² = 8/3)')
   })
 
   it('n = 200 lands on areaUnder, where n = 8 does not', () => {

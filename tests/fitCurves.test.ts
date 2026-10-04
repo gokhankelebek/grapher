@@ -117,8 +117,10 @@ describe('calcFramePoints — what the overlays are about', () => {
     expect(calcFramePoints([{ kind: 'limit', id: 'L', parentId: 'f', a: Infinity }], [f], models)).toEqual([])
     const hidden = { ...f, visible: false }
     expect(calcFramePoints([{ kind: 'secant', id: 'S', parentId: 'f', a: 1, b: 2 }], [hidden], models)).toEqual([])
+    // (a solid's interval IS framed now — tests/fitFrame.test.ts; a sign
+    // chart has no point of its own to frame)
     expect(
-      calcFramePoints([{ kind: 'volume', id: 'V', parentId: 'f', a: 1, b: 2, method: 'washer' }], [f], models),
+      calcFramePoints([{ kind: 'signchart', id: 'C', parentId: 'f', rows: ['f'] }], [f], models),
     ).toEqual([])
   })
 

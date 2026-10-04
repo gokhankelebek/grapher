@@ -424,7 +424,11 @@ export function withPoints(box: Box | null, pts: readonly Vec2[]): Box | null {
  * The points a calculus overlay is ABOUT, which the curve's own extent in the
  * current window may not reach: a secant's (a, f(a)) and (b, f(b)), a Taylor
  * centre (a, f(a)), and a limit's (a, L) — both one-sided values at a jump,
- * none at ±∞ or when the limit is infinite. Only for visible parents.
+ * none at ±∞ or when the limit is infinite. The ends of an area, a Riemann
+ * sum or a solid's interval, (from, f(from)) and (to, f(to)), with (from, 0)
+ * and (to, 0) when the region reaches the x-axis (no second curve) — or the
+ * second curve's ends when it has one; an accumulation's lower limit a and
+ * its probe x the same way. Only for visible parents.
  */
 export function calcFramePoints(
   links: readonly CalcLink[],
@@ -442,11 +446,47 @@ export function calcFramePoints(
       /* no point to frame */
     }
   }
+  /** An interval's two ends on the curve(s) — and on the axis when the region reaches it. */
+  const interval = (parent: FittedCurve, otherId: string | undefined, a: number, b: number): void => {
+    at(parent, a)
+    at(parent, b)
+    const other = otherId ? curves.find((c) => c.id === otherId) : undefined
+    if (other) {
+      at(other, a)
+      at(other, b)
+      return
+    }
+    for (const x of [a, b]) if (Number.isFinite(x)) out.push({ x, y: 0 })
+  }
   for (const link of links) {
-    if (link.kind !== 'secant' && link.kind !== 'taylor' && link.kind !== 'limit') continue
+    if (
+      link.kind !== 'secant' && link.kind !== 'taylor' && link.kind !== 'limit' &&
+      link.kind !== 'area' && link.kind !== 'riemann' && link.kind !== 'volume' && link.kind !== 'accumulation'
+    ) continue
     const parent = curves.find((c) => c.id === link.parentId)
     if (!parent || !parent.visible) continue
-    if (link.kind === 'secant') {
+    if (link.kind === 'area') {
+      interval(parent, link.otherId, link.from, link.to)
+    } else if (link.kind === 'riemann') {
+      interval(parent, undefined, link.from, link.to)
+    } else if (link.kind === 'volume') {
+      const first = out.length
+      interval(parent, link.otherId, link.a, link.b)
+      // A solid of revolution draws the region's mirror across its axis too.
+      if (link.method !== 'section') {
+        const axis = link.axis ?? { dir: 'h', at: 0 }
+        if (Number.isFinite(axis.at)) {
+          for (const p of out.slice(first)) {
+            out.push(axis.dir === 'h' ? { x: p.x, y: 2 * axis.at - p.y } : { x: 2 * axis.at - p.x, y: p.y })
+          }
+        }
+      }
+    } else if (link.kind === 'accumulation') {
+      // g(x) = C + ∫ₐˣ f: the lower limit, and the probe with the strip
+      // between them down to the axis
+      if (link.x !== undefined && Number.isFinite(link.x)) interval(parent, undefined, link.a, link.x)
+      else at(parent, link.a)
+    } else if (link.kind === 'secant') {
       at(parent, link.a)
       at(parent, link.b)
     } else if (link.kind === 'taylor') {

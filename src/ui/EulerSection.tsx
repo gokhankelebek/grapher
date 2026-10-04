@@ -6,6 +6,7 @@ import { parseNumeric } from './numeric'
 import { EULER_N_MAX, EULER_N_MIN } from './eulerLinks'
 import type { EulerRunCard, RunPatch } from './eulerLinks'
 import type { EulerNumber } from '../core/euler'
+import { entryHandlers } from './fieldEntry'
 
 // ============================================================================
 // src/ui/EulerSection.tsx — "Euler's method" on a slope field's card.
@@ -122,17 +123,7 @@ function RunBlock({
             aria-invalid={edit.bad || undefined}
             value={edit.text}
             onChange={(e) => setEdit({ which, text: e.target.value, bad: false })}
-            onKeyDown={(e) => {
-              e.stopPropagation()
-              if (e.key === 'Enter') {
-                e.preventDefault()
-                commit()
-              } else if (e.key === 'Escape') {
-                e.preventDefault()
-                setEdit(null)
-              }
-            }}
-            onBlur={() => setEdit(null)}
+            {...entryHandlers(commit, () => setEdit(null))}
           />
         </span>
       )

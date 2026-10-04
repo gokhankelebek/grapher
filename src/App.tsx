@@ -359,6 +359,7 @@ export default function App() {
       <AnswerContext.Provider value={answerBoard}>
       <Sidebar
         open={sidebarOpen && !presentMode}
+        docId={docMeta.id}
         readOnly={shared?.viewOnly === true}
         topNote={
           // A view-only link shows the note only when the teacher included it

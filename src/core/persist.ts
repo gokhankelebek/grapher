@@ -3419,6 +3419,23 @@ export function emptyBoard(kind: BoardKind = 'cartesian'): StoredBoard {
   return board
 }
 
+/**
+ * The figure style a BRAND-NEW document exports in: Textbook (white, unit
+ * grid, print colours). The first Download a teacher makes goes straight into
+ * a worksheet, and a dark-background PNG is the wrong default there.
+ *
+ * Only for documents created from now on (New, the first board of a new
+ * user, an opened example). A stored document that names no style was saved
+ * in 'screen' and still reads as 'screen' — absence keeps meaning what it
+ * always meant, so no saved board changes and no bytes move.
+ */
+export const NEW_DOC_FIGURE: FigureStyleId = 'textbook'
+
+/** emptyBoard for a document being created now: states the new-document figure style. */
+export function newDocBoard(kind: BoardKind = 'cartesian'): StoredBoard {
+  return { ...emptyBoard(kind), figure: NEW_DOC_FIGURE }
+}
+
 export function serializeDoc(doc: StoredDoc): string {
   return JSON.stringify(doc)
 }

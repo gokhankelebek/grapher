@@ -58,7 +58,7 @@ export interface AnswerSources {
   complex?(curveId: string): Text
   /** A typed line's family facts (src/ui/familyFacts.ts). */
   family?(curveId: string): readonly string[]
-  /** A calculus tool's statement: "R₅₀ ≈ 14.44 → ∫ = 14.67". `board`: it draws its value too. */
+  /** A calculus tool's statement: "R₅₀ = 14.44 (exact ∫₋₄⁴ = 44/3)". `board`: it draws its value too. */
   calc?(linkId: string): { label: string; value: string; curveId?: string | null; board?: boolean } | null
   /** A Table section's part. */
   table?(curveId: string, part: string): Text

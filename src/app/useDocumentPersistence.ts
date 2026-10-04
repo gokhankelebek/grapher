@@ -18,6 +18,8 @@ import {
   deserializeDoc,
   docFromBoard,
   emptyBoard,
+  NEW_DOC_FIGURE,
+  newDocBoard,
 } from '../core/persist'
 import type { BoardInput, DocMeta, HydratedBoard } from '../core/persist'
 import { parseShareHash, shareViewOf, urlWithoutShare } from '../core/share'
@@ -121,7 +123,8 @@ export function useDocumentPersistence({ board, docState, session, refs, derived
       stats: [],
       system: null,
       grid: 'cartesian',
-      figure: 'screen',
+      // A board being CREATED (New): the new-document export style.
+      figure: NEW_DOC_FIGURE,
       caption: '',
       captionAuto: true,
       curveViews: {},
@@ -526,7 +529,11 @@ export function useDocumentPersistence({ board, docState, session, refs, derived
           setLoadNotice({ problems: res.problems, fatal: true })
         }
       }
-      const doc = createDoc(nextDocName('cartesian', listDocs().map((d) => d.name)), emptyBoard())
+      const doc = createDoc(nextDocName('cartesian', listDocs().map((d) => d.name)), newDocBoard())
+      // The first board of a new user (or after an unreadable one) is a NEW
+      // document: it exports in the new-document style.
+      figureStyleRef.current = NEW_DOC_FIGURE
+      setFigureStyle(NEW_DOC_FIGURE)
       const meta: DocMeta = {
         id: doc.id,
         name: doc.name,

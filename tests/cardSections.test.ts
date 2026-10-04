@@ -218,13 +218,17 @@ describe('the order of a card', () => {
     expect(t.match(/aria-expanded="(true|false)"/)?.[1]).toBe('false')
   })
 
-  it('y = -2(x-3)^2+1 has no other family: its Transformation opens, as before', () => {
+  it('y = -2(x-3)^2+1 has no other family: its Transformation comes first, folded (launch polish)', () => {
     const src = 'y = -2(x-3)^2+1'
     const { curve, models: m } = typedCurve(src)
     const html = card(curve, m, { exprSource: src })
     expect(sectionsIn(html)[0]).toBe('transform')
     const t = html.slice(html.indexOf('data-testid="transform-section"'))
-    expect(t.match(/aria-expanded="(true|false)"/)?.[1]).toBe('true')
+    expect(t.match(/aria-expanded="(true|false)"/)?.[1]).toBe('false')
+    // …and opens on a board that says "show parent" (the gallery's lessons)
+    const shown = card(curve, m, { exprSource: src, transformShowParent: true })
+    const u = shown.slice(shown.indexOf('data-testid="transform-section"'))
+    expect(u.match(/aria-expanded="(true|false)"/)?.[1]).toBe('true')
   })
 
   it('attached tools list in the order they were added, not by kind', () => {

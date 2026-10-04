@@ -9,6 +9,7 @@
 import { useCallback, useMemo } from 'react'
 import { levelCrossings } from '../core/domainRange'
 import {
+  drawnExtent,
   hltVerdict,
   inVariable,
   inverseCurveLine,
@@ -129,6 +130,7 @@ export function useDomainPanel({ board, docState, refs, derived, calc, domain, n
       hlt,
       reflect: l?.reflect !== undefined,
       inverse,
+      drawn: restrict.kind === 'sketch' ? drawnExtent(owner) : null,
     }
     // The facts are keyed on values, so these say WHEN to ask; historyTick
     // is the end of a gesture (a committed drag), when stale facts refresh.

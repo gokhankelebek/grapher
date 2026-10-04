@@ -46,7 +46,7 @@ import { APPROX, exactDetail, formatCoord, parseNumeric, pointParts } from './nu
 import { alignedValues, curveScale, curveXScale, derivesFromInk } from './curveState'
 import { axisKeys, featureAxes } from './featureEdit'
 import { curveEquationText, displayEquationLatex } from './equationText'
-import { N_MAX, N_MIN, RIEMANN_METHODS } from './calcLinks'
+import { N_MAX, N_MIN, RIEMANN_METHODS, trimmed } from './calcLinks'
 import type { CalcChange, CalcKind, CardCalc } from './calcLinks'
 import { CALC_GROUPS, calcMenuOffers } from './calcMenu'
 import { TaylorSection } from './TaylorSection'
@@ -58,7 +58,11 @@ import { VolumeSection } from './VolumeSection'
 import type { CurveIntersections } from './intersections'
 import { DomainSection } from './DomainSection'
 import { ImplicitSection } from './ImplicitSection'
-import { CardSection } from './CardSection'
+import { CardSection, OPEN_SECTION_EVENT, useSectionOpenNow } from './CardSection'
+import { entryHandlers } from './fieldEntry'
+import { kindLabel } from './kindLabel'
+import { tidyOffer } from '../core/tidy'
+import type { TidyOffer } from '../core/tidy'
 import { InequalitySection } from './InequalitySection'
 import { TableSection } from './TableSection'
 import { CircleSection } from './CircleSection'
@@ -523,8 +527,78 @@ export function asymptoteTexts(
   }
 }
 
-/** How many next-best readings sit beside the select as one-click chips. */
+/** How many next-best readings sit beside the current one as one-click chips. */
 const ALSO_FITS = 2
+/** A reading is offered beside the current one only when it fits at least this well (fitQuality). */
+export const ALSO_FITS_MIN = 0.5
+
+/**
+ * Which readings of a sketch the Read-as row shows: the one in force, at most
+ * two others that genuinely fit (quality ≥ ALSO_FITS_MIN, best first), and the
+ * rest behind "More readings…". Sixteen rows ending in "Spiral 11%" and
+ * "Rose 6%" was noise at the one moment the sketch should feel like magic.
+ * `active` is the index of the reading in force (−1: edited away from all).
+ */
+export function readingsShown(
+  quality: readonly number[],
+  active: number,
+): { also: number[]; more: number[] } {
+  const others = quality.map((_, i) => i).filter((i) => i !== active)
+  const also = others.filter((i) => (quality[i] ?? 0) >= ALSO_FITS_MIN).slice(0, ALSO_FITS)
+  const more = others.filter((i) => !also.includes(i))
+  return { also, more }
+}
+
+/**
+ * Bring a just-added tool section into view and put the keyboard on its first
+ * field. A section of a kind the teacher keeps folded is opened for the
+ * moment (OPEN_SECTION_EVENT — the remembered choice is left alone). On a
+ * touch screen the field is only focused, not opened for typing, so the
+ * on-screen keyboard does not jump up over the board.
+ */
+export function revealSection(card: HTMLElement | null, toolId: string): void {
+  if (!card) return
+  const find = (): HTMLElement | null => {
+    for (const el of card.querySelectorAll<HTMLElement>('[data-tool]')) {
+      if (el.dataset.tool === toolId) return el
+    }
+    return null
+  }
+  const wrap = find()
+  const section = wrap?.querySelector<HTMLElement>('[data-section]') ?? null
+  if (section && section.classList.contains('cs-closed') && section.dataset.section) {
+    window.dispatchEvent(new CustomEvent(OPEN_SECTION_EVENT, { detail: section.dataset.section }))
+  }
+  window.requestAnimationFrame(() => {
+    const box = find()
+    const target = (box?.firstElementChild as HTMLElement | null) ?? box
+    if (!target) return
+    try {
+      target.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    } catch {
+      /* a scroll that fails is not the user's work */
+    }
+    const field = target.querySelector<HTMLElement>('.cs-body .calc-field-btn, .cs-body input, .cs-body select')
+    if (!field) return
+    let coarse = false
+    try {
+      coarse = window.matchMedia('(pointer: coarse)').matches
+    } catch {
+      coarse = false
+    }
+    if (field.classList.contains('calc-field-btn') && !coarse) field.click()
+    else field.focus({ preventScroll: true })
+  })
+}
+
+/** tidyOffer, never throwing into a render. */
+function safeTidy(curve: FittedCurve): TidyOffer | null {
+  try {
+    return tidyOffer(curve)
+  } catch {
+    return null
+  }
+}
 
 export function formatError(err: number): string {
   if (!Number.isFinite(err)) return '—'
@@ -847,6 +921,11 @@ export function CurveCard({
   const ink = useInk()
   const spec: ModelSpec | undefined = models[curve.modelId]
   const isExpression = curve.modelId.startsWith('expr_')
+  /** "Tidy to y = x² − 4": only for the selected sketch (a search, 1–12 ms). */
+  const tidy = useMemo(
+    () => (selected && !isExpression && curve.sourceStroke ? safeTidy(curve) : null),
+    [selected, isExpression, curve],
+  )
   /** Reveal mode: which computed answers on this card stand as pills (src/ui/reveal.ts). */
   const revealApi = useReveal()
   /** A derived curve (tangent, f′, Pₙ, accumulation): its equation is computed — an answer. */
@@ -998,6 +1077,8 @@ export function CurveCard({
     sinusoidal: sinusoidal !== null,
   }
   const transformOpen = transform ? transformOpenByDefault(transform, transformOthers) : false
+  /** The Transformation section is open right now (its ghost follows it). */
+  const transformSectionOpen = useSectionOpenNow('transform', false)
   /**
    * Another family section is on this card too (Roots, Exponential …): the
    * Transformation reading is then the SECOND one, and starts collapsed. The
@@ -1086,6 +1167,13 @@ export function CurveCard({
   // Inline editing of a calculus number: the x a tangent touches, and the two
   // limits of an interval. Keyed by "<linkId>:<field>" so one editor is open
   // at a time no matter how many objects the curve carries.
+  const cardRef = useRef<HTMLDivElement>(null)
+  /** The Read-as row's "More readings…" is open. */
+  const [moreReadings, setMoreReadings] = useState(false)
+  /** The tool sections on this card at the last render (null: not yet rendered). */
+  const toolIdsRef = useRef<string[] | null>(null)
+  /** A menu add is in flight: the next new section is scrolled to and focused. */
+  const revealToolRef = useRef(false)
   const [calcEdit, setCalcEdit] = useState<{ key: string; text: string; bad: boolean } | null>(
     null,
   )
@@ -1223,6 +1311,11 @@ export function CurveCard({
       return curve.modelId
     }
   })()
+  /** The card's kind label: one vocabulary for sketched and typed curves (src/ui/kindLabel.ts). */
+  const kindName = useMemo(
+    () => kindLabel(curve, spec, models, exprSource),
+    [curve, spec, models, exprSource],
+  )
 
   /**
    * What this curve is CALLED in a sentence — "Between y = x^2 and y = 2 - x^2".
@@ -1714,10 +1807,8 @@ export function CurveCard({
             aria-label={label}
             value={calcEdit.text}
             onChange={(e) => setCalcEdit({ key, text: e.target.value, bad: false })}
-            onKeyDown={(e) => {
-              e.stopPropagation()
-              if (e.key === 'Enter') {
-                e.preventDefault()
+            {...entryHandlers(
+              () => {
                 const v = parseNumeric(calcEdit.text)
                 if (v === null) {
                   setCalcEdit({ ...calcEdit, bad: true })
@@ -1725,12 +1816,9 @@ export function CurveCard({
                 }
                 commit(v)
                 setCalcEdit(null)
-              } else if (e.key === 'Escape') {
-                e.preventDefault()
-                setCalcEdit(null)
-              }
-            }}
-            onBlur={() => setCalcEdit(null)}
+              },
+              () => setCalcEdit(null),
+            )}
           />
         </span>
       )
@@ -1745,7 +1833,9 @@ export function CurveCard({
         }
       >
         <span className="calc-field-label">{label}</span>
-        <span className="calc-field-value">{formatCoord(value, { scale })}</span>
+        {/* One format for every bound: what a teacher would type, to at most
+            three places — "a 0 · b 3", not "a 0 · b 3.000". */}
+        <span className="calc-field-value">{trimmed(value)}</span>
       </button>
     )
   }
@@ -2082,15 +2172,32 @@ export function CurveCard({
   }, [candidates])
 
   const activeCand = candidates.findIndex((c) => c.modelId === curve.modelId)
-  const alsoFits = candidates
-    .map((cand, i) => ({ cand, i }))
-    .filter(({ i }) => i !== activeCand)
-    .slice(0, ALSO_FITS)
+  const shownReadings = readingsShown(
+    candidates.map((_, i) => quality[i] ?? 0),
+    activeCand,
+  )
 
   const showsSigma = derivesFromInk(curve, edited)
 
+  // A section added from the ⋯ menu is brought into view with its first field
+  // focused: it used to land below the fold, and nothing in the sidebar
+  // visibly changed. Only after a menu add — undo bringing a section back, or
+  // a document opening, scrolls nothing.
+  const toolsKey = calcTools.map((t) => t.id).join('|')
+  useEffect(() => {
+    const prev = toolIdsRef.current
+    const ids = toolsKey === '' ? [] : toolsKey.split('|')
+    toolIdsRef.current = ids
+    if (!revealToolRef.current || prev === null) return
+    const added = ids.filter((id) => !prev.includes(id))
+    if (added.length === 0) return
+    revealToolRef.current = false
+    revealSection(cardRef.current, added[added.length - 1])
+  }, [toolsKey])
+
   return (
     <div
+      ref={cardRef}
       className={`card${selected ? ' card-selected' : ''}${curve.visible ? '' : ' card-hidden'}${
         shaking ? ' card-shake' : ''
       }${broken || linkError ? ' card-broken-state' : ''}`}
@@ -2099,7 +2206,7 @@ export function CurveCard({
       aria-roledescription="card"
       tabIndex={0}
       aria-current={selected ? 'true' : undefined}
-      aria-label={`${name ? `${name}: ` : ''}${broken ? 'Equation' : modelName} curve${curve.visible ? '' : ', hidden'}${selected ? ', selected' : ''}`}
+      aria-label={`${name ? `${name}: ` : ''}${broken ? 'Equation' : kindName} curve${curve.visible ? '' : ', hidden'}${selected ? ', selected' : ''}`}
       onClick={onSelect}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return
@@ -2168,19 +2275,21 @@ export function CurveCard({
               {name}
             </span>
           ))}
-        <span className="model-name" role="heading" aria-level={3}>
-          {broken ? 'Equation' : modelName}
+        <span
+          className="model-name"
+          role="heading"
+          aria-level={3}
+          title={
+            !broken && showsSigma
+              ? `fit σ ${formatError(curve.error)} — how far the fitted curve sits from the ink you drew (RMS, math units)`
+              : undefined
+          }
+        >
+          {broken ? 'Equation' : kindName}
         </span>
         {broken ? (
           <span className="err-badge err-badge-bad" title={brokenReason}>
             can’t restore
-          </span>
-        ) : showsSigma ? (
-          <span
-            className="err-badge"
-            title="How far the fitted curve sits from the ink you drew (RMS, math units)"
-          >
-            fit σ {formatError(curve.error)}
           </span>
         ) : null}
         {!curve.visible && <span className="card-flag">hidden</span>}
@@ -2260,7 +2369,10 @@ export function CurveCard({
                                   item.kind === 'pcalc' && calc.motion === 'polar'
                                     ? 'Calculus at \u03b8 (dy/dx, dr/d\u03b8, arc length)'
                                     : item.label,
-                                  () => onAddCalc(item.kind as CalcKind),
+                                  () => {
+                                    revealToolRef.current = true
+                                    onAddCalc(item.kind as CalcKind)
+                                  },
                                 )}
                               </Fragment>
                             ),
@@ -2445,6 +2557,23 @@ export function CurveCard({
         )}
       </div>
 
+      {/* A sketch within a hair of simple numbers: one click makes it the
+          equation the teacher meant (src/core/tidy.ts). It becomes that typed
+          line, exact everywhere; Undo brings the sketch back. */}
+      {tidy && onConvertTyped && !broken && (
+        <div className="tidy-row" onClick={(e) => e.stopPropagation()}>
+          <button
+            type="button"
+            className="calc-chip tidy-chip"
+            data-testid="tidy-offer"
+            title={`Snap the fitted numbers to the simple ones the sketch is within a hair of, and type it as ${tidy.text}. Undo brings the sketch back.`}
+            onClick={() => void onConvertTyped(tidy.src, 'tidy to nice numbers')}
+          >
+            {`Tidy to ${tidy.text}`}
+          </button>
+        </div>
+      )}
+
       {/* What this curve IS, when it is not a sketch: the tangent's point and
           its slope, or f′ and whose. Always visible, never only when the card
           is open — a tangent that has just gone away (a corner, a pole) has to
@@ -2589,9 +2718,13 @@ export function CurveCard({
           {transform && onTransformRestate && (
             <TransformSection
               spec={transform}
-              defaultOpen={transformOpen && !transformSecondary}
+              // Folded by default: the parent table, the dashed parent and the
+              // construction arrows are a Precalc lesson nobody asked for when
+              // they typed x² − 4 to find its zeros. A board that says "show
+              // parent" (the gallery's transformation lessons) opens on it.
+              defaultOpen={transformOpen && !transformSecondary && transformShowParent === true}
               secondary={transformSecondary}
-              showParent={transformShowParent ?? transformOpen}
+              showParent={transformShowParent ?? (transformOpen && transformSectionOpen)}
               onShowParent={onTransformShowParent}
               handles={transformOwnsHandles(transformOthers)}
               onRestate={onTransformRestate}
@@ -2924,7 +3057,9 @@ export function CurveCard({
                 {/* Everything attached to this curve, in the order it was
                     added: the lesson's order, not the menu's. */}
                 {calcTools.map((t) => (
-                  <Fragment key={t.id}>{t.node}</Fragment>
+                  <div key={t.id} className="calc-tool" data-tool={t.id}>
+                    {t.node}
+                  </div>
                 ))}
               </div>
             </div>
@@ -2997,46 +3132,74 @@ export function CurveCard({
             <div className="cand-section">
               <div className="readas-row">
                 <span className="readas-label">Read as</span>
-                <select
-                  className="readas-select"
-                  aria-label="Read this sketch as"
-                  value={activeCand >= 0 ? String(activeCand) : ''}
-                  onChange={(e) => {
-                    const i = Number(e.target.value)
-                    const cand = candidates[i]
-                    if (cand) onApplyCandidate(cand)
-                  }}
+                {/* The reading in force, with how closely it fits the ink in
+                    its tooltip (the "fit σ" chip used to sit in the header). */}
+                <span
+                  className="readas-chip readas-current"
+                  data-testid="readas-current"
+                  title={`${activeCand >= 0 ? `Read as a ${(models[curve.modelId]?.name ?? curve.modelId).toLowerCase()}` : 'Edited by hand'}${
+                    showsSigma ? ` — fit σ ${formatError(curve.error)}: how far the curve sits from the ink you drew (RMS, math units)` : ''
+                  }`}
                 >
-                  {activeCand < 0 && <option value="">Edited</option>}
-                  {candidates.map((cand, i) => (
-                    <option key={`${cand.modelId}-${i}`} value={String(i)}>
-                      {`${models[cand.modelId]?.name ?? cand.modelId} — fits ${qualityText(
-                        quality[i] ?? 0,
-                      )}`}
-                    </option>
-                  ))}
-                </select>
-                {alsoFits.length > 0 && (
+                  {activeCand >= 0 ? models[curve.modelId]?.name ?? curve.modelId : 'Edited'}
+                </span>
+                {shownReadings.also.length > 0 && (
                   <span className="readas-also">
                     <span className="readas-also-label">also fits:</span>
-                    {alsoFits.map(({ cand, i }, k) => (
-                      <span key={`${cand.modelId}-${i}`} className="readas-chip-wrap">
-                        {k > 0 && <span className="readas-dot">·</span>}
-                        <button
-                          type="button"
-                          className="readas-chip"
-                          title={`Read this sketch as a ${(
-                            models[cand.modelId]?.name ?? cand.modelId
-                          ).toLowerCase()} — fits ${qualityText(quality[i] ?? 0)} as tightly as the best reading`}
-                          onClick={() => onApplyCandidate(cand)}
-                        >
-                          {models[cand.modelId]?.name ?? cand.modelId}
-                        </button>
-                      </span>
-                    ))}
+                    {shownReadings.also.map((i, k) => {
+                      const cand = candidates[i]
+                      return (
+                        <span key={`${cand.modelId}-${i}`} className="readas-chip-wrap">
+                          {k > 0 && <span className="readas-dot">·</span>}
+                          <button
+                            type="button"
+                            className="readas-chip"
+                            title={`Read this sketch as a ${(
+                              models[cand.modelId]?.name ?? cand.modelId
+                            ).toLowerCase()} — fits ${qualityText(quality[i] ?? 0)} as tightly as the best reading`}
+                            onClick={() => onApplyCandidate(cand)}
+                          >
+                            {models[cand.modelId]?.name ?? cand.modelId}
+                          </button>
+                        </span>
+                      )
+                    })}
                   </span>
                 )}
+                {shownReadings.more.length > 0 && (
+                  <button
+                    type="button"
+                    className="readas-more"
+                    data-testid="readas-more"
+                    aria-expanded={moreReadings}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setMoreReadings((o) => !o)
+                    }}
+                  >
+                    {moreReadings ? 'Fewer readings' : `More readings… (${shownReadings.more.length})`}
+                  </button>
+                )}
               </div>
+              {moreReadings && shownReadings.more.length > 0 && (
+                <div className="readas-list" data-testid="readas-list">
+                  {shownReadings.more.map((i) => {
+                    const cand = candidates[i]
+                    const nm = models[cand.modelId]?.name ?? cand.modelId
+                    return (
+                      <button
+                        key={`${cand.modelId}-${i}`}
+                        type="button"
+                        className="readas-chip"
+                        title={`Read this sketch as a ${nm.toLowerCase()} — fits ${qualityText(quality[i] ?? 0)} as tightly as the best reading`}
+                        onClick={() => onApplyCandidate(cand)}
+                      >
+                        {`${nm} · ${qualityText(quality[i] ?? 0)}`}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
             </div>
           )}
         </div>

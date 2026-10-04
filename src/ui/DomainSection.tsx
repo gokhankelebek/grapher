@@ -42,6 +42,12 @@ interface Props {
 
 const DASH = '—'
 
+/** An end of the drawn piece: three places at most, a real minus sign. */
+function drawnNum(v: number): string {
+  const r = Math.round(v * 1000) / 1000
+  return (Object.is(r, -0) ? 0 : r).toString().replace('-', '\u2212')
+}
+
 /** One stated row: label, value (or "—" with the reason on hover). */
 function Row({
   label,
@@ -215,6 +221,27 @@ export function DomainSection({ panel, actions, notation }: Props) {
           {other === 'builder' ? 'x ≥' : '[ , )'}
         </button>
       </Row>
+      {isFn && panel.drawn && !draft && (
+        <div className="dr-indent">
+          <div className="dr-line dr-drawn" data-testid="drawn-extent">
+            <span
+              className="dr-lead"
+              title="Where the sketch was drawn. The rows describe the function itself; the graph stops at the ends of the sketch."
+            >
+              {`drawn on [${drawnNum(panel.drawn[0])}, ${drawnNum(panel.drawn[1])}]`}
+            </span>
+            <button
+              type="button"
+              className="calc-chip"
+              data-testid="extend-all-x"
+              title="Draw this function for every x, not only where the sketch was drawn"
+              onClick={() => actions.onRestrict(id, null)}
+            >
+              Extend to all x
+            </button>
+          </div>
+        </div>
+      )}
       {draft && (
         <div className="dr-indent">
           <div className="dr-editor" data-testid="restrict-editor">

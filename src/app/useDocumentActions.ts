@@ -9,7 +9,7 @@
 // ============================================================================
 
 import { useCallback, useState } from 'react'
-import { createDoc, deserializeDoc, docFromBoard, emptyBoard, serializeDoc } from '../core/persist'
+import { createDoc, deserializeDoc, docFromBoard, emptyBoard, newDocBoard, serializeDoc } from '../core/persist'
 import type { DocMeta } from '../core/persist'
 import type { BoardKind } from '../core/types'
 import { copyDocName, nextDocName } from '../ui/docName'
@@ -84,7 +84,7 @@ export function useDocumentActions({ board, docState, session, refs, derived, no
       // named for what it IS and numbered from what is already there.
       const doc = createDoc(
         nextDocName(nextKind, listDocs().map((d) => d.name)),
-        emptyBoard(nextKind),
+        newDocBoard(nextKind),
       )
       const meta: DocMeta = {
         id: doc.id,

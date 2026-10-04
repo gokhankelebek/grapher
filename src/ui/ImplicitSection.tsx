@@ -22,6 +22,7 @@ import { calcKey } from './reveal'
 import { CardSection, SectionDrop } from './CardSection'
 import { parseNumeric } from './numeric'
 import type { CalcChange, ImplicitRow } from './calcLinks'
+import { entryHandlers } from './fieldEntry'
 
 interface Props {
   row: ImplicitRow
@@ -119,17 +120,7 @@ export function ImplicitSection({ row, onCalcChange, onRemove }: Props) {
               aria-label="x — the point moves along its branch"
               value={edit.text}
               onChange={(e) => setEdit({ text: e.target.value, bad: false })}
-              onKeyDown={(e) => {
-                e.stopPropagation()
-                if (e.key === 'Enter') {
-                  e.preventDefault()
-                  commit()
-                } else if (e.key === 'Escape') {
-                  e.preventDefault()
-                  setEdit(null)
-                }
-              }}
-              onBlur={() => setEdit(null)}
+              {...entryHandlers(commit, () => setEdit(null))}
             />
           </span>
         ) : (

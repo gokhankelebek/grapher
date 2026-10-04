@@ -205,7 +205,10 @@ function partsCondition(set: RealSet, v: string, tex: boolean): string | null {
     else if (p.lo === p.hi) out.push(`${v} = ${end(p.lo, p.loExact)}`)
     else out.push(`${end(p.lo, p.loExact)} ${lt(p.loClosed)} ${v} ${lt(p.hiClosed)} ${end(p.hi, p.hiExact)}`)
   }
-  return out.join(tex ? ' \\text{ or } ' : ' or ')
+  // Each clause braced into one unbreakable group, \allowbreak after the
+  // "or": a long condition wraps between clauses ("x < −2 or" / "x > 2"),
+  // never inside one ("x <" / "−2").
+  return tex ? out.map((c) => `{${c}}`).join(' \\text{ or } \\allowbreak ') : out.join(' or ')
 }
 
 /** The builder is really a condition (not the interval text it falls back to). */
@@ -222,10 +225,30 @@ export function builderText(set: RealSet, variable = 'x'): string {
   return cond ? `{${variable} | ${cond}}` : b || set.text
 }
 
+/**
+ * A condition's top-level "or"s as wrap points, with each clause one
+ * unbreakable group (see partsCondition): only when the braces balance, so a
+ * clause is never split mid-group.
+ */
+function breakableOr(tex: string): string {
+  const parts = tex.split('\\text{ or }')
+  if (parts.length < 2) return tex
+  const balanced = (t: string): boolean => {
+    let d = 0
+    for (const ch of t) {
+      if (ch === '{') d++
+      else if (ch === '}' && --d < 0) return false
+    }
+    return d === 0
+  }
+  if (!parts.every(balanced)) return tex
+  return parts.map((p) => `{${p.trim()}}`).join(' \\text{ or } \\allowbreak ')
+}
+
 export function builderTex(set: RealSet, variable = 'x'): string {
   const b = set.builder.trim()
   if (/^(all|no)\b/i.test(b) || /^the empty set/i.test(b)) return set.builderTex || set.tex
-  const cond = isCondition(set) ? set.builderTex.trim() : partsCondition(set, variable, true)
+  const cond = isCondition(set) ? breakableOr(set.builderTex.trim()) : partsCondition(set, variable, true)
   return cond ? `\\{\\, ${variable} \\mid ${cond} \\,\\}` : set.builderTex || set.tex
 }
 

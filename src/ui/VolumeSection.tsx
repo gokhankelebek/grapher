@@ -25,6 +25,7 @@ import { SECTION_LABELS, editableNum } from './volumeLinks'
 import { SECTION_SHAPES } from '../core/volume'
 import type { SectionShape, VolumeAxis, VolumeMethod } from '../core/volume'
 import { numText } from './secantLinks'
+import { entryHandlers } from './fieldEntry'
 
 interface Props {
   row: VolumeRow
@@ -103,17 +104,7 @@ export function VolumeSection({ row, onCalcChange, onRemove, onEditStart, onEdit
             aria-label={title}
             value={edit.text}
             onChange={(e) => setEdit({ which, text: e.target.value, bad: false })}
-            onKeyDown={(e) => {
-              e.stopPropagation()
-              if (e.key === 'Enter') {
-                e.preventDefault()
-                commit()
-              } else if (e.key === 'Escape') {
-                e.preventDefault()
-                setEdit(null)
-              }
-            }}
-            onBlur={() => setEdit(null)}
+            {...entryHandlers(commit, () => setEdit(null))}
           />
         </span>
       )

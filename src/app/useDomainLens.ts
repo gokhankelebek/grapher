@@ -24,6 +24,7 @@ import type { FittedCurve, ModelSpec } from '../core/types'
 import { typedName } from '../render/curveNames'
 import { patchLens } from '../ui/curveViews'
 import {
+  drawnExtent,
   explicitF,
   hltStart,
   inverseCurveLine,
@@ -348,6 +349,10 @@ export function useDomainLens({ board, session, refs, derived, notices, history,
           return null
         }
       }
+      // A sketch still on the piece it was drawn over is a FUNCTION drawn on
+      // a piece: its domain, range and one-to-one are the function's
+      // (drawnExtent in src/ui/domainLinks.ts); the card names the piece.
+      if (drawnExtent(curve)) curve = { ...curve, domain: null }
       // The natural domain of a restricted typed line is its BODY's: the
       // restriction is what the teacher set, measured against it.
       const base = baseModelOf(curve)

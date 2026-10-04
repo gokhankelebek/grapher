@@ -24,6 +24,7 @@ import { parseNumeric } from './numeric'
 import type { CalcChange } from './calcLinks'
 import type { ParamCalcRow, PolarBetweenRow } from './paramCalcLinks'
 import type { TangentPoint } from '../core/paramCalc'
+import { entryHandlers } from './fieldEntry'
 
 /** What a typed field is prefilled with: the exact text, in the parser's spelling. */
 function editable(text: string): string {
@@ -77,17 +78,7 @@ function NumField({
           value={edit.text}
           onClick={(e) => e.stopPropagation()}
           onChange={(e) => setEdit({ text: e.target.value, bad: false })}
-          onKeyDown={(e) => {
-            e.stopPropagation()
-            if (e.key === 'Enter') {
-              e.preventDefault()
-              commit()
-            } else if (e.key === 'Escape') {
-              e.preventDefault()
-              setEdit(null)
-            }
-          }}
-          onBlur={() => setEdit(null)}
+          {...entryHandlers(commit, () => setEdit(null))}
         />
       </span>
     )

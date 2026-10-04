@@ -34,6 +34,7 @@ import {
   defaultAccum,
   defaultBetweenBounds,
   defaultBounds,
+  niceBounds,
   defaultTangentX,
   fixed as fixedNum,
   followDomains,
@@ -606,7 +607,17 @@ export function useCalcLinks({ board, refs, derived, notices, history, editing }
         return
       }
 
-      const [from, to] = defaultBounds(parent, win)
+      // On screen and in nice numbers: between two zeros in view, else a
+      // nice interval the curve stays on the board over (niceBounds).
+      let bounds: [number, number]
+      try {
+        const vp = vpRef.current
+        const halfY = vp.heightPx / 2 / ppuY(vp)
+        bounds = niceBounds(parent, models, win, [vp.center.y - halfY, vp.center.y + halfY])
+      } catch {
+        bounds = defaultBounds(parent, win)
+      }
+      const [from, to] = bounds
       if (kind === 'area') {
         commitState(
           { calc: [...calcRef.current, { kind: 'area', id: linkId, parentId, from, to, abs: false }] },

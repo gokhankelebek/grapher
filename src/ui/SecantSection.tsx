@@ -18,6 +18,7 @@ import { calcKey } from './reveal'
 import { CardSection, SectionDrop } from './CardSection'
 import { parseNumeric } from './numeric'
 import type { CalcChange, SecantRow } from './calcLinks'
+import { entryHandlers } from './fieldEntry'
 
 interface Props {
   row: SecantRow
@@ -67,17 +68,7 @@ export function SecantSection({ row, onCalcChange, onRemove }: Props) {
             aria-label={title}
             value={edit.text}
             onChange={(e) => setEdit({ which, text: e.target.value, bad: false })}
-            onKeyDown={(e) => {
-              e.stopPropagation()
-              if (e.key === 'Enter') {
-                e.preventDefault()
-                commit()
-              } else if (e.key === 'Escape') {
-                e.preventDefault()
-                setEdit(null)
-              }
-            }}
-            onBlur={() => setEdit(null)}
+            {...entryHandlers(commit, () => setEdit(null))}
           />
         </span>
       )

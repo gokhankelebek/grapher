@@ -5,22 +5,25 @@
 // triangle's centres (the circumcircle reaches past the triangle) and a
 // circle's theorems.
 //
-// The measurement is the fitted export's (useExport's exportContent, which
-// already takes the geometry in), so the screen and an exported figure frame
-// the same things; with what only the screen's fit adds — the solution
-// curves of a field, the Euler steps and the calculus tools' key points —
-// taken in as useViewport's fit takes them. A board with no geometry on it
-// fits exactly as it always did (useViewport.fitToContent).
+// The rest of the board is measured exactly as useViewport's fit measures it
+// (fitContentBox): each curve by its FEATURES (src/ui/fitFrame.ts), never by
+// its extent across the window, and the solution curves of a field, data
+// tables, sequences, unit circles, related rates, statistics, the Euler steps
+// and the calculus tools' key points. The geometry is measured as the fitted
+// export measures it (shapesBox / overlaysBox). A board with no geometry on it
+// fits exactly as useViewport.fitToContent does.
+//
+// The export's own content box (useExport's exportContent) is NOT used here:
+// it measures each curve across the whole window — right for an exported
+// figure, wrong for a button that should show where the curve's features are.
 //
 // Called once per render by App (src/App.tsx), after useExport.
 // ============================================================================
 
 import { useCallback } from 'react'
 import { unionBoxes } from '../ui/curveState'
-import { eulerFramePoints } from '../ui/eulerLinks'
 import { overlaysBox, shapesBox } from '../ui/exportFit'
 import type { Box } from '../ui/viewScale'
-import { calcFramePoints, withPoints } from '../ui/viewScale'
 import type { BoardRefsApi } from './useBoardRefs'
 import type { ModelsApi } from './useModels'
 import type { FieldsApi } from './useFields'
@@ -35,47 +38,25 @@ export interface FitAllDeps {
   viewport: ViewportApi
   /** The board's geometry overlays (centres, circle theorems): useBoardOverlays. */
   geometryMarksRef: { current: Parameters<typeof overlaysBox>[0] }
-  /** The fitted export's content box: useExport. */
-  exportContent: () => Box | null
+  /**
+   * The fitted export's content box (useExport). No longer read: it measures
+   * curves across the window, which is what this fit must not do. Kept so
+   * the call site in App compiles unchanged; safe to drop there.
+   */
+  exportContent?: () => Box | null
 }
 
-/** The box a set of polylines' finite points occupy. */
-function polylinesBox(polys: readonly { pts: readonly { x: number; y: number }[] }[]): Box | null {
-  let out: Box | null = null
-  for (const poly of polys) {
-    for (const p of poly.pts) {
-      if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) continue
-      if (!out) out = { min: { ...p }, max: { ...p } }
-      else {
-        out.min.x = Math.min(out.min.x, p.x)
-        out.min.y = Math.min(out.min.y, p.y)
-        out.max.x = Math.max(out.max.x, p.x)
-        out.max.y = Math.max(out.max.y, p.y)
-      }
-    }
-  }
-  return out
-}
-
-export function useFitAll({ refs, derived, fieldsApi, shapesApi, viewport, geometryMarksRef, exportContent }: FitAllDeps) {
-  const { kindRef, calcRef, curvesRef } = refs
-  const { modelsRef } = derived
-  const { eulerPathsRef, fieldPolylinesRef } = fieldsApi
+export function useFitAll({ refs, shapesApi, viewport, geometryMarksRef }: FitAllDeps) {
+  const { kindRef } = refs
   const { shapeSceneRef } = shapesApi
-  const { fitToContent, frameBox } = viewport
+  const { fitToContent, fitContentBox, frameBox } = viewport
 
   return useCallback((): void => {
     if (kindRef.current !== 'cartesian') return fitToContent()
     const geometry = unionBoxes([shapesBox(shapeSceneRef.current), overlaysBox(geometryMarksRef.current)])
     if (!geometry) return fitToContent()
-    let keyPts = eulerFramePoints(eulerPathsRef.current)
-    try {
-      keyPts = keyPts.concat(calcFramePoints(calcRef.current, curvesRef.current, modelsRef.current))
-    } catch {
-      /* the key points are extra; the rest still frames */
-    }
-    const box = withPoints(unionBoxes([exportContent(), polylinesBox(fieldPolylinesRef.current), geometry]), keyPts)
+    const box = unionBoxes([fitContentBox(), geometry])
     if (box) frameBox(box)
     else fitToContent()
-  }, [fitToContent, frameBox, exportContent])
+  }, [fitToContent, fitContentBox, frameBox])
 }

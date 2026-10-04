@@ -19,6 +19,7 @@ import type { CalcChange, LimitRow } from './calcLinks'
 import { EPS_MAX, EPS_MIN, EPS_STEP } from './limitLinks'
 import { Answer, AnswerTex } from './RevealAnswer'
 import { calcKey } from './reveal'
+import { entryHandlers } from './fieldEntry'
 
 interface Props {
   row: LimitRow
@@ -84,17 +85,7 @@ export function LimitSection({ row, onCalcChange, onRemove, onEditStart, onEditE
           aria-label={title}
           value={edit.text}
           onChange={(e) => setEdit({ text: e.target.value, bad: false })}
-          onKeyDown={(e) => {
-            e.stopPropagation()
-            if (e.key === 'Enter') {
-              e.preventDefault()
-              commit()
-            } else if (e.key === 'Escape') {
-              e.preventDefault()
-              setEdit(null)
-            }
-          }}
-          onBlur={() => setEdit(null)}
+          {...entryHandlers(commit, () => setEdit(null))}
         />
       </span>
     ) : (

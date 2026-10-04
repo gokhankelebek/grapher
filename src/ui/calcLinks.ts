@@ -35,6 +35,7 @@ import {
   tangentAt,
 } from '../core/calculus'
 import { analyzeCurve } from '../core/analyze'
+import { mvtSourceOf } from '../core/mvt'
 import { exactForm } from '../core/exact'
 import { pointText as implicitPointText } from '../core/implicitDiff'
 import type {
@@ -141,7 +142,13 @@ export const RIEMANN_METHODS: readonly RiemannMethod[] = [
 /** n's slider range, as the loader also clamps it. */
 export const N_MIN = RIEMANN_N_MIN
 export const N_MAX = RIEMANN_N_MAX
-export const N_DEFAULT = RIEMANN_N_DEFAULT
+/**
+ * n for a NEW Riemann sum: four rectangles, the count a class can see and add
+ * by hand. (RIEMANN_N_DEFAULT stays what a stored sum without an n reads as.)
+ */
+export const N_DEFAULT = 4
+/** What a stored sum with no n loads as — unchanged, so old documents draw as before. */
+export const N_STORED_DEFAULT = RIEMANN_N_DEFAULT
 
 /** Integerise and clamp n. One rule, shared with persistence. */
 export const clampN = clampRiemannN
@@ -439,6 +446,38 @@ export function integralSymbol(from: number, to: number): string {
   return `∫${digits(from, SUB)}${digits(to, SUP)}`
 }
 
+/** Whole numbers a sub/superscript can carry, sign included. */
+const smallInt = (v: number): boolean => Number.isInteger(v) && Math.abs(v) < 1000
+
+/**
+ * "∫₀³", "∫₋₂²" — the integral with its limits when both are whole numbers;
+ * "∫ₐᵇ" otherwise (the a and b fields beside it say what they are: there is
+ * no subscript full stop to write 0.5 with).
+ */
+export function integralLimits(from: number, to: number): string {
+  if (!smallInt(from) || !smallInt(to)) return '∫ₐᵇ'
+  return `∫${from < 0 ? '₋' : ''}${digits(from, SUB)}${to < 0 ? '⁻' : ''}${digits(to, SUP)}`
+}
+
+/**
+ * A number's closed form when it has one to double precision — "−3", "−32/3",
+ * "2√2/3", "π/2" — else null. Integers first; then src/core/exact.ts at its
+ * strict tolerance, so a decimal is never dressed up as a fraction.
+ */
+export function closedForm(v: number): string | null {
+  if (!Number.isFinite(v)) return null
+  const r = Math.round(v)
+  if (Math.abs(v - r) <= 1e-9 * Math.max(1, Math.abs(v))) return fixed(r, 0)
+  const ex = exactForm(v)
+  return ex ? ex.text : null
+}
+
+/** A decimal to at most 3 places, trailing zeros dropped: −7, 1.75, 2.667. */
+export function trimmed(v: number): string {
+  if (!Number.isFinite(v)) return '—'
+  return fixed(Math.round(v * 1000) / 1000, 3).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '')
+}
+
 export interface AreaReadout {
   /** "∫₀² = 2.667" or "|area| ≈ 2.667" — the whole sentence. */
   text: string
@@ -607,7 +646,7 @@ export function riemannSymbol(method: RiemannMethod, n: number): string {
 }
 
 export interface RiemannReadout {
-  /** "L₈ = 1.750 → ∫ = 2.667" — the sum, and what it is converging to. */
+  /** "L₈ = 1.75 (exact ∫₀² = 8/3)" — the sum, and the integral it approximates. */
   text: string
   problem: string | null
   value: number | null
@@ -644,9 +683,17 @@ export function riemannReadout(
   } catch {
     exact = null
   }
-  const target = exact ? ` → ∫ = ${fixed(exact.value, 3)}` : ''
+  // The integral the sum approximates, beside it in brackets — never after an
+  // arrow, which read as "becomes". "exact" only beside a closed form (−3,
+  // −32/3, 2√2/3); a value that is only known as a decimal says ≈.
+  const form = exact ? closedForm(exact.value) : null
+  const target = !exact
+    ? ''
+    : form
+      ? ` (exact ${integralLimits(link.from, link.to)} = ${form})`
+      : ` (${integralLimits(link.from, link.to)} ≈ ${trimmed(exact.value)})`
   return {
-    text: `${sym} = ${fixed(sum.value, 3)}${target}`,
+    text: `${sym} = ${trimmed(sum.value)}${target}`,
     problem: null,
     value: sum.value,
     skipped: sum.skipped,
@@ -1318,6 +1365,108 @@ export function defaultBounds(
 }
 
 /**
+ * [a, b] for a fresh Riemann sum or area under f, chosen so the picture is ON
+ * the screen and the numbers are ones a teacher would have typed.
+ *
+ *   1. Between two neighbouring zeros of f in view — the region a question is
+ *      about — the pair nearest the middle of the view (or 0), the one to the
+ *      right on a tie: x² − 4 opens on [−2, 2], sin x on [0, π].
+ *   2. Otherwise a nice interval: the middle half of the view snapped to the
+ *      grid, then [0, 4], [0, 3], [0, 2], [0, 1], [1, 4] … and smaller steps
+ *      around the middle, the first on which f is defined throughout AND stays
+ *      inside the visible y-range (x² opens on [0, 2], not on bars running
+ *      off the top of the board); failing that, the first on which f is at
+ *      least defined.
+ *
+ * Everything is clipped to where the curve is (a sketch's drawn piece) and to
+ * the view. Falls back to `defaultBounds` when f cannot be evaluated.
+ */
+export function niceBounds(
+  curve: FittedCurve,
+  models: Record<string, ModelSpec>,
+  window: [number, number],
+  yWindow: [number, number] | null = null,
+): [number, number] {
+  const legacy = (): [number, number] => defaultBounds(curve, window)
+  const src = mvtSourceOf(curve, models)
+  if (!src) return legacy()
+  const f = (x: number): number => {
+    try {
+      return src.f(x)
+    } catch {
+      return Number.NaN
+    }
+  }
+  const [slo, shi] = spanOf(curve, window)
+  const [wlo, whi] =
+    Number.isFinite(window?.[0]) && Number.isFinite(window?.[1]) && window[1] > window[0] ? window : [slo, shi]
+  const lo = Math.max(slo, wlo)
+  const hi = Math.min(shi, whi)
+  if (!(hi > lo)) return legacy()
+  const width = hi - lo
+  const centre = lo <= 0 && 0 <= hi ? 0 : (lo + hi) / 2
+  const yr = yWindow && Number.isFinite(yWindow[0]) && Number.isFinite(yWindow[1]) && yWindow[0] !== yWindow[1]
+    ? [Math.min(yWindow[0], yWindow[1]), Math.max(yWindow[0], yWindow[1])] as const
+    : null
+  const pad = yr ? 0.06 * (yr[1] - yr[0]) : 0
+  const SAMPLES = 48
+  /** 'screen': defined throughout and inside the y-window; 'defined'; or null. */
+  const grade = (a: number, b: number): 'screen' | 'defined' | null => {
+    if (!(b > a) || a < lo - 1e-9 || b > hi + 1e-9) return null
+    let inside = true
+    for (let i = 0; i <= SAMPLES; i++) {
+      const y = f(a + ((b - a) * i) / SAMPLES)
+      if (!Number.isFinite(y)) return null
+      if (yr && (y < yr[0] + pad || y > yr[1] - pad)) inside = false
+    }
+    return inside ? 'screen' : 'defined'
+  }
+
+  // 1. Two neighbouring zeros.
+  let zeros: number[] = []
+  try {
+    zeros = analyzeCurve(curve, models)
+      .filter((p) => p.kind === 'zero' && p.pos.x >= lo - 1e-9 && p.pos.x <= hi + 1e-9)
+      .map((p) => p.pos.x)
+      .sort((p, q) => p - q)
+  } catch {
+    zeros = []
+  }
+  let best: { a: number; b: number; d: number; right: boolean } | null = null
+  for (let i = 0; i + 1 < zeros.length; i++) {
+    const a = zeros[i]
+    const b = zeros[i + 1]
+    if (b - a < width / 40) continue
+    if (grade(a, b) !== 'screen') continue
+    const d = centre < a ? a - centre : centre > b ? centre - b : 0
+    const right = a >= centre - 1e-9
+    if (!best || d < best.d - 1e-9 || (Math.abs(d - best.d) <= 1e-9 && right && !best.right)) {
+      best = { a, b, d, right }
+    }
+  }
+  if (best) return [round6(best.a), round6(best.b)]
+
+  // 2. A nice interval.
+  const grid = width >= 8 ? 1 : width >= 4 ? 0.5 : width >= 1 ? 0.25 : width / 8
+  const snap = (v: number): number => round6(Math.round(v / grid) * grid)
+  const cands: [number, number][] = [
+    [snap(lo + width / 4), snap(hi - width / 4)],
+    [0, 4], [0, 3], [0, 2], [0, 1],
+    [1, 4], [1, 3], [1, 2],
+    [-1, 1], [-2, 0], [-1, 0],
+  ]
+  const c = snap(centre)
+  for (const k of [2, 1, 0.5, 0.25]) cands.push([round6(c - k * grid * 2), round6(c + k * grid * 2)], [c, round6(c + k * grid * 2)])
+  let defined: [number, number] | null = null
+  for (const [a, b] of cands) {
+    const g = grade(a, b)
+    if (g === 'screen') return [a + 0, b + 0]
+    if (g === 'defined') defined ??= [a + 0, b + 0]
+  }
+  return defined ?? legacy()
+}
+
+/**
  * [a, b] for a fresh area BETWEEN two curves.
  *
  * The region an AP question is about is almost always the one the curves
@@ -1720,7 +1869,7 @@ export interface RiemannRow {
   to: number
   n: number
   method: RiemannMethod
-  /** "L₈ = 1.750 → ∫ = 2.667" */
+  /** "L₈ = 1.75 (exact ∫₀² = 8/3)" */
   text: string
   problem: string | null
   skipped: number

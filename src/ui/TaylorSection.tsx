@@ -18,6 +18,7 @@ import { CardSection, SectionDrop } from './CardSection'
 import { parseNumeric } from './numeric'
 import type { CalcChange, TaylorRow } from './calcLinks'
 import { TAYLOR_N_MAX, TAYLOR_N_MIN, TAYLOR_PLAY_TO, TAYLOR_STEP_MS } from './taylorLinks'
+import { entryHandlers } from './fieldEntry'
 
 interface Props {
   row: TaylorRow
@@ -122,17 +123,7 @@ export function TaylorSection({ row, onCalcChange, onRemove, onEditStart, onEdit
             aria-label={title}
             value={edit.text}
             onChange={(e) => setEdit({ which, text: e.target.value, bad: false })}
-            onKeyDown={(e) => {
-              e.stopPropagation()
-              if (e.key === 'Enter') {
-                e.preventDefault()
-                commit()
-              } else if (e.key === 'Escape') {
-                e.preventDefault()
-                setEdit(null)
-              }
-            }}
-            onBlur={() => setEdit(null)}
+            {...entryHandlers(commit, () => setEdit(null))}
           />
         </span>
       )

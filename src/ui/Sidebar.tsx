@@ -77,6 +77,12 @@ interface Props {
   student?: boolean
   /** Shown at the very top of the sidebar: an opened example's teacher note. */
   topNote?: ReactNode
+  /**
+   * The open document's id. When it changes the list scrolls back to the top:
+   * another document opened at the previous one's scroll position lands
+   * mid-card, at whatever row happened to be there.
+   */
+  docId?: string
   /** Which board this is. A number line lists items, not curves. */
   kind: BoardKind
   /** Switch the whole board over. Lossless, and one undo step. */
@@ -423,6 +429,7 @@ export function Sidebar({
   readOnly = false,
   student = false,
   topNote = null,
+  docId,
   kind,
   onSetKind,
   items,
@@ -643,6 +650,13 @@ export function Sidebar({
   useEffect(() => {
     if (asideRef.current) asideRef.current.inert = !open
   }, [open])
+  // A different document starts at the top of its list (see `docId`).
+  const listRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (listRef.current) listRef.current.scrollTop = 0
+    const inner = asideRef.current?.querySelector<HTMLElement>('.sidebar-inner')
+    if (inner) inner.scrollTop = 0
+  }, [docId])
 
   return (
     <aside
@@ -724,7 +738,7 @@ export function Sidebar({
             )}
           </div>
         </div>
-        <div className="sidebar-list">
+        <div className="sidebar-list" ref={listRef}>
           <div className="sidebar-list-body" ref={bodyRef}>
           {!numberLine && factorOpen && onFactorBuild && onFactorToggle && (
             <FactorEditor onBuild={onFactorBuild} onClose={onFactorToggle} />

@@ -8,8 +8,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SolveResult } from '../core/solveInequality'
-import { nextId, ppuX } from '../core/types'
-import { curveBounds, unionBoxes } from '../ui/curveState'
+import { nextId, ppuX, ppuY } from '../core/types'
+import { unionBoxes } from '../ui/curveState'
+import { curvesFeatureBox } from '../ui/fitFrame'
 import { dataBox } from '../ui/dataLinks'
 import { eulerFramePoints } from '../ui/eulerLinks'
 import { fitRange, graphNoteShown, graphSources, solveCached, solveXs } from '../ui/nlSolve'
@@ -314,15 +315,17 @@ export function useViewport({ board, refs, derived, notices, history, persistenc
   )
 
   /**
-   * Frame everything on the board, in one click.
+   * The box "Fit to curves" frames: everything on the board, in math coords,
+   * before the fit margin — or null when there is nothing visible.
    *
    * Zoom in / zoom out / reset gave a teacher three ways to hunt for a curve
    * they had panned away from and no way to simply be shown it. Reset only
-   * goes home; home is not where the work is.
+   * goes home; home is not where the work is. useFitAll (the ⤢ the toolbar
+   * actually wires) unions this with the geometry.
    */
-  const fitToContent = useCallback((): void => {
+  const fitContentBox = useCallback((): Box | null => {
     const vp = vpRef.current
-    let box: { min: { x: number; y: number }; max: { x: number; y: number } } | null = null
+    let box: Box | null = null
     if (kindRef.current === 'number-line') {
       const xs: number[] = []
       for (const it of itemsRef.current) {
@@ -336,17 +339,29 @@ export function useViewport({ board, refs, derived, notices, history, persistenc
           if (it.hi !== null) xs.push(it.hi)
         }
       }
-      if (xs.length === 0) return
+      if (xs.length === 0) return null
       box = {
         min: { x: Math.min(...xs), y: -0.5 },
         max: { x: Math.max(...xs), y: 0.5 },
       }
     } else {
-      const half = vp.widthPx / 2 / vp.pxPerUnit
-      const window: [number, number] = [vp.center.x - half, vp.center.x + half]
-      const boxes = curvesRef.current
-        .filter((c) => c.visible)
-        .map((c) => curveBounds(c, modelsRef.current[c.modelId], window))
+      // Each curve is framed by its FEATURES — zeros, turning points,
+      // inflections, holes, asymptotes, the ends of a drawn piece — never by
+      // its extent across the window: a parabola measured over ±8.5 reaches
+      // y = 72, and equal axes then zoomed the board out to ±65
+      // (src/ui/fitFrame.ts).
+      const halfX = vp.widthPx / 2 / ppuX(vp)
+      const halfY = vp.heightPx / 2 / ppuY(vp)
+      const view = {
+        x: [vp.center.x - halfX, vp.center.x + halfX] as [number, number],
+        y: [vp.center.y - halfY, vp.center.y + halfY] as [number, number],
+      }
+      const boxes: (Box | null)[] = []
+      try {
+        boxes.push(curvesFeatureBox(curvesRef.current, modelsRef.current, view))
+      } catch {
+        /* the curves have no frame; the rest of the board still does */
+      }
       // A differential-equations board often has no curves on it at all: the
       // figure IS the solution curves threading the lattice, and "Fit to
       // curves" on such a board used to say there was nothing to frame. The
@@ -403,12 +418,21 @@ export function useViewport({ board, refs, derived, notices, history, persistenc
       }
       box = withPoints(unionBoxes(boxes), keyPts)
     }
+    return box
+  }, [])
+
+  /**
+   * Frame everything on the board, in one click — the box fitContentBox
+   * measures, with the fit margin all round.
+   */
+  const fitToContent = useCallback((): void => {
+    const box = fitContentBox()
     if (!box) {
       showToast('Nothing visible to frame.', { ms: 2000 })
       return
     }
     frameBox(box)
-  }, [frameBox, showToast])
+  }, [fitContentBox, frameBox, showToast])
 
   frameBoxRef.current = frameData
 
@@ -527,7 +551,7 @@ export function useViewport({ board, refs, derived, notices, history, persistenc
 
   return {
     hltEdgeX, viewRefresh, viewportChanged, viewMoved, zoomBy, resetView, frameBox, viewSettings,
-    fitToContent, graphSolve, zoomToData, zoomToSequence,
+    fitToContent, fitContentBox, graphSolve, zoomToData, zoomToSequence,
   }
 }
 

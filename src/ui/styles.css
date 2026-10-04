@@ -971,15 +971,31 @@ button.card-formula:hover {
 
 /* ------------------------------------------------------------ empty state */
 
+/* In the UPPER half of the board, on a translucent card: centred on the stage
+   it sat on the x-axis (and the number line) and over their tick labels. An
+   empty board is at its home view, where the axis runs through the middle, so
+   a card centred at a quarter of the height never reaches it. `translate`, not
+   `transform`, so the entry animation's transform still applies. */
 .empty-hint {
   position: absolute;
-  inset: 0;
+  top: 25%;
+  left: 50%;
+  translate: -50% -50%;
+  width: max-content;
+  max-width: min(560px, calc(100% - 2 * var(--sp-4)));
+  box-sizing: border-box;
   z-index: 5;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  text-align: center;
   gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--radius-lg, 12px);
+  background: color-mix(in srgb, var(--bg, #0b1020) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text, #fff) 8%, transparent);
+  backdrop-filter: blur(2px);
   pointer-events: none;
   animation: hint-in 0.6s var(--ease) both;
 }
@@ -3594,6 +3610,35 @@ button.card-eq {
 .readas-chip:hover {
   background: var(--panel-3);
   border-color: var(--border-strong);
+}
+
+/* The reading in force: a chip, not a button — the tooltip carries its fit σ. */
+.readas-current {
+  border-color: color-mix(in srgb, var(--curve, var(--accent)) 55%, transparent);
+  background: color-mix(in srgb, var(--curve, var(--accent)) 12%, var(--panel));
+  cursor: help;
+}
+
+.readas-more {
+  padding: 2px var(--sp-1);
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.readas-more:hover {
+  color: var(--text);
+}
+
+.readas-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1);
 }
 
 /* ---- readouts that line up ---- */
@@ -6871,9 +6916,17 @@ button.calc-field-btn {
   gap: 0;
 }
 
+/* One wrapper per attached tool (data-tool: what a fresh section is scrolled
+   to); it lays out as if it were not there. */
+.calc-tool {
+  display: contents;
+}
+
 .card-body > .cs,
 .calc-list > .cs,
-.card-body > .calc-section > .calc-list > .cs {
+.calc-list > .calc-tool > .cs,
+.card-body > .calc-section > .calc-list > .cs,
+.card-body > .calc-section > .calc-list > .calc-tool > .cs {
   margin-top: 0;
   padding-top: var(--sp-2);
   border-top: 1px solid var(--border-soft);
@@ -7963,7 +8016,15 @@ button.calc-field-btn {
 
 .solve-tex {
   color: var(--text);
-  white-space: nowrap;
+  /* Wraps at the formula's own break points (after a relation, a ∪, an "or")
+     instead of running off a narrow sidebar: at 1024 px the set-builder line
+     was cut at "{x | x < −2 or x >". */
+  white-space: normal;
+  min-width: 0;
+}
+
+.solve-row > :not(.solve-tag) {
+  min-width: 0;
 }
 
 .solve-raw {
@@ -10290,4 +10351,16 @@ button.calc-field-btn {
   border: 1px solid var(--border);
   color: var(--text);
   font-size: var(--fs-md);
+}
+
+/* "Tidy to y = x² − 4" under a sketch's equation (src/core/tidy.ts). */
+.tidy-row {
+  display: flex;
+  margin-top: var(--sp-1);
+}
+
+.tidy-chip {
+  white-space: normal;
+  text-align: left;
+  border-color: color-mix(in srgb, var(--curve, var(--accent)) 50%, transparent);
 }
