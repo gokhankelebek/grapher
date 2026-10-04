@@ -9,10 +9,18 @@
 // memo and effect on the board, so a new hook goes where its inputs exist.
 // ============================================================================
 
+import type { ShareView } from '../core/share'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { DocMeta, InverseLink } from '../core/persist'
 import type { SaveState } from '../ui/DocMenu'
 import type { CurveEdit } from './types'
+
+/**
+ * How the open document came from a share link (null: it did not) — see
+ * src/core/share.ts shareViewOf: view only, a student (view only in reveal
+ * mode), the teacher note hidden, the question for the banner.
+ */
+export type SharedState = ShareView
 
 export function useDocumentState() {
   // ---- documents / persistence
@@ -37,10 +45,13 @@ export function useDocumentState() {
    * saved only by Make a copy — or automatically, as a copy, when it has been
    * edited and the board is about to be switched away from it. `viewOnly` is
    * the student view: nothing on the board or in the cards can be changed.
+   * `student` (view only AND reveal mode) also takes away the teacher's
+   * tools and the reveal-everything buttons; `noteHidden` keeps the teacher
+   * note off the sidebar; `question` is the banner the link carried.
    */
-  const [shared, setShared] = useState<{ viewOnly: boolean } | null>(null)
+  const [shared, setShared] = useState<SharedState | null>(null)
   const sharedRef = useRef(shared)
-  const setSharedState = useCallback((v: { viewOnly: boolean } | null): void => {
+  const setSharedState = useCallback((v: SharedState | null): void => {
     sharedRef.current = v
     setShared(v)
   }, [])

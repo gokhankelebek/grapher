@@ -20,7 +20,7 @@ import {
   emptyBoard,
 } from '../core/persist'
 import type { BoardInput, DocMeta, HydratedBoard } from '../core/persist'
-import { parseShareHash, urlWithoutShare } from '../core/share'
+import { parseShareHash, shareViewOf, urlWithoutShare } from '../core/share'
 import type { BoardKind, ModelSpec } from '../core/types'
 import { curveNames } from '../render/curveNames'
 import { collectCurveViews, viewStatesFrom } from '../ui/curveViews'
@@ -470,7 +470,9 @@ export function useDocumentPersistence({ board, docState, session, refs, derived
       // one's, and the switch below picks it up.
       if (outcome.flags.reveal) revealByDocRef.current.set(outcome.meta.id, { ...REVEAL_OFF, on: true })
       applyHydrated(outcome.meta, outcome.board)
-      setSharedState({ viewOnly: outcome.flags.view })
+      // View only + reveal is a student; a view-only link hides the teacher
+      // note unless it was included; the question rides along as a banner.
+      setSharedState(shareViewOf(outcome.flags))
       docStoredRef.current = false
       hydratedRef.current = true
       setConflict(null)

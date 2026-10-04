@@ -67,8 +67,8 @@ import type { CirclePanel } from './circleLinks'
 import type { TableActions } from './TableSection'
 import type { TablePanel } from './valueTableLinks'
 import { setRowText } from './domainLinks'
-import { Answer, AnswerTex, AnswerText, RevealPill, useReveal } from './RevealAnswer'
-import { asymKey, calcKey, coincideKey, domainKey, rangeKey } from './reveal'
+import { Answer, AnswerTex, AnswerText, FamilyAnswerContext, RevealPill, useReveal } from './RevealAnswer'
+import { asymKey, calcKey, coincideKey, domainKey, familyKey, rangeKey } from './reveal'
 import type { DomainActions, DomainPanel, SetNotation } from './domainLinks'
 import { useInk } from './inkContext'
 import { equationLabel, speakLatex } from '../core/mathSpeech'
@@ -2524,6 +2524,7 @@ export function CurveCard({
       )}
 
       {selected && (
+        <FamilyAnswerContext.Provider value={transform || (conic && conic.kind !== 'class') ? familyKey(curve.id) : null}>
         <div className="card-body card-body-sections" onClick={(e) => e.stopPropagation()}>
           {inequality && <InequalitySection info={inequality} />}
           {/* A function built piece by piece is edited BY its pieces. */}
@@ -3039,6 +3040,7 @@ export function CurveCard({
             </div>
           )}
         </div>
+        </FamilyAnswerContext.Provider>
       )}
     </div>
   )

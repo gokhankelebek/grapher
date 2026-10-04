@@ -16,7 +16,7 @@
 // restriction being typed.
 // ============================================================================
 
-import { Answer } from './RevealAnswer'
+import { Answer, useReveal } from './RevealAnswer'
 import { domainKey, inverseKey, oneToOneKey, rangeKey } from './reveal'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
@@ -88,6 +88,7 @@ export function DomainSection({ panel, actions, notation }: Props) {
   const [draft, setDraft] = useState<(RestrictDraft & { error: string | null }) | null>(null)
   const id = panel.ownerId
   const isFn = panel.role === 'function'
+  const reveal = useReveal()
   const restrict = panel.restrict
   const sketch = restrict.kind === 'sketch'
 
@@ -258,7 +259,9 @@ export function DomainSection({ panel, actions, notation }: Props) {
           answerKey={oneToOneKey(id)}
         />
       )}
-      {isFn && panel.chips.length > 0 && restrict.kind !== 'none' && (
+      {/* The suggested restrictions say it is NOT one-to-one, and where it turns:
+          in reveal mode they wait for that answer. */}
+      {isFn && panel.chips.length > 0 && restrict.kind !== 'none' && !(reveal.on && reveal.hidden(oneToOneKey(id))) && (
         <div className="dr-indent">
           <div className="dr-line" data-testid="one-to-one-chips">
             <span className="dr-lead">Make it one-to-one:</span>
@@ -328,9 +331,13 @@ export function DomainSection({ panel, actions, notation }: Props) {
                   </span>
                 </Answer>
               ) : (
-                <span className="dr-why" data-testid="inverse-why">
-                  {inv.why}
-                </span>
+                // "f isn't one-to-one — restrict its domain first" answers
+                // the One-to-one row too: it is the inverse's answer here.
+                <Answer k={inverseKey(id)} what="the inverse">
+                  <span className="dr-why" data-testid="inverse-why">
+                    {inv.why}
+                  </span>
+                </Answer>
               )}
             </span>
           </div>

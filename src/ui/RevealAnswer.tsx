@@ -47,6 +47,20 @@ export const REVEAL_API_OFF: RevealApi = {
 
 export const RevealContext = createContext<RevealApi>(REVEAL_API_OFF)
 
+/**
+ * The family-facts key of the card a family section sits on (src/ui/reveal.ts
+ * familyKey), or null: a Build ▾ preview, which has no answers to hide, and a
+ * card whose line has no family facts in reveal mode's list.
+ */
+export const FamilyAnswerContext = createContext<string | null>(null)
+
+/** Whether this card's family facts are hidden right now, and their key. */
+export function useFamilyMask(): { key: string | null; hidden: boolean } {
+  const r = useReveal()
+  const key = useContext(FamilyAnswerContext)
+  return { key, hidden: key !== null && r.on && r.hidden(key) }
+}
+
 export function useReveal(): RevealApi {
   return useContext(RevealContext)
 }

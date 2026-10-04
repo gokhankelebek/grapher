@@ -3,6 +3,7 @@ import { CardSection, withoutDomainRange } from './CardSection'
 import type { SinFn, SinSpec, SinStart } from '../core/sinusoidal'
 import { Latex } from './Latex'
 import { ExpFacts, XField, badText } from './ExpEditor'
+import { useFamilyMask } from './RevealAnswer'
 import {
   KIND_WORD,
   SIN_FIELD_LABEL,
@@ -66,6 +67,9 @@ const TABS: { tab: SinTab; label: string }[] = [
 
 /** The five key points of one cycle, with their exact text. */
 export function KeyPointTable({ rows }: { rows: readonly KeyRow[] }) {
+  // Reveal mode on a card: where the extrema are is the answer ("?" until
+  // the card's facts are revealed); which kind of point comes next is not.
+  const masked = useFamilyMask().hidden
   if (rows.length === 0) return null
   return (
     <table className="se-keys" data-testid="sin-keys">
@@ -74,14 +78,14 @@ export function KeyPointTable({ rows }: { rows: readonly KeyRow[] }) {
         <tr>
           <th scope="row">x</th>
           {rows.map((r, i) => (
-            <td key={i}>{r.x}</td>
+            <td key={i}>{masked ? '?' : r.x}</td>
           ))}
         </tr>
         <tr>
           <th scope="row">y</th>
           {rows.map((r, i) => (
             <td key={i} className={`se-key-${r.kind}`}>
-              {r.y}
+              {masked ? '?' : r.y}
             </td>
           ))}
         </tr>

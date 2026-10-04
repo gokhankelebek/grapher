@@ -6,6 +6,7 @@ import { DARK_THEME } from '../core/types'
 import { Latex } from './Latex'
 import { XField, badText } from './ExpEditor'
 import { renderBoard } from './renderBoard'
+import { RevealPill, useFamilyMask } from './RevealAnswer'
 import {
   PARENT_IDS,
   PARENT_SHORT,
@@ -150,8 +151,12 @@ export function StepList({ steps }: { steps: readonly string[] }) {
   )
 }
 
-/** Two columns: each parent key point and where it goes. */
-export function MapTable({ rows }: { rows: readonly PointRow[] }) {
+/**
+ * Two columns: each parent key point and where it goes. `masked` (reveal
+ * mode on a card): the parent column is the given and stays; each image is
+ * an answer and says "?".
+ */
+export function MapTable({ rows, masked = false }: { rows: readonly PointRow[]; masked?: boolean }) {
   if (rows.length === 0) return null
   return (
     <table className="te-map" data-testid="transform-map">
@@ -169,7 +174,7 @@ export function MapTable({ rows }: { rows: readonly PointRow[] }) {
             <td className="te-map-arrow" aria-label="maps to">
               →
             </td>
-            <td>{r.to}</td>
+            <td>{masked ? '?' : r.to}</td>
           </tr>
         ))}
       </tbody>
@@ -403,6 +408,7 @@ export function TransformSection({
 
   const anchorWord = parentOf(spec.parent).anchorName
   const line = spec.parent === 'linear'
+  const mask = useFamilyMask()
 
   return (
     <CardSection
@@ -430,8 +436,16 @@ export function TransformSection({
             <XField value={spec.k || '0'} mode="commit" label={FIELD_HELP.k} className="fe-input-part" onCommit={field('k')} />
           </div>
           <StepList steps={stepSentences(spec)} />
-          <MapTable rows={pointRows(spec)} />
-          <FeatureList lines={hideDomainRange ? withoutDomainRange(featureLines(spec)) : featureLines(spec)} />
+          <MapTable rows={pointRows(spec)} masked={mask.hidden} />
+          {mask.hidden && mask.key ? (
+            // The images and the features (vertex, asymptotes, domain, range)
+            // are worked out from a, b, h, k: in reveal mode, one pill for them.
+            <div className="reveal-pill-row" data-testid="transform-facts-hidden">
+              <RevealPill k={mask.key} what="the image points and features" />
+            </div>
+          ) : (
+            <FeatureList lines={hideDomainRange ? withoutDomainRange(featureLines(spec)) : featureLines(spec)} />
+          )}
           {error && <div className="expr-error">{error}</div>}
           {onShowParent && (
             <label className="te-check" onClick={(e) => e.stopPropagation()}>

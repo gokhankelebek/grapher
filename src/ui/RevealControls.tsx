@@ -6,7 +6,21 @@
 // sized for a room (44 px targets). The keys do the same things from anywhere:
 // R toggles the mode, → / PageDown reveal the next answer, ← / PageUp take the
 // last one back — a presentation clicker's forward and back buttons.
+//
+// The counter says how far the class has got: "3 of 9 revealed" (it used to
+// count what was still hidden, so it ran backwards as answers came out).
+//
+// A STUDENT (a view-only share link opened in reveal mode) gets Next and the
+// counter only: Next checks their own work one answer at a time, while the
+// Reveal switch, All and Reset would put every answer up in one tap.
 // ============================================================================
+
+/** "3 of 9 revealed" — the counter's words, everywhere it appears. */
+export function revealCountText(hidden: number, total: number): string {
+  const t = Math.max(0, Math.round(total))
+  const shown = Math.min(t, Math.max(0, t - Math.round(hidden)))
+  return `${shown} of ${t} revealed`
+}
 
 export interface RevealControlsProps {
   on: boolean
@@ -33,7 +47,40 @@ export function RevealControls({
   onReset,
   onPositions,
   present = false,
-}: RevealControlsProps & { present?: boolean }) {
+  student = false,
+}: RevealControlsProps & { present?: boolean; student?: boolean }) {
+  const count = (
+    <span className="reveal-bar-count" data-testid="reveal-count" title="Answers revealed so far">
+      {revealCountText(hidden, total)}
+    </span>
+  )
+  const next = (
+    <button
+      type="button"
+      className="reveal-btn reveal-btn-primary"
+      data-testid="reveal-next"
+      disabled={hidden === 0}
+      title="Reveal the next answer (→ or PageDown)"
+      onClick={onNext}
+    >
+      Next ›
+    </button>
+  )
+  if (student) {
+    if (!on) return null
+    return (
+      <div
+        className={`${present ? 'present-reveal' : 'reveal-controls'} reveal-student`}
+        role="group"
+        aria-label="Check your answers"
+        data-testid={present ? 'present-reveal' : 'reveal-controls'}
+        data-student="true"
+      >
+        {count}
+        {next}
+      </div>
+    )
+  }
   return (
     <div
       className={present ? 'present-reveal' : 'reveal-controls'}
@@ -53,19 +100,8 @@ export function RevealControls({
       </button>
       {on && (
         <>
-          <span className="reveal-bar-count" data-testid="reveal-count" title="Answers still hidden">
-            {`${hidden}/${total}`}
-          </span>
-          <button
-            type="button"
-            className="reveal-btn reveal-btn-primary"
-            data-testid="reveal-next"
-            disabled={hidden === 0}
-            title="Reveal the next answer (→ or PageDown)"
-            onClick={onNext}
-          >
-            Next ›
-          </button>
+          {count}
+          {next}
           <button
             type="button"
             className="reveal-btn"

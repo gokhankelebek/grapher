@@ -3919,6 +3919,102 @@ button.card-eq {
   opacity: 1;
 }
 
+/* ---- reveal mode in presentation: the answers revealed, on the board ----
+   (src/ui/PresentAnswers.tsx). The legend's glass, in the side it leaves
+   free, under the corner cluster; every font-size is set inline from the
+   presentation type scale, as the legend's is. */
+
+.present-answers {
+  position: absolute;
+  z-index: 13;
+  inset-block-start: calc(var(--sp-3) + 64px);
+  display: flex;
+  flex-direction: column;
+  gap: 0.3em;
+  width: max-content;
+  min-width: 9em;
+  max-width: min(34%, 20em);
+  max-height: calc(100% - 64px - 2 * var(--sp-3) - var(--sign-band, 0px));
+  overflow: auto;
+  padding: 0.45em 0.6em;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: rgba(15, 17, 23, 0.86);
+  color: var(--text);
+  line-height: 1.25;
+}
+.present-answers-right {
+  inset-inline-end: var(--sp-3);
+}
+.present-answers-left {
+  inset-inline-start: var(--sp-3);
+}
+.canvas-light .present-answers {
+  border-color: rgba(20, 24, 34, 0.12);
+  background: rgba(255, 255, 255, 0.9);
+  color: #101420;
+}
+.present-answers-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1em;
+  color: var(--muted);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.present-answers-count {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+.present-answers-earlier {
+  color: var(--faint);
+}
+.present-answers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35em;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.present-answer {
+  --curve: var(--accent-text);
+  display: flex;
+  flex-direction: column;
+  gap: 0.05em;
+  padding: 0.2em 0.45em;
+  border-inline-start: 3px solid var(--curve);
+  border-radius: 4px;
+  opacity: 0.72;
+}
+.present-answer-label {
+  color: var(--muted);
+}
+.present-answer-value {
+  color: var(--curve);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.present-answer-new {
+  opacity: 1;
+  background: rgba(79, 156, 249, 0.14);
+  box-shadow: 0 0 0 1px rgba(79, 156, 249, 0.45), 0 0 18px rgba(79, 156, 249, 0.25);
+  animation: reveal-in 0.45s var(--ease) both;
+}
+.canvas-light .present-answer-new {
+  background: rgba(79, 156, 249, 0.12);
+  box-shadow: 0 0 0 1px rgba(36, 99, 196, 0.45);
+}
+.present-answer-new .present-answer-label {
+  color: var(--text);
+}
+@media (prefers-reduced-motion: reduce) {
+  .present-answer-new {
+    animation: none;
+  }
+}
+
 /* ------------------------------------------------ export: framing ------ */
 
 .exp-check {
@@ -8152,6 +8248,7 @@ button.calc-field-btn {
 .reveal-bar-count {
   padding: 0 var(--sp-2);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .reveal-btn {
   display: inline-flex;
@@ -8383,6 +8480,69 @@ button.calc-field-btn {
   white-space: nowrap;
 }
 .share-banner-btn:hover { filter: brightness(1.08); }
+
+/* The banner and, under it, the teacher's question — one stack, centred
+   under the toolbar wherever the toolbar is (its top is measured, inline). */
+.share-stack {
+  position: absolute;
+  top: var(--sp-3);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-2);
+  width: max-content;
+  max-width: calc(100% - 32px);
+  pointer-events: none;
+}
+.share-stack > * { pointer-events: auto; }
+.share-stack > .share-banner {
+  position: static;
+  transform: none;
+  max-width: 100%;
+}
+.share-question-banner {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  max-width: min(640px, 100%);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius);
+  border: 1px solid var(--accent);
+  border-inline-start-width: 4px;
+  background: rgba(19, 23, 34, 0.94);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  font-size: var(--fs-lg);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.share-question-tag {
+  flex: none;
+  color: var(--accent-text);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* The share dialog's optional question for students. */
+.share-question { display: flex; flex-direction: column; gap: var(--sp-1); }
+.share-question-label { font-weight: 600; }
+.share-question-label .share-sub { font-weight: 400; }
+.share-question-input {
+  height: 34px;
+  padding: 0 var(--sp-2);
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: var(--fs-md);
+}
+.share-check-off { cursor: default; opacity: 0.7; }
 
 .sidebar-list-body { display: contents; }
 .sidebar-readonly-note {

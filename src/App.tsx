@@ -14,6 +14,7 @@ import { ExportMenu } from './ui/ExportMenu'
 import { NumberLineStage } from './ui/NumberLineStage'
 import { PresentBar } from './ui/PresentBar'
 import { PresentLegend } from './ui/PresentLegend'
+import { PresentAnswers } from './ui/PresentAnswers'
 import { RevealContext } from './ui/RevealAnswer'
 import { RevealControls } from './ui/RevealControls'
 import { Sidebar } from './ui/Sidebar'
@@ -40,6 +41,7 @@ import { useNumberLine } from './app/useNumberLine'
 import { useViewport } from './app/useViewport'
 import { useUnitCircle } from './app/useUnitCircle'
 import { useExamples } from './app/useExamples'
+import { useGalleryLink } from './app/useGalleryLink'
 import { useItemBank } from './app/useItemBank'
 import { useRelatedRates } from './app/useRelatedRates'
 import { useStats } from './app/useStats'
@@ -62,6 +64,7 @@ import { useSidebarEditors } from './app/useSidebarEditors'
 import { useCommands } from './app/useCommands'
 import { useKeyboard } from './app/useKeyboard'
 import { usePresentation } from './app/usePresentation'
+import { usePresentAnswers } from './app/usePresentAnswers'
 import { examplesLib } from './app/useExamples'
 import { itemBankLib } from './app/useItemBank'
 import { LazyWait, lazyComponent, lazyModule, prefetchLazyModules } from './ui/lazyLoad'
@@ -199,6 +202,10 @@ export default function App() {
   const presentation = usePresentation({
     board, docState, session, refs, derived, fieldsApi, shapesApi, tables,
   })
+  const presentAnswers = usePresentAnswers({
+    board, docState, session, derived, overlaysApi, panel, valueTablesApi, circleViewsApi, tables,
+    fieldsApi, system, unitCircle, rates, statsApi, marks, naming, revealInv: revealMode.revealInv,
+  })
 
   const {
     curves, kind, items, styles, selectedId, sidebarOpen, setSidebarOpen, drawingActive,
@@ -226,6 +233,7 @@ export default function App() {
   const { undo, redo, editStart, editEnd, editCancel, commitWithSnap } = history
   const { saveNow, reloadCurrentDoc, docNote } = persistence
   const { galleryOpen, openGallery, closeGallery, openExample, foldedNotes, setNoteFolded } = examplesApi
+  useGalleryLink(openGallery) // ?app=1&gallery=1 (the landing page's "Open an AP example")
   const {
     bankOpen, openBankCopy, closeBankCopy, itemOpen, openGraphFromItem, closeGraphFromItem,
     buildBankFigure, copyBankText, downloadTex, graphItem,
@@ -316,6 +324,12 @@ export default function App() {
   const { description, describeOpen, openDescribe, closeDescribe, copyText, copyAltText } = describer
   /** The colour a card shows: the board's palette (the sidebar is dark in every theme). */
   const cardInk = useMemo(() => inkMapper(false, curvePalette), [curvePalette])
+  /**
+   * A view-only share link opened in reveal mode: the person is a student.
+   * The teacher's tools (Analysis, Undo/Redo, Reveal, Present, Download, the
+   * share and copy actions) and the reveal-everything buttons are not theirs.
+   */
+  const student = shared?.student === true
   /** What the board's live region says: the latest toast or "moved" note. */
   const liveText = toast?.msg ?? (featureNote?.kind === 'moved' ? featureNote.text : '')
   // After the first paint, fetch the code the first render left out, in idle time.
@@ -347,12 +361,17 @@ export default function App() {
         open={sidebarOpen && !presentMode}
         readOnly={shared?.viewOnly === true}
         topNote={
-          <TeacherNote
-            note={docNote}
-            folded={foldedNotes.has(docMeta.id)}
-            onFold={(f) => setNoteFolded(docMeta.id, f)}
-          />
+          // A view-only link shows the note only when the teacher included it
+          // (and never to a student in reveal mode): it is written to them.
+          shared?.noteHidden ? null : (
+            <TeacherNote
+              note={docNote}
+              folded={foldedNotes.has(docMeta.id)}
+              onFold={(f) => setNoteFolded(docMeta.id, f)}
+            />
+          )
         }
+        student={student}
         kind={kind}
         onSetKind={setBoardKind}
         items={items}
@@ -690,19 +709,34 @@ export default function App() {
         {/* A shared document says so on the board, with the one thing to do
             about it. DOM, so it never reaches an export. */}
         {shared && !presentMode && (
-          <div className="share-banner" data-testid="share-banner" role="status" style={{ top: bannerTop }}>
-            <span className="share-banner-text">
-              <strong>Shared graph</strong>
-              {shared.viewOnly ? ' · view only' : ' · not in your documents yet'}
-            </span>
-            <button
-              className="share-banner-btn"
-              data-testid="share-make-copy"
-              onClick={() => makeSharedCopy('asked')}
-              title="Save this graph into your own documents, where you can edit it"
-            >
-              Make a copy
-            </button>
+          <div className="share-stack" style={{ top: bannerTop }}>
+            <div className="share-banner" data-testid="share-banner" role="status">
+              <span className="share-banner-text">
+                <strong>Shared graph</strong>
+                {student
+                  ? ' · view only · Next checks one answer at a time'
+                  : shared.viewOnly
+                    ? ' · view only'
+                    : ' · not in your documents yet'}
+              </span>
+              {/* A student's copy would open with every answer showing. */}
+              {!student && (
+                <button
+                  className="share-banner-btn"
+                  data-testid="share-make-copy"
+                  onClick={() => makeSharedCopy('asked')}
+                  title="Save this graph into your own documents, where you can edit it"
+                >
+                  Make a copy
+                </button>
+              )}
+            </div>
+            {shared.question && (
+              <div className="share-question-banner" data-testid="share-question-banner" role="note" aria-label="Question">
+                <span className="share-question-tag">Question</span>
+                <span className="share-question-text">{shared.question}</span>
+              </div>
+            )}
           </div>
         )}
 
@@ -731,7 +765,7 @@ export default function App() {
             the PresentBar instead). DOM, so they never reach an export. */}
         {reveal.on && !presentMode && (
           <div className="reveal-bar" data-testid="reveal-bar">
-            <RevealControls {...revealControls} />
+            <RevealControls {...revealControls} student={student} />
           </div>
         )}
 
@@ -773,15 +807,20 @@ export default function App() {
               onDelete={deleteDocument}
               onExport={exportDocument}
               onImport={importDocument}
-              onWorksheet={openWorksheet}
+              onWorksheet={student ? undefined : openWorksheet}
               onExamples={openGallery}
-              onGraphFromItem={openGraphFromItem}
-              onShare={openShareDialog}
+              onGraphFromItem={student ? undefined : openGraphFromItem}
+              onShare={student ? undefined : openShareDialog}
               shared={shared ? (shared.viewOnly ? 'view' : 'edit') : null}
-              onMakeCopy={() => makeSharedCopy('asked')}
+              onMakeCopy={student ? undefined : () => makeSharedCopy('asked')}
+              student={student}
             />
           }
+          student={student}
           exportMenu={
+            // A student gets none of these: Reveal off and Download would both
+            // put every answer up, and Present is the teacher's projector.
+            student ? undefined : (
             <>
               {/* The presentation switch lives beside Download because both
                   are "the board leaves this window": one to paper, one to a
@@ -878,6 +917,7 @@ export default function App() {
                 }}
               />
             </>
+            )
           }
           onToggleSidebar={() => setSidebarOpen((o) => !o)}
           onUndo={undo}
@@ -892,10 +932,21 @@ export default function App() {
         />
         )}
 
+        {presentMode && reveal.on && (
+          <PresentAnswers
+            lines={presentAnswers}
+            total={revealControls.total}
+            type={present?.type ?? presentType}
+            side={legendCorner.endsWith('left') ? 'right' : 'left'}
+          />
+        )}
+
         {presentMode && (
           <PresentLegend
             entries={legendShown}
-            type={presentType}
+            type={present?.type ?? presentType}
+            vpRef={kind === 'cartesian' ? vpRef : undefined}
+            bottomInset={kind === 'cartesian' ? signBandPx : 0}
             corner={legendCorner}
             onCycleCorner={() =>
               setLegendCorner((c) =>

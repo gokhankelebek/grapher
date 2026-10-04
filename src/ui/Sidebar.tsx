@@ -73,6 +73,8 @@ interface Props {
    * controls that add things are gone. A note says how to get an editable copy.
    */
   readOnly?: boolean
+  /** A student's view (view only, reveal mode): the note says how to check answers instead. */
+  student?: boolean
   /** Shown at the very top of the sidebar: an opened example's teacher note. */
   topNote?: ReactNode
   /** Which board this is. A number line lists items, not curves. */
@@ -419,6 +421,7 @@ const EMPTY_ANALYSIS: SpecialPoint[] = []
 export function Sidebar({
   open,
   readOnly = false,
+  student = false,
   topNote = null,
   kind,
   onSetKind,
@@ -652,7 +655,15 @@ export function Sidebar({
         <div className="sidebar-head">
           {readOnly ? (
             <div className="sidebar-readonly-note" data-testid="sidebar-readonly-note">
-              View only — use <strong>Make a copy</strong> to edit this graph.
+              {student ? (
+                <>
+                  View only — press <strong>Reveal</strong> on a card, or <strong>Next</strong>, to check an answer.
+                </>
+              ) : (
+                <>
+                  View only — use <strong>Make a copy</strong> to edit this graph.
+                </>
+              )}
             </div>
           ) : (
             <BoardKindSwitch kind={kind} onSetKind={onSetKind} />

@@ -119,3 +119,53 @@ export function itemLegend(items: readonly NLItem[]): LegendEntry[] {
     }
   })
 }
+
+// ---------------------------------------------------------------------------
+// The legend and the x axis's numbers
+// ---------------------------------------------------------------------------
+
+/** A vertical stretch of the board, in px from its top. */
+export interface Band {
+  top: number
+  bottom: number
+}
+
+/**
+ * Where the x axis's tick numbers are drawn, in px from the board's top —
+ * the rule src/render/grid.ts follows: just under the axis, slid along the
+ * top or bottom edge when the axis is off the board. `labelPx` is the 1:1
+ * label size (grid.ts LABEL_PX), `type` the presentation type scale,
+ * `inset` a sign-chart band the numbers sit above.
+ */
+export function xLabelBand(axisY: number, heightPx: number, type: number, labelPx: number, inset = 0): Band {
+  const fpx = labelPx * type
+  const lo = 4
+  const hi = Math.max(4, heightPx - fpx - 6 - inset)
+  const top = Math.min(hi, Math.max(lo, axisY + 5 * type))
+  return { top: top - 2, bottom: top + fpx + 3 }
+}
+
+/**
+ * How far to move the legend (px, + down) so it does not sit on the x axis's
+ * numbers. A legend in a bottom corner steps up above them, one in a top
+ * corner down below them — and when there is no room that way, it goes to
+ * the other side of the numbers instead. 0 when they do not meet.
+ *
+ * `box` is where the legend sits unmoved, `heightPx` the board's height.
+ */
+export function legendNudge(
+  corner: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right',
+  box: Band,
+  band: Band,
+  heightPx: number,
+  gap = 6,
+): number {
+  if (!(box.bottom > band.top && box.top < band.bottom)) return 0
+  const h = box.bottom - box.top
+  const up = band.top - gap - box.bottom // ≤ 0: lift it clear above the numbers
+  const down = band.bottom + gap - box.top // ≥ 0: drop it clear below them
+  const fitsAbove = band.top - gap - h >= gap
+  const fitsBelow = band.bottom + gap + h <= heightPx - gap
+  if (corner.startsWith('bottom')) return fitsAbove || !fitsBelow ? up : down
+  return fitsBelow || !fitsAbove ? down : up
+}

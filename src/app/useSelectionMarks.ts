@@ -6,6 +6,7 @@
 // memo and effect on the board, so a new hook goes where its inputs exist.
 // ============================================================================
 
+import { familyKey, isHidden } from '../ui/reveal'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type { ConicSpec } from '../core/conics'
 import type { LogisticSpec } from '../core/logistic'
@@ -104,7 +105,7 @@ export function useSelectionMarks({ board, docState, session, refs, derived, fie
     curves, kind, selectedId, construction, motionPlay, setMotionPlay, showParent, lens,
   } = board
   const { exprSources, calls, inverses } = docState
-  const { markersOn, canvasTheme } = session
+  const { markersOn, canvasTheme, reveal } = session
   const { curvesRef } = refs
   const { models, modelsRef, selectedCurve, depKeys, analysis, vpRef } = derived
   const {
@@ -273,12 +274,18 @@ export function useSelectionMarks({ board, docState, session, refs, derived, fie
     if (selectedTransform?.ghost) refreshGhostFrame(true)
   }, [selectedTransform, refreshGhostFrame])
 
+  /**
+   * Reveal mode: the images (vertex included) are the card's family facts
+   * (src/ui/reveal.ts familyKey) — no marks and no arrows to them until
+   * those are revealed. The dashed parent is the given and stays.
+   */
+  const transformHidden = selectedTransform !== null && isHidden(reveal, familyKey(selectedTransform.id))
   const transformMarks = useMemo<SpecialPoint[]>(
     () =>
-      selectedTransform?.marks
+      selectedTransform?.marks && !transformHidden
         ? transformKeyMarks(selectedTransform.spec)
         : [],
-    [selectedTransform],
+    [selectedTransform, transformHidden],
   )
 
   // ------------------------------------- a selected parametric / polar curve
@@ -531,15 +538,17 @@ export function useSelectionMarks({ board, docState, session, refs, derived, fie
       const inkFor = ghostInk(canvasTheme !== 'light')
       out.push(
         parentGhost(selectedTransform.spec.parent, ghostFrame.span, inkFor.ghost, `ghost:${selectedTransform.id}`),
-        ...keyPointArrows(selectedTransform.spec, ghostFrame, inkFor.arrow, `arrow:${selectedTransform.id}`),
       )
+      if (!transformHidden) {
+        out.push(...keyPointArrows(selectedTransform.spec, ghostFrame, inkFor.arrow, `arrow:${selectedTransform.id}`))
+      }
     }
     // a polar particle's ray from the pole
     if (motionScene) out.push(...motionScene.polylines)
     // a sequence's continuous partner, dashed through its dots
     if (partnerLines.length > 0) out.push(...partnerLines)
     return out.length === fieldPolylines.length ? fieldPolylines : out
-  }, [fieldPolylines, selectedSin, selectedLogistic, selectedTransform, ghostFrame, canvasTheme, constructionScene, selectedConic, construction, motionScene, partnerLines])
+  }, [fieldPolylines, selectedSin, selectedLogistic, selectedTransform, transformHidden, ghostFrame, canvasTheme, constructionScene, selectedConic, construction, motionScene, partnerLines])
 
   /** The on-screen shapes: the board's own, then a conic's named foci (F₁, F₂). */
   const screenShapes = useMemo<Shape[]>(() => {

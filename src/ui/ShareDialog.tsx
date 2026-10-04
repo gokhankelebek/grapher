@@ -5,13 +5,18 @@
 // The link carries the whole document in its fragment (src/core/share.ts), so
 // nothing is uploaded anywhere and no account is needed. Two switches decide
 // what a student gets: "View only" (a read-only view with Make a copy) and
-// "Open in reveal mode" (the answers hidden behind "?" marks).
+// "Open in reveal mode" (the answers hidden behind "?" marks). Both together
+// is the STUDENT view: no teacher note, no teacher tools, no "All".
+//
+// A view-only link leaves the teacher note out unless "Include teacher note"
+// is ticked (never in reveal mode: a note holds answers), and an optional
+// one-line "Question for students" rides in the link as a banner.
 // ============================================================================
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useDialogFocus } from './useDialogFocus'
 import type { ShareFlags } from '../core/share'
-import { SHARE_WARN_LENGTH, buildShareLink, shareLengthVerdict } from '../core/share'
+import { QUESTION_MAX, SHARE_WARN_LENGTH, buildShareLink, cleanQuestion, shareLengthVerdict } from '../core/share'
 import type { QrCode } from '../core/qr'
 import { byteCapacity, encodeQrBest, qrSvgPath } from '../core/qr'
 
@@ -44,8 +49,30 @@ const DENSE_QR_VERSION = 25
 
 type Copy = 'idle' | 'copied' | 'failed'
 
+/** Whether a document's JSON carries a teacher note (only then is there a note to include). */
+export function docHasNote(json: string): boolean {
+  try {
+    const note = (JSON.parse(json) as { board?: { note?: unknown } } | null)?.board?.note
+    return typeof note === 'string' && note.trim() !== ''
+  } catch {
+    return false
+  }
+}
+
 export function ShareDialog({ name, json, baseHref, onClose }: Props) {
   const [flags, setFlags] = useState<ShareFlags>({ view: false, reveal: false })
+  const [question, setQuestion] = useState('')
+  const hasNote = useMemo(() => docHasNote(json), [json])
+  /** What the link is built from: the switches, and the question as it will travel. */
+  const linkFlags = useMemo<ShareFlags>(() => {
+    const q = cleanQuestion(question)
+    return {
+      view: flags.view,
+      reveal: flags.reveal,
+      ...(flags.view && !flags.reveal && flags.note && hasNote ? { note: true } : {}),
+      ...(q ? { question: q } : {}),
+    }
+  }, [flags, question, hasNote])
   const [link, setLink] = useState<{ url: string; length: number } | null>(null)
   const [copy, setCopy] = useState<Copy>('idle')
   const [showQr, setShowQr] = useState(false)
@@ -56,7 +83,7 @@ export function ShareDialog({ name, json, baseHref, onClose }: Props) {
   useEffect(() => {
     let live = true
     setCopy('idle')
-    buildShareLink(baseHref, json, flags)
+    buildShareLink(baseHref, json, linkFlags)
       .then((l) => {
         if (live) setLink({ url: l.url, length: l.length })
       })
@@ -66,7 +93,7 @@ export function ShareDialog({ name, json, baseHref, onClose }: Props) {
     return () => {
       live = false
     }
-  }, [baseHref, json, flags])
+  }, [baseHref, json, linkFlags])
 
   useDialogFocus(dialogRef, onClose, { escape: false, autoFocus: false })
   useEffect(() => {
@@ -121,7 +148,7 @@ export function ShareDialog({ name, json, baseHref, onClose }: Props) {
     }
   }
 
-  const set = (k: keyof ShareFlags) => (e: React.ChangeEvent<HTMLInputElement>) =>
+  const set = (k: 'view' | 'reveal' | 'note') => (e: React.ChangeEvent<HTMLInputElement>) =>
     setFlags((f) => ({ ...f, [k]: e.target.checked }))
 
   return (
@@ -166,6 +193,7 @@ export function ShareDialog({ name, json, baseHref, onClose }: Props) {
                     : ''}
                   {flags.view ? ' Opens view only.' : ''}
                   {flags.reveal ? ' Opens in reveal mode.' : ''}
+                  {linkFlags.question ? ' Shows your question.' : ''}
                 </p>
               </>
             ) : qr && 'error' in qr ? (
@@ -202,10 +230,47 @@ export function ShareDialog({ name, json, baseHref, onClose }: Props) {
                 <input type="checkbox" checked={flags.reveal} onChange={set('reveal')} data-testid="share-reveal" />
                 <span>
                   <strong>Open in reveal mode</strong>
-                  <span className="share-sub">The answers start hidden behind “?” marks.</span>
+                  <span className="share-sub">
+                    The answers start hidden behind “?” marks.
+                    {flags.view ? ' With View only, students step through them with Next — no All, no Reset.' : ''}
+                  </span>
                 </span>
               </label>
+              {flags.view && hasNote && (
+                <label className={`share-check${flags.reveal ? ' share-check-off' : ''}`}>
+                  <input
+                    type="checkbox"
+                    checked={flags.note === true && !flags.reveal}
+                    disabled={flags.reveal}
+                    onChange={set('note')}
+                    data-testid="share-note"
+                  />
+                  <span>
+                    <strong>Include teacher note</strong>
+                    <span className="share-sub">
+                      {flags.reveal
+                        ? 'Never shown in reveal mode — a note can give the answers away.'
+                        : 'Off: students don’t see the note, and the link doesn’t carry it.'}
+                    </span>
+                  </span>
+                </label>
+              )}
             </div>
+
+            <label className="share-question">
+              <span className="share-question-label">
+                Question for students <span className="share-sub">(optional · shown as a banner)</span>
+              </span>
+              <input
+                className="share-question-input"
+                type="text"
+                value={question}
+                maxLength={QUESTION_MAX}
+                placeholder="e.g. Which sum is closer to the area, and why?"
+                onChange={(e) => setQuestion(e.target.value)}
+                data-testid="share-question"
+              />
+            </label>
 
             <div className="share-link-row">
               <input

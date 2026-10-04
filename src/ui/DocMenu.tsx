@@ -40,6 +40,11 @@ interface Props {
   shared?: 'edit' | 'view' | null
   /** Save the shared document into this browser's documents. */
   onMakeCopy?(): void
+  /**
+   * A student's view of a shared graph (view only, reveal mode): no backup
+   * of it either — a backup imported back would open with every answer up.
+   */
+  student?: boolean
 }
 
 function relativeTime(ts: number): string {
@@ -110,6 +115,7 @@ export function DocMenu({
   onShare,
   shared = null,
   onMakeCopy,
+  student = false,
 }: Props) {
   const [open, setOpen] = useState(false)
   const [renaming, setRenaming] = useState(false)
@@ -331,9 +337,11 @@ export function DocMenu({
             )}
             {/* "Save a backup…" writes a DOCUMENT; Download writes a PNG. The
                 old wording ("Export to file…") was being read as the picture. */}
-            <button className="doc-item" role="menuitem" onClick={pick(onExport)}>
-              Save a backup…
-            </button>
+            {!student && (
+              <button className="doc-item" role="menuitem" onClick={pick(onExport)}>
+                Save a backup…
+              </button>
+            )}
             <button className="doc-item" role="menuitem" onClick={() => fileRef.current?.click()}>
               Import from file…
             </button>

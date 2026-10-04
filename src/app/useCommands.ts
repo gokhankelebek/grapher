@@ -348,6 +348,7 @@ export function useCommands({ board, docState, session, refs, derived, notices, 
         board: kind,
         readOnly: shared?.viewOnly === true,
         shared: shared !== null,
+        ...(shared?.student ? { student: true } : {}),
         selectedId,
         curves: commandCurves,
         fields:

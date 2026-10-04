@@ -203,6 +203,11 @@ export interface CommandContext {
   readOnly: boolean
   /** A shared graph (view or edit) that is not in the documents yet. */
   shared: boolean
+  /**
+   * A student's view (a view-only link in reveal mode): only the commands in
+   * STUDENT_COMMANDS — looking, zooming, stepping through the answers.
+   */
+  student?: boolean
   selectedId: string | null
   curves: readonly CurveFacts[]
   fields: readonly TargetFacts[]
@@ -1518,6 +1523,26 @@ export function targetNoun(kind: TargetKind): string {
 }
 
 /**
+ * What a student's view offers (CommandContext.student): reading the board
+ * and checking answers one at a time. Not Reveal mode itself (off shows every
+ * answer), not presentation, exports, sharing or copies.
+ */
+export const STUDENT_COMMANDS: ReadonlySet<string> = new Set([
+  'help',
+  'palette',
+  'view-describe',
+  'view-colour-safe',
+  'view-theme',
+  'view-sidebar',
+  'view-reveal-next',
+  'view-reveal-back',
+  'view-zoom-fit',
+  'view-zoom-in',
+  'view-zoom-out',
+  'view-reset',
+])
+
+/**
  * Whether a command is on offer now, and how it would run.
  *
  * A targeted command runs on the SELECTED object when that object is of its
@@ -1527,6 +1552,7 @@ export function targetNoun(kind: TargetKind): string {
  * first.
  */
 export function availability(cmd: Command, ctx: CommandContext): Availability {
+  if (ctx.student && !STUDENT_COMMANDS.has(cmd.id)) return { state: 'hidden' }
   if (!cmd.when(ctx)) return { state: 'hidden' }
   if (!cmd.target) {
     const why = cmd.blocked?.(ctx) ?? null

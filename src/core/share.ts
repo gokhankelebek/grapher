@@ -22,7 +22,14 @@
 //        or a document so small that deflate would make it longer
 // The flags come BEFORE `doc` so that a link truncated by an email client
 // loses the end of the document (and is reported as damaged) rather than
-// silently dropping "view only".
+// silently dropping "view only". The full set, each optional:
+//
+//   view=1     read-only            reveal=1   answers hidden behind "?"
+//   note=1     show the teacher note in a view-only link (never with reveal)
+//   q=<text>   "Question for students", one line, percent-encoded
+//
+// A view-only link that does not show the note does not CARRY it either
+// (shareDocJson). Links made before note / q existed open exactly as before.
 //
 // Pure apart from the optional Compression/DecompressionStream, which are
 // passed in (or picked up from globalThis) so node tests can run both paths.
@@ -51,9 +58,97 @@ export interface ShareFlags {
   view: boolean
   /** Open in reveal mode: the answers hidden behind "?" marks. */
   reveal: boolean
+  /**
+   * A view-only link shows the teacher note only when the teacher asked for
+   * it ("Include teacher note"). Absent: not asked. Never shown to a student
+   * in reveal mode (studentView), whatever this says — a note holds answers.
+   */
+  note?: boolean
+  /**
+   * "Question for students": one line the student view shows as a banner.
+   * It lives in the link only — never in the document. Absent: none.
+   */
+  question?: string
 }
 
 export const NO_FLAGS: Readonly<ShareFlags> = { view: false, reveal: false }
+
+/** The longest question a link carries; the dialog's field stops there too. */
+export const QUESTION_MAX = 200
+
+/**
+ * A question as a link carries it: one line, no control characters, runs of
+ * white space as one space, at most QUESTION_MAX characters. '' for nothing.
+ */
+export function cleanQuestion(text: unknown): string {
+  if (typeof text !== 'string') return ''
+  // eslint-disable-next-line no-control-regex
+  const one = text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').replace(/\s+/g, ' ').trim()
+  return Array.from(one).slice(0, QUESTION_MAX).join('').trim()
+}
+
+/**
+ * The person opening a view-only link in reveal mode is a STUDENT: the
+ * teacher note, the teacher's tools and the reveal-everything buttons are
+ * not theirs. Old links (view=1&reveal=1) open this way too.
+ */
+export function isStudentView(flags: Pick<ShareFlags, 'view' | 'reveal'>): boolean {
+  return flags.view && flags.reveal
+}
+
+/**
+ * Whether a link's teacher note is shown. An editable link is a teacher
+ * handing a board to a teacher: the note travels. A view-only link is for
+ * students: the note is hidden unless the teacher ticked "Include teacher
+ * note" — and never in reveal mode.
+ */
+export function shareShowsNote(flags: ShareFlags): boolean {
+  if (!flags.view) return true
+  return flags.note === true && !flags.reveal
+}
+
+/** How the opened link presents itself: what the App's shared state records. */
+export interface ShareView {
+  viewOnly: boolean
+  /** A student (isStudentView): no teacher tools, no reveal-everything buttons. */
+  student?: true
+  /** The teacher note stays off the sidebar (shareShowsNote is false). */
+  noteHidden?: true
+  /** The banner's question. */
+  question?: string
+}
+
+/** What a link's flags mean for the person who opens it. */
+export function shareViewOf(flags: ShareFlags): ShareView {
+  const q = cleanQuestion(flags.question)
+  return {
+    viewOnly: flags.view,
+    ...(isStudentView(flags) ? { student: true as const } : {}),
+    ...(shareShowsNote(flags) ? {} : { noteHidden: true as const }),
+    ...(q ? { question: q } : {}),
+  }
+}
+
+/**
+ * The document as a link carries it: without its teacher note when the link
+ * would not show it, so the note is not in the link at all (a student who
+ * decodes the fragment finds no answers in it). Anything that is not a
+ * document's JSON is passed through untouched — the link reports it as it
+ * always did.
+ */
+export function shareDocJson(json: string, flags: ShareFlags): string {
+  if (shareShowsNote(flags)) return json
+  let doc: unknown
+  try {
+    doc = JSON.parse(json)
+  } catch {
+    return json
+  }
+  const board = (doc as { board?: unknown } | null)?.board
+  if (!board || typeof board !== 'object' || !('note' in board)) return json
+  const { note: _gone, ...rest } = board as Record<string, unknown>
+  return JSON.stringify({ ...(doc as Record<string, unknown>), board: rest })
+}
 
 export type ShareCodec = 'z' | 'p'
 
@@ -224,6 +319,9 @@ export function shareFragment(payload: string, flags: ShareFlags = NO_FLAGS): st
   const parts: string[] = []
   if (flags.view) parts.push('view=1')
   if (flags.reveal) parts.push('reveal=1')
+  if (flags.note) parts.push('note=1')
+  const q = cleanQuestion(flags.question)
+  if (q) parts.push(`q=${encodeURIComponent(q)}`)
   parts.push(`${SHARE_KEY}=${payload}`)
   return '#' + parts.join('&')
 }
@@ -241,7 +339,7 @@ export async function buildShareLink(
   flags: ShareFlags,
   codecs: StreamCodecs = defaultCodecs(),
 ): Promise<{ url: string; codec: ShareCodec; length: number }> {
-  const { payload, codec } = await encodeSharePayload(json, codecs)
+  const { payload, codec } = await encodeSharePayload(shareDocJson(json, flags), codecs)
   const url = shareUrl(base, shareFragment(payload, flags))
   return { url, codec, length: url.length }
 }
@@ -292,11 +390,13 @@ export function parseShareHash(hash: string): ParsedShare {
   // URLSearchParams turns '+' into ' '; base64url never has either, but a
   // standard-base64 link would. Put them back before decoding.
   const payload = (params.get(SHARE_KEY) ?? '').replace(/ /g, '+').trim()
-  return {
-    kind: 'share',
-    payload,
-    flags: { view: truthy(params.get('view')), reveal: truthy(params.get('reveal')) },
-  }
+  // An old link has neither `note` nor `q`: its flags are exactly the two it
+  // always had.
+  const question = cleanQuestion(params.get('q'))
+  const flags: ShareFlags = { view: truthy(params.get('view')), reveal: truthy(params.get('reveal')) }
+  if (truthy(params.get('note'))) flags.note = true
+  if (question) flags.question = question
+  return { kind: 'share', payload, flags }
 }
 
 export type DecodedShare = { ok: true; json: string } | { ok: false; error: string }

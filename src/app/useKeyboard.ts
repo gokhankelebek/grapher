@@ -79,12 +79,18 @@ export function useKeyboard({ board, docState, session, refs, history, editing, 
       // ← / PageUp (back), which is what a presentation clicker sends. See
       // revealKeyAction for why these keys and not others.
       const ra = revealKeyAction(e, revealRef.current.on)
+      // A student (view-only link in reveal mode) steps; R would turn reveal
+      // mode off and put every answer up, so it does nothing for them.
+      const student = sharedRef.current?.student === true
       if (ra) {
         e.preventDefault()
-        if (ra === 'toggle') toggleReveal()
-        else revealStep(ra)
+        if (ra === 'toggle') {
+          if (!student) toggleReveal()
+        } else revealStep(ra)
         return
       }
+      // …and the teacher's own keys: Analysis (A) and Present (F).
+      if (student && !meta && !e.altKey && (key === 'a' || key === 'f')) return
       // View only: the keys that change the board do nothing. Looking keys
       // (reveal, present, analysis, the sidebar) still work.
       if (

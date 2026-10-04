@@ -31,6 +31,7 @@ import type {
   RateKind,
 } from './expLinks'
 import { evalText } from './factorLinks'
+import { RevealPill, useFamilyMask } from './RevealAnswer'
 
 // ============================================================================
 // src/ui/ExpEditor.tsx — an exponential function, stated the precalculus way.
@@ -165,7 +166,17 @@ export function ExpFacts({
   features: string[]
   testPrefix?: string
 }) {
+  // On a card in reveal mode these are answers worked out from the typed
+  // numbers (an asymptote, a range, a period): one pill stands for them.
+  const mask = useFamilyMask()
   if (sentences.length === 0 && features.length === 0) return null
+  if (mask.hidden && mask.key) {
+    return (
+      <div className="xe-facts reveal-pill-row" data-testid={`${testPrefix}-facts-hidden`}>
+        <RevealPill k={mask.key} what="what these numbers give" />
+      </div>
+    )
+  }
   return (
     <div className="xe-facts">
       {sentences.length > 0 && (

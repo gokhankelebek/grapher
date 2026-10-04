@@ -49,6 +49,7 @@ import { measureAnswerParts } from '../ui/shapeMeasure'
 import { shapeKey } from '../ui/reveal'
 import { residualPlotReg } from '../ui/dataLinks'
 import { residFigId } from '../ui/residualLinks'
+import { familyKeyOf } from '../ui/familyFacts'
 
 /** What useRevealMode reads from the hooks App calls before it. */
 export interface RevealModeDeps {
@@ -70,7 +71,7 @@ export function useRevealMode({ board, docState, session, derived, editing, syst
     curves, kind, items, selectedId, calcLinks, fields, sequences, unitCircles, relatedRates, stats, shapes,
     dataSets, valueTables, circleViews,
   } = board
-  const { exprSources } = docState
+  const { exprSources, brokenExpr } = docState
   const shapeCompiled = shapesApi?.shapeCompiled
   const { docMeta } = docState
   const { reveal, setReveal, revealRef, revealByDocRef, revealFreshRef } = session
@@ -102,6 +103,11 @@ export function useRevealMode({ board, docState, session, derived, editing, syst
       })
     }
     const shown = curves.filter((c) => c.visible)
+    const familyKeysOf = (c: (typeof curves)[number]): string[] => {
+      if (brokenExpr[c.id] !== undefined) return []
+      const k = familyKeyOf(c, exprSources[c.id], models, depKeys[c.id])
+      return k ? [k] : []
+    }
     const after: string[] = []
     for (const q of sequences) if (q.series && q.visible) after.push(seriesKey(q.id))
     for (const f of fields) if (f.eulers && f.eulers.length > 0) after.push(eulerKey(f.id))
@@ -147,9 +153,15 @@ export function useRevealMode({ board, docState, session, derived, editing, syst
           // The Table section's answers, for a table the teacher set up.
           // …and a circle's Circle theorems (and its completed square).
           // …and a polynomial's Zeros over ℂ.
+          // …and a typed line's family facts (the Transformation section's
+          // images, vertex and features), first: they come from the numbers typed.
           extra: c.kind === 'explicit'
-            ? [...complexKeysOf(c, models), ...tableKeysOf(c.id, valueTables[c.id], curveIds)]
-            : circleKeysOf(c, exprSources[c.id], circleViews[c.id]),
+            ? [
+                ...familyKeysOf(c),
+                ...complexKeysOf(c, models),
+                ...tableKeysOf(c.id, valueTables[c.id], curveIds),
+              ]
+            : [...familyKeysOf(c), ...circleKeysOf(c, exprSources[c.id], circleViews[c.id])],
         }
       }),
       crossings,
@@ -158,7 +170,7 @@ export function useRevealMode({ board, docState, session, derived, editing, syst
     })
     // depKeys: a curve that calls another moves when it does.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reveal.on, kind, items, curves, selectedId, models, analysis, analysisFor, domainPanel, calcLinks, crossings, sequences, fields, unitCircles, relatedRates, stats, sysCard, depKeys, shapes, shapeCompiled, dataSets, valueTables, circleViews, exprSources, coincidences, boardOverlays])
+  }, [reveal.on, kind, items, curves, selectedId, models, analysis, analysisFor, domainPanel, calcLinks, crossings, sequences, fields, unitCircles, relatedRates, stats, sysCard, depKeys, shapes, shapeCompiled, dataSets, valueTables, circleViews, exprSources, brokenExpr, coincidences, boardOverlays])
   const revealInvRef = useRef(revealInv)
   revealInvRef.current = revealInv
 
@@ -279,7 +291,7 @@ export function useRevealMode({ board, docState, session, derived, editing, syst
 
   return {
     revealKey, revealStep, toggleReveal, sceneReveal, sceneRevealRef, contextShown, revealApi,
-    revealControls,
+    revealControls, revealInv,
   }
 }
 

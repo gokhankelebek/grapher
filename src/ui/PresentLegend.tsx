@@ -1,7 +1,12 @@
-import type { CSSProperties } from 'react'
+import { useEffect, useRef } from 'react'
+import type { CSSProperties, MutableRefObject } from 'react'
 import { Latex } from './Latex'
 import type { LegendEntry } from './present'
+import { legendNudge, xLabelBand } from './present'
 import { useInk } from './inkContext'
+import type { Viewport } from '../core/types'
+import { ppuX, ppuY, toScreen } from '../core/types'
+import { LABEL_PX } from '../render/grid'
 
 interface Props {
   entries: readonly LegendEntry[]
@@ -15,6 +20,14 @@ interface Props {
   /** Which corner it sits in. The plot usually leaves one of them free. */
   corner: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
   onCycleCorner(): void
+  /**
+   * The graph board's view. Given, the legend keeps off the x axis's tick
+   * numbers: in a bottom corner it steps up above them (or below them, when
+   * there is no room above), wherever a pan or zoom has put the axis.
+   */
+  vpRef?: MutableRefObject<Viewport>
+  /** A sign chart's band under the board, which the numbers sit above (px). */
+  bottomInset?: number
 }
 
 /**
@@ -30,11 +43,48 @@ interface Props {
  * It is the whole reason presentation mode can hide the sidebar. Without it,
  * hiding the cards leaves four anonymous coloured lines.
  */
-export function PresentLegend({ entries, type, corner, onCycleCorner }: Props) {
+export function PresentLegend({ entries, type, corner, onCycleCorner, vpRef, bottomInset = 0 }: Props) {
   const ink = useInk()
-  if (entries.length === 0) return null
+  const ref = useRef<HTMLDivElement>(null)
+  const shiftRef = useRef(0)
+  const empty = entries.length === 0
+  // Followed every frame, but only recomputed when something it reads moved:
+  // the board pans without re-rendering the App, so a render-time check
+  // would leave the legend on the numbers after a drag.
+  useEffect(() => {
+    if (!vpRef || empty) return
+    // What is applied now (a remounted legend starts unmoved).
+    shiftRef.current = Number(ref.current?.dataset.nudge || 0)
+    let raf = 0
+    let last = ''
+    const tick = (): void => {
+      raf = requestAnimationFrame(tick)
+      const el = ref.current
+      const canvas = document.getElementById('board-canvas')
+      if (!el || !canvas) return
+      const vp = vpRef.current
+      const c = canvas.getBoundingClientRect()
+      const r = el.getBoundingClientRect()
+      const sig = `${vp.center.x}|${vp.center.y}|${ppuX(vp)}|${ppuY(vp)}|${vp.heightPx}|${c.top}|${r.height}|${corner}|${type}|${bottomInset}`
+      if (sig === last) return
+      last = sig
+      const axisY = toScreen({ x: 0, y: 0 }, vp).y
+      const band = xLabelBand(axisY, vp.heightPx, type, LABEL_PX, bottomInset)
+      const at = r.top - c.top - shiftRef.current
+      const dy = Math.round(legendNudge(corner, { top: at, bottom: at + r.height }, band, vp.heightPx))
+      if (dy !== shiftRef.current) {
+        shiftRef.current = dy
+        el.style.transform = dy !== 0 ? `translateY(${dy}px)` : ''
+        el.dataset.nudge = String(dy)
+      }
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [vpRef, empty, corner, type, bottomInset])
+  if (empty) return null
   return (
     <div
+      ref={ref}
       className={`present-legend present-legend-${corner}`}
       data-testid="present-legend"
       data-legend-px={Math.round(13 * type)}

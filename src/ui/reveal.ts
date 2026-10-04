@@ -22,6 +22,15 @@
 //   curve:<id>:domain  …range, onetoone, inverse: the Domain rows
 //   curve:<id>:complex           a polynomial's Zeros over ℂ (count, zeros,
 //                                discriminant)
+//   curve:<id>:family            what a typed curve's family sections work
+//                                out from a, b, h, k: the Transformation
+//                                section's image points (the table's image
+//                                column and the marks on the board) and its
+//                                features (vertex, asymptotes, domain, range),
+//                                and the facts lists of the Exponential,
+//                                Logarithmic, Sinusoidal and Logistic sections
+//                                beside it. The steps ("shift up 1") restate
+//                                what was typed, so they always show.
 //   cross:<a>:<b>:<i>            the i-th crossing of a and b (ids sorted), by x
 //   cross:<a>:<b>:same           where a and b coincide (the same function)
 //   calc:<linkId>:value          every value one calculus tool states
@@ -109,6 +118,11 @@ export const coincideKey = (a: string, b: string): string => {
   const [x, y] = a <= b ? [a, b] : [b, a]
   return `cross:${x}:${y}:same`
 }
+/**
+ * A typed curve's family facts (see the header): one answer per curve, there
+ * when the line reads back as a transformed parent (familyKeyOf).
+ */
+export const familyKey = (curveId: string): string => `curve:${curveId}:family`
 /** A polynomial's Zeros over ℂ: the count, the zeros and the discriminant, revealed together. */
 export const complexKey = (curveId: string): string => `curve:${curveId}:complex`
 /** The parts of a circle's Circle theorems section that are answers. */
@@ -218,6 +232,8 @@ export interface RevealInventory {
   answerKey(curveId: string, p: SpecialPoint): string | null
   /** The key of a crossing of a and b at this point. */
   crossKey(a: string, b: string, p: SpecialPoint): string
+  /** The point behind a point or crossing key in `order`, or null (presentation's answer list says it). */
+  pointOf(key: string): SpecialPoint | null
 }
 
 /** Teaching rank of a point kind within one curve. */
@@ -238,6 +254,7 @@ export function buildInventory(src: RevealSource): RevealInventory {
   const pointKeys = new Map<string, string>()
   const fallback = new Map<string, readonly SpecialPoint[]>()
   const calc: string[] = []
+  const pointByKey = new Map<string, SpecialPoint>()
 
   for (const c of src.curves) {
     const keys = curvePointKeys(c.id, c.points)
@@ -247,6 +264,7 @@ export function buildInventory(src: RevealSource): RevealInventory {
       .sort((a, b) => a.rank - b.rank || byXY(a.p, b.p))
     for (const r of ranked) {
       pointKeys.set(`${c.id}|${sig(r.p.kind, r.p.pos)}`, r.key)
+      pointByKey.set(r.key, r.p)
       order.push(r.key)
     }
     for (let i = 0; i < (c.asymptotes ?? 0); i++) order.push(asymKey(c.id, i))
@@ -266,6 +284,7 @@ export function buildInventory(src: RevealSource): RevealInventory {
   for (const { c, key } of crossOrder) {
     const [a, b] = crossPair(c.curveId, c.point.withId ?? '')
     crossMap.set(`${a}|${b}|${c.point.pos.x}|${c.point.pos.y}`, key)
+    pointByKey.set(key, c.point)
     order.push(key)
   }
 
@@ -297,6 +316,9 @@ export function buildInventory(src: RevealSource): RevealInventory {
     crossKey(a, b, p) {
       const [x, y] = crossPair(a, b)
       return crossMap.get(`${x}|${y}|${p.pos.x}|${p.pos.y}`) ?? `cross:${x}:${y}:${p.pos.x.toFixed(6)}`
+    },
+    pointOf(key) {
+      return pointByKey.get(key) ?? null
     },
   }
 }

@@ -25,6 +25,11 @@ interface Props {
   /** ⋯ → Colour-blind-safe curve colours (a preference). */
   curvePalette?: 'standard' | 'safe'
   onCurvePalette?(next: 'standard' | 'safe'): void
+  /**
+   * A student's view (a view-only share link in reveal mode): no Analysis
+   * switch and no Undo / Redo — the teacher set the board up for them.
+   */
+  student?: boolean
 }
 
 /**
@@ -137,9 +142,10 @@ export function Toolbar({
   onDescribe,
   curvePalette,
   onCurvePalette,
+  student = false,
 }: Props) {
   return (
-    <div className="toolbar">
+    <div className={`toolbar${student ? ' toolbar-student' : ''}`} data-student={student ? 'true' : undefined}>
       <button
         className="tb-btn tb-icon"
         onClick={onToggleSidebar}
@@ -166,6 +172,7 @@ export function Toolbar({
 
       <div className="tb-sep" />
 
+      {!student && (
       <button
         className={`tb-btn tb-toggle${showAnalysis ? ' tb-toggle-on' : ''}`}
         onClick={onToggleAnalysis}
@@ -184,6 +191,7 @@ export function Toolbar({
         </svg>
         Analysis
       </button>
+      )}
 
       <button
         className="tb-btn tb-icon"
@@ -216,18 +224,25 @@ export function Toolbar({
         )}
       </button>
 
-      <div className="tb-sep" />
+      {!student && (
+        <>
+          <div className="tb-sep" />
 
-      <button className="tb-btn" onClick={onUndo} disabled={!canUndo} title="Undo (⌘Z)">
-        Undo
-      </button>
-      <button className="tb-btn" onClick={onRedo} disabled={!canRedo} title="Redo (⇧⌘Z)">
-        Redo
-      </button>
+          <button className="tb-btn" onClick={onUndo} disabled={!canUndo} title="Undo (⌘Z)">
+            Undo
+          </button>
+          <button className="tb-btn" onClick={onRedo} disabled={!canRedo} title="Redo (⇧⌘Z)">
+            Redo
+          </button>
+        </>
+      )}
 
-      <div className="tb-sep" />
-
-      {exportMenu}
+      {exportMenu && (
+        <>
+          <div className="tb-sep" />
+          {exportMenu}
+        </>
+      )}
 
       {(onDescribe || onCurvePalette) && (
         <MoreMenu onDescribe={onDescribe} curvePalette={curvePalette} onCurvePalette={onCurvePalette} onHelp={onHelp} />
