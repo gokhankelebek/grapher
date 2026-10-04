@@ -43,6 +43,11 @@ export interface BuildFocusValue {
   onTypeLine?(seed: string): void
   /** Switch to the number line and open its inequality box. */
   onSolveInequality?(): void
+  /**
+   * "Riemann sum from a table": a data table with "Calculus on this table"
+   * open and the Σ sum on (the table-riemann command; useCommands openTableCalc).
+   */
+  onTableRiemann?(): void
 }
 
 export const BuildFocus = createContext<BuildFocusValue>({})
@@ -285,6 +290,8 @@ export function buildRows(p: Props, focus: BuildFocusValue = {}): BuildRow[] {
   // ---- Calculus
   add('calculus', 'build-slope-field', 'Slope field (dy/dx = …)', seed('dy/dx = '), undefined,
     'Type dy/dx = … and get its slope field; tap to draw solutions')
+  add('calculus', 'build-table-riemann', 'Riemann sum from a table', focus.onTableRiemann, undefined,
+    'A data table with its Σ sum on: type or paste the rows (unequal widths are fine) for L, R, M or T written out term by term')
   add('calculus', 'build-logistic', 'Logistic', p.onLogisticToggle, p.logisticOpen ?? false)
   add('calculus', 'build-related-rates', 'Related rates', p.onRelatedRatesAdd, undefined,
     'Related rates: a sliding ladder, a cone tank, a shadow, a ripple or a balloon — animated in time, with the relation, its derivative and the live rates')

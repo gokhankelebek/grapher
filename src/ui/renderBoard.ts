@@ -84,6 +84,7 @@ import { drawSolveFigure } from '../render/nlSolve'
 import { solveBlocks } from './nlSolve'
 import type { NLPart } from '../render/numberline'
 import { pointText } from './numeric'
+import { curveScale, curveXScale } from './curveState'
 import type { RevealMark, RevealPulse } from './reveal'
 import { nlToScreenX, numberLineAxisY } from '../render/numberline'
 import { readSinusoid } from '../core/sinusoidal'
@@ -710,10 +711,85 @@ export function answerTokens(points: readonly SpecialPoint[]): string[] {
   return out
 }
 
-function labelFor(p: SpecialPoint): string {
-  const text = pointText(p, { decimal: false })
+function labelFor(p: SpecialPoint, at?: BoardLabelScale): string {
+  const text = at ? boardPointText(p, at) : pointText(p, { decimal: false })
   if (p.kind === 'zero') return `${text}${p.tangent ? ' (touches)' : ''}`
   return text
+}
+
+/**
+ * The scales a chip's coordinates are rounded at (formatCoord's `scale` for
+ * y, `xScale` for x): the CARD's — the curve's own extent (curveScale /
+ * curveXScale), absent for a chip with no curve — and the BOARD's, the
+ * window's span on each axis.
+ */
+export interface BoardLabelScale {
+  scale?: number
+  xScale?: number
+  viewScale: number
+  viewXScale: number
+}
+
+/** The window's span on each axis. Pure. */
+export function viewSpans(vp: Viewport): { viewScale: number; viewXScale: number } {
+  const x = vp.widthPx / ppuX(vp)
+  const y = vp.heightPx / ppuY(vp)
+  return { viewXScale: Number.isFinite(x) && x > 0 ? x : 1, viewScale: Number.isFinite(y) && y > 0 ? y : 1 }
+}
+
+/** A curve's card scales, once per curve object (they are replaced, never mutated). */
+const CARD_SCALES = new WeakMap<FittedCurve, { spec: ModelSpec | undefined; scale?: number; xScale?: number }>()
+
+function cardScales(curve: FittedCurve, models: Record<string, ModelSpec>): { scale?: number; xScale?: number } {
+  const spec = models[curve.modelId]
+  const hit = CARD_SCALES.get(curve)
+  if (hit && hit.spec === spec) return hit
+  let scale: number | undefined
+  let xScale: number | undefined
+  try {
+    scale = curveScale(curve, spec)
+    xScale = curveXScale(curve, spec)
+  } catch {
+    /* no extent to measure: the board's scale alone */
+  }
+  const v = { spec, scale, xScale }
+  CARD_SCALES.set(curve, v)
+  return v
+}
+
+/** The scales for a chip of `curve` (or of no one curve) on this view. */
+export function boardLabelScale(
+  vp: Viewport,
+  curve?: FittedCurve | null,
+  models?: Record<string, ModelSpec>,
+): BoardLabelScale {
+  const card = curve && models ? cardScales(curve, models) : {}
+  return { ...card, ...viewSpans(vp) }
+}
+
+/** An exponent in a formatted coordinate: "−2.32e−4", "5.09e-4". */
+const E_NOTATION = /\de[-+\u2212]?\d/
+
+/**
+ * A point's chip text, as the board prints it.
+ *
+ * It rounds exactly as the card's row does (formatCoord with the curve's
+ * scale), so the plate and the card can never disagree: a sketched vertex at
+ * x = −0.000232 is "(0, −3.958)" in both. And the board never prints
+ * e-notation for a value that is tiny against the WINDOW: where the card's
+ * rounding would write "8.50e−4" on a board 17 units wide, the plate rounds at
+ * the window's span instead and says 0 — what the eye sees there. A real
+ * small value keeps its digits once the view is zoomed in to its size. Never
+ * a zero-snap of the point itself: display only. Pure.
+ */
+export function boardPointText(p: SpecialPoint, at: BoardLabelScale): string {
+  const card = pointText(p, { decimal: false, scale: at.scale, xScale: at.xScale })
+  if (!E_NOTATION.test(card)) return card
+  return pointText(p, {
+    decimal: false,
+    scale: Math.max(at.scale ?? 0, at.viewScale),
+    xScale: Math.max(at.xScale ?? 0, at.viewXScale),
+  })
 }
 
 function roundRect(
@@ -963,6 +1039,8 @@ function labelNormal(
 interface LabelBox { x: number; y: number; w: number; h: number }
 
 interface AnalysisOpts {
+  /** The scales the chips round at (boardLabelScale); absent: the window's alone. */
+  labelScale?: BoardLabelScale
   color: string
   theme: Theme
   /** Empty for export: with no handles on the board, nothing masks a marker. */
@@ -1115,6 +1193,7 @@ export function drawAnalysis(
   ctx.textBaseline = 'middle'
   const placed: LabelBox[] = o.reserve ?? []
   const anchors: number[] = []
+  const labelScale = o.labelScale ?? boardLabelScale(vp)
   const text0 = textColor(o.theme)
 
   const ranked = shown.slice().sort((a, b) => {
@@ -1140,7 +1219,7 @@ export function drawAnalysis(
       if (!emph(m.i) && anchors.some((a) => Math.abs(a - m.sx) < gap)) continue
     }
 
-    const text = labelFor(m.p)
+    const text = labelFor(m.p, labelScale)
     const w = ctx.measureText(text).width + 10 * ctype
     // A masked point has a handle standing on it, which is bigger than any
     // marker: step off from the handle's radius so the plate clears it too.
@@ -1342,7 +1421,7 @@ export function drawIntersections(
     // The string that is actually drawn, exact form and all: a plate measured
     // on "(1.414, 2.000)" and printed with "(√2, 2)" is a box of the wrong
     // width, and the crowding test it feeds is then wrong too.
-    const text = pointText(m.p, { decimal: false })
+    const text = boardPointText(m.p, boardLabelScale(vp))
     const w = ctx.measureText(text).width + 10 * ctype
     // Straight up off the crossing. There are two tangents here and no reason
     // to prefer either, so the plate takes the direction that reads as a
@@ -2692,6 +2771,7 @@ export function renderBoard(ctx: CanvasRenderingContext2D, sceneIn: BoardScene):
   if (an && an.points.length > 0 && an.curve.visible) {
     try {
       drawAnalysis(ctx, vp, an.points, {
+        labelScale: boardLabelScale(vp, an.curve, models),
         key,
         reserve: plates,
         color: ink(an.curve.color),
@@ -2718,6 +2798,7 @@ export function renderBoard(ctx: CanvasRenderingContext2D, sceneIn: BoardScene):
       if (!m.curve.visible || m.points.length === 0) continue
       try {
         drawAnalysis(ctx, vp, m.points, {
+          labelScale: boardLabelScale(vp, m.curve, models),
           key,
           reserve: plates,
           color: ink(m.curve.color),

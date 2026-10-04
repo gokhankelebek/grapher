@@ -32,7 +32,7 @@ import {
   oversketch,
   nearestOnCurve,
 } from '../core/fit/edit'
-import { REVEAL_MARK_R, handleHitRadius, hasMarkerGlyph, renderBoard, revealMarkPx } from './renderBoard'
+import { REVEAL_MARK_R, boardLabelScale, handleHitRadius, hasMarkerGlyph, renderBoard, revealMarkPx } from './renderBoard'
 import type { RevealMark, SceneReveal } from './reveal'
 import { applyReveal, markAt } from './reveal'
 import type {
@@ -1588,7 +1588,9 @@ export const CanvasStage = forwardRef<CanvasStageHandle, Props>(function CanvasS
   }, [])
 
   const sayHandle = useCallback((h: CurveHandle, moved: boolean): void => {
-    const at = `(${formatCoord(h.pos.x)}, ${formatCoord(h.pos.y)})`
+    // Rounded at the board's scale, as the chips are (renderBoard boardLabelScale).
+    const sc = boardLabelScale(vpRef.current)
+    const at = `(${formatCoord(h.pos.x, { scale: sc.viewXScale })}, ${formatCoord(h.pos.y, { scale: sc.viewScale })})`
     setKbSay(
       moved
         ? `${handleWords(h.label, h.id)} at ${at}`

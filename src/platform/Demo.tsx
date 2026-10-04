@@ -1,15 +1,16 @@
 // ============================================================================
 // The hero demo: four REAL frames from the running app, cross-faded.
 //
-// Captured from the app itself (scripted in a headless browser): a wobbly
-// stroke drawn with the mouse, the parabola it snapped to with its zeros
-// labelled, the card after typing exact coefficients, and the PNG the app's
-// Download button wrote in the Textbook figure style (shown on a backdrop).
-// Nothing here is a mock-up.
+// Captured from the current build (scripted in a headless browser, a clean
+// profile): a wobbly stroke drawn with the mouse; the parabola it snapped to,
+// its card offering "Tidy to y = x² − 4"; the card one click later — y = x² − 4,
+// zeros −2 and 2, minimum (0, −4); and the PNG the app's Download button wrote
+// in the Textbook figure style (shown on a backdrop). Nothing here is a
+// mock-up.
 //
 // Motion: auto-advances, with a pause button (WCAG 2.2.2). Under
-// prefers-reduced-motion it never moves on its own and opens on the card
-// frame; the step buttons still show every frame. Images load one ahead of
+// prefers-reduced-motion it never moves on its own and opens on the tidied
+// card; the step buttons still show every frame. Images load one ahead of
 // the frame on screen, so a reader who never watches pays for one or two.
 // ============================================================================
 
@@ -38,15 +39,15 @@ const FRAMES: readonly Frame[] = [
   {
     src: snap,
     step: 'Snap',
-    caption: 'It snaps to a parabola and labels the zeros.',
-    alt: 'The stroke has become a smooth parabola. Its zeros are labeled −1.997 and 1.995 on the axis, and a card shows y = 0.99626x² + 0.00268x − 3.9693.',
-    ms: 2800,
+    caption: 'It snaps to a parabola, and the card offers the equation you meant.',
+    alt: 'The stroke has become a smooth parabola with its zeros −1.993 and 1.993 and vertex (0, −3.983) labeled. The card reads y = 1.003x² − 3.9832 with a button “Tidy to y = x² − 4”.',
+    ms: 3000,
   },
   {
     src: card,
-    step: 'Analyze',
-    caption: 'Type exact values. The card gives zeros, minimum, domain and range.',
-    alt: 'After typing a = 1, b = 0, c = −4 the card reads y = x² − 4, with zeros −2 and 2, minimum (0, −4), range and a one-to-one check.',
+    step: 'Tidy',
+    caption: 'One click on “Tidy to y = x² − 4”: exact zeros, minimum, domain and range.',
+    alt: 'After one click the card reads y = x² − 4, with zeros −2 and 2, minimum (0, −4), range [−4, ∞) and a one-to-one check; the board labels −2, 2 and (0, −4).',
     ms: 3400,
   },
   {
@@ -58,7 +59,7 @@ const FRAMES: readonly Frame[] = [
   },
 ]
 
-/** The frame a reduced-motion reader sees first: the card, the most telling still. */
+/** The frame a reduced-motion reader sees first: the tidied card, the most telling still. */
 const STILL = 2
 
 function prefersReducedMotion(): boolean {

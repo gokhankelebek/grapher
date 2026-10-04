@@ -10,6 +10,7 @@
 // memo and effect on the board, so a new hook goes where its inputs exist.
 // ============================================================================
 
+import { docListName } from '../ui/docName'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { MODELS } from '../core/fit/models'
 import {
@@ -489,7 +490,7 @@ export function useDocumentPersistence({ board, docState, session, refs, derived
       // except in reveal mode, whose bar sits where the toast would.
       if (!outcome.flags.reveal) showToast(
         outcome.flags.view
-          ? `Opened “${outcome.meta.name}” from a share link — view only. Make a copy to keep it.`
+          ? `Opened “${docListName(outcome.meta.name)}” from a share link — view only. Make a copy to keep it.`
           : `Opened “${outcome.meta.name}” from a share link. It isn’t in your documents until you make a copy.`,
         { ms: 5000 },
       )

@@ -21,7 +21,8 @@ import { listWorksheets, readDocJSON, readExportSettings, removeWorksheet, write
 import type { ExampleCourse } from '../examples/catalog'
 import type { DocModel } from './docScene'
 import { docFigure, docModelFromJSON, recordFigure } from './docScene'
-import { buildSheet, itemStyle, pageSvg, sheetLatex } from './worksheetExport'
+import { buildSheet, includeTable, itemStyle, pageSvg, sheetFileName, sheetLatex } from './worksheetExport'
+import { relyOnTable } from './docAnswers'
 import { toPdfPages } from '../render/vectorPdf'
 import { replayList } from '../render/vectorPage'
 import { itemLabel } from './worksheetLayout'
@@ -55,8 +56,6 @@ const STYLE_LABELS: Record<FigureStyleId, string> = {
   ap: 'AP Calculus',
 }
 const STYLES: FigureStyleId[] = ['textbook', 'sat', 'ap', 'screen']
-
-const safeName = (s: string): string => s.replace(/[^\w\d\-. ]+/g, '_').trim() || 'worksheet'
 
 function download(data: BlobPart, mime: string, name: string): void {
   const url = URL.createObjectURL(new Blob([data], { type: mime }))
@@ -184,7 +183,7 @@ export function WorksheetEditor({ docs, screen: screenIn, onClose, toast, course
     try {
       const { pages } = buildSheet(sheet, lookup, answers)
       const bytes = toPdfPages(pages, { ptPerPx: 1, title: sheet.title || sheet.name })
-      download(bytes as BlobPart, 'application/pdf', `${safeName(sheet.name)}${answers ? ' - Key' : ' - Student'}.pdf`)
+      download(bytes as BlobPart, 'application/pdf', sheetFileName(sheet, answers, 'pdf'))
     } catch {
       toast('Couldn’t build the PDF.')
     }
@@ -210,7 +209,7 @@ export function WorksheetEditor({ docs, screen: screenIn, onClose, toast, course
   const downloadLatex = (): void => {
     const tex = latex()
     if (!tex) return toast('Couldn’t build the LaTeX.')
-    download(tex, 'application/x-tex', `${safeName(sheet.name)}.tex`)
+    download(tex, 'application/x-tex', sheetFileName(sheet, sheet.showAnswers === true, 'tex'))
   }
   const exportPng = (): void => {
     if (!built) return
@@ -224,7 +223,7 @@ export function WorksheetEditor({ docs, screen: screenIn, onClose, toast, course
       if (!ctx) return
       replayList(ctx, page, scale)
       canvas.toBlob((blob) => {
-        if (blob) download(blob, 'image/png', `${safeName(sheet.name)}${built.pages.length > 1 ? ` p${i + 1}` : ''}.png`)
+        if (blob) download(blob, 'image/png', sheetFileName(sheet, sheet.showAnswers === true, 'png', built.pages.length > 1 ? i + 1 : undefined))
       }, 'image/png')
     })
   }
@@ -354,7 +353,7 @@ export function WorksheetEditor({ docs, screen: screenIn, onClose, toast, course
           <button className="ws-btn ws-primary" disabled={sheet.items.length === 0} onClick={() => exportPdf(false)} title="Vector PDF without answers">
             Student PDF
           </button>
-          <button className="ws-btn ws-primary" disabled={sheet.items.length === 0} onClick={() => exportPdf(true)} title="Vector PDF with the analysis markers and labels">
+          <button className="ws-btn ws-primary" disabled={sheet.items.length === 0} onClick={() => exportPdf(true)} title="Vector PDF marked ANSWER KEY: the analysis markers and labels, and the worked answers under each figure">
             Key PDF
           </button>
           <button className="ws-btn" disabled={sheet.items.length === 0} onClick={copyLatex} title="Copy the sheet as a LaTeX snippet">
@@ -443,7 +442,7 @@ export function WorksheetEditor({ docs, screen: screenIn, onClose, toast, course
                   ))}
                 </select>
               </label>
-              <label className="ws-check ws-key" title="Show the analysis markers, their labels and the intersections on every figure">
+              <label className="ws-check ws-key" title="Preview, LaTeX and PNG as the answer key: the markers and labels on every figure, and the worked answers under it">
                 <input
                   type="checkbox"
                   checked={sheet.showAnswers === true}
@@ -559,6 +558,17 @@ export function WorksheetEditor({ docs, screen: screenIn, onClose, toast, course
                             ))}
                           </select>
                         </div>
+                        {relyOnTable(model) && (
+                          <label className="ws-check ws-table-check" title="Print the data table under the figure, on the student copy and the key">
+                            <input
+                              type="checkbox"
+                              checked={includeTable(it, model)}
+                              onChange={(e) => patchItem(i, { table: e.target.checked })}
+                              data-testid="ws-table"
+                            />
+                            Include data table
+                          </label>
+                        )}
                         {model && model.omitted.length > 0 && (
                           <div className="ws-note">Not included: {model.omitted.join(', ')}.</div>
                         )}

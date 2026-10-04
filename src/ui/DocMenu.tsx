@@ -226,7 +226,10 @@ export function DocMenu({
             setRenaming(true)
           }}
         >
-          {name}
+          {/* A shared graph opened from an example is named "Example: U6 — …";
+              a student need not be told it is a stock (searchable) example.
+              Display only: the stored name is untouched. */}
+          {shared ? docListName(name) : name}
         </button>
       )}
 

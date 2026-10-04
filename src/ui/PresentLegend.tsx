@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import type { CSSProperties, MutableRefObject } from 'react'
 import { Latex } from './Latex'
 import type { LegendEntry } from './present'
-import { legendNudge, xLabelBand } from './present'
+import { legendNudge, legendPx, xAxisBand } from './present'
 import { useInk } from './inkContext'
 import type { Viewport } from '../core/types'
 import { ppuX, ppuY, toScreen } from '../core/types'
@@ -69,7 +69,7 @@ export function PresentLegend({ entries, type, corner, onCycleCorner, vpRef, bot
       if (sig === last) return
       last = sig
       const axisY = toScreen({ x: 0, y: 0 }, vp).y
-      const band = xLabelBand(axisY, vp.heightPx, type, LABEL_PX, bottomInset)
+      const band = xAxisBand(axisY, vp.heightPx, type, LABEL_PX, bottomInset)
       const at = r.top - c.top - shiftRef.current
       const dy = Math.round(legendNudge(corner, { top: at, bottom: at + r.height }, band, vp.heightPx))
       if (dy !== shiftRef.current) {
@@ -87,8 +87,8 @@ export function PresentLegend({ entries, type, corner, onCycleCorner, vpRef, bot
       ref={ref}
       className={`present-legend present-legend-${corner}`}
       data-testid="present-legend"
-      data-legend-px={Math.round(13 * type)}
-      style={{ fontSize: `${Math.round(13 * type)}px` }}
+      data-legend-px={legendPx(type)}
+      style={{ fontSize: `${legendPx(type)}px` }}
       role="list"
       aria-label="Equations on this board"
     >

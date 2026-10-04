@@ -655,7 +655,9 @@ describe('answer key', () => {
     const ms = models()
     const lookup = (id: string): DocModel | null => ms.get(id) ?? null
     const s = buildSheet(sheetOf(), lookup, false).pages[0]
-    const k = buildSheet(sheetOf(), lookup, true).pages[0]
+    // The key prints its worked answers under each figure, so it may run to more pages.
+    const kPages = buildSheet(sheetOf(), lookup, true).pages
+    const k: DisplayList = { ...kPages[0], items: kPages.flatMap((p) => p.items) }
     expect(texts(s)).not.toContain('√3')
     expect(texts(k)).toContain('√3')
     // labels and captions are on both

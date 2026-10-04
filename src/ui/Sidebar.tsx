@@ -1,4 +1,5 @@
 import type { TablePanel } from './valueTableLinks'
+import { lockReadOnly } from './readOnlyLock'
 import type { TableActions } from './TableSection'
 import type { CirclePanel } from './circleLinks'
 import type { CircleActions } from './CircleSection'
@@ -78,6 +79,12 @@ interface Props {
   student?: boolean
   /** Shown at the very top of the sidebar: an opened example's teacher note. */
   topNote?: ReactNode
+  /**
+   * Close the sidebar. Shown as a × only where the sidebar is a drawer over
+   * the board (≤ 900 px, src/ui/drawer.ts); wider, the toolbar's toggle is
+   * beside it.
+   */
+  onClose?(): void
   /**
    * The open document's id. When it changes the list scrolls back to the top:
    * another document opened at the previous one's scroll position lands
@@ -434,6 +441,7 @@ export function Sidebar({
   readOnly = false,
   student = false,
   topNote = null,
+  onClose,
   docId,
   kind,
   onSetKind,
@@ -645,11 +653,15 @@ export function Sidebar({
   circleActions,
 }: Props) {
   const numberLine = kind === 'number-line'
-  // `inert` on a display:contents wrapper: everything inside stops taking
-  // clicks, focus and typing, while the list around it still scrolls.
+  // View only: the list is LOCKED rather than inert (src/ui/readOnlyLock.ts)
+  // — every edit is stopped before a card hears it, while a card can still
+  // be opened, a section unfolded and a "? Reveal" pressed. The controls that
+  // would do nothing are hidden by the stylesheet (`.sidebar-readonly`).
   const bodyRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
-    if (bodyRef.current) bodyRef.current.inert = readOnly
+    const el = bodyRef.current
+    if (!el || !readOnly) return
+    return lockReadOnly(el)
   }, [readOnly])
   // A closed sidebar is 0 px wide but its controls are still in the DOM: inert
   // keeps Tab and a screen reader out of what nobody can see.
@@ -672,6 +684,22 @@ export function Sidebar({
       aria-label={numberLine ? 'Solution set' : 'Curves and objects'}
     >
       <div className="sidebar-inner">
+        {onClose && (
+          <div className="sidebar-drawer-bar">
+            <button
+              type="button"
+              className="sidebar-drawer-close"
+              data-testid="sidebar-close"
+              aria-label="Close the sidebar"
+              title="Close the sidebar"
+              onClick={onClose}
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M3.5 3.5l9 9M12.5 3.5l-9 9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+              </svg>
+            </button>
+          </div>
+        )}
         {topNote}
         <div className="sidebar-head">
           {readOnly ? (

@@ -98,6 +98,9 @@ export interface CommandsDeps {
   focus?: CourseFocusApi
 }
 
+/** A table with no rows yet, for turnOn's starting settings. */
+const EMPTY_TABLE = { id: '', name: '', xLabel: 'x', yLabel: 'y', rows: [], color: '', visible: true, regressions: [] }
+
 export function useCommands({ board, docState, session, refs, derived, notices, history, docActions, editing, calc, fieldsApi, typed, tables, domain, numberLine, viewport, unitCircle, rates, overlaysApi, naming, revealMode, exporter, figureSettings, editors, examples, itemBank, describer, statsApi, shapesApi, circleViewsApi, focus }: CommandsDeps) {
   const {
     curves, kind, items, selectedId, setSelectedId, sidebarOpen, setSidebarOpen, lens, fields,
@@ -250,11 +253,19 @@ export function useCommands({ board, docState, session, refs, derived, notices, 
       }
       const target = dataSets.find((d) => d.id === selectedId) ?? dataSets[0]
       if (!target) {
-        // no table yet: a new one, and what to do first
+        // No table yet: a new one with the tool already on, its section
+        // open, and what to do first. (A tool that needs rows to start from —
+        // r′(c), IVT — is switched on once the table has them.)
         showBuilder(null, 'open')
-        addDataTable()
+        const startsOn = tool === 'sum' || tool === 'avg' || tool === 'mvt'
+        addDataTable(startsOn ? turnOn(EMPTY_TABLE, tool) : undefined)
         openSection()
-        showToast('Type or paste the table first (x increasing), then switch the tool on under “Calculus on this table”.', { ms: 5000 })
+        showToast(
+          startsOn
+            ? 'Type or paste the table (x increasing; unequal widths are fine) — the sum is written out as you go.'
+            : 'Type or paste the table first (x increasing), then switch the tool on under “Calculus on this table”.',
+          { ms: 5000 },
+        )
         return
       }
       if (!partOn(target.calc, tool)) setTableCalc(target.id, turnOn(target, tool), `table ${tool}`)
@@ -499,6 +510,8 @@ export function useCommands({ board, docState, session, refs, derived, notices, 
 
   return {
     mac, commandCtx, runCommand, doFromHelp,
+    /** The table-riemann command's action, outside the palette (Build → Calculus). */
+    tableRiemann: (): void => commandActions.openTableCalc?.('sum'),
   }
 }
 

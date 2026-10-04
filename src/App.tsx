@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import type { CSSProperties } from 'react'
 import { inkMapper } from './core/a11yPalette'
 import { InkContext } from './ui/inkContext'
@@ -42,6 +42,8 @@ import { useViewport } from './app/useViewport'
 import { useUnitCircle } from './app/useUnitCircle'
 import { useExamples } from './app/useExamples'
 import { useGalleryLink } from './app/useGalleryLink'
+import { useNoteFold } from './app/useNoteFold'
+import { usePresentClearance } from './app/usePresentClearance'
 import { useItemBank } from './app/useItemBank'
 import { useRelatedRates } from './app/useRelatedRates'
 import { useStats } from './app/useStats'
@@ -69,7 +71,7 @@ import { feedbackHref, useCourseFocus } from './app/useCourseFocus'
 import { BuildFocus } from './ui/BuildMenu'
 import { FirstRun } from './ui/FirstRun'
 import { AboutDialog } from './ui/AboutDialog'
-import { coursesLabel, galleryFilterFor } from './ui/courses'
+import { coursesLabel, galleryDefaultCourses, galleryFilterFor } from './ui/courses'
 import { listDocs } from './ui/storage'
 import { BRAND } from './brand'
 import { examplesLib } from './app/useExamples'
@@ -242,7 +244,10 @@ export default function App() {
   const { undo, redo, editStart, editEnd, editCancel, commitWithSnap } = history
   const { saveNow, reloadCurrentDoc, docNote } = persistence
   const { galleryOpen, openGallery, closeGallery, openExample, foldedNotes, setNoteFolded } = examplesApi
-  useGalleryLink(openGallery) // ?app=1&gallery=1 (the landing page's "Open an AP example")
+  // ?app=1&gallery=1 (the landing page's "Open an AP example"); true while that gallery is open
+  const galleryFromLink = useGalleryLink(openGallery, galleryOpen)
+  // The teacher note folds by itself while Reveal is on (src/app/useNoteFold.ts).
+  const { noteFolded, foldNote } = useNoteFold(foldedNotes, setNoteFolded, reveal.on)
   const {
     bankOpen, openBankCopy, closeBankCopy, itemOpen, openGraphFromItem, closeGraphFromItem,
     buildBankFigure, copyBankText, downloadTex, graphItem,
@@ -335,13 +340,27 @@ export default function App() {
         setBoardKind('number-line')
         editors.typeLine()
       },
+      // Build → Calculus → "Riemann sum from a table": what the ⌘K command of
+      // that name runs (table-riemann), with this render's state.
+      onTableRiemann: () => tableRiemannRef.current(),
     }),
     [focus.courses, editors.typeLine, setBoardKind],
   )
+  const tableRiemannRef = useRef(commandsApi.tableRiemann)
+  tableRiemannRef.current = commandsApi.tableRiemann
   const { mac, commandCtx, runCommand, doFromHelp } = commandsApi
   const {
     canUndo, canRedo, present, legendShown, changePresentType, hasBoardContent, answerBoard,
   } = presentation
+  // Present + Reveal: the view makes room for the "Revealed" panel (src/ui/presentClearance.ts).
+  usePresentClearance({
+    active: presentMode && reveal.on && kind === 'cartesian' && presentAnswers.length > 0,
+    lines: presentAnswers.length,
+    type: present?.type ?? presentType,
+    vpRef,
+    fitContentBox: viewport.fitContentBox,
+    viewMoved: viewport.viewMoved,
+  })
   const { description, describeOpen, openDescribe, closeDescribe, copyText, copyAltText } = describer
   /** The colour a card shows: the board's palette (the sidebar is dark in every theme). */
   const cardInk = useMemo(() => inkMapper(false, curvePalette), [curvePalette])
@@ -381,18 +400,29 @@ export default function App() {
       <BuildFocus.Provider value={buildFocus}>
       <Sidebar
         open={sidebarOpen && !presentMode}
+        onClose={() => setSidebarOpen(false)}
         docId={docMeta.id}
         readOnly={shared?.viewOnly === true}
         topNote={
           // A view-only link shows the note only when the teacher included it
           // (and never to a student in reveal mode): it is written to them.
-          shared?.noteHidden ? null : (
-            <TeacherNote
-              note={docNote}
-              folded={foldedNotes.has(docMeta.id)}
-              onFold={(f) => setNoteFolded(docMeta.id, f)}
-            />
-          )
+          <>
+            {/* The drawer (≤ 900 px) covers the board's question banner, so
+                it says the question too; wider, only the banner does. */}
+            {shared?.question ? (
+              <div className="sidebar-question" data-testid="sidebar-question" role="note" aria-label="Question">
+                <span className="share-question-tag">Question</span> {shared.question}
+              </div>
+            ) : null}
+            {shared?.noteHidden ? null : (
+              <TeacherNote
+                note={docNote}
+                folded={noteFolded(docMeta.id)}
+                onFold={(f) => foldNote(docMeta.id, f)}
+                revealing={reveal.on}
+              />
+            )}
+          </>
         }
         student={student}
         kind={kind}
@@ -1227,7 +1257,11 @@ export default function App() {
         )}
 
         {galleryOpen && (
-          <ExampleGallery defaultCourses={galleryFilterFor(focus.courses)} onOpen={openExample} onClose={closeGallery} />
+          <ExampleGallery
+            defaultCourses={galleryDefaultCourses(focus.courses, galleryFromLink)}
+            onOpen={openExample}
+            onClose={closeGallery}
+          />
         )}
 
         {/* First run ("What do you teach?") and Settings → Your courses. */}

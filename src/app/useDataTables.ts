@@ -142,7 +142,12 @@ export function useDataTables({ board, docState, refs, derived, notices, history
   )
 
   /** "Build ▾ → Data table": an empty table, selected, ready to type or paste into. */
-  const addDataTable = useCallback((): void => {
+  /**
+   * A new, empty table, selected. `calc`: its calculus tools from the start
+   * (Build → "Riemann sum from a table" adds one with the Σ sum on, so the
+   * pasted rows are framed down to y = 0, where the rectangles stand).
+   */
+  const addDataTable = useCallback((calc?: BoardData['calc']): void => {
     const table: BoardData = {
       id: nextId(),
       name: nextTableName(dataRef.current),
@@ -152,8 +157,9 @@ export function useDataTables({ board, docState, refs, derived, notices, history
       color: pickColor(),
       visible: true,
       regressions: [],
+      ...(calc ? { calc } : {}),
     }
-    commitState({ data: [...dataRef.current, table] }, 'add data table')
+    commitState({ data: [...dataRef.current, table] }, calc ? 'add data table (calculus)' : 'add data table')
     setSelectedId(table.id)
   }, [commitState, pickColor])
 

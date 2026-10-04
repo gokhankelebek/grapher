@@ -618,8 +618,8 @@ export function DataCard({
           )}
 
           <div className="field-section">
-            <div className="an-title">Points</div>
-            <div className="field-spacing" role="group" aria-label="Marker">
+            <div className="an-title data-marker-pick">Points</div>
+            <div className="field-spacing data-marker-pick" role="group" aria-label="Marker">
               {MARKERS.map((m) => {
                 const on = (data.marker ?? 'dot') === m.marker
                 return (
@@ -637,7 +637,7 @@ export function DataCard({
               })}
             </div>
             {count === 0 && (
-              <div className="field-hint">
+              <div className="field-hint data-marker-pick">
                 Type x and y in the grid, or paste two columns from a spreadsheet. The first row can
                 be the column names.
               </div>

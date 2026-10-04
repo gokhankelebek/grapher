@@ -8,31 +8,54 @@
 // the document. On a short screen (an iPad, a Chromebook) a long note scrolls
 // inside its card instead of taking half the sidebar. A document without a
 // note shows nothing at all.
+//
+// REVEAL MODE. A note states the answers ("L₄ = … = 68.5"), so while Reveal is
+// on it folds by itself — to a line that names no words of it ("hidden while
+// revealing"), not even the first ones. The teacher can still unfold it on
+// purpose; when Reveal turns off the note is as it was before (useNoteFold).
+// In Present the sidebar, and the note with it, is hidden anyway.
 // ============================================================================
 
 interface Props {
   note: string
   folded: boolean
   onFold(folded: boolean): void
+  /** Reveal mode is on: the folded line shows none of the note's words. */
+  revealing?: boolean
 }
 
-export function TeacherNote({ note, folded, onFold }: Props) {
+/**
+ * Is the note folded right now? Outside reveal mode: the teacher's own
+ * choice (`stored`). In reveal mode: folded, unless the teacher unfolded it
+ * deliberately since Reveal came on (`openedWhileRevealing`). Pure.
+ */
+export function noteFoldedNow(stored: boolean, revealing: boolean, openedWhileRevealing: boolean): boolean {
+  return revealing ? !openedWhileRevealing : stored
+}
+
+export function TeacherNote({ note, folded, onFold, revealing = false }: Props) {
   if (note === '') return null
   if (folded) {
     return (
       <button
         type="button"
-        className="tnote tnote-line"
+        className={`tnote tnote-line${revealing ? ' tnote-revealing' : ''}`}
         data-testid="teacher-note-chip"
         aria-expanded={false}
         onClick={() => onFold(false)}
-        title="Show the teacher note"
+        title={revealing ? 'Show the teacher note (it states the answers)' : 'Show the teacher note'}
       >
         <NoteGlyph />
         <span className="tnote-title">Teacher note</span>
-        <span className="tnote-peek" aria-hidden="true">
-          {note}
-        </span>
+        {revealing ? (
+          <span className="tnote-peek" data-testid="teacher-note-hidden">
+            hidden while revealing
+          </span>
+        ) : (
+          <span className="tnote-peek" aria-hidden="true">
+            {note}
+          </span>
+        )}
         <span className="tnote-toggle">Show note</span>
       </button>
     )

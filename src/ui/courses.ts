@@ -134,6 +134,24 @@ export function galleryFilterFor(courses: readonly CourseId[] | undefined): Taug
   return taught.length > 0 ? taught : null
 }
 
+/** What the landing page's "Open an AP example" door shows a teacher who never chose. */
+export const AP_GALLERY_COURSES: readonly TaughtCourse[] = ['calc', 'precalc']
+
+/**
+ * The gallery's opening filter. The teacher's courses when they chose some;
+ * for the landing page's AP link (`fromLink`) and a teacher who was never
+ * asked (courses undefined), AP Calculus + AP Precalculus; otherwise every
+ * course (null). Only the opening filter — nothing here is stored. Pure.
+ */
+export function galleryDefaultCourses(
+  courses: readonly CourseId[] | undefined,
+  fromLink: boolean,
+): TaughtCourse[] | null {
+  const mine = galleryFilterFor(courses)
+  if (mine) return mine
+  return fromLink && courses === undefined ? [...AP_GALLERY_COURSES] : null
+}
+
 // ---------------------------------------------------------------- first run
 
 export interface FirstRunFacts {

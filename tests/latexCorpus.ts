@@ -439,6 +439,22 @@ export function corpusDocs(): CorpusDoc[] {
     )
   }
 
+  // ---- a long data table (20 rows), for a worksheet to wrap into column
+  // groups, its headers carrying units and characters LaTeX dislikes
+  {
+    const rows = Array.from({ length: 20 }, (_, i) => ({ x: String(i * 0.5), y: (3 + 2 * Math.sin(i / 3)).toFixed(2) }))
+    out.push(
+      doc('longtable', 'Twenty readings', input({
+        viewport: { center: { x: 5, y: 3 }, pxPerUnit: 40 },
+        data: [{
+          id: 'T10', name: 'Readings #2', xLabel: 't (hours)', yLabel: 'T(t) (°C & 50%)', color: '#16a34a', visible: true,
+          rows, regressions: [],
+          calc: { sum: { m: 'right' }, avg: {} },
+        }],
+      })),
+    )
+  }
+
   // ---- probability (NC Math 2): a two-way table with column percentages and
   // P(B|A); a three-set Venn diagram with an event; a tree without replacement
   // and a typed dependent tree — labels carrying characters LaTeX dislikes
@@ -679,6 +695,36 @@ export function sheetExports(models: Map<string, DocModel>): CorpusTex[] {
       cols: 1,
       style: 'textbook',
       items: [{ docId: 'data', caption: 'Population, 50% growth?' }, { docId: 'shapes' }, { docId: 'measure', caption: 'Classify ABCD; find sin E.' }, { docId: 'tablecalc', caption: 'Estimate ∫₀¹² r(t) dt with a left sum.' }],
+    },
+    {
+      // The answer key's own furniture: ANSWER KEY by the title, worked
+      // answers under each figure, data tables (one wrapped into column
+      // groups, one switched on by hand, one switched off).
+      ...newWorksheet('Key and tables', 100),
+      id: 'ws5',
+      title: 'Unit 6 Quiz: Riemann sums — key & tables',
+      cols: 2,
+      style: 'ap',
+      items: [
+        { docId: 'tablecalc' },
+        { docId: 'tabletrap', table: true },
+        { docId: 'longtable' },
+        { docId: 'data', table: false },
+        { docId: 'signchart' },
+        { docId: 'areas' },
+        { docId: 'probtable' },
+        { docId: 'normal' },
+        { docId: 'explicit' },
+      ],
+    },
+    {
+      // Narrow cells with long answer lists: what does not fit its cell goes
+      // on under "Answers, continued".
+      ...newWorksheet('Narrow key', 100),
+      id: 'ws6',
+      cols: 3,
+      style: 'textbook',
+      items: [{ docId: 'piaxes' }, { docId: 'signchart' }, { docId: 'sketch' }, { docId: 'measure' }, { docId: 'valuetable' }, { docId: 'circles' }],
     },
   ]
   const out: CorpusTex[] = []

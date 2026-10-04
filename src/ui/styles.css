@@ -1279,6 +1279,52 @@ button.card-formula:hover {
   .sidebar-closed {
     box-shadow: none;
   }
+
+  /* The drawer's own ×: a tap on the scrim closes it too, but nothing said so. */
+  .sidebar .sidebar-drawer-bar {
+    display: flex;
+    justify-content: flex-end;
+    flex: none;
+    padding: var(--sp-1) var(--sp-2) 0;
+  }
+}
+
+/* Wider than a drawer: the toolbar's toggle sits beside the sidebar, and the
+   question banner over the board is never under it. */
+.sidebar-drawer-bar,
+.sidebar-question {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .sidebar .sidebar-question {
+    display: block;
+    margin: var(--sp-2) var(--sp-3) 0;
+    padding: var(--sp-2) var(--sp-3);
+    border: 1px solid var(--accent);
+    border-inline-start-width: 4px;
+    border-radius: var(--radius);
+    color: var(--text);
+    font-size: var(--fs-md);
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+  }
+}
+
+.sidebar-drawer-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 36px;
+  border-radius: var(--radius);
+  color: var(--muted);
+}
+
+.sidebar-drawer-close:hover,
+.sidebar-drawer-close:focus-visible {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text);
 }
 
 /* Phones: the toolbar docks to the bottom as a single scrolling row. */
@@ -1340,6 +1386,12 @@ button.card-formula:hover {
 
   .has-sign-band .zoom-controls {
     bottom: calc(var(--toolbar-reserve) + var(--sp-2) + var(--sign-band, 0px));
+  }
+
+  /* Reveal mode's "0 of 2 revealed · Next": above the dock. On a student's
+     phone it sat under the docked toolbar, and Next could not be tapped. */
+  .canvas-area .reveal-bar {
+    inset-block-end: calc(var(--toolbar-reserve) + var(--sp-2) + var(--sign-band, 0px));
   }
 }
 
@@ -3904,7 +3956,10 @@ button.card-eq {
   max-width: 62%;
   max-height: 62%;
   overflow: auto;
-  padding: var(--sp-3);
+  /* Snug: the move control sits in the corner, not on a row of its own, so a
+     one-curve legend is one line tall (it was three at 2.5×). */
+  padding: 0.3em 0.55em;
+  padding-inline-end: 28px;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius);
   background: rgba(15, 17, 23, 0.78);
@@ -3964,7 +4019,9 @@ button.card-eq {
 }
 
 .present-legend-move {
-  align-self: flex-end;
+  position: absolute;
+  inset-block-start: 2px;
+  inset-inline-end: 2px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -4224,6 +4281,10 @@ button.card-eq {
   .present-legend-move {
     min-width: 44px;
     min-height: 44px;
+  }
+
+  .present-legend {
+    padding-inline-end: 46px;
   }
 
   .handle-pop-foot {
@@ -8681,6 +8742,51 @@ button.calc-field-btn {
   line-height: 1.4;
 }
 
+/* View only (a share link): the cards are read, never edited. Every edit is
+   stopped by src/ui/readOnlyLock.ts; here the controls that would do nothing
+   are not shown at all — Paste data, Regression, the point styles, a card's
+   ⋯ menu, a row's ×, the empty new row, sliders, and every tool chip that is
+   off — and what states a choice (the method that is on, a from/to, a value)
+   reads as plain text. The "? Reveal" pills and section toggles stay live. */
+.sidebar-readonly .data-actions,
+.sidebar-readonly .data-marker-pick,
+.sidebar-readonly .card-menu-wrap,
+.sidebar-readonly .data-row-new,
+.sidebar-readonly .data-drop-col,
+.sidebar-readonly .calc-drop,
+.sidebar-readonly .sidebar-list-body input[type='range'],
+.sidebar-readonly .sidebar-list-body .calc-chip:not(.calc-chip-on) {
+  display: none !important;
+}
+
+.sidebar-readonly .sidebar-list-body .calc-chip-on {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+  cursor: default;
+}
+
+.sidebar-readonly .sidebar-list-body select,
+.sidebar-readonly .sidebar-list-body textarea,
+.sidebar-readonly .sidebar-list-body input:not([type='checkbox']):not([type='radio']) {
+  -webkit-appearance: none;
+  appearance: none;
+  border-color: transparent !important;
+  background: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  cursor: default;
+}
+
+.sidebar-readonly .sidebar-list-body select {
+  padding-inline: 2px;
+}
+
+.sidebar-readonly .color-dot {
+  cursor: default;
+}
+
 /* ============================================================
    Command palette (⌘K) — src/ui/CommandPalette.tsx
    ============================================================ */
@@ -9650,6 +9756,13 @@ button.calc-field-btn {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Folded by Reveal mode: says why, in full — none of the note's words. */
+.tnote-revealing .tnote-peek {
+  white-space: normal;
+  font-style: italic;
+  line-height: 1.25;
 }
 
 /* ============================================================

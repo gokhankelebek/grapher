@@ -34,7 +34,7 @@ import type { Overlay } from '../render/overlays'
 import type { DomainLens } from './curveViews'
 import { inverseColor } from './logLinks'
 import { exactForm } from '../core/exact'
-import { parseNumeric } from './numeric'
+import { formatCoord, parseNumeric } from './numeric'
 
 const MINUS = '−'
 
@@ -102,11 +102,11 @@ export function endText(v: number, exact: { text: string } | null | undefined): 
  * one interval, in `v`. Used for the chips (always one interval) and as the
  * fallback when the core has no words for a set.
  */
-export function partBuilder(p: IntervalPart, v = 'x'): string {
+export function partBuilder(p: IntervalPart, v = 'x', opts?: { scale?: number }): string {
   const loF = Number.isFinite(p.lo)
   const hiF = Number.isFinite(p.hi)
-  const lo = loF ? endText(p.lo, p.loExact).show : ''
-  const hi = hiF ? endText(p.hi, p.hiExact).show : ''
+  const lo = loF ? endShow(p.lo, p.loExact, opts?.scale) : ''
+  const hi = hiF ? endShow(p.hi, p.hiExact, opts?.scale) : ''
   if (loF && hiF) {
     if (p.lo === p.hi) return `${v} = ${lo}`
     return `${lo} ${p.loClosed ? '≤' : '<'} ${v} ${p.hiClosed ? '≤' : '<'} ${hi}`
@@ -114,6 +114,18 @@ export function partBuilder(p: IntervalPart, v = 'x'): string {
   if (loF) return `${v} ${p.loClosed ? '≥' : '>'} ${lo}`
   if (hiF) return `${v} ${p.hiClosed ? '≤' : '<'} ${hi}`
   return 'all real numbers'
+}
+
+/**
+ * One end as a chip shows it, rounded at `scale` (the curve's x-extent) the
+ * way the card's rows are (formatCoord): a sketched vertex at x = −0.0002324
+ * on a curve six units wide is "x ≥ 0", as the card's Minimum (0, −3.958)
+ * says — never "x ≥ −0.0002324". A closed form is kept; the restriction the
+ * chip applies is the true value (partRestriction). Display only.
+ */
+function endShow(v: number, exact: { text: string } | null | undefined, scale: number | undefined): string {
+  if (!exact && scale !== undefined && formatCoord(v, { scale }) === '0') return '0'
+  return endText(v, exact).show
 }
 
 /** "[0, ∞)", "(−π/2, π/2]" — interval notation for one stretch. */
@@ -363,13 +375,13 @@ export interface OneToOneChip {
 export const MAX_CHIPS = 4
 
 /** The chips for a function that is not one-to-one; none for one that is. */
-export function oneToOneChips(info: OneToOne | null): OneToOneChip[] {
+export function oneToOneChips(info: OneToOne | null, xScale?: number): OneToOneChip[] {
   if (!info || info.oneToOne) return []
   const out: OneToOneChip[] = []
   const seen = new Set<string>()
   for (const p of info.monotone) {
     if (!p || !(p.hi > p.lo)) continue
-    const label = partBuilder(p, 'x')
+    const label = partBuilder(p, 'x', { scale: xScale })
     if (seen.has(label) || label === 'all real numbers') continue
     seen.add(label)
     out.push({ label, part: p })

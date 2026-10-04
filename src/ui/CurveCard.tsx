@@ -501,6 +501,16 @@ export function asymptoteText(a: Asymptote, scale?: number): string {
 }
 
 /**
+ * The Analysis section's header: "Analysis of f′" when a sign chart takes the
+ * curve as f′ (or f″) — its zeros and extrema are then f′'s, not f's.
+ */
+export function analysisTitle(name: string | undefined, calc: CardCalc | undefined): string {
+  const as = (calc?.signs ?? []).find((s) => s.as === 'f1' || s.as === 'f2')?.as
+  if (!as || !name) return 'Analysis'
+  return `Analysis of ${name}${as === 'f1' ? '′' : '″'}`
+}
+
+/**
  * Every asymptote of a curve, in the words the card prints — vertical ones
  * first, then whatever its two ends lean on, which is the order they are
  * named in and the order src/core/holes.ts returns them.
@@ -2833,7 +2843,7 @@ export function CurveCard({
           {(domainRows || analysisGroups.length > 0 || asymptotes.length > 0) && (
             <CardSection
               kind="analysis"
-              title="Analysis"
+              title={analysisTitle(name, calc)}
               summary={analysisSummary}
               className="an-section"
               testId="analysis-section"

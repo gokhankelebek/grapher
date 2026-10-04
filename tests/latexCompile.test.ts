@@ -229,7 +229,20 @@ describe('the LaTeX corpus', () => {
     expect(docs.length).toBeGreaterThanOrEqual(25)
     for (const s of STYLES) expect(figures.some((f) => f.name.includes(`-${s}-`))).toBe(true)
     expect(figures.filter((f) => f.format === 'pgfplots').length).toBeGreaterThan(50)
-    expect(sheets.length).toBe(16)
+    expect(sheets.length).toBe(24)
+  })
+
+  it('compiles a key with its ANSWER KEY badge, worked answers, data tables and the continued answers', () => {
+    const key = sheets.find((t) => t.name === 'ws5-key-tikz')!.tex
+    const student = sheets.find((t) => t.name === 'ws5-student-tikz')!.tex
+    expect(key).toContain('\\fbox{\\bfseries ANSWER KEY}')
+    expect(student).not.toContain('ANSWER KEY}')
+    // the tables print on both copies: tablecalc, tabletrap (on by hand) and
+    // longtable (wrapped into groups); data's is switched off
+    for (const tex of [key, student]) expect(tex.match(/\\begin\{tabular\}/g)?.length).toBeGreaterThanOrEqual(4)
+    expect(key).toContain('\\hangindent')
+    expect(student).not.toContain('\\hangindent')
+    expect(sheets.find((t) => t.name === 'ws6-key-tikz')!.tex).toContain('Answers, continued')
   })
 
   it('every export declares its preamble in its header, and it starts with the package it draws with', () => {

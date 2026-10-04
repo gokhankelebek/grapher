@@ -8,6 +8,7 @@
 
 import { useCallback, useMemo } from 'react'
 import { levelCrossings } from '../core/domainRange'
+import { curveXScale } from '../ui/curveState'
 import {
   drawnExtent,
   hltVerdict,
@@ -93,6 +94,13 @@ export function useDomainPanel({ board, docState, refs, derived, calc, domain, n
       }
     }
     const restrict = restrictModeOf(owner)
+    const chipScale = (c: typeof owner): number | undefined => {
+      try {
+        return curveXScale(c, models[c.modelId])
+      } catch {
+        return undefined
+      }
+    }
     const l = lens[owner.id]
     let current = null as DomainPanel['current']
     let restricted = false
@@ -125,7 +133,8 @@ export function useDomainPanel({ board, docState, refs, derived, calc, domain, n
       restrict,
       current,
       restricted,
-      chips: oneToOneChips(facts.one),
+      // labelled at the curve's x-scale, as the card's rows are
+      chips: oneToOneChips(facts.one, chipScale(owner)),
       ghost: l?.ghost === true,
       hlt,
       reflect: l?.reflect !== undefined,

@@ -25,6 +25,8 @@
 //                  the Unicode Dingbats block is ZapfDingbats in order,
 //                  U+2713 ✓ = 0x33, U+2717 ✗ = 0x37;
 //   ‘ ’ “ ” – — … • and Latin-1 → their WinAnsi codes;
+//   ∥ ‖          → "||"; ℂ ℝ ℕ ℤ ℚ → their plain capital; a combining
+//                  macron or hat (x̄, p̂) → the spacing ¯ or ˆ after it;
 //   anything else → "?". Nothing outside ASCII ever reaches the file raw:
 //                  every byte above 126 in a string is written as \ddd.
 // ============================================================================
@@ -40,12 +42,15 @@ export const PT_PER_PX = 0.75
 
 const WINANSI_HIGH: Readonly<Record<string, number>> = {
   '€': 0x80, '…': 0x85, '‘': 0x91, '’': 0x92, '“': 0x93, '”': 0x94, '•': 0x95,
-  '–': 0x96, '—': 0x97, '−': 0x96,
+  '–': 0x96, '—': 0x97, '−': 0x96, 'ˆ': 0x88,
 }
+
+/** Blackboard-bold capitals, set as their plain capital (no standard font has them). */
+const BLACKBOARD: Readonly<Record<string, string>> = { 'ℂ': 'C', 'ℝ': 'R', 'ℕ': 'N', 'ℤ': 'Z', 'ℚ': 'Q' }
 
 const SUP: Readonly<Record<string, string>> = {
   '⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4', '⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8',
-  '⁹': '9', '⁻': '-', '⁺': '+', 'ⁿ': 'n', 'ⁱ': 'i', 'ˣ': 'x',
+  '⁹': '9', '⁻': '-', '⁺': '+', 'ⁿ': 'n', 'ⁱ': 'i', 'ˣ': 'x', 'ᶜ': 'c',
 }
 const SUB: Readonly<Record<string, string>> = {
   '₀': '0', '₁': '1', '₂': '2', '₃': '3', '₄': '4', '₅': '5', '₆': '6', '₇': '7', '₈': '8',
@@ -120,7 +125,14 @@ export function pdfTextRuns(text: string, f: FontSpec): TextRun[] {
   }
   // The parallel signs have no glyph in WinAnsi, Symbol or ZapfDingbats: the
   // standard fonts print them as two ASCII bars, which is how they are read.
-  const expanded = text.replace(/[\u2225\u2016]/g, '||').replace(/‴/g, '″′')
+  // The blackboard letters (ℂ, ℝ …) have no glyph either: their plain capital.
+  // A combining macron or hat (x̄, p̂) follows its letter as the spacing mark.
+  const expanded = text
+    .replace(/[\u2225\u2016]/g, '||')
+    .replace(/‴/g, '″′')
+    .replace(/[ℂℝℕℤℚ]/g, (c) => BLACKBOARD[c] ?? c)
+    .replace(/\u0304/g, '¯')
+    .replace(/\u0302/g, 'ˆ')
   for (const ch of expanded) {
     // Scripts first: ² and ³ exist in WinAnsi but ⁴ does not, and x² beside
     // x⁴ must not come out in two different sizes.

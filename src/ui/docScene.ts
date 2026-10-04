@@ -237,6 +237,12 @@ export interface FigureOptions {
    * teacher's, or the AP auto caption); '' = none.
    */
   caption?: string
+  /**
+   * The key's line of text under the figure (its asymptotes, and what found
+   * no room for a chip). Default on; a worksheet key turns it off, because it
+   * prints every answer under the figure itself (src/ui/docAnswers.ts).
+   */
+  keyLine?: boolean
 }
 
 export interface DocFigure {
@@ -252,6 +258,8 @@ export interface DocFigure {
    * once each — stated under the figure. Empty on a student figure.
    */
   asymptotes: string[]
+  /** false: no key line under the figure (FigureOptions.keyLine). */
+  keyLine?: false
 }
 
 const analyze = (c: FittedCurve, models: Record<string, ModelSpec>): SpecialPoint[] => {
@@ -523,7 +531,7 @@ export function docFigure(m: DocModel, o: FigureOptions): DocFigure {
     }
   }
   if (scene.answerKey) scene.answerKey.asymptotes = asymptotes
-  return { scene, context, margin: settings.margin, sources: board.exprSources, asymptotes }
+  return { scene, context, margin: settings.margin, sources: board.exprSources, asymptotes, ...(o.keyLine === false ? { keyLine: false as const } : {}) }
 }
 
 const isBand = (l: CalcLink): boolean => l.kind === 'taylor' && l.band === true
@@ -578,7 +586,7 @@ export function recordFigure(f: DocFigure): DisplayList {
   if (key) key.unlabelled.length = 0
   const list: DisplayList = recordScene(f.scene, f.margin, (ctx) => paintContext(ctx, f))
   const tokens = key ? keyLineTokens(key.asymptotes ?? f.asymptotes, key.unlabelled) : []
-  if (!key || tokens.length === 0) return list
+  if (!key || tokens.length === 0 || f.keyLine === false) return list
   // A key never leaves an answer unstated: what found no room for a chip is
   // written under the figure, in a band added to its bottom.
   const generic = f.scene.figure?.font === 'serif' ? 'serif' : 'sans-serif'

@@ -11,7 +11,8 @@
 // memo and effect on the board, so a new hook goes where its inputs exist.
 // ============================================================================
 
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { isDrawerWidth, sidebarStartsOpen, viewportWidth } from '../ui/drawer'
 import type { ConicSpec } from '../core/conics'
 import type { ExpSpec } from '../core/exponential'
 import type { FactoredSpec } from '../core/factored'
@@ -46,7 +47,22 @@ export function useBoardState() {
   const [items, setItems] = useState<NLItem[]>([])
   const [styles, setStyles] = useState<StyleMap>({})
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  // Closed on load when it would be a drawer over the toolbar (src/ui/drawer.ts).
+  const [sidebarOpen, setSidebarOpen] = useState(() => sidebarStartsOpen(viewportWidth()))
+  // And closed when the window narrows into drawer width (an iPad turned to
+  // portrait, a split screen): a sidebar the board had room for becomes a
+  // drawer over the toolbar otherwise.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    let wasDrawer = isDrawerWidth(viewportWidth())
+    const onResize = (): void => {
+      const drawer = isDrawerWidth(viewportWidth())
+      if (drawer && !wasDrawer) setSidebarOpen(false)
+      wasDrawer = drawer
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
   const [drawingActive, setDrawingActive] = useState(false)
   const [exprOpen, setExprOpen] = useState(false)
   /** "Build from roots" open at the top of the list (src/ui/FactorEditor.tsx). */

@@ -52,6 +52,8 @@ const MATH_SYMBOLS: Readonly<Record<string, string>> = {
   'Ψ': '\\Psi', 'Υ': '\\Upsilon',
   // Geometry (shape measurements): △ABC, line ℓ, AB ∦ CD.
   '△': '\\triangle', 'ℓ': '\\ell', '∦': '\\not\\parallel',
+  // Vulgar fractions (a trapezoid's ½(Δt)(…)): the kernel's \frac.
+  '½': '\\frac{1}{2}', '¼': '\\frac{1}{4}', '¾': '\\frac{3}{4}', '⅓': '\\frac{1}{3}', '⅔': '\\frac{2}{3}',
 }
 
 const SUPERS: Readonly<Record<string, string>> = {
@@ -339,14 +341,18 @@ export function texLabel(label: string, opts: TexOptions = {}): string {
     out.push(hasMathSignal(text) ? `$${texMath(text, opts)}$` : texEscapeText(text))
     run = []
   }
-  for (const t of tokens) {
-    if (isProse(t)) {
+  // The article "a" between two words ("f has a relative maximum") is prose,
+  // not the variable a.
+  const article = (i: number): boolean =>
+    tokens[i] === 'a' && i > 0 && i < tokens.length - 1 && isProse(tokens[i - 1]) && isProse(tokens[i + 1])
+  tokens.forEach((t, i) => {
+    if (isProse(t) || article(i)) {
       flush()
       out.push(texEscapeText(t))
     } else {
       run.push(t)
     }
-  }
+  })
   flush()
   return out.join(' ')
 }

@@ -55,10 +55,17 @@ export interface CellLayout {
   figure: RectPt
   /** The caption band (h 0 when the sheet has no captions). */
   caption: RectPt
+  /**
+   * Under the caption: the figure's data table and, on the key, its worked
+   * answers. As tall as the tallest such block in the row (h 0 without).
+   */
+  extra: RectPt
 }
 
 export interface PageLayout {
   cells: CellLayout[]
+  /** Where the last row on the page ends (pt from the top). */
+  bottom: number
 }
 
 export interface SheetLayout {
@@ -86,6 +93,12 @@ export interface LayoutInput {
   hasTitle: boolean
   nameLine: boolean
   hasCaptions: boolean
+  /**
+   * Per item, the height (pt) of what is printed under its figure and caption
+   * — a data table, the key's answers. A row grows to its tallest; absent or
+   * all zero, every row is the same height (the layout as it always was).
+   */
+  extra?: readonly number[]
 }
 
 export function pageSize(page: SheetPage, orientation: SheetOrientation): { w: number; h: number } {
@@ -125,27 +138,41 @@ export function layoutSheet(o: LayoutInput): SheetLayout {
   const rowsRest = rowsIn(contentH)
 
   const pages: PageLayout[] = []
+  const extraOf = (i: number): number => Math.max(0, o.extra?.[i] ?? 0)
+  const anyExtra = o.extra !== undefined && o.extra.some((e) => e > 0)
   let index = 0
   let pageNo = 0
   while (index < o.count || pages.length === 0) {
-    const rows = pageNo === 0 ? rowsFirst : rowsRest
     const top = m + (pageNo === 0 ? header : 0)
     const cells: CellLayout[] = []
-    for (let r = 0; r < rows && index < o.count; r++) {
-      for (let c = 0; c < cols && index < o.count; c++) {
+    let y = top
+    let rows = 0
+    // Without extras every row is cellH tall: as many rows as rowsIn says.
+    // With them a row is as tall as its tallest block, and the page takes
+    // rows while they fit (always at least one).
+    const most = anyExtra ? Infinity : pageNo === 0 ? rowsFirst : rowsRest
+    while (index < o.count && rows < most) {
+      const n = Math.min(cols, o.count - index)
+      let ex = 0
+      for (let k = 0; k < n; k++) ex = Math.max(ex, extraOf(index + k))
+      const rowH = cellH + ex
+      if (anyExtra && rows > 0 && y + rowH > m + contentH + 1e-6) break
+      for (let c = 0; c < n; c++) {
         const x = m + c * (cellW + GUTTER_PT)
-        const cy = top + r * (cellH + ROW_GAP_PT)
         cells.push({
           index,
-          cell: { x, y: cy, w: cellW, h: cellH },
-          label: { x, y: cy + LABEL_BAND_PT - 4 },
-          figure: { x, y: cy + LABEL_BAND_PT, w: cellW, h: figureH },
-          caption: { x, y: cy + LABEL_BAND_PT + figureH, w: cellW, h: captionH },
+          cell: { x, y, w: cellW, h: rowH },
+          label: { x, y: y + LABEL_BAND_PT - 4 },
+          figure: { x, y: y + LABEL_BAND_PT, w: cellW, h: figureH },
+          caption: { x, y: y + LABEL_BAND_PT + figureH, w: cellW, h: captionH },
+          extra: { x, y: y + cellH, w: cellW, h: ex },
         })
         index++
       }
+      y += rowH + ROW_GAP_PT
+      rows++
     }
-    pages.push({ cells })
+    pages.push({ cells, bottom: rows > 0 ? y - ROW_GAP_PT : top })
     pageNo++
     if (o.count === 0) break
   }

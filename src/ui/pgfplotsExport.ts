@@ -676,6 +676,8 @@ export interface PgfplotsOptions {
   extraMarkers?: ReadonlyArray<{ curve: FittedCurve; points: readonly SpecialPoint[] }>
   /** For the header comment. */
   title?: string
+  /** An answer key's line of text under the axis. Default on (a worksheet key states its answers itself). */
+  keyLine?: boolean
 }
 
 /** What every pgfplots export needs in the preamble (it loads tikz and xcolor). */
@@ -1832,7 +1834,7 @@ export function toPgfplots(sceneIn: BoardScene, opts: PgfplotsOptions = {}): str
   const tail: string[] = ['\\end{axis}']
   // The key's text line: exactly the board's own (keyLineTokens) — its
   // asymptotes, then what it found no room to label, in its order.
-  const keyLine = key ? keyLineTokens(key.asymptotes ?? [], board.unlabelled) : []
+  const keyLine = key && opts.keyLine !== false ? keyLineTokens(key.asymptotes ?? [], board.unlabelled) : []
   if (keyLine.length > 0) {
     tail.push(`% answer key line: ${texCommentSafe(keyLine.join(' | '))}`)
     // One unbreakable piece per value, so a line breaks between answers.

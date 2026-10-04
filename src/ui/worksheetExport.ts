@@ -17,7 +17,15 @@
 //
 // The answer key is a property of the FIGURES (./docScene.ts `answers`): off,
 // every analysis marker, label and intersection chip is cleared from every
-// scene — the student version; on, they are drawn — the key.
+// scene — the student version; on, they are drawn — the key. The key also
+// says so ("ANSWER KEY" beside the title, and over every later page) and
+// writes the worked answers under each figure: every answer reveal mode
+// would hide, in reveal order, in Present's own words (./docAnswers.ts,
+// ./sheetBlocks.ts). Answers that do not fit their cell go on after the
+// figures under "Answers, continued" — never dropped.
+//
+// A figure that relies on a data table prints it under the figure in BOTH
+// copies (WorksheetItem.table; on by default for such a figure).
 // ============================================================================
 
 import type { FigureStyleId } from '../core/types'
@@ -32,7 +40,22 @@ import { GREY, addClip, addLine, addRect, addText, emptyPage, measure, placeList
 import type { DocFigure, DocModel } from './docScene'
 import { docFigure, recordFigure } from './docScene'
 import type { SheetLayout } from './worksheetLayout'
-import { GUTTER_PT, TITLE_SIZE_PT, fitInBox, itemLabel, layoutSheet, pageSize } from './worksheetLayout'
+import { GUTTER_PT, ROW_GAP_PT, TITLE_SIZE_PT, fitInBox, itemLabel, layoutSheet, pageSize } from './worksheetLayout'
+import { docAnswerLines, docDataTables, relyOnTable } from './docAnswers'
+import type { AnswerLine } from './revealedAnswers'
+import type { KeyAnswer, TableLayout, WrappedAnswer } from './sheetBlocks'
+import {
+  ANSWER_LEAD_PT,
+  answersHeight,
+  drawAnswers,
+  drawTables,
+  fitAnswers,
+  keyAnswers,
+  labelHead,
+  layoutTables,
+  tablesHeight,
+  wrapAnswer,
+} from './sheetBlocks'
 import { PGFPLOTS_FILLBETWEEN, PGFPLOTS_PREAMBLE, toPgfplots } from './pgfplotsExport'
 import { PX_PER_CM } from './vectorExport'
 
@@ -60,21 +83,55 @@ export interface SheetFigure {
   /** Physical width the figure was drawn at, cm. */
   widthCm: number
   missing?: string
+  /** The data tables printed under the figure (both copies), laid out for its cell. */
+  tables: TableLayout[]
+  /** The key: every answer on the document, in reveal order. Empty on a student copy. */
+  key: KeyAnswer[]
+  /** The answers printed in the cell, wrapped to its width. */
+  answers: WrappedAnswer[]
+  /** The answers that did not fit the cell: printed after the figures. */
+  more: KeyAnswer[]
 }
 
 /** Look up a document's model; null = not in storage / unreadable. */
 export type ModelLookup = (docId: string) => DocModel | null
 
-export function sheetLayoutFor(sheet: Worksheet): SheetLayout {
+/** Whether an item prints its document's data table: as the teacher set it, else on when the figure relies on one. */
+export function includeTable(item: WorksheetItem, model: DocModel | null): boolean {
+  return item.table ?? relyOnTable(model)
+}
+
+/**
+ * The layout of a sheet. `answers`: the key, whose header always has a title
+ * band (it says "ANSWER KEY" there). `extra`: per item, what is printed under
+ * its figure (sheetFigures works it out).
+ */
+export function sheetLayoutFor(sheet: Worksheet, answers = false, extra?: readonly number[]): SheetLayout {
   return layoutSheet({
     page: sheet.page,
     orientation: sheet.orientation,
     cols: sheet.cols,
     count: sheet.items.length,
-    hasTitle: !!sheet.title && sheet.title.trim() !== '',
+    hasTitle: (!!sheet.title && sheet.title.trim() !== '') || answers,
     nameLine: sheet.nameLine !== false,
     hasCaptions: sheet.items.some((i) => !!i.caption && i.caption.trim() !== ''),
+    ...(extra ? { extra } : {}),
   })
+}
+
+/** A document's answers, once per document model (a sheet is rebuilt on every edit). */
+const answerCache = new WeakMap<DocModel, AnswerLine[]>()
+function answerLinesOf(model: DocModel, figure: DocFigure): AnswerLine[] {
+  const hit = answerCache.get(model)
+  if (hit) return hit
+  const lines = docAnswerLines(model, { overlays: figure.scene.overlays ?? [] })
+  answerCache.set(model, lines)
+  return lines
+}
+
+/** What a cell prints under its figure and caption, in points. */
+export function extraHeight(f: SheetFigure): number {
+  return tablesHeight(f.tables) + answersHeight(f.answers)
 }
 
 /**
@@ -87,21 +144,27 @@ export function sheetFigures(
   sheet: Worksheet,
   lookup: ModelLookup,
   answers: boolean,
-  layout: SheetLayout = sheetLayoutFor(sheet),
+  layout: SheetLayout = sheetLayoutFor(sheet, answers),
 ): SheetFigure[] {
   const boxW = layout.cellW
   const boxH = layout.figureH
+  // A row may grow to a whole page: a cell's answers stop there and go on after the figures.
+  const pageRoom = layout.height - 2 * layout.margin - layout.cellH
   return sheet.items.map((item, i) => {
     const label = itemLabel(i, sheet.numbering, item.label)
     const model = lookup(item.docId)
     if (!model) {
-      return { item, label, figure: null, list: null, widthCm: 0, missing: 'This document is no longer saved.' }
+      return {
+        item, label, figure: null, list: null, widthCm: 0, missing: 'This document is no longer saved.',
+        tables: [], key: [], answers: [], more: [],
+      }
     }
     const style = itemStyle(sheet, item)
     // The cell's own caption replaces the document's: one line under a figure.
     const caption = item.caption && item.caption.trim() !== '' ? '' : undefined
     const draw = (widthCm: number): { figure: DocFigure; list: DisplayList } => {
-      const figure = docFigure(model, { style, answers, widthCm, caption })
+      // The key's figure leaves out its own line of answers: the cell states them all, under it.
+      const figure = docFigure(model, { style, answers, widthCm, caption, ...(answers ? { keyLine: false } : {}) })
       return { figure, list: recordFigure(figure) }
     }
     // Physical widths are stated to 0.1 cm (clampLatexWidth rounds), so round
@@ -114,26 +177,93 @@ export function sheetFigures(
       widthCm = tenth((widthCm * boxH) / hPt)
       got = draw(widthCm)
     }
-    return { item, label, figure: got.figure, list: got.list, widthCm }
+    const tables = includeTable(item, model) ? layoutTables(docDataTables(model), boxW) : []
+    const key = answers ? keyAnswers(answerLinesOf(model, got.figure)) : []
+    const wrapped = key.map((a) => wrapAnswer(a, boxW))
+    // (Nine tenths of a page at most, so the LaTeX, set in TeX's own
+    // metrics, never runs a row off the page either.)
+    const { fit, rest } = fitAnswers(wrapped, Math.max(ANSWER_LEAD_PT * 3, 0.9 * pageRoom - tablesHeight(tables)))
+    return { item, label, figure: got.figure, list: got.list, widthCm, tables, key, answers: fit, more: rest }
   })
 }
 
 const WHITE = { r: 255, g: 255, b: 255, a: 1 }
 const FAINT = { r: 160, g: 160, b: 160, a: 1 }
 
+/** The key's mark: beside the title on page 1, over every later page. */
+export const KEY_MARK = 'ANSWER KEY'
+const KEY_RED = { r: 176, g: 20, b: 20, a: 1 }
+const KEY_SIZE_PT = 11
+/** "Answers, continued": the heading of what did not fit under its figure. */
+export const MORE_HEADING = 'Answers, continued'
+
+/** The boxed "ANSWER KEY" with its left edge at x, baseline at y; returns its width. */
+function keyBadge(page: DisplayList, x: number, base: number, size = KEY_SIZE_PT): number {
+  const o = { size, bold: true, color: KEY_RED }
+  const w = measure(KEY_MARK, o) + 10
+  const r = { x, y: base - size * 0.95, w, h: size * 1.35 }
+  page.items.push({
+    t: 'path',
+    segs: [
+      { k: 'M', x: r.x, y: r.y },
+      { k: 'L', x: r.x + r.w, y: r.y },
+      { k: 'L', x: r.x + r.w, y: r.y + r.h },
+      { k: 'L', x: r.x, y: r.y + r.h },
+      { k: 'Z' },
+    ],
+    fill: null,
+    stroke: { color: KEY_RED, width: 1, cap: 'butt', join: 'miter', miter: 10, dash: [], dashOffset: 0 },
+    clip: 0,
+  })
+  addText(page, KEY_MARK, x + 5, base, o)
+  return w
+}
+
 /** The pages, as display lists in points. */
-export function composeSheet(sheet: Worksheet, figures: readonly SheetFigure[], layout: SheetLayout = sheetLayoutFor(sheet)): DisplayList[] {
+export function composeSheet(
+  sheet: Worksheet,
+  figures: readonly SheetFigure[],
+  layout: SheetLayout = sheetLayoutFor(sheet),
+  answers = false,
+): DisplayList[] {
   const pages: DisplayList[] = []
-  layout.pages.forEach((pl, pageNo) => {
+  const title = sheet.title?.trim() ?? ''
+  const newPage = (): DisplayList => {
     const page = emptyPage(layout.width, layout.height)
     addRect(page, { x: 0, y: 0, w: layout.width, h: layout.height }, WHITE)
+    // Every later page of a key says so too: a loose page 2 is never mistaken for the student copy.
+    if (answers && pages.length > 0) {
+      const base = layout.margin - 18
+      const right = layout.width - layout.margin
+      const o = { size: 9, color: GREY }
+      const lead = title ? `${title} — ` : ''
+      const badgeW = measure(KEY_MARK, { size: 9, bold: true }) + 10
+      if (lead) addText(page, lead, right - badgeW - 4, base, { ...o, anchor: 'end' })
+      keyBadge(page, right - badgeW, base, 9)
+    }
+    pages.push(page)
+    return page
+  }
+  layout.pages.forEach((pl, pageNo) => {
+    const page = newPage()
     if (pageNo === 0) {
-      if (layout.title && sheet.title) {
-        addText(page, sheet.title, layout.title.x + layout.title.w / 2, layout.title.y + TITLE_SIZE_PT, {
-          size: TITLE_SIZE_PT,
-          bold: true,
-          anchor: 'middle',
-        })
+      if (layout.title) {
+        const base = layout.title.y + TITLE_SIZE_PT
+        const centre = layout.title.x + layout.title.w / 2
+        const to = { size: TITLE_SIZE_PT, bold: true }
+        if (answers) {
+          // The title and the badge, centred together as one line.
+          // (Bold serif is measured with the regular face's metrics, which run
+          // narrow: allow for the bold's extra width so the badge never touches it.)
+          const tw = title ? measure(title, to) * 1.1 : 0
+          const bw = measure(KEY_MARK, { size: KEY_SIZE_PT, bold: true }) + 10
+          const gap = title ? 12 : 0
+          const left = Math.max(layout.title.x, centre - (tw + gap + bw) / 2)
+          if (title) addText(page, title, left, base, to)
+          keyBadge(page, left + tw + gap, base - 1)
+        } else if (title) {
+          addText(page, title, centre, base, { ...to, anchor: 'middle' })
+        }
       }
       if (layout.nameLine) {
         const r = layout.nameLine
@@ -187,17 +317,62 @@ export function composeSheet(sheet: Worksheet, figures: readonly SheetFigure[], 
           addText(page, line, c.caption.x + c.caption.w / 2, c.caption.y + 11 + k * 12, o)
         })
       }
+      // Under the caption: the data table, then (the key) the worked answers.
+      let y = c.extra.y
+      if (f.tables.length > 0) y = drawTables(page, f.tables, c.extra.x, c.extra.w, y)
+      if (f.answers.length > 0) drawAnswers(page, f.answers, c.extra.x, y)
+      if (f.more.length > 0) {
+        addText(page, `continued under “${MORE_HEADING}”`, c.extra.x, y + answersHeight(f.answers) + ANSWER_LEAD_PT - 2, {
+          size: 8,
+          italic: true,
+          color: GREY,
+        })
+      }
     }
-    pages.push(page)
   })
+
+  // ---- what did not fit under its figure, in full-width text after the figures
+  const rest = figures.filter((f) => f.more.length > 0)
+  if (rest.length > 0) {
+    const width = layout.contentW
+    const bottom = layout.height - layout.margin
+    let page = pages[pages.length - 1]
+    let y = (layout.pages[layout.pages.length - 1]?.bottom ?? layout.margin) + ROW_GAP_PT
+    const room = (h: number): void => {
+      if (y + h <= bottom) return
+      page = newPage()
+      y = layout.margin
+    }
+    room(30)
+    addText(page, MORE_HEADING, layout.margin, y + 13, { size: 12, bold: true })
+    y += 18
+    for (const f of rest) {
+      room(ANSWER_LEAD_PT * 2 + 14)
+      addText(page, f.label || 'Figure', layout.margin, y + 13, { size: LABEL_SIZE_PT, bold: true })
+      y += 14
+      for (const a of f.more) {
+        const w = wrapAnswer(a, width)
+        // An answer longer than a page is set across pages, line by line.
+        for (let i = 0; i < w.lines.length; ) {
+          room(ANSWER_LEAD_PT * 2)
+          const k = Math.max(1, Math.min(w.lines.length - i, Math.floor((bottom - y) / ANSWER_LEAD_PT) - 1))
+          y = drawAnswers(page, [{ answer: a, lines: w.lines.slice(i, i + k) }], layout.margin, y)
+          i += k
+        }
+      }
+      y += 6
+    }
+  }
   return pages
 }
 
 /** Everything one export of a sheet needs, built once. */
 export function buildSheet(sheet: Worksheet, lookup: ModelLookup, answers: boolean): { layout: SheetLayout; figures: SheetFigure[]; pages: DisplayList[] } {
-  const layout = sheetLayoutFor(sheet)
-  const figures = sheetFigures(sheet, lookup, answers, layout)
-  return { layout, figures, pages: composeSheet(sheet, figures, layout) }
+  const first = sheetLayoutFor(sheet, answers)
+  const figures = sheetFigures(sheet, lookup, answers, first)
+  const extra = figures.map(extraHeight)
+  const layout = extra.some((e) => e > 0) ? sheetLayoutFor(sheet, answers, extra) : first
+  return { layout, figures, pages: composeSheet(sheet, figures, layout, answers) }
 }
 
 /** The sheet as PDF bytes: one page per page of the layout, vector throughout. */
@@ -256,7 +431,12 @@ export function sheetLatex(
   const sources = figures.map((f) =>
     f.figure && f.list
       ? opts.pgfplots && f.figure.scene.kind !== 'number-line'
-        ? toPgfplots(f.figure.scene, { widthCm: f.widthCm, sources: f.figure.sources, extraMarkers: f.figure.context })
+        ? toPgfplots(f.figure.scene, {
+            widthCm: f.widthCm,
+            sources: f.figure.sources,
+            extraMarkers: f.figure.context,
+            ...(f.figure.keyLine === false ? { keyLine: false } : {}),
+          })
         : toTikz(f.list)
       : null,
   )
@@ -269,7 +449,7 @@ export function sheetLatex(
     `% Grapher worksheet "${commentText(sheet.name)}": ${figures.length} figure${figures.length === 1 ? '' : 's'}, ` +
       `${cols} column${cols === 1 ? '' : 's'}, ${PAGE_NAMES[sheet.page]} ${sheet.orientation}.`,
   )
-  out.push(answers ? '% ANSWER KEY: analysis markers, labels and intersections are drawn.' : '% Student version: no answers drawn.')
+  out.push(answers ? '% ANSWER KEY: analysis markers, labels and intersections are drawn, and the worked answers printed.' : '% Student version: no answers drawn.')
   out.push('% Preamble (once, in your document):')
   out.push('%   \\usepackage{tikz}       % the figures (it loads xcolor)')
   out.push('%   \\usepackage{graphicx}   % \\resizebox: a figure wider than its column shrinks to fit')
@@ -286,9 +466,13 @@ export function sheetLatex(
   )
   out.push(rule)
 
-  if (sheet.title && sheet.title.trim() !== '') {
+  const hasTitle = !!sheet.title && sheet.title.trim() !== ''
+  if (hasTitle || answers) {
     out.push('\\begin{center}')
-    out.push(`  {\\large\\bfseries ${texText(sheet.title)}}`)
+    const title = hasTitle ? `{\\large\\bfseries ${texText(sheet.title ?? '')}}` : ''
+    // The key says so beside its title: a boxed, red ANSWER KEY (xcolor comes with TikZ).
+    const badge = answers ? `{\\color[rgb]{0.69,0.08,0.08}\\fbox{\\bfseries ${KEY_MARK}}}` : ''
+    out.push(`  ${[title, badge].filter(Boolean).join('\\quad')}`)
     out.push('\\end{center}')
   }
   if (sheet.nameLine !== false) {
@@ -316,12 +500,137 @@ export function sheetLatex(
     // A caption is a board label like any other: "y = x³ − 3" is set as
     // mathematics, prose stays prose (src/render/texText.ts).
     if (cap) out.push(`  \\par\\vspace{2pt}{\\small ${texLabel(cap.replace(CONTROL, ' '))}}%`)
+    for (const l of latexTables(f.tables)) out.push(`  ${l}`)
+    for (const l of latexAnswers(f.answers.map((w) => w.answer))) out.push(`  ${l}`)
+    if (f.more.length > 0) out.push(`  {\\footnotesize\\itshape continued under ${texText(`“${MORE_HEADING}”`)}}\\par%`)
     out.push('\\end{minipage}%')
     const lastInRow = col === cols - 1 || i === figures.length - 1
     if (lastInRow) out.push('\\par\\bigskip')
     else out.push(`\\hspace{${gutter}pt}%`)
   })
+  // What did not fit under its figure: ordinary paragraphs, which break across pages.
+  const rest = figures.filter((f) => f.more.length > 0)
+  if (rest.length > 0) {
+    out.push(`\\noindent{\\bfseries ${texText(MORE_HEADING)}}\\par\\smallskip`)
+    for (const f of rest) {
+      out.push(`\\noindent{\\bfseries ${texText(f.label || 'Figure')}}\\par`)
+      for (const l of latexAnswers(f.more)) out.push(l)
+      out.push('\\medskip')
+    }
+  }
   return out.join('\n') + '\n'
+}
+
+/** A piece of a key's text: mathematics in $…$, prose escaped (texLabel), control characters gone. */
+const texPiece = (t: string): string => texLabel(t.replace(CONTROL, ' '))
+
+/** A figure's data tables as tabulars, grouped as the PDF groups them. */
+export function latexTables(tables: readonly TableLayout[]): string[] {
+  const out: string[] = []
+  for (const t of tables) {
+    out.push('\\par\\vspace{6pt}{\\centering' + (t.size < 9 ? '\\footnotesize' : '\\small') + '%')
+    if (t.named) out.push(`{\\itshape ${texText(t.table.name)}}\\par\\vspace{2pt}%`)
+    t.groups.forEach((g, i) => {
+      if (i > 0) out.push('\\hspace{8pt}%')
+      out.push('\\begin{tabular}[t]{|c|c|}\\hline')
+      // a header set on two lines (name over units) is a one-column tabular of its own
+      const head = (lines: readonly string[]): string =>
+        lines.length > 1
+          ? `\\begin{tabular}[b]{@{}c@{}}${lines.map((l) => `\\textbf{${texPiece(l)}}`).join('\\\\')}\\end{tabular}`
+          : `\\textbf{${texPiece(lines[0] ?? '')}}`
+      out.push(`${head(t.head[0])} & ${head(t.head[1])}\\\\ \\hline`)
+      for (const r of g) out.push(`${texPiece(r[0]) || '{}'} & ${texPiece(r[1]) || '{}'}\\\\ \\hline`)
+      out.push('\\end{tabular}%')
+    })
+    out.push('\\par}%')
+  }
+  return out
+}
+
+/**
+ * A value's LaTeX, broken where TeX may break the line: at the ", ", "; " and
+ * " · " between its parts (outside any brackets), each part its own $…$ — one
+ * long $…$ of twelve zeros cannot be broken and would run off the column.
+ */
+export function texValue(v: string): string {
+  const parts: string[] = []
+  const seps: string[] = []
+  let depth = 0
+  let cur = ''
+  const t = v.trim()
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i]
+    if (ch === '(' || ch === '[' || ch === '{') depth++
+    else if ((ch === ')' || ch === ']' || ch === '}') && depth > 0) depth--
+    const sep = depth === 0 ? (/^(, |; | · )/.exec(t.slice(i))?.[1] ?? null) : null
+    if (sep) {
+      parts.push(cur)
+      seps.push(sep)
+      cur = ''
+      i += sep.length - 1
+      continue
+    }
+    cur += ch
+  }
+  parts.push(cur)
+  return parts
+    .map((p, i) => texPiece(p) + (i < seps.length ? (seps[i] === ' · ' ? ' $\\cdot$ ' : `${seps[i].trim()} `) : ''))
+    .join('')
+}
+
+/** The key's answers as paragraphs: the label bold, the value after it, a hanging indent. */
+export function latexAnswers(list: readonly KeyAnswer[]): string[] {
+  if (list.length === 0) return []
+  const out = ['\\par\\vspace{4pt}{\\small\\raggedright%']
+  for (const a of list) {
+    out.push(`\\noindent\\hangindent=1em\\hangafter=1 \\textbf{${texPiece(labelHead(a))}} ${texValue(a.value)}\\par%`)
+  }
+  out.push('}%')
+  return out
+}
+
+// ---------------------------------------------------------------------------
+// File names
+// ---------------------------------------------------------------------------
+
+/** Names Windows will not create a file under, whatever the extension. */
+const RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/i
+
+/**
+ * A title as a file name every system accepts: "Unit 6 Quiz: Riemann sums" →
+ * "Unit 6 Quiz - Riemann sums". Letters of every script stay; the characters
+ * a file system refuses (\ / : * ? " < > |) and control characters go, as do
+ * leading and trailing dots and spaces. '' when nothing usable is left.
+ */
+export function fileBase(s: string | undefined): string {
+  if (!s) return ''
+  let t = s
+    .normalize('NFC')
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/\s*:\s*/g, ' - ')
+    .replace(/\s*[\\/]\s*/g, '-')
+    .replace(/[*?"<>|]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^[.\s-]+|[.\s]+$/g, '')
+  if (t.length > 100) t = t.slice(0, 100).replace(/[.\s-]+$/g, '')
+  if (RESERVED.test(t)) t = `${t}_`
+  return t
+}
+
+/** The stem of every file a sheet exports: its title, else its name, else "worksheet". */
+export function sheetFileStem(sheet: Pick<Worksheet, 'title' | 'name'>): string {
+  return fileBase(sheet.title) || fileBase(sheet.name) || 'worksheet'
+}
+
+/** "Riemann sums quiz - Key.pdf", "… - Student.tex", "… - Key p2.png". */
+export function sheetFileName(
+  sheet: Pick<Worksheet, 'title' | 'name'>,
+  answers: boolean,
+  ext: 'pdf' | 'tex' | 'png',
+  page?: number,
+): string {
+  return `${sheetFileStem(sheet)} - ${answers ? 'Key' : 'Student'}${page !== undefined ? ` p${page}` : ''}.${ext}`
 }
 
 /** cm → CSS px, re-exported for the editor's thumbnails. */

@@ -4779,6 +4779,12 @@ export interface WorksheetItem {
   caption?: string
   /** This figure's style; absent = the sheet's style. */
   style?: FigureStyleId
+  /**
+   * Print the figure's data table beside it (student copy and key). Absent =
+   * the default: on when the figure relies on a data table (a scatter plot,
+   * calculus on a table). Stored only once the teacher sets it.
+   */
+  table?: boolean
 }
 
 export interface Worksheet {
@@ -4859,6 +4865,7 @@ export function storedToWorksheet(raw: unknown): Worksheet | null {
         ...(label !== undefined ? { label } : {}),
         ...(caption !== undefined ? { caption } : {}),
         ...(isFigureStyleId(it.style) ? { style: it.style } : {}),
+        ...(typeof it.table === 'boolean' ? { table: it.table } : {}),
       })
     }
   }

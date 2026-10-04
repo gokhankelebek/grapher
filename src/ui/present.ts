@@ -146,6 +146,27 @@ export function xLabelBand(axisY: number, heightPx: number, type: number, labelP
 }
 
 /**
+ * The x axis as a legend must keep off it: its tick numbers (xLabelBand) and
+ * the axis line itself above them. A legend whose bottom edge sat ON the
+ * axis line read as part of the figure, over the −8 … −4 stretch of it.
+ * When the axis is off the board only the numbers (slid along the edge) count.
+ */
+export function xAxisBand(axisY: number, heightPx: number, type: number, labelPx: number, inset = 0): Band {
+  const band = xLabelBand(axisY, heightPx, type, labelPx, inset)
+  const onBoard = axisY >= 0 && axisY <= heightPx - inset
+  return onBoard ? { top: Math.min(band.top, axisY - 4 * type), bottom: band.bottom } : band
+}
+
+/**
+ * The legend's type size, px: the axis numbers' size at this scale (11px at
+ * 1:1, 27.5px at 2.5×) — a legend set larger than the numbers it labels was
+ * the biggest thing on the wall. Never under 13px.
+ */
+export function legendPx(type: number): number {
+  return Math.round(Math.max(13, 11 * type))
+}
+
+/**
  * How far to move the legend (px, + down) so it does not sit on the x axis's
  * numbers. A legend in a bottom corner steps up above them, one in a top
  * corner down below them — and when there is no room that way, it goes to
