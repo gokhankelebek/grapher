@@ -228,7 +228,7 @@ describe('accumulationModel — the closure', () => {
     expect(acc!.stats!().cells).toBeGreaterThan(small)
     const t0 = performance.now()
     expect(at(900)).toBeCloseTo(Math.sin(900), 5)
-    expect(performance.now() - t0).toBeLessThan(400)
+    expect(performance.now() - t0).toBeLessThan(400 * PERF)
   })
 
   it('is fast: build < 5 ms, 1000 points < 2 ms (best of several, as the other perf tests)', () => {
@@ -249,8 +249,8 @@ describe('accumulationModel — the closure', () => {
       run = Math.min(run, performance.now() - t0)
       expect(Number.isFinite(s)).toBe(true)
     }
-    expect(build, `build took ${build.toFixed(2)}ms`).toBeLessThan(5)
-    expect(run, `1000 points took ${run.toFixed(3)}ms`).toBeLessThan(2)
+    expect(build, `build took ${build.toFixed(2)}ms`).toBeLessThan(5 * PERF)
+    expect(run, `1000 points took ${run.toFixed(3)}ms`).toBeLessThan(2 * PERF)
   })
 })
 
@@ -278,6 +278,7 @@ import {
   overlaysFor,
   short,
 } from '../src/ui/calcLinks'
+import { PERF } from './perfBudget'
 
 const META: DocMeta = { id: 'doc1', name: 'Accumulation', createdAt: 1000, modifiedAt: 1000 }
 

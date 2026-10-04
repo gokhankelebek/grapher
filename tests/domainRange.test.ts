@@ -16,6 +16,7 @@ import {
   oneToOneInfo,
 } from '../src/core/domainRange'
 import type { IntervalPart, RealSet } from '../src/core/domainRange'
+import { PERF } from './perfBudget'
 
 const PI = Math.PI
 
@@ -520,7 +521,7 @@ describe('levelCrossings', () => {
     const N = 200
     for (let i = 0; i < N; i++) levelCrossings(t.curve, t.models, -1 + (2 * i) / N, [-10, 10])
     const each = (performance.now() - t0) / N
-    expect(each).toBeLessThan(2)
+    expect(each).toBeLessThan(2 * PERF)
   })
 })
 
@@ -585,6 +586,6 @@ describe('performance', () => {
     }
     times.sort((a, b) => a - b)
     const median = times[Math.floor(times.length / 2)]
-    expect(median).toBeLessThan(15)
+    expect(median).toBeLessThan(15 * PERF)
   })
 })

@@ -14,6 +14,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { exactForm, verifiedExact } from '../src/core/exact'
+import { PERF } from './perfBudget'
 
 const MINUS = '−'
 const RT = '√'
@@ -330,6 +331,6 @@ describe('verifiedExact — the curve has the last word', () => {
     const REPS = 500
     for (let i = 0; i < REPS; i++) verifiedExact(1.2345678912 + i * 1e-7, () => false)
     const us = ((performance.now() - t0) / REPS) * 1000
-    expect(us, `${us.toFixed(1)}us per unrecognisable value`).toBeLessThan(200)
+    expect(us, `${us.toFixed(1)}us per unrecognisable value`).toBeLessThan(200 * PERF)
   })
 })

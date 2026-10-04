@@ -14,6 +14,7 @@ import {
   referencedNames,
   type FunctionEnv,
 } from '../src/core/functionEnv'
+import { PERF } from './perfBudget'
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -285,7 +286,7 @@ describe('named calls — speed', () => {
       best = Math.min(best, performance.now() - t0)
     }
     expect(Number.isFinite(sink)).toBe(true)
-    expect(best).toBeLessThan(2)
+    expect(best).toBeLessThan(2 * PERF)
   })
 })
 

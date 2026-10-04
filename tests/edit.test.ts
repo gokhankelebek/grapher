@@ -14,6 +14,7 @@ import {
 import { analyzeCurve } from '../src/core/analyze'
 import type { ModelSpec, SpecialPoint, SpecialPointKind } from '../src/core/types'
 import { makeRng, makeGauss } from './helpers'
+import { PERF } from './perfBudget'
 
 const SQRT_LN2 = Math.sqrt(Math.LN2)
 
@@ -1566,7 +1567,7 @@ describe('applyFeatureEdit — never produces a broken curve', () => {
       applyFeatureEdit(c, MODELS, { point: pt, to: { x: 1 + i / 1000 } })
     }
     const per = (performance.now() - t0) / N
-    expect(per, `${per.toFixed(3)} ms per edit`).toBeLessThan(10)
+    expect(per, `${per.toFixed(3)} ms per edit`).toBeLessThan(10 * PERF)
   })
 })
 

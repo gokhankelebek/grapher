@@ -12,6 +12,7 @@ import { MODELS } from '../src/core/fit/models'
 import { analyzeCurve, intersectionPoints, zeroIntervals } from '../src/core/analyze'
 import { centerFormToConic, conicToCenterForm } from '../src/core/fit/optimize'
 import { parseExpression } from '../src/core/parse'
+import { PERF } from './perfBudget'
 
 function curve(
   modelId: string,
@@ -780,7 +781,7 @@ describe('analyzeCurve — robustness', () => {
         for (let i = 0; i < REPS; i++) analyzeCurve(c, models)
         ms = Math.min(ms, (performance.now() - t0) / REPS)
       }
-      expect(ms, `${c.modelId} took ${ms.toFixed(3)}ms`).toBeLessThan(2)
+      expect(ms, `${c.modelId} took ${ms.toFixed(3)}ms`).toBeLessThan(2 * PERF)
     }
   })
 })
@@ -1271,7 +1272,7 @@ describe('analyzeCurve — exact forms', () => {
     const t0 = performance.now()
     for (let i = 0; i < REPS; i++) analyzeCurve(c, models)
     const ms = (performance.now() - t0) / REPS
-    expect(ms, `x^3 - 3x took ${ms.toFixed(3)}ms`).toBeLessThan(3)
+    expect(ms, `x^3 - 3x took ${ms.toFixed(3)}ms`).toBeLessThan(3 * PERF)
   })
 })
 
@@ -1509,7 +1510,7 @@ describe('analyzeCurve — intersections', () => {
       intersectionPoints(f.c, g.c, models, [-10, 10])
       best = Math.min(best, performance.now() - t0)
     }
-    expect(best, `took ${best.toFixed(3)}ms`).toBeLessThan(2)
+    expect(best, `took ${best.toFixed(3)}ms`).toBeLessThan(2 * PERF)
   })
 })
 
@@ -1723,13 +1724,13 @@ describe('intersectionPoints — in the plane', () => {
     const D = typed('d', '(x-1)^2 + y^2 = 4')
     const m = { ...MODELS, ...C.models, ...P.models, ...D.models }
     const cp = best(() => intersectionPoints(C.c, P.c, m, [-16, 16]))
-    expect(cp, `circle × parabola took ${cp.toFixed(3)}ms`).toBeLessThan(3)
+    expect(cp, `circle × parabola took ${cp.toFixed(3)}ms`).toBeLessThan(3 * PERF)
     const cc = best(() => intersectionPoints(C.c, D.c, m, [-16, 16]))
-    expect(cc, `circle × circle took ${cc.toFixed(3)}ms`).toBeLessThan(5)
+    expect(cc, `circle × circle took ${cc.toFixed(3)}ms`).toBeLessThan(5 * PERF)
     const fam = best(() => intersectionPoints(
       named('a', 'circle', [0, 0, 3]), named('b', 'poly2', [-3, 0, 1]), MODELS, [-16, 16],
     ))
-    expect(fam, `fitted circle × parabola took ${fam.toFixed(3)}ms`).toBeLessThan(3)
+    expect(fam, `fitted circle × parabola took ${fam.toFixed(3)}ms`).toBeLessThan(3 * PERF)
   })
 
   it('two explicit curves give byte-for-byte what they gave before the plane solver', () => {
@@ -1927,7 +1928,7 @@ describe('analyzeCurve — steps, jumps and flat stretches', () => {
         for (let i = 0; i < 20; i++) analyzeCurve(c, models)
         ms = Math.min(ms, (performance.now() - t0) / 20)
       }
-      expect(ms, `${src} took ${ms.toFixed(3)}ms`).toBeLessThan(2)
+      expect(ms, `${src} took ${ms.toFixed(3)}ms`).toBeLessThan(2 * PERF)
     }
   })
 })

@@ -18,6 +18,7 @@ import {
   type RiemannMethod,
 } from '../src/core/calculus'
 import { intersectionPoints } from '../src/core/analyze'
+import { PERF } from './perfBudget'
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -1035,7 +1036,7 @@ describe('performance', () => {
       const d = derivativeModel(c, models, 'd')!
       for (let i = 0; i < 100; i++) d.spec.evalExplicit!(d.params, -5 + i * 0.1)
     })
-    expect(ms).toBeLessThan(2)
+    expect(ms).toBeLessThan(2 * PERF)
   })
 
   it('areaUnder on a typed expression is under 2ms', () => {
@@ -1043,14 +1044,14 @@ describe('performance', () => {
     for (let i = 0; i < 3; i++) areaUnder(c, models, -3, 3)
     expect(areaUnder(c, models, -3, 3)).not.toBeNull()
     const ms = bestOf(() => areaUnder(c, models, -3, 3))
-    expect(ms).toBeLessThan(2)
+    expect(ms).toBeLessThan(2 * PERF)
   })
 
   it('a closed-form area is essentially free', () => {
     const ms = bestOf(() => {
       for (let i = 0; i < 100; i++) areaUnder(curve('poly3', [1, 2, 3, 4]), MODELS, -2, 2)
     })
-    expect(ms).toBeLessThan(2)
+    expect(ms).toBeLessThan(2 * PERF)
   })
 
   it('areaBetween on a typed expression and a curve is under 2ms', () => {
@@ -1059,7 +1060,7 @@ describe('performance', () => {
     for (let i = 0; i < 3; i++) areaBetween(f, g, models, -3, 3, false)
     expect(areaBetween(f, g, models, -3, 3, false)).not.toBeNull()
     const ms = bestOf(() => areaBetween(f, g, models, -3, 3, false))
-    expect(ms).toBeLessThan(2)
+    expect(ms).toBeLessThan(2 * PERF)
   })
 
   it('the |f − g| path, split at every crossing, is under 2ms', () => {
@@ -1075,7 +1076,7 @@ describe('performance', () => {
       Math.abs(areaBetween(f, g, models, -3, 3, false)!.value),
     )
     const ms = bestOf(() => areaBetween(f, g, models, -3, 3, true))
-    expect(ms).toBeLessThan(2)
+    expect(ms).toBeLessThan(2 * PERF)
   })
 
   it('1000 tangent lines on a library family stay under 2ms', () => {
@@ -1083,7 +1084,7 @@ describe('performance', () => {
     const ms = bestOf(() => {
       for (let i = 0; i < 1000; i++) tangentAt(c, MODELS, -5 + i * 0.01)
     })
-    expect(ms).toBeLessThan(2)
+    expect(ms).toBeLessThan(2 * PERF)
   })
 })
 

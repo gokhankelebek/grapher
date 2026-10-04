@@ -15,6 +15,7 @@ import { MODELS } from '../src/core/fit/models'
 import { findAsymptotes, findEndAsymptotes, findHoles, findPoles } from '../src/core/holes'
 import { analyzeCurve } from '../src/core/analyze'
 import { asymptoteTexts } from '../src/ui/CurveCard'
+import { PERF } from './perfBudget'
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -949,7 +950,7 @@ describe('cost', () => {
     const t0 = performance.now()
     for (let i = 0; i < n; i++) once()
     const per = (performance.now() - t0) / n
-    expect(per, `${per.toFixed(3)} ms per call`).toBeLessThan(1)
+    expect(per, `${per.toFixed(3)} ms per call`).toBeLessThan(1 * PERF)
   })
 
   it('findEndAsymptotes costs well under half a millisecond', () => {
@@ -963,7 +964,7 @@ describe('cost', () => {
     const t0 = performance.now()
     for (let i = 0; i < n; i++) once()
     const per = (performance.now() - t0) / n
-    expect(per, `${per.toFixed(4)} ms per call`).toBeLessThan(0.5)
+    expect(per, `${per.toFixed(4)} ms per call`).toBeLessThan(0.5 * PERF)
   })
 
   it('a polar round — holes and slant asymptotes — costs under a millisecond', () => {
@@ -979,7 +980,7 @@ describe('cost', () => {
     const t0 = performance.now()
     for (let i = 0; i < n; i++) once()
     const per = (performance.now() - t0) / n
-    expect(per, `${per.toFixed(3)} ms per call`).toBeLessThan(1)
+    expect(per, `${per.toFixed(3)} ms per call`).toBeLessThan(1 * PERF)
   })
 })
 
@@ -1179,7 +1180,7 @@ describe('named calls — holes and asymptotes of the called curve', () => {
     const t0 = performance.now()
     for (let i = 0; i < n; i++) t.spec.singularities!(t.curve.params, R)
     const per = (performance.now() - t0) / n
-    expect(per, `${per.toFixed(4)} ms per call`).toBeLessThan(0.05)
+    expect(per, `${per.toFixed(4)} ms per call`).toBeLessThan(0.05 * PERF)
   })
 
   it('a named-call round (singularities + holes + poles) stays under a few ms', () => {
@@ -1194,6 +1195,6 @@ describe('named calls — holes and asymptotes of the called curve', () => {
     const t0 = performance.now()
     for (let i = 0; i < n; i++) once()
     const per = (performance.now() - t0) / n
-    expect(per, `${per.toFixed(3)} ms per call`).toBeLessThan(5)
+    expect(per, `${per.toFixed(3)} ms per call`).toBeLessThan(5 * PERF)
   })
 })

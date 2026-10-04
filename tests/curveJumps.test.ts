@@ -20,6 +20,7 @@ import { parseExpression } from '../src/core/parse'
 import { MODELS } from '../src/core/fit/models'
 import { drawCurve, sampleExplicitPolylines, traceCurve, type CurveJump, type CurveTrace } from '../src/render/curves'
 import { MockCtx, withMockPath2D, type MockPath2D } from './mockCanvas'
+import { PERF } from './perfBudget'
 
 type Ctx2D = Parameters<typeof drawCurve>[0]
 
@@ -273,7 +274,7 @@ describe('cost', () => {
     const t0 = performance.now()
     for (let i = 0; i < N; i++) traceCurve(curve, models, VP_OFF)
     const per = (performance.now() - t0) / N
-    expect(per, `${per.toFixed(3)} ms per trace`).toBeLessThan(2)
+    expect(per, `${per.toFixed(3)} ms per trace`).toBeLessThan(2 * PERF)
   })
 })
 
@@ -374,7 +375,7 @@ describe('trace.jumps: where, the two limits, and f there', () => {
     for (let i = 0; i < N; i++) n += traceCurve(curve, models, VP_OFF)!.jumps.length
     const per = (performance.now() - t0) / N
     expect(n / N).toBeGreaterThan(140)
-    expect(per, `${per.toFixed(3)} ms per trace + jumps`).toBeLessThan(10)
+    expect(per, `${per.toFixed(3)} ms per trace + jumps`).toBeLessThan(10 * PERF)
   })
 })
 

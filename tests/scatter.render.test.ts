@@ -39,6 +39,7 @@ import {
   PRINT_CURVE_COLORS,
 } from '../src/core/types'
 import type { FittedCurve, Vec2, Viewport } from '../src/core/types'
+import { PERF } from './perfBudget'
 
 const VP: Viewport = { center: { x: 0, y: 0 }, pxPerUnit: 60, widthPx: 900, heightPx: 700 }
 
@@ -439,6 +440,6 @@ describe('scatter — robustness and cost', () => {
       drawScatter(noop, [big], { vp: VP, theme: DARK_THEME, curveAt })
       best = Math.min(best, performance.now() - t0)
     }
-    expect(best).toBeLessThan(8)
+    expect(best).toBeLessThan(8 * PERF)
   })
 })

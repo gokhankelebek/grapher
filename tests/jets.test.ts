@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest'
 import type { ExprNode } from '../src/core/parse'
 import { parseExpression } from '../src/core/parse'
 import { jetAt } from '../src/core/parse/jets'
+import { PERF } from './perfBudget'
 
 function jet(src: string, a: number, n: number, params?: number[]): number[] | null {
   const r = parseExpression(src)
@@ -345,7 +346,7 @@ describe('jetAt — performance', () => {
       const t0 = performance.now()
       for (let i = 0; i < N; i++) spec.taylor!([], a, 64)
       const per = (performance.now() - t0) / N
-      expect(per).toBeLessThan(0.5)
+      expect(per).toBeLessThan(0.5 * PERF)
     }
   })
 })

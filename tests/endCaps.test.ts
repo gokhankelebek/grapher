@@ -43,6 +43,7 @@ import {
   toPrintColor,
 } from '../src/core/types'
 import type { FittedCurve, ModelSpec, Viewport } from '../src/core/types'
+import { PERF } from './perfBudget'
 
 // x in [-7.5, 7.5], y in [-5, 5]
 const VP: Viewport = { center: { x: 0, y: 0 }, pxPerUnit: 60, widthPx: 900, heightPx: 600 }
@@ -757,7 +758,7 @@ describe('natural domain endpoints', () => {
       curveEndPoints(t.curve, t.models, VP)
     }
     const per = (performance.now() - t0) / N
-    expect(per, `${per.toFixed(3)} ms per trace`).toBeLessThan(2)
+    expect(per, `${per.toFixed(3)} ms per trace`).toBeLessThan(2 * PERF)
   })
 })
 

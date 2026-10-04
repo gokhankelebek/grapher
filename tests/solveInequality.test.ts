@@ -9,6 +9,7 @@
 import { describe, it, expect } from 'vitest'
 import { solveInequality, type SolveResult, type ClauseWork } from '../src/core/solveInequality'
 import { parseInequality } from '../src/core/parse/inequality'
+import { PERF } from './perfBudget'
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -508,7 +509,7 @@ describe('working details', () => {
     for (const s of inputs) {
       const t0 = performance.now()
       solve(s)
-      expect(performance.now() - t0, s).toBeLessThan(20)
+      expect(performance.now() - t0, s).toBeLessThan(20 * PERF)
     }
   })
 

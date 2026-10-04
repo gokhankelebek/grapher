@@ -22,6 +22,7 @@ import {
   type TaylorPoly,
   type TaylorSource,
 } from '../src/core/taylor'
+import { PERF } from './perfBudget'
 
 function curve(modelId: string, params: number[], domain: [number, number] | null, kind: FittedCurve['kind']): FittedCurve {
   return {
@@ -626,11 +627,11 @@ describe('performance', () => {
   it('a polynomial, the interval and a 200-sample band are slider-cheap', () => {
     const s = source('y = sin(x)')
     const xs = Array.from({ length: 200 }, (_, i) => -5 + i * 0.05)
-    expect(time(() => taylorPolynomial(s, Math.PI / 6, 30))).toBeLessThan(15)
-    expect(time(() => taylorPolynomial(s, 0, 5))).toBeLessThan(3)
-    expect(time(() => convergence(source('y = ln(1+x)'), 0))).toBeLessThan(10)
-    expect(time(() => errorBand(s, 0.3, 9, xs))).toBeLessThan(10)
-    expect(time(() => lagrangeBound(s, 0, 9, 2))).toBeLessThan(10)
+    expect(time(() => taylorPolynomial(s, Math.PI / 6, 30))).toBeLessThan(15 * PERF)
+    expect(time(() => taylorPolynomial(s, 0, 5))).toBeLessThan(3 * PERF)
+    expect(time(() => convergence(source('y = ln(1+x)'), 0))).toBeLessThan(10 * PERF)
+    expect(time(() => errorBand(s, 0.3, 9, xs))).toBeLessThan(10 * PERF)
+    expect(time(() => lagrangeBound(s, 0, 9, 2))).toBeLessThan(10 * PERF)
   })
 })
 
