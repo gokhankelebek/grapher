@@ -18,8 +18,8 @@
 import { useCallback, useState } from 'react'
 import { createDoc, deserializeDoc, docFromBoard, emptyBoard } from '../core/persist'
 import type { DocMeta } from '../core/persist'
-import { buildExample, exampleById, exampleCopyName } from '../examples'
 import type { ExampleWindow } from '../examples'
+import { lazyModule } from '../ui/lazyLoad'
 import { listDocs, setCurrentDoc, writeDoc } from '../ui/storage'
 import type { DocumentStateApi } from './useDocumentState'
 import type { BoardRefsApi } from './useBoardRefs'
@@ -27,6 +27,13 @@ import type { ModelsApi } from './useModels'
 import type { NoticesApi } from './useNotices'
 import type { DocumentPersistenceApi } from './useDocumentPersistence'
 import type { ViewportApi } from './useViewport'
+
+/**
+ * The examples catalog and its builder (src/examples) load with the gallery
+ * or the help sheet — the only two places an example is opened from — and
+ * App's lazy dialogs wait for this, so openExample can stay synchronous.
+ */
+export const examplesLib = lazyModule(() => import('../examples'))
 
 /** What useExamples reads from the hooks App calls before it. */
 export interface ExamplesDeps {
@@ -99,6 +106,12 @@ export function useExamples({ docState, refs, derived, notices, persistence, vie
   /** Open example `id` as a new document copy. False when nothing was opened. */
   const openExample = useCallback(
     (id: string): boolean => {
+      const lib = examplesLib.get()
+      if (!lib) {
+        void examplesLib.load().catch(() => {})
+        return false
+      }
+      const { buildExample, exampleById, exampleCopyName } = lib
       const def = exampleById(id)
       if (!def) return false
       let json: string

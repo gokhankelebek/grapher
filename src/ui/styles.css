@@ -10114,3 +10114,20 @@ button.calc-field-btn {
   color: var(--muted);
   font-size: var(--fs-sm);
 }
+
+/* ------------------------------------------------- lazy dialog: still loading
+   A dialog whose code has not arrived yet (src/ui/lazyLoad.tsx) — only on a
+   slow connection, in the first seconds before the idle prefetch has it. */
+.lazy-wait {
+  position: fixed;
+  left: 50%;
+  top: 40%;
+  transform: translateX(-50%);
+  z-index: 60;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: 8px;
+  background: rgba(19, 23, 34, 0.94);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: var(--fs-md);
+}

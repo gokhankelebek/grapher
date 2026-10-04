@@ -27,19 +27,12 @@ import { StableCurveCard } from './CurveCard'
 import type { BetweenInfo } from './CurveCard'
 import type { CurveIntersections } from './intersections'
 import type { CalcChange, CalcKind, CardCalc } from './calcLinks'
-import { FieldCard } from './FieldCard'
 import type { BoardField, FieldCardData } from './fieldLinks'
 import type { RunPatch } from './eulerLinks'
-import { ShapeCard } from './ShapeCard'
-import { DataCard } from './DataCard'
-import { SequenceCard } from './SequenceCard'
-import { SequenceEditor } from './SequenceEditor'
 import type { BoardSequence, SeqSeriesView, SequenceCardData } from './seqLinks'
 import type { DataParse } from '../core/data'
 import type { BoardData, DataCardData, DataMarker, PasteMode, RegressionKind } from './dataLinks'
 import type { BoardShape, ShapeCardData } from './shapeLinks'
-import { NLCard } from './NLCard'
-import { SolveCard } from './SolveCard'
 import { ExprInput } from './ExprInput'
 import { FactorEditor } from './FactorEditor'
 import { ExpEditor } from './ExpEditor'
@@ -58,6 +51,19 @@ import type { SinSpec } from '../core/sinusoidal'
 import type { InverseSource } from './logLinks'
 import { BuildMenu } from './BuildMenu'
 import { BoardKindSwitch } from './BoardKindSwitch'
+import { lazyComponent, lazyModule } from './lazyLoad'
+
+// Cards for objects a board may not have — fields, shapes, data, sequences,
+// solve and number-line items — and the sequence builder load when the first
+// one shows (or in the idle prefetch after the first paint: src/ui/lazyLoad.tsx).
+// Curve cards stay in the main chunk: nearly every board has one.
+const FieldCard = lazyComponent(lazyModule(() => import('./FieldCard')), (m) => m.FieldCard)
+const ShapeCard = lazyComponent(lazyModule(() => import('./ShapeCard')), (m) => m.ShapeCard)
+const DataCard = lazyComponent(lazyModule(() => import('./DataCard')), (m) => m.DataCard)
+const SequenceCard = lazyComponent(lazyModule(() => import('./SequenceCard')), (m) => m.SequenceCard)
+const SequenceEditor = lazyComponent(lazyModule(() => import('./SequenceEditor')), (m) => m.SequenceEditor)
+const NLCard = lazyComponent(lazyModule(() => import('./NLCard')), (m) => m.NLCard)
+const SolveCard = lazyComponent(lazyModule(() => import('./SolveCard')), (m) => m.SolveCard)
 
 interface Props {
   open: boolean

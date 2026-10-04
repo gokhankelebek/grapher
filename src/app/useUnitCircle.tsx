@@ -13,7 +13,6 @@ import { CURVE_COLORS, nextId, ppuX } from '../core/types'
 import type { Vec2 } from '../core/types'
 import type { UnitCircleFigure } from '../render/unitCircle'
 import type { ExtraHandle } from '../ui/CanvasStage'
-import { UnitCircleCard } from '../ui/UnitCircleCard'
 import {
   newUnitCircle,
   playStart,
@@ -32,6 +31,11 @@ import type { HistoryApi } from './useHistory'
 import type { CalcLinksApi } from './useCalcLinks'
 import type { ViewportApi } from './useViewport'
 import { playClock } from '../ui/motionPref'
+import { lazyComponent, lazyModule } from '../ui/lazyLoad'
+
+// The card loads when the first one shows, or in the idle prefetch after the
+// first paint (src/ui/lazyLoad.tsx); what the board draws stays in the main chunk.
+const UnitCircleCard = lazyComponent(lazyModule(() => import('../ui/UnitCircleCard')), (m) => m.UnitCircleCard)
 
 /** What useUnitCircle reads from the hooks App calls before it. */
 export interface UnitCircleDeps {

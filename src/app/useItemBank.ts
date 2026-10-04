@@ -22,7 +22,7 @@ import { docFromBoard, serializeDoc } from '../core/persist'
 import { docModelFromJSON } from '../ui/docScene'
 import { clampFitSettings } from '../ui/exportFit'
 import type { BankFigure, BankOptions, ItemPlan } from '../ui/itemBank'
-import { bankFigure, buildItemDoc, itemDocName } from '../ui/itemBank'
+import { lazyModule } from '../ui/lazyLoad'
 import { listDocs } from '../ui/storage'
 import type { BoardRefsApi } from './useBoardRefs'
 import type { ModelsApi } from './useModels'
@@ -30,6 +30,13 @@ import type { NoticesApi } from './useNotices'
 import type { DocumentPersistenceApi } from './useDocumentPersistence'
 import type { BoardOverlaysApi } from './useBoardOverlays'
 import type { ExamplesApi } from './useExamples'
+
+/**
+ * The item bank (src/ui/itemBank.ts, with the LaTeX importer and the TikZ /
+ * pgfplots writers it uses) loads with its dialogs — App's lazy dialogs wait
+ * for this, and nothing else calls into it.
+ */
+export const itemBankLib = lazyModule(() => import('../ui/itemBank'))
 
 /** What useItemBank reads from the hooks App calls before it. */
 export interface ItemBankDeps {
@@ -75,7 +82,8 @@ export function useItemBank({ refs, derived, notices, persistence, overlaysApi, 
         screen: { widthPx: vp.widthPx, heightPx: vp.heightPx },
         settings: clampFitSettings(exportSettingsRef.current),
       })
-      return model ? bankFigure(model, opts) : null
+      const lib = itemBankLib.get()
+      return model && lib ? lib.bankFigure(model, opts) : null
     } catch {
       return null
     }
@@ -125,10 +133,12 @@ export function useItemBank({ refs, derived, notices, persistence, overlaysApi, 
   const graphItem = useCallback(
     (plan: ItemPlan): boolean => {
       if (plan.empty) return false
-      const name = itemDocName(plan.baseName, listDocs().map((d) => d.name))
-      let built: ReturnType<typeof buildItemDoc>
+      const lib = itemBankLib.get()
+      if (!lib) return false
+      const name = lib.itemDocName(plan.baseName, listDocs().map((d) => d.name))
+      let built: ReturnType<typeof lib.buildItemDoc>
       try {
-        built = buildItemDoc(plan, name)
+        built = lib.buildItemDoc(plan, name)
       } catch {
         showToast('That item could not be graphed.')
         return false

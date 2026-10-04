@@ -14,12 +14,16 @@ import type { Vec2 } from '../core/types'
 import type { ExtraHandle } from '../ui/CanvasStage'
 import type { Overlay } from '../ui/renderBoard'
 import { snapPlaced } from '../ui/snap'
-import { SystemCard } from '../ui/SystemCard'
 import { inequalityCount, systemCard, systemOverlays, TEST_COLOR } from '../ui/systemLinks'
 import type { BoardStateApi } from './useBoardState'
 import type { BoardRefsApi } from './useBoardRefs'
 import type { ModelsApi } from './useModels'
 import type { HistoryApi } from './useHistory'
+import { lazyComponent, lazyModule } from '../ui/lazyLoad'
+
+// The card loads when the first one shows, or in the idle prefetch after the
+// first paint (src/ui/lazyLoad.tsx); what the board draws stays in the main chunk.
+const SystemCard = lazyComponent(lazyModule(() => import('../ui/SystemCard')), (m) => m.SystemCard)
 
 /** What useInequalitySystem reads from the hooks App calls before it. */
 export interface InequalitySystemDeps {

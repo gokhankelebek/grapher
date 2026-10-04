@@ -1,8 +1,7 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import type { CSSProperties } from 'react'
 import { inkMapper } from './core/a11yPalette'
 import { InkContext } from './ui/inkContext'
-import { DescribeDialog } from './ui/DescribeDialog'
 import { useSliderShiftSteps } from './ui/sliderKeys'
 import { BOARD_DESC_ID, useGraphDescription } from './app/useGraphDescription'
 import { MODE } from './app/constants'
@@ -10,21 +9,15 @@ import { FIGURE_STYLES } from './core/types'
 import { AnalysisOverlay } from './ui/AnalysisOverlay'
 import { AnswerContext } from './ui/answerContext'
 import { CanvasStage } from './ui/CanvasStage'
-import { CommandPalette } from './ui/CommandPalette'
 import { DocMenu } from './ui/DocMenu'
 import { ExportMenu } from './ui/ExportMenu'
-import { HelpSheet } from './ui/HelpSheet'
 import { NumberLineStage } from './ui/NumberLineStage'
 import { PresentBar } from './ui/PresentBar'
 import { PresentLegend } from './ui/PresentLegend'
 import { RevealContext } from './ui/RevealAnswer'
 import { RevealControls } from './ui/RevealControls'
-import { ShareDialog } from './ui/ShareDialog'
 import { Sidebar } from './ui/Sidebar'
 import { Toolbar } from './ui/Toolbar'
-import { WorksheetEditor } from './ui/WorksheetEditor'
-import { ExampleGallery } from './ui/ExampleGallery'
-import { CopyForBankDialog, GraphFromItemDialog } from './ui/ItemBankDialogs'
 import { TeacherNote } from './ui/TeacherNote'
 import { useBoardState } from './app/useBoardState'
 import { useDocumentState } from './app/useDocumentState'
@@ -69,6 +62,33 @@ import { useSidebarEditors } from './app/useSidebarEditors'
 import { useCommands } from './app/useCommands'
 import { useKeyboard } from './app/useKeyboard'
 import { usePresentation } from './app/usePresentation'
+import { examplesLib } from './app/useExamples'
+import { itemBankLib } from './app/useItemBank'
+import { LazyWait, lazyComponent, lazyModule, prefetchLazyModules } from './ui/lazyLoad'
+
+// Dialogs and sheets: none is open on the first render, so their code (and
+// what only they use — the examples catalog, the item bank's LaTeX import,
+// the QR encoder, the worksheet's pages) loads when one is first opened, or
+// in the idle prefetch after the first paint (src/ui/lazyLoad.tsx).
+const DescribeDialog = lazyComponent(lazyModule(() => import('./ui/DescribeDialog')), (m) => m.DescribeDialog, <LazyWait />)
+const CommandPalette = lazyComponent(lazyModule(() => import('./ui/CommandPalette')), (m) => m.CommandPalette, <LazyWait />)
+const HelpSheet = lazyComponent(
+  lazyModule(() => Promise.all([import('./ui/HelpSheet'), examplesLib.load()]).then(([m]) => m)),
+  (m) => m.HelpSheet,
+  <LazyWait />,
+)
+const ShareDialog = lazyComponent(lazyModule(() => import('./ui/ShareDialog')), (m) => m.ShareDialog, <LazyWait />)
+const WorksheetEditor = lazyComponent(lazyModule(() => import('./ui/WorksheetEditor')), (m) => m.WorksheetEditor, <LazyWait />)
+const ExampleGallery = lazyComponent(
+  lazyModule(() => Promise.all([import('./ui/ExampleGallery'), examplesLib.load()]).then(([m]) => m)),
+  (m) => m.ExampleGallery,
+  <LazyWait />,
+)
+const itemBankDialogs = lazyModule(() =>
+  Promise.all([import('./ui/ItemBankDialogs'), itemBankLib.load()]).then(([m]) => m),
+)
+const CopyForBankDialog = lazyComponent(itemBankDialogs, (m) => m.CopyForBankDialog, <LazyWait />)
+const GraphFromItemDialog = lazyComponent(itemBankDialogs, (m) => m.GraphFromItemDialog, <LazyWait />)
 
 /** Per-curve style extras FittedCurve doesn't carry (kept in a parallel map). */
 export type { CurveStyle, StyleMap } from './core/persist'
@@ -298,6 +318,8 @@ export default function App() {
   const cardInk = useMemo(() => inkMapper(false, curvePalette), [curvePalette])
   /** What the board's live region says: the latest toast or "moved" note. */
   const liveText = toast?.msg ?? (featureNote?.kind === 'moved' ? featureNote.text : '')
+  // After the first paint, fetch the code the first render left out, in idle time.
+  useEffect(() => prefetchLazyModules(), [])
 
   return (
     <div

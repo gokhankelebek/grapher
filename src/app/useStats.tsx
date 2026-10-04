@@ -14,9 +14,6 @@ import { freshSeed, normalCdf, normalPdf } from '../core/stats'
 import { MAX_STATS } from '../core/statsPersist'
 import type { StatsFigure } from '../render/stats'
 import type { ExtraHandle } from '../ui/CanvasStage'
-import { NormalCard, SimCard } from '../ui/StatsCard'
-import { DataPlotCard } from '../ui/DataPlotCard'
-import { ProbCard } from '../ui/ProbCard'
 import { probCard, probSpots, settleProb, toggleLeaf } from '../ui/probLinks'
 import type { BoardProb } from '../ui/probLinks'
 import { newProb } from '../core/probPersist'
@@ -49,6 +46,15 @@ import type { HistoryApi } from './useHistory'
 import type { CalcLinksApi } from './useCalcLinks'
 import type { ViewportApi } from './useViewport'
 import { playClock } from '../ui/motionPref'
+import { lazyComponent, lazyModule } from '../ui/lazyLoad'
+
+// The card loads when the first one shows, or in the idle prefetch after the
+// first paint (src/ui/lazyLoad.tsx); what the board draws stays in the main chunk.
+const statsCards = lazyModule(() => import('../ui/StatsCard'))
+const NormalCard = lazyComponent(statsCards, (m) => m.NormalCard)
+const SimCard = lazyComponent(statsCards, (m) => m.SimCard)
+const DataPlotCard = lazyComponent(lazyModule(() => import('../ui/DataPlotCard')), (m) => m.DataPlotCard)
+const ProbCard = lazyComponent(lazyModule(() => import('../ui/ProbCard')), (m) => m.ProbCard)
 
 /** What useStats reads from the hooks App calls before it. */
 export interface StatsDeps {

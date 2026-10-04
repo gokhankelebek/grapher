@@ -10,10 +10,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { DARK_THEME, ppuX } from '../core/types'
 import type { BoardKind } from '../core/types'
 import { signBandHeight } from '../render/signChart'
-import { toPdf } from '../render/vectorPdf'
-import { toSvg } from '../render/vectorSvg'
 import type { GraphDescriptionApi } from './useGraphDescription'
-import { toTikz } from '../render/vectorTikz'
 import { drawContextMarkers } from '../ui/AnalysisOverlay'
 import { constructionPoints } from '../ui/conicLinks'
 import { unionBoxes } from '../ui/curveState'
@@ -24,7 +21,6 @@ import type { CopyState } from '../ui/ExportMenu'
 import { solveSpan } from '../ui/fieldLinks'
 import { exportLook } from '../ui/figureStyle'
 import { crossingsClearOf } from '../ui/intersections'
-import { toPgfplots } from '../ui/pgfplotsExport'
 import { relatedRatesBox } from '../ui/relatedRatesLinks'
 import {
   canvasToPngBlob,
@@ -64,6 +60,16 @@ import type { BoardLookApi } from './useBoardLook'
 import type { RevealModeApi } from './useRevealMode'
 import type { StatsApi } from './useStats'
 import { statsBox } from '../ui/statsLinks'
+import { lazyModule } from '../ui/lazyLoad'
+
+/**
+ * The SVG / PDF / TikZ / pgfplots writers load on the first vector export (or
+ * in the idle prefetch after the first paint). Once here, an export runs
+ * synchronously inside the click exactly as before; a click that beats the
+ * download waits for it.
+ */
+const exportBackends = lazyModule(() => import('../ui/exportBackends'))
+type ExportBackends = NonNullable<ReturnType<typeof exportBackends.get>>
 
 /** What useExport reads from the hooks App calls before it. */
 export interface ExportDeps {
@@ -552,7 +558,10 @@ export function useExport({ board, docState, session, refs, derived, notices, ca
 
   /** The source text / bytes of a vector format, or null when there is nothing to draw. */
   const buildVectorExport = useCallback(
-    (format: Exclude<ExportFormat, 'png'>): { data: string | Uint8Array; mime: string } | null => {
+    (
+      format: Exclude<ExportFormat, 'png'>,
+      { toPdf, toSvg, toTikz, toPgfplots }: ExportBackends,
+    ): { data: string | Uint8Array; mime: string } | null => {
       const settings = clampFitSettings(exportSettingsRef.current)
       const title = docMetaRef.current.name
       try {
@@ -589,17 +598,33 @@ export function useExport({ board, docState, session, refs, derived, notices, ca
     [buildExportScene, paintExportExtras],
   )
 
-  const exportVector = useCallback(
-    (format: Exclude<ExportFormat, 'png'>): void => {
-      const out = buildVectorExport(format)
-      if (!out) {
-        showToast('Couldn’t render the figure for export.')
+  /** Run with the writers: now when they are loaded, else once they arrive. */
+  const withBackends = useCallback(
+    (run: (lib: ExportBackends) => void): void => {
+      const lib = exportBackends.get()
+      if (lib) {
+        run(lib)
         return
       }
-      const part = out.data as BlobPart
-      downloadBlob(new Blob([part], { type: out.mime }), exportFileName(docMetaRef.current.name, format))
+      exportBackends.load().then(run, () => {
+        showToast('Couldn’t load the exporter — check the connection and try again.')
+      })
     },
-    [buildVectorExport, downloadBlob, showToast],
+    [showToast],
+  )
+
+  const exportVector = useCallback(
+    (format: Exclude<ExportFormat, 'png'>): void =>
+      withBackends((lib) => {
+        const out = buildVectorExport(format, lib)
+        if (!out) {
+          showToast('Couldn’t render the figure for export.')
+          return
+        }
+        const part = out.data as BlobPart
+        downloadBlob(new Blob([part], { type: out.mime }), exportFileName(docMetaRef.current.name, format))
+      }),
+    [buildVectorExport, downloadBlob, showToast, withBackends],
   )
 
   /** Download in the chosen format — the primary click. */
@@ -615,10 +640,10 @@ export function useExport({ board, docState, session, refs, derived, notices, ca
   useEffect(() => () => window.clearTimeout(latexCopyTimerRef.current), [])
 
   /** Put the TikZ / pgfplots source on the clipboard; download it if the clipboard refuses. */
-  const copyLatex = useCallback((): void => {
+  const copyLatex = useCallback((): void => withBackends((lib) => {
     const f = exportFormatRef.current
     const format: 'tikz' | 'pgfplots' = f === 'pgfplots' && kindRef.current === 'cartesian' ? 'pgfplots' : 'tikz'
-    const out = buildVectorExport(format)
+    const out = buildVectorExport(format, lib)
     if (!out || typeof out.data !== 'string') {
       showToast('Couldn’t produce the LaTeX to copy.')
       return
@@ -651,7 +676,7 @@ export function useExport({ board, docState, session, refs, derived, notices, ca
       },
       (err: unknown) => fallBack(describeClipboardError(err)),
     )
-  }, [buildVectorExport, downloadBlob, showToast])
+  }), [buildVectorExport, downloadBlob, showToast, withBackends])
 
   /** The physical size of a PDF / TikZ / pgfplots figure, in cm, margins included. */
   const physicalSizeOf = useCallback(

@@ -11,7 +11,6 @@ import { solveWhen } from '../core/relatedRates'
 import type { RRScenario } from '../core/relatedRates'
 import { CURVE_COLORS, nextId } from '../core/types'
 import type { RelatedRatesFigure } from '../render/relatedRates'
-import { RelatedRatesCard } from '../ui/RelatedRatesCard'
 import {
   newRelatedRates,
   relatedRatesBox,
@@ -30,6 +29,11 @@ import type { HistoryApi } from './useHistory'
 import type { CalcLinksApi } from './useCalcLinks'
 import type { ViewportApi } from './useViewport'
 import { playClock } from '../ui/motionPref'
+import { lazyComponent, lazyModule } from '../ui/lazyLoad'
+
+// The card loads when the first one shows, or in the idle prefetch after the
+// first paint (src/ui/lazyLoad.tsx); what the board draws stays in the main chunk.
+const RelatedRatesCard = lazyComponent(lazyModule(() => import('../ui/RelatedRatesCard')), (m) => m.RelatedRatesCard)
 
 /** What useRelatedRates reads from the hooks App calls before it. */
 export interface RelatedRatesDeps {
