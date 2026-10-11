@@ -22,6 +22,10 @@
 
 import type { BoardKind } from '../core/types'
 import type { ExampleBoard } from './builder'
+import { MORE_CALC } from './more/calc'
+import { MORE_PRECALC } from './more/precalc'
+import { MORE_NC12 } from './more/nc12'
+import { MORE_NC3 } from './more/nc3'
 
 export type ExampleCourse = 'calc' | 'precalc' | 'math1' | 'math2' | 'math3'
 
@@ -58,7 +62,7 @@ export interface ExampleDef {
 
 const PI = Math.PI
 
-export const EXAMPLE_DEFS: readonly ExampleDef[] = [
+const BASE_DEFS: readonly ExampleDef[] = [
   // ======================================================== AP Calculus
   {
     id: 'calc-u1-holes-jumps',
@@ -1123,4 +1127,13 @@ export const EXAMPLE_DEFS: readonly ExampleDef[] = [
       b.shape('ABC = (-2,0) (6,0) (0,2)', { centres: ['centroid', 'circumcentre', 'incentre', 'orthocentre', 'euler'] })
     },
   },
+]
+
+/** Every example: the base set, then the additions in src/examples/more/. */
+export const EXAMPLE_DEFS: readonly ExampleDef[] = [
+  ...BASE_DEFS,
+  ...MORE_CALC,
+  ...MORE_PRECALC,
+  ...MORE_NC12,
+  ...MORE_NC3,
 ]
