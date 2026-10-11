@@ -244,7 +244,8 @@ export default function App() {
   const { undo, redo, editStart, editEnd, editCancel, commitWithSnap } = history
   const { saveNow, reloadCurrentDoc, docNote } = persistence
   const { galleryOpen, openGallery, closeGallery, openExample, foldedNotes, setNoteFolded } = examplesApi
-  // ?app=1&gallery=1 (the landing page's "Open an AP example"); true while that gallery is open
+  // ?app=1&gallery=1[&course=nc] (the landing page's "Open an AP / NC Math example"):
+  // that door, 'ap' or 'nc', while that gallery is open; null otherwise
   const galleryFromLink = useGalleryLink(openGallery, galleryOpen)
   // The teacher note folds by itself while Reveal is on (src/app/useNoteFold.ts).
   const { noteFolded, foldNote } = useNoteFold(foldedNotes, setNoteFolded, reveal.on)

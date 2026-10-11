@@ -1,7 +1,8 @@
 // ============================================================================
 // The landing page at "/": one screen of story, then a short scroll of proof.
 //
-// For AP Calculus and AP Precalculus teachers who make their own handouts.
+// For AP Calculus, AP Precalculus and NC Math 1–3 teachers who make their own
+// handouts.
 // It shares the app's dark navy and neon look (src/ui/styles.css) but NOT its
 // code: this module's import graph is React, src/brand.ts and this folder's
 // small helpers, so "/" stays a small download (tests/landing.test.ts checks).
@@ -18,6 +19,9 @@ import { browserStorage, savedDocCount } from './returning'
 import answersImg from './img/answers.webp'
 import teachImg from './img/teach.webp'
 import printImg from './img/print.webp'
+import ncMath1Img from './img/nc-math1.webp'
+import ncMath2Img from './img/nc-math2.webp'
+import ncMath3Img from './img/nc-math3.webp'
 import './landing.css'
 
 /**
@@ -27,7 +31,7 @@ import './landing.css'
  */
 const TEACHER_PHOTO: string | null = null
 const TEACHER_QUOTE: string | null = null
-const TEACHER_LINE = 'Built by an AP Calculus teacher in North Carolina.'
+const TEACHER_LINE = 'Built by a North Carolina math teacher who teaches AP Calculus, AP Precalculus and NC Math 3.'
 
 const PANELS = [
   {
@@ -53,6 +57,36 @@ const PANELS = [
   },
 ] as const
 
+/**
+ * "Also for NC Math": one real board per course, each from the gallery
+ * (src/examples/catalog.ts) and its help-sheet section (src/ui/commands.ts
+ * HELP_SECTIONS): m1-parallelogram (m1-coord), m2-two-way-table (m2-prob),
+ * m2-triangle-centres (m3-centres; a Math 3 example despite its id).
+ */
+const NC_PANELS = [
+  {
+    id: 'nc-math1',
+    course: 'NC Math 1 · G-GPE.4',
+    img: ncMath1Img,
+    alt: 'A polygon card for ABCD: perimeter 4√5 + 2√26 ≈ 19.14, area 18 by the shoelace formula, and under Classification “AB ∥ DC (slope 1/5) and AD ∥ BC (slope 2), so ABCD is a parallelogram.”',
+    text: 'Type the vertices and the card proves what the figure is with slopes, “so ABCD is a parallelogram”, with its perimeter and area.',
+  },
+  {
+    id: 'nc-math2',
+    course: 'NC Math 2 · S-CP',
+    img: ncMath2Img,
+    alt: 'A two-way table of 100 students, Junior or Senior by Drives or Doesn’t drive, with the Junior-and-Drives cell and the Drives column highlighted; under it “In this sample, A and B are independent”, checked as P(A|B) = 3/5 = P(A) and P(A and B) = 6/25 = P(A)·P(B).',
+    text: 'Type the counts of a two-way table: the totals, P(A | B), and whether the events are independent, checked both ways.',
+  },
+  {
+    id: 'nc-math3',
+    course: 'NC Math 3 · G-CO.10',
+    img: ncMath3Img,
+    alt: 'Obtuse triangle ABC with its incenter I ≈ (0.25, 0.93) and inscribed circle, its centroid G (4/3, 2/3), its circumcenter O (2, −2) outside the triangle on a circle of radius 2√5 ≈ 4.47, and the Euler line labeled HG = 2·GO.',
+    text: 'A triangle’s centroid, circumcenter, incenter and orthocenter, exact, on the Euler line with HG = 2·GO.',
+  },
+] as const
+
 export default function Landing() {
   const base = import.meta.env.BASE_URL
   // Read-only: how many documents this browser already has. Never writes.
@@ -68,6 +102,8 @@ export default function Landing() {
 
   const appUrl = appHref(base)
   const galleryUrl = appHref(base, { gallery: '1' })
+  // The NC door: the gallery opens on NC Math 1, 2 and 3 (src/app/useGalleryLink.ts).
+  const ncGalleryUrl = appHref(base, { gallery: '1', course: 'nc' })
 
   return (
     <div className="lp">
@@ -89,7 +125,7 @@ export default function Landing() {
       <main id="main">
         <section className="lp-hero" aria-labelledby="lp-title">
           <div className="lp-hero-copy">
-            <p className="lp-eyebrow">For AP Calculus and AP Precalculus teachers</p>
+            <p className="lp-eyebrow">For AP Calculus, AP Precalculus and NC Math 1–3 teachers</p>
             <h1 id="lp-title">
               {/* One sentence per line where there is room; the second in the canvas's neon. */}
               {(TAGLINE.match(/[^.]+\.?/g) ?? [TAGLINE]).map((part, i) => (
@@ -100,8 +136,9 @@ export default function Landing() {
               ))}
             </h1>
             <p className="lp-sub">
-              Built by an AP Calculus teacher for teachers who make their own handouts: the AP-style analysis, then a
-              print-ready figure, worksheet and answer key, even as LaTeX/TikZ.
+              Built by a North Carolina math teacher (AP Calculus, AP Precalculus, NC Math 3) for teachers who make
+              their own handouts: the AP-style analysis, then a print-ready figure, worksheet and answer key, even as
+              LaTeX/TikZ.
             </p>
             <div className="lp-ctas">
               {returning && (
@@ -114,6 +151,9 @@ export default function Landing() {
               )}
               <a className={`lp-btn ${returning ? 'lp-btn-secondary' : 'lp-btn-primary'}`} href={galleryUrl}>
                 Open an AP example
+              </a>
+              <a className="lp-btn lp-btn-secondary" href={ncGalleryUrl}>
+                Open an NC Math example
               </a>
               {/* A returning visitor's app opens on their last graph, so "blank" would not be true for them. */}
               {!returning && (
@@ -140,6 +180,29 @@ export default function Landing() {
               </article>
             ))}
           </div>
+        </section>
+
+        <section className="lp-panels lp-nc" aria-labelledby="lp-nc">
+          <h2 id="lp-nc" className="lp-section-title">
+            Also for NC Math 1–3
+          </h2>
+          <p className="lp-nc-lede">
+            Ready-to-teach boards for NC Math 1, 2 and 3 in the gallery, and a help-sheet section for each course.
+          </p>
+          <div className="lp-panel-grid">
+            {NC_PANELS.map((p) => (
+              <article className="lp-panel" key={p.id} aria-labelledby={`lp-${p.id}`}>
+                <img src={p.img} alt={p.alt} width={720} height={450} loading="lazy" decoding="async" />
+                <h3 id={`lp-${p.id}`}>{p.course}</h3>
+                <p>{p.text}</p>
+              </article>
+            ))}
+          </div>
+          <p className="lp-nc-cta">
+            <a className="lp-btn lp-btn-secondary" href={ncGalleryUrl}>
+              Open an NC Math example
+            </a>
+          </p>
         </section>
 
         <section className="lp-trust" aria-labelledby="lp-trust">

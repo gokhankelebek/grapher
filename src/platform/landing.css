@@ -213,9 +213,16 @@
 
 .lp-ctas {
   margin-top: 26px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
+  /* Three doors (AP example, NC Math example, blank graph) do not fit side by
+     side in the hero's column: one column, every button as wide as the widest. */
+  display: grid;
+  grid-template-columns: minmax(0, max-content);
+  gap: 10px;
+}
+
+.lp-ctas .lp-btn {
+  align-items: center;
+  text-align: center;
 }
 
 .lp-trust-mini {
@@ -385,6 +392,22 @@
   color: #c3c9de;
 }
 
+/* ------------------------------------------------- also for NC Math 1–3 */
+
+.lp-nc {
+  padding-top: 0;
+}
+
+.lp-nc-lede {
+  margin-top: 8px;
+  color: #c3c9de;
+  max-width: 40em;
+}
+
+.lp-nc-cta {
+  margin-top: 24px;
+}
+
 /* ----------------------------------------------------------------- trust */
 
 .lp-trust {
@@ -521,10 +544,8 @@
   .lp-link {
     display: none;
   }
-  .lp-ctas .lp-btn {
-    flex: 1 1 100%;
-    text-align: center;
-    align-items: center;
+  .lp-ctas {
+    grid-template-columns: minmax(0, 1fr);
   }
   .lp-steps button {
     padding-right: 10px;

@@ -12,7 +12,8 @@
 //   * a view-only page shows no dead editing controls, and its title drops
 //     "Example: ";
 //   * Build → Calculus → "Riemann sum from a table";
-//   * "Open an AP example" opens the gallery on AP courses, stored nowhere;
+//   * "Open an AP example" opens the gallery on AP courses, "Open an NC Math
+//     example" (&course=nc) on NC Math 1–3, both stored nowhere;
 //   * the landing demo tells the current story and imports no app code.
 // ============================================================================
 
@@ -29,7 +30,8 @@ import { buildRows } from '../src/ui/BuildMenu'
 import { COMMAND_BY_ID } from '../src/ui/commands'
 import { dataBox } from '../src/ui/dataLinks'
 import { turnOn } from '../src/ui/tableCalcLinks'
-import { AP_GALLERY_COURSES, galleryDefaultCourses } from '../src/ui/courses'
+import { AP_GALLERY_COURSES, NC_GALLERY_COURSES, galleryDefaultCourses } from '../src/ui/courses'
+import { galleryDoor } from '../src/app/useGalleryLink'
 import { docListName } from '../src/ui/docName'
 import {
   applyClearance,
@@ -416,25 +418,38 @@ describe('Build → Calculus → "Riemann sum from a table" (item 9)', () => {
 
 // ---------------------------------------------------------------------------
 
-describe('"Open an AP example" (§4 next)', () => {
+describe('"Open an AP example" (§4 next) and "Open an NC Math example"', () => {
   it('a gallery link with no courses ever chosen opens on AP Calc + AP Precalc', () => {
     expect(AP_GALLERY_COURSES).toEqual(['calc', 'precalc'])
-    expect(galleryDefaultCourses(undefined, true)).toEqual(['calc', 'precalc'])
+    expect(galleryDefaultCourses(undefined, 'ap')).toEqual(['calc', 'precalc'])
+    // ?gallery=1 with no course parameter is the AP door
+    expect(galleryDefaultCourses(undefined, galleryDoor('?app=1&gallery=1'))).toEqual(['calc', 'precalc'])
   })
 
-  it('the teacher’s own courses win; otherwise every course, as before', () => {
-    expect(galleryDefaultCourses(['math1'], true)).toEqual(['math1'])
-    expect(galleryDefaultCourses(['calc', 'math2'], false)).toEqual(['calc', 'math2'])
-    expect(galleryDefaultCourses(undefined, false)).toBeNull()
-    // "No courses — show everything" was a choice: kept
-    expect(galleryDefaultCourses([], true)).toBeNull()
-    expect(galleryDefaultCourses(['other'], true)).toBeNull()
+  it('the NC door (&course=nc) opens on NC Math 1, 2 and 3 for a teacher who never chose', () => {
+    expect(NC_GALLERY_COURSES).toEqual(['math1', 'math2', 'math3'])
+    expect(galleryDefaultCourses(undefined, 'nc')).toEqual(['math1', 'math2', 'math3'])
+    expect(galleryDefaultCourses(undefined, galleryDoor('?app=1&gallery=1&course=nc'))).toEqual(['math1', 'math2', 'math3'])
+  })
+
+  it('a door names its courses on the button, so it wins for that opening; otherwise the teacher’s own', () => {
+    expect(galleryDefaultCourses(['math1'], 'ap')).toEqual(['calc', 'precalc'])
+    expect(galleryDefaultCourses(['calc'], 'nc')).toEqual(['math1', 'math2', 'math3'])
+    expect(galleryDefaultCourses([], 'nc')).toEqual(['math1', 'math2', 'math3'])
+    expect(galleryDefaultCourses(['other'], 'ap')).toEqual(['calc', 'precalc'])
+    // Opened from the menu (no door): the teacher's courses, else everything
+    expect(galleryDefaultCourses(['calc', 'math2'], null)).toEqual(['calc', 'math2'])
+    expect(galleryDefaultCourses(undefined, null)).toBeNull()
+    expect(galleryDefaultCourses([], null)).toBeNull()
   })
 
   it('stores nothing: the filter is only the gallery’s opening state', () => {
     const hook = read('src/app/useGalleryLink.ts')
     expect(hook).not.toMatch(/updatePrefs|chooseCourses|localStorage/)
+    expect(hook).toMatch(/setFromLink\(galleryDoor\(search\)\)/)
     expect(read('src/App.tsx')).toMatch(/defaultCourses=\{galleryDefaultCourses\(focus\.courses, galleryFromLink\)\}/)
+    // the door is read from the address bar only; the stored course choice is never written
+    expect(hook).not.toMatch(/savePrefs|setPrefs|saveCourses/)
   })
 })
 

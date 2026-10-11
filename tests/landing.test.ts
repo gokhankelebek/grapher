@@ -1,13 +1,16 @@
 // The landing page at "/": one brand constant, a small module graph that never
 // reaches the app, read-only returning-visitor detection, and the URL routing
-// (?app=1, share links, ?gallery=1).
+// (?app=1, share links, ?gallery=1 and its NC door, &course=nc), the audience
+// it names and the "Also for NC Math" strip's images and claims.
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { BRAND, TAGLINE } from '../src/brand'
 import { DOC_INDEX_KEY, savedDocCount } from '../src/platform/returning'
 import { appHref, opensApp } from '../src/platform/route'
-import { wantsGallery, withoutGalleryParam } from '../src/app/useGalleryLink'
+import { galleryDoor, wantsGallery, withoutGalleryParam } from '../src/app/useGalleryLink'
+import { EXAMPLE_DEFS } from '../src/examples/catalog'
+import { HELP_SECTIONS } from '../src/ui/commands'
 
 const root = path.resolve(__dirname, '..')
 const src = (p: string): string => fs.readFileSync(path.join(root, p), 'utf8')
@@ -169,5 +172,94 @@ describe('routing "/"', () => {
     expect(wantsGallery('?app=1', '')).toBe(false)
     expect(wantsGallery('?app=1&gallery=1', '#view=1&doc=zabc')).toBe(false)
     expect(withoutGalleryParam('https://x.test/grapher/?app=1&gallery=1#a')).toBe('https://x.test/grapher/?app=1#a')
+  })
+
+  it('&course=nc is the NC Math door; no course (or any other) is the AP door', () => {
+    expect(appHref('/', { gallery: '1', course: 'nc' })).toBe('/?app=1&gallery=1&course=nc')
+    expect(opensApp('?app=1&gallery=1&course=nc', '')).toBe(true)
+    expect(wantsGallery('?app=1&gallery=1&course=nc', '')).toBe(true)
+    // course alone does not open the gallery, and a share link still wins
+    expect(wantsGallery('?app=1&course=nc', '')).toBe(false)
+    expect(wantsGallery('?app=1&gallery=1&course=nc', '#doc=zabc')).toBe(false)
+    expect(galleryDoor('?app=1&gallery=1&course=nc')).toBe('nc')
+    expect(galleryDoor('?app=1&gallery=1')).toBe('ap')
+    expect(galleryDoor('?app=1&gallery=1&course=calc')).toBe('ap')
+    // both parameters leave the address bar, so a reload does not reopen the gallery
+    expect(withoutGalleryParam('https://x.test/grapher/?app=1&gallery=1&course=nc#a')).toBe('https://x.test/grapher/?app=1#a')
+  })
+})
+
+// ---------------------------------------------------------------------------
+
+/** A WebP's pixel size from its header (VP8, VP8L or VP8X). */
+function webpSize(buf: Buffer): { w: number; h: number } {
+  expect(buf.toString('ascii', 0, 4)).toBe('RIFF')
+  expect(buf.toString('ascii', 8, 12)).toBe('WEBP')
+  const kind = buf.toString('ascii', 12, 16)
+  if (kind === 'VP8X') return { w: 1 + buf.readUIntLE(24, 3), h: 1 + buf.readUIntLE(27, 3) }
+  if (kind === 'VP8L') {
+    const b = buf.readUInt32LE(21)
+    return { w: 1 + (b & 0x3fff), h: 1 + ((b >> 14) & 0x3fff) }
+  }
+  expect(kind).toBe('VP8 ')
+  return { w: buf.readUInt16LE(26) & 0x3fff, h: buf.readUInt16LE(28) & 0x3fff }
+}
+
+describe('the audience: AP and NC Math 1–3 teachers', () => {
+  const landing = src('src/platform/Landing.tsx')
+
+  it('names NC Math wherever it names the audience', () => {
+    expect(landing).toContain('<p className="lp-eyebrow">For AP Calculus, AP Precalculus and NC Math 1–3 teachers</p>')
+    expect(landing).toMatch(/^\/\/ For AP Calculus, AP Precalculus and NC Math 1–3 teachers/m)
+    expect(src('index.html')).toMatch(/<meta name="description" content="[^"]*AP Calculus, AP Precalculus and NC Math 1–3 teachers/)
+    expect(code(landing)).not.toMatch(/Built by an AP Calculus teacher/)
+    expect(code(landing)).toMatch(/Built by a North Carolina math teacher \(AP Calculus, AP Precalculus, NC Math 3\)/)
+  })
+
+  it('keeps the AP door and adds the NC door, in the hero and under the NC strip', () => {
+    expect(landing).toMatch(/href=\{galleryUrl\}>\s*Open an AP example\s*</)
+    expect(landing).toMatch(/const ncGalleryUrl = appHref\(base, \{ gallery: '1', course: 'nc' \}\)/)
+    expect(landing.match(/href=\{ncGalleryUrl\}>\s*Open an NC Math example\s*</g)).toHaveLength(2)
+  })
+
+  it('the NC strip comes after Answers · Teach · Print and claims only what the gallery has', () => {
+    const order = ['id="lp-what"', 'id="lp-nc"', 'id="lp-trust"'].map((m) => landing.indexOf(m))
+    expect(order.every((i) => i > 0)).toBe(true)
+    expect([...order].sort((a, b) => a - b)).toEqual(order)
+    // each panel's board is a real gallery example of that course, with that help-sheet section
+    const boards: [string, string, string][] = [
+      ['m1-parallelogram', 'math1', 'm1-coord'],
+      ['m2-two-way-table', 'math2', 'm2-prob'],
+      ['m2-triangle-centres', 'math3', 'm3-centres'],
+    ]
+    for (const [id, course, help] of boards) {
+      const def = EXAMPLE_DEFS.find((d) => d.id === id)
+      expect(def?.course, id).toBe(course)
+      expect(def?.help, id).toContain(help)
+      expect(HELP_SECTIONS.find((h) => h.id === help)?.course, help).toBe(`NC Math ${course.slice(-1)}`)
+    }
+    for (const tag of ['NC Math 1 · G-GPE.4', 'NC Math 2 · S-CP', 'NC Math 3 · G-CO.10']) expect(landing).toContain(`'${tag}'`)
+    expect(HELP_SECTIONS.find((h) => h.id === 'm1-coord')?.title).toMatch(/G-GPE\.4/)
+    expect(HELP_SECTIONS.find((h) => h.id === 'm2-prob')?.title).toMatch(/S-CP/)
+    expect(HELP_SECTIONS.find((h) => h.id === 'm3-centres')?.title).toMatch(/G-CO\.10/)
+  })
+
+  it('every NC image is a 720 × 450 WebP under 40 KB with real alt text', () => {
+    for (const n of [1, 2, 3]) {
+      const f = `src/platform/img/nc-math${n}.webp`
+      const buf = fs.readFileSync(path.join(root, f))
+      expect(buf.length, f).toBeLessThan(40 * 1024)
+      expect(webpSize(buf), f).toEqual({ w: 720, h: 450 })
+      expect(landing).toContain(`import ncMath${n}Img from './img/nc-math${n}.webp'`)
+    }
+    const alts = [...landing.matchAll(/^\s*alt: '([^']+)'/gm)].map((m) => m[1])
+    expect(alts).toHaveLength(6)
+    for (const a of alts) expect(a.length).toBeGreaterThan(60)
+  })
+
+  it('keeps every landing image together under 300 KB', () => {
+    const dir = path.join(root, 'src/platform/img')
+    const total = fs.readdirSync(dir).reduce((sum, f) => sum + fs.statSync(path.join(dir, f)).size, 0)
+    expect(total).toBeLessThan(300 * 1024)
   })
 })

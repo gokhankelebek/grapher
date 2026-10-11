@@ -134,22 +134,32 @@ export function galleryFilterFor(courses: readonly CourseId[] | undefined): Taug
   return taught.length > 0 ? taught : null
 }
 
+/**
+ * Which landing-page door opened the gallery: "Open an AP example"
+ * (`?app=1&gallery=1`) or "Open an NC Math example" (`…&course=nc`).
+ */
+export type GalleryDoor = 'ap' | 'nc'
+
 /** What the landing page's "Open an AP example" door shows a teacher who never chose. */
 export const AP_GALLERY_COURSES: readonly TaughtCourse[] = ['calc', 'precalc']
 
+/** What its "Open an NC Math example" door shows a teacher who never chose. */
+export const NC_GALLERY_COURSES: readonly TaughtCourse[] = ['math1', 'math2', 'math3']
+
 /**
- * The gallery's opening filter. The teacher's courses when they chose some;
- * for the landing page's AP link (`fromLink`) and a teacher who was never
- * asked (courses undefined), AP Calculus + AP Precalculus; otherwise every
- * course (null). Only the opening filter — nothing here is stored. Pure.
+ * The gallery's opening filter. A landing-page door (`door`) names its
+ * courses on the button ("Open an AP example", "Open an NC Math example"),
+ * so it wins for that opening: AP Calculus + AP Precalculus, or NC Math 1, 2
+ * and 3. Opened any other way, the teacher's own courses when they chose
+ * some, otherwise every course (null). Only the opening filter — nothing
+ * here is stored. Pure.
  */
 export function galleryDefaultCourses(
   courses: readonly CourseId[] | undefined,
-  fromLink: boolean,
+  door: GalleryDoor | null,
 ): TaughtCourse[] | null {
-  const mine = galleryFilterFor(courses)
-  if (mine) return mine
-  return fromLink && courses === undefined ? [...AP_GALLERY_COURSES] : null
+  if (door) return [...(door === 'nc' ? NC_GALLERY_COURSES : AP_GALLERY_COURSES)]
+  return galleryFilterFor(courses)
 }
 
 // ---------------------------------------------------------------- first run
