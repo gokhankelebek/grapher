@@ -302,7 +302,7 @@ describe('board labels round like the card (item 7)', () => {
   it('the board passes each curve’s card scale to its chips', () => {
     const src = read('src/ui/renderBoard.ts')
     expect(src).toMatch(/labelScale: boardLabelScale\(vp, an\.curve, models\)/)
-    expect(read('src/app/useDomainPanel.ts')).toMatch(/oneToOneChips\(facts\.one, chipScale\(owner\)\)/)
+    expect(read('src/app/useDomainPanel.ts')).toMatch(/oneToOneChips\(facts\.one, chipScale\(owner\)(, v)?\)/)
   })
 })
 

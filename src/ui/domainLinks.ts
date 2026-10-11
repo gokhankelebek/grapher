@@ -167,6 +167,17 @@ export function inVariable(set: RealSet | null, v: string): RealSet | null {
   return { ...set, text: d.text, tex: d.tex, builder: d.builder, builderTex: d.builderTex }
 }
 
+/**
+ * The same set, its set-builder written in `v` (t for C(t)) instead of x.
+ * Only the builder names a variable; a periodic set keeps its "x ≠ π/2 + kπ"
+ * shape, just in t. x itself: the set as it is.
+ */
+export function inCurveVariable(set: RealSet | null, v: string): RealSet | null {
+  if (!set || v === 'x') return set
+  const swap = (s: string): string => s.replace(/(?<![A-Za-z\\])x(?![A-Za-z])/g, v)
+  return { ...set, builder: swap(set.builder), builderTex: swap(set.builderTex) }
+}
+
 /** One row's text: interval notation, or set-builder when the teacher asked for it. */
 export function setRowText(set: RealSet | null, form: SetNotation): string | null {
   if (!set || set.kind === 'unknown') return null
@@ -375,13 +386,13 @@ export interface OneToOneChip {
 export const MAX_CHIPS = 4
 
 /** The chips for a function that is not one-to-one; none for one that is. */
-export function oneToOneChips(info: OneToOne | null, xScale?: number): OneToOneChip[] {
+export function oneToOneChips(info: OneToOne | null, xScale?: number, v = 'x'): OneToOneChip[] {
   if (!info || info.oneToOne) return []
   const out: OneToOneChip[] = []
   const seen = new Set<string>()
   for (const p of info.monotone) {
     if (!p || !(p.hi > p.lo)) continue
-    const label = partBuilder(p, 'x', { scale: xScale })
+    const label = partBuilder(p, v, { scale: xScale })
     if (seen.has(label) || label === 'all real numbers') continue
     seen.add(label)
     out.push({ label, part: p })
@@ -394,7 +405,7 @@ export function oneToOneChips(info: OneToOne | null, xScale?: number): OneToOneC
 export const MAX_WITNESS_XS = 3
 
 /** "Yes" / "No — fails at y = 1 (x = −1, 1)". */
-export function oneToOneText(info: OneToOne | null): string | null {
+export function oneToOneText(info: OneToOne | null, v = 'x'): string | null {
   if (!info) return null
   if (info.oneToOne) return 'Yes'
   const w = info.witness
@@ -405,7 +416,7 @@ export function oneToOneText(info: OneToOne | null): string | null {
   const all = w.xs.filter(Number.isFinite)
   const xs = all.slice(0, MAX_WITNESS_XS).map((x) => endText(x, null).show)
   if (all.length > MAX_WITNESS_XS) xs.push('…')
-  return xs.length > 0 ? `No — fails at y = ${y} (x = ${xs.join(', ')})` : `No — fails at y = ${y}`
+  return xs.length > 0 ? `No — fails at y = ${y} (${v} = ${xs.join(', ')})` : `No — fails at y = ${y}`
 }
 
 // ---------------------------------------------------------------------------
@@ -622,6 +633,11 @@ export interface DomainPanel {
    * [a, b]" with an "Extend to all x". Absent otherwise.
    */
   drawn?: [number, number] | null
+  /**
+   * The function's own variable: 't' for C(t) = {…} or d(t) = …, else 'x'
+   * (absent: x). The rows, the Restrict editor and the chips speak in it.
+   */
+  variable?: 'x' | 't'
 }
 
 /** What the rows can do. Every id is the panel's `ownerId`. */

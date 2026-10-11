@@ -303,6 +303,17 @@ export function pointParts(p: SpecialPoint, opts: PointTextOpts = {}): PointPart
 }
 
 /**
+ * An open END of the graph (a 'hole' with `side`: x·ln x at 0), as a class
+ * says it: "y → 0 as x → 0⁺". The limit and the place, each as pointParts
+ * prints a coordinate (closed form first); ⁺ when the graph is to the right.
+ */
+export function openEndText(p: SpecialPoint, opts: PointTextOpts = {}, v = 'x'): string {
+  const x = pointParts(p, { ...opts, axes: 'x', decimal: false })
+  const y = pointParts(p, { ...opts, axes: 'y', decimal: false })
+  return `y → ${y.text} as ${v} → ${x.text}${(p.side ?? 1) > 0 ? '⁺' : '⁻'}`
+}
+
+/**
  * One special point, as every surface in the app prints it.
  *
  * `pointText(p)` is the card: "√3 ≈ 1.732", "(√3/3, −2√3/9) ≈ (0.577, −0.385)",

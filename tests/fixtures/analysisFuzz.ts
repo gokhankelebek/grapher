@@ -5,7 +5,10 @@
 // infinite loop cannot be interrupted from inside its own thread.
 //
 // Prints one JSON line: for each expression, the wall time (ms) of every
-// analysis entry point, each on a fresh curve so no memo is shared.
+// analysis entry point, each on a fresh curve so no memo is shared — and a
+// second (TEXT) with the domain and range as the card writes them, so the
+// parent can check them for artefacts (an endpoint like −1301000 that no
+// formula wrote: tan(x)/x once listed a sparse sample of tan's poles).
 // ============================================================================
 
 import type { FittedCurve, ModelSpec } from '../../src/core/types'
@@ -43,6 +46,7 @@ const exprs: string[] = JSON.parse(process.argv[2] ?? '[]')
 for (const fn of Object.values(CALLS)) fn(typed('y = x^3 - 2x'))
 
 const out: Record<string, Record<string, number>> = {}
+const texts: Record<string, { domain: string[]; range: string[] }> = {}
 for (const src of exprs) {
   const row: Record<string, number> = {}
   for (const [name, fn] of Object.entries(CALLS)) {
@@ -52,5 +56,11 @@ for (const src of exprs) {
     row[name] = performance.now() - t0
   }
   out[src] = row
+  // after the timing, on a fresh curve of its own
+  const tt = typed(src)
+  const d = curveDomain(tt.curve, tt.models)
+  const r = curveRange(tt.curve, tt.models)
+  texts[src] = { domain: d ? [d.text, d.builder] : [], range: r ? [r.text, r.builder] : [] }
 }
 console.log(`FUZZ ${JSON.stringify(out)}`)
+console.log(`TEXT ${JSON.stringify(texts)}`)

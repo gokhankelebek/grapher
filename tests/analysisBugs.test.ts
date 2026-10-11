@@ -94,7 +94,31 @@ const NASTY = [
   'y = floor(1/x)',
   'y = ln(sin(x))',
   'y = tan(x)^2/sin(x)',
+  // the second round (tests/analysisEnds.test.ts): overflowing ends, open
+  // ends, periodic exclusions with extra points, slow logarithmic ends
+  'y = e^x/(e^x + 7)',
+  'y = e^x/(1 + e^x)',
+  'y = (2e^x + 3)/(e^x - 1)',
+  'y = x/e^x',
+  'y = x ln(x)',
+  'y = x^x',
+  'y = sec(x)/x',
+  'y = 1/(x sin(x))',
+  'y = tan(x)/(x - 100)',
+  'y = tan(x)/(x^2 - 1)',
+  'y = tan(x) + tan(sqrt(2)x)',
+  'y = 1/ln(x)',
+  'y = sqrt(x)/ln(x)',
 ]
+
+/**
+ * The numbers a domain or range text states, as numbers: "(−∞, −1301000) ∪ …"
+ * → [1301000, …]. Exact forms (π/2, √3) contribute their digits only, which
+ * are small.
+ */
+function statedNumbers(text: string): number[] {
+  return (text.replace(/−/g, '-').match(/\d+(?:\.\d+)?(?:e[+-]?\d+)?/g) ?? []).map(Number)
+}
 
 describe('every analysis entry point finishes on nasty formulas', () => {
   it('in a child process, under 500 ms per call (the 400 ms backstop plus margin) — a hang is killed, not waited on', () => {
@@ -118,6 +142,19 @@ describe('every analysis entry point finishes on nasty formulas', () => {
       for (const [call, ms] of Object.entries(row)) if (!(ms < 500 * PERF)) slow.push(`${src} ${call} ${ms.toFixed(0)} ms`)
     }
     expect(slow).toEqual([])
+    // No domain or range text states an endpoint past 1e5 that its formula
+    // did not write: such a number is a sampled pattern printed as a list.
+    const textLine = (res.stdout ?? '').split('\n').find((l) => l.startsWith('TEXT '))
+    expect(textLine, res.stdout).toBeDefined()
+    const texts = JSON.parse(textLine!.slice(5)) as Record<string, { domain: string[]; range: string[] }>
+    const artefacts: string[] = []
+    for (const src of NASTY) {
+      const written = statedNumbers(src)
+      for (const t of [...(texts[src]?.domain ?? []), ...(texts[src]?.range ?? [])]) {
+        for (const v of statedNumbers(t)) if (v > 1e5 && !written.includes(v)) artefacts.push(`${src}: ${t.slice(0, 80)}`)
+      }
+    }
+    expect(artefacts).toEqual([])
   }, 120_000 * PERF)
 
   it('the one that hung: the horizontal line test fails, with a real witness', () => {

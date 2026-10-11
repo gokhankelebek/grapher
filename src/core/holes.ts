@@ -44,7 +44,10 @@
 //     limit nor a blow-up, and it lets the other side speak alone.
 //   * a HOLE needs both sides to converge to the same value (within the same
 //     tol), or one side absent and the other converged; its y is the mean of
-//     the limits it has.
+//     the limits it has. One side absent is an open END of the domain (x·ln x
+//     at 0), marked `side`. A limit still creeping in geometrically is
+//     extrapolated (Aitken) and rounded to the size of that extrapolation —
+//     x·ln x reads 0, not the −1.84e−7 of its last rung.
 //   * a POLE needs one diverging side.
 //   * ANYTHING ELSE is neither. A jump — |x|/x at 0 — converges on both sides
 //     to different values: it is not a hole and it is not an asymptote, and it
@@ -108,6 +111,7 @@
 import type { Asymptote, FittedCurve, ModelSpec, PieceInfo, Vec2 } from './types'
 import { endBehaviour } from './fit/models'
 import { exactForm } from './exact'
+import { overflowEdge } from './domainRange'
 import type { ExactForm } from './exact'
 
 /**
@@ -154,6 +158,12 @@ export interface Hole {
   y: number
   /** true when the point came from an explicit exclusion or a closed-form root */
   exact: boolean
+  /**
+   * Set when the formula exists on ONE side of x only — an open END of the
+   * graph, not a removable discontinuity: x·ln x at 0 exists for x > 0 only
+   * (side 1) and approaches 0 as x → 0⁺. Absent for a two-sided hole.
+   */
+  side?: 1 | -1
 }
 
 // ---------------------------------------------------------------------------
@@ -270,15 +280,18 @@ function probeSide(f: Fn, x0: number, dir: 1 | -1, mag: number, scale: number): 
   const last = vals.slice(-3)
   const ref = Math.abs(last[2])
   const tol = Math.max(CONVERGE_REL * ref, CONVERGE_REL * mag, CONVERGE_ABS * scale)
+  const steps: number[] = []
+  for (let i = 1; i < vals.length; i++) steps.push(Math.abs(vals[i] - vals[i - 1]))
+  const n = steps.length
   if (Math.abs(last[0] - last[2]) <= tol && Math.abs(last[1] - last[2]) <= tol) {
-    return { limit: last[2], diverges: false, absent: false }
+    // settled — but a value still creeping in geometrically (xˣ at 0:
+    // 0.99999984, 0.99999982) is read to where it is going, as below
+    const shrinking = n >= 2 && steps[n - 1] <= TAIL_SHRINK * steps[n - 2]
+    return { limit: shrinking ? collapsedLimit(vals, steps) : last[2], diverges: false, absent: false }
   }
 
   // The values did not settle. Two ways that still has an answer, told apart
   // by what the STEPS between rungs are doing.
-  const steps: number[] = []
-  for (let i = 1; i < vals.length; i++) steps.push(Math.abs(vals[i] - vals[i - 1]))
-  const n = steps.length
 
   // A logarithm steps by ln 10 ≈ 2.303 every time h is divided by 10 — the
   // step never shrinks, so the side never arrives anywhere. It only reaches
@@ -289,18 +302,43 @@ function probeSide(f: Fn, x0: number, dir: 1 | -1, mag: number, scale: number): 
   }
 
   // The opposite: steps dying geometrically and already inside tol. x·ln(x)
-  // crawls to 0 this way, and its last value IS the limit to the precision
-  // that is left.
+  // crawls to 0 this way. Its last rung (−1.84e−7 at h = 1e−8) is NOT the
+  // limit: the steps still to come add up to about step·r/(1 − r), r the
+  // ratio of the last two steps. That sum is added (Aitken's extrapolation)
+  // and the result is rounded to the size of the sum itself — the precision
+  // the ladder actually knows the limit to — so x·ln x reads 0, not noise.
   if (
     n >= 3 &&
     steps[n - 1] <= tol &&
     steps[n - 1] <= TAIL_SHRINK * steps[n - 2] &&
     steps[n - 2] <= TAIL_SHRINK * steps[n - 3]
   ) {
-    return { limit: vals[vals.length - 1], diverges: false, absent: false }
+    return { limit: collapsedLimit(vals, steps), diverges: false, absent: false }
   }
 
   return { limit: null, diverges: false, absent: false }
+}
+
+/**
+ * The limit of a ladder whose steps are collapsing geometrically: the last
+ * value plus the tail of steps still to come (Aitken), rounded to the size
+ * of that tail — the limit is known no better than that. A real value keeps
+ * every digit the ladder knows (0.5 stays 0.5); what rounds away is only
+ * what is below the ladder's own uncertainty.
+ */
+function collapsedLimit(vals: number[], steps: number[]): number {
+  const n = steps.length
+  const last = vals[vals.length - 1]
+  const d = vals[vals.length - 1] - vals[vals.length - 2]
+  const r = steps[n - 1] / steps[n - 2]
+  if (!(r >= 0 && r < 1) || d === 0) return last
+  const tail = (d * r) / (1 - r)
+  const est = last + tail
+  const err = Math.abs(tail)
+  if (!Number.isFinite(est) || !(err > 0)) return last
+  const grid = Math.pow(10, Math.ceil(Math.log10(err)))
+  const y = Math.round(est / grid) * grid
+  return Number(y.toPrecision(12)) + 0
 }
 
 type Verdict = 'hole' | 'pole' | 'neither'
@@ -309,6 +347,8 @@ interface Classified {
   verdict: Verdict
   /** the two-sided limit, when the verdict is 'hole' */
   y: number
+  /** a one-sided 'hole': the side the formula exists on (see Hole.side) */
+  side?: 1 | -1
 }
 
 /** Sort one candidate x0 by VALUE — the whole rule, in one place. */
@@ -320,11 +360,13 @@ function classify(f: Fn, x0: number, mag: number): Classified {
 
   // One side has no formula on it at all: the other side is the whole story.
   // x·ln(x) exists only right of 0 and arrives at 0 — an open point on the
-  // graph, which is exactly what a hole is.
+  // graph, drawn as a hole's ring, but an END of the domain rather than a
+  // removable discontinuity: `side` says so, and the card states it as
+  // "y → 0 as x → 0⁺".
   if (left.absent !== right.absent) {
     const only = left.absent ? right.limit : left.limit
     if (only === null || !Number.isFinite(only)) return { verdict: 'neither', y: 0 }
-    return { verdict: 'hole', y: only }
+    return { verdict: 'hole', y: only, side: left.absent ? 1 : -1 }
   }
   if (left.limit === null || right.limit === null) return { verdict: 'neither', y: 0 }
 
@@ -689,8 +731,13 @@ function endSide(f: Fn, side: 1 | -1, x0: number, mag: number): EndLine | null {
   for (let k = 0; k <= END_RUNGS; k++) {
     const v = f(x)
     // Infinity is not a line, and NaN is a domain edge reached (√x to the
-    // left, ln of a negative). Either way this side has no asymptote.
-    if (typeof v !== 'number' || !Number.isFinite(v)) return null
+    // left, ln of a negative). Either way this side has no asymptote —
+    // unless the NaN is the doubles overflowing (eˣ/(eˣ + 7) is ∞/∞ past
+    // x ≈ 709.78, though it is ≈ 1 everywhere out there): then the ladder
+    // stops short of the overflow and reads a LEVEL from the rungs it has.
+    if (typeof v !== 'number' || !Number.isFinite(v)) {
+      return k > 0 && Number.isNaN(v) ? overflowLevel(f, xs[k - 1], x, mag) : null
+    }
     xs.push(x)
     fs.push(v)
     x *= END_RATIO
@@ -751,6 +798,43 @@ function endSide(f: Fn, side: 1 | -1, x0: number, mag: number): EndLine | null {
   if (Math.abs(vOff - m * xOff - b) > 2 * bTol) return null
   if (Math.abs(b) <= bTol) b = 0
   return { m, b }
+}
+
+/**
+ * The level an end settles on when the outward ladder ran into overflow
+ * before it could finish: f has a value at xIn, and NaN at xOut, because a
+ * term like eˣ overflowed on the way (∞/∞, ∞ − ∞) — not because the formula
+ * stops. overflowEdge (src/core/domainRange.ts) tells the two apart: the
+ * last x with a value must be far out and f must arrive there smoothly.
+ *
+ * Then the ladder is rebuilt INSIDE the readable reach — X/64, X/32, …, X,
+ * doubling up to the last x with a value — and the side has a horizontal
+ * asymptote when the last three rungs AGREE (agreement only: these tails are
+ * exponential, eˣ/(eˣ + 7) is 1 to the last bit from x ≈ 40 on) and the
+ * level holds at three non-round points between them too. A slope, a slow
+ * 1/x drift or an oscillation fails one or the other and reports nothing,
+ * which is a miss, never a wrong line. (2eˣ + 3)/(eˣ − 1) → 2 and
+ * eˣ/(1 + eˣ) → 1 are read this way.
+ */
+function overflowLevel(f: Fn, xIn: number, xOut: number, mag: number): EndLine | null {
+  const X = overflowEdge(f, xIn, xOut)
+  if (X === null) return null
+  const vals: number[] = []
+  for (const d of [64, 32, 16, 8, 4, 2, 1]) {
+    const v = f(X / d)
+    if (!Number.isFinite(v)) return null
+    vals.push(v)
+  }
+  const last = vals[vals.length - 1]
+  const tol = Math.max(CONVERGE_REL * Math.abs(last), CONVERGE_REL * mag, CONVERGE_ABS)
+  let b = tailLimit(vals, tol, false)
+  if (b === null || !Number.isFinite(b)) return null
+  for (const q of [0.31, 0.6, 0.83]) {
+    const v = f(X * q)
+    if (!Number.isFinite(v) || Math.abs(v - b) > 2 * tol) return null
+  }
+  if (Math.abs(b) <= tol) b = 0
+  return { m: 0, b }
 }
 
 /** Where, as a multiple of rung x₅, the off-ladder check samples: e, not round. */
@@ -894,7 +978,7 @@ export function findHoles(
       // f finite AT the point means the formula never broke there: the x was
       // written down as an exclusion, so it is known rather than located.
       const exact = Number.isFinite(ctx.f(x)) || looksWritten(x)
-      out.push({ x, y: c.y, exact })
+      out.push(c.side ? { x, y: c.y, exact, side: c.side } : { x, y: c.y, exact })
     }
     return out
   } catch {

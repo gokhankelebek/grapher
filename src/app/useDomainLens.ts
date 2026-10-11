@@ -37,6 +37,7 @@ import {
 } from '../ui/domainLinks'
 import type { DomainActions, Restriction, RestrictMode } from '../ui/domainLinks'
 import { curveEquationText } from '../ui/equationText'
+import { lineVariable } from '../ui/familyLine'
 import {
   inverseColor,
   isIdentityLine,
@@ -455,7 +456,8 @@ export function useDomainLens({ board, session, refs, derived, notices, history,
       if (mode.kind === 'none') return mode.why
       if (mode.kind === 'typed') {
         const src = exprSourcesRef.current[id]
-        const line = restrictedLine(src, r ?? { lo: null, hi: null })
+        // written in the line's own variable: d(t) = … {0 <= t <= 24}
+        const line = restrictedLine(src, r ?? { lo: null, hi: null }, lineVariable(src))
         if (line === null) return WHY_PIECEWISE
         const err = restateTypedCurve(id, line, r ? 'restrict domain' : 'clear restriction')
         if (err) return err

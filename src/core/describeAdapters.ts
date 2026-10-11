@@ -480,11 +480,13 @@ function describeOne(c: AdapterCurve, input: AdapterInput): DescribeCurve {
     const h: DescribeHole = { x: p.pos.x, y: p.pos.y }
     if (p.exactX) h.exactX = p.exactX
     if (p.exactY) h.exactY = p.exactY
+    if (p.side) h.side = p.side
     holes.push(h)
   }
   for (const h of safe(() => findHoles(curve, models, range)) ?? []) {
     if (!inWindow(h, w) || holes.some((k) => Math.abs(k.x - h.x) < 1e-6)) continue
     const d: DescribeHole = { x: h.x, y: h.y }
+    if (h.side) d.side = h.side
     const exX = ex(h.x); if (exX) d.exactX = exX
     const exY = ex(h.y); if (exY) d.exactY = exY
     holes.push(d)

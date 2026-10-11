@@ -69,6 +69,7 @@ import { signRange } from './signChartLinks'
 import { implicitSearchBox, isImplicitCurve } from './implicitLinks'
 import { drawnExtent, inverseRestriction, oneToOneText, setRowText, splitTyped } from './domainLinks'
 import { curveEquationText } from './equationText'
+import { lineVariable } from './familyLine'
 import { dependencyKeys } from './nameLinks'
 import { curveSpecSerial } from './valueKeys'
 import { viewSpans } from './renderBoard'
@@ -253,7 +254,7 @@ function domainRowsFor(m: DocModel, selectedId: string | null): DomainRows | nul
   return {
     domain: setRowText(domain, 'interval'),
     range: setRowText(range, 'interval'),
-    oneToOne: oneToOneText(one),
+    oneToOne: oneToOneText(one, lineVariable(src)),
     inverse,
   }
 }

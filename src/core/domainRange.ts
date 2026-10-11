@@ -91,10 +91,23 @@
 // ("… ∪ (−3π/2, −π/2) ∪ (−π/2, π/2) ∪ (π/2, 3π/2) ∪ …"), and `builder` is
 // "x ≠ π/2 + kπ" when the exclusions are points (several offsets:
 // "x ≠ π/6 + 2kπ, 5π/6 + 2kπ"); a periodic set of intervals (√(sin x))
-// keeps the "…" text as its builder. Intersected with a bounded restriction
+// keeps the "…" text as its builder. A FEW points off the pattern (at most
+// three — the 0 of tan(x)/x) are allowed and listed first: "x ≠ 0, π/2 + kπ".
+// Exclusions the scan cannot vouch for — many far out (|x| > 1e5), or many
+// crowding closer than a few samples (tan(eˣ)) — are a pattern seen through
+// a sparse scan: the domain is then 'unknown', never a list of samples.
+// Intersected with a bounded restriction
 // the set is ordinary again, read over the restriction itself. The range and
 // the horizontal line test of a periodic domain are read over the parts in
-// the window (right for tan, sec, and every periodic formula).
+// the window — right when f itself repeats (tan, sec); when it does not
+// (1/(x sin x), sec(x)/x) the range is 'unknown' unless the window already
+// takes every value (tan(x)/x is ℝ).
+//
+// ENDS BY THE FORMULA. An open finite end, and a tail at ±∞ the samples read
+// as settling or running off, is first asked of the formula's limit laws
+// (src/core/endLimit.ts): (e²ˣ − 1)/ln(1 + x) → 0 as x → −1⁺ and 1/ln x → 0
+// as x → ∞ crawl in like 1/ln h, too slowly for any extrapolation. Then an
+// open finite end asks the Taylor jet (a removable 0/0), then the ladder.
 //
 // OVERFLOW, UNDERFLOW AND POLES THE DOUBLES HIT. A lone ±∞ sample between
 // two values is f dividing by exactly 0 at that x — a pole, so the point is
@@ -131,6 +144,7 @@ import type { ExactPoint, FittedCurve, ModelSpec } from './types'
 import type { ExactForm } from './exact'
 import { exactForm, verifiedExact } from './exact'
 import { richardsonD1 } from './parse'
+import { formulaLimit } from './endLimit'
 
 /** One interval of reals. lo/hi are ±Infinity for an unbounded side (never closed). */
 export interface IntervalPart {
@@ -156,6 +170,12 @@ export interface PeriodicInfo {
   right: boolean
   /** for a pattern of excluded POINTS: one representative of each class mod P */
   offsets: { value: number; exact: ExactForm | null }[] | null
+  /**
+   * Excluded points that are NOT part of the pattern — the 0 of tan(x)/x,
+   * whose denominator x is out once, beside tan's π/2 + kπ. Absent when
+   * there are none.
+   */
+  extra?: { value: number; exact: ExactForm | null }[]
 }
 
 /** A set of reals, and how a textbook writes it. */
@@ -223,6 +243,12 @@ const MAX_PARTS = 400
 const ISOLATED_MAX = 4
 /** At most this many one-to-one stretches are listed (floor(x)/x has one per tread). */
 const MAX_MONOTONE = 24
+/**
+ * Domain events farther out than this are few in any formula a class types
+ * (1/(x − 200000) has one); many of them are a pattern seen through a sparse
+ * scan, never a list to print (see scanDomain).
+ */
+const FAR_EVENT = 1e5
 /** The internal memo lives this long (ms): one card render, not one drag. */
 const MEMO_MS = 60
 /**
@@ -566,7 +592,12 @@ function periodicDescription(
   const bodyTex = shown.map(partTex).join(' \\cup ')
   const text = `${moreLeft ? '… ∪ ' : ''}${body}${moreRight ? ' ∪ …' : ''}`
   const tex = `${moreLeft ? '\\cdots \\cup ' : ''}${bodyTex}${moreRight ? ' \\cup \\cdots' : ''}`
-  if (per.offsets && per.left && per.right) {
+  // "x ≠ …" only when the listed parts really are the line with points out:
+  // ln(sin x) has its zeros kπ named as exclusions, but its domain is the
+  // INTERVALS (2kπ, (2k + 1)π), and "x ≠ kπ" would be false
+  const pointGaps = parts.length > 1 && parts.every((p, i) =>
+    p.lo < p.hi && (i === 0 || (same(parts[i - 1].hi, p.lo) && !parts[i - 1].hiClosed && !p.loClosed)))
+  if (per.offsets && per.left && per.right && pointGaps) {
     const k = kMultiple(per.period, per.periodExact)
     const terms = per.offsets.map((o) => {
       if (Math.abs(o.value) < 1e-12) return { t: k.t, tex: k.tex }
@@ -574,6 +605,10 @@ function periodicDescription(
       const oTex = o.exact ? o.exact.tex : numTex(o.value)
       return { t: `${ot} + ${k.t}`, tex: `${oTex} + ${k.tex}` }
     })
+    // the lone points off the pattern come first: "x ≠ 0, π/2 + kπ"
+    for (const o of (per.extra ?? []).slice().reverse()) {
+      terms.unshift({ t: o.exact ? o.exact.text : numText(o.value), tex: o.exact ? o.exact.tex : numTex(o.value) })
+    }
     return {
       text,
       tex,
@@ -943,7 +978,9 @@ function scanDomain(ctx: Ctx, wLo: number, wHi: number, mode: ScanMode = 'curve'
   // (√(sin x)), or the excluded points alone repeating out to one or both
   // edges (tan x; tan x {x >= 0}, whose gate at 0 is not part of the pattern)
   const inWin = (x: number) => x >= wLo && x <= wHi
+  // (one point may be named twice — a lone pole sample and a singularity)
   const winPoints = pointEvents.filter((e) => inWin(e.x)).sort((a, b) => a.x - b.x)
+    .filter((e, i, arr) => i === 0 || !same(arr[i - 1].x, e.x))
   const dedup: Event[] = []
   for (const e of sorted.filter((q) => inWin(q.x)).concat(winPoints).sort((a, b) => a.x - b.x)) {
     const last = dedup[dedup.length - 1]
@@ -957,13 +994,41 @@ function scanDomain(ctx: Ctx, wLo: number, wHi: number, mode: ScanMode = 'curve'
   const per = detectPeriod(dedup, wLo, wHi) ?? detectPointPeriod(winPoints, wLo, wHi)
   if (per) {
     // the far singularities on a periodic side are the pattern (or aliasing
-    // of it): only the window's own points are taken out
-    const keep = pointEvents.filter((e) => inWin(e.x) || (e.x < wLo && !per.left) || (e.x > wHi && !per.right))
+    // of it): only the window's own points are taken out — and, beyond it, a
+    // point the formula names that is NOT on the pattern (tan(x)/(x − 100)
+    // loses 100 too), up to the same few as inside
+    const farExtra = pointEvents.filter((e) => !inWin(e.x) && ((e.x < wLo && per.left) || (e.x > wHi && per.right)) && !onPattern(per, e.x))
+      .sort((a, b) => a.x - b.x).filter((e, i, arr) => i === 0 || !same(arr[i - 1].x, e.x))
+    const keep = pointEvents.filter((e) => inWin(e.x) || (e.x < wLo && !per.left) || (e.x > wHi && !per.right) ||
+      (farExtra.length + (per.extra?.length ?? 0) <= PATTERN_EXTRA_MAX && farExtra.includes(e)))
+    if (per.offsets && farExtra.length > 0 && farExtra.length + (per.extra?.length ?? 0) <= PATTERN_EXTRA_MAX) {
+      per.extra = [...(per.extra ?? []), ...farExtra.map((e) => ({ value: e.x, exact: e.exact }))].sort((a, b) => a.value - b.value)
+    }
     let ps = removePoints(base, keep.map((e) => ({ x: e.x, exact: e.exact })))
     ps = ps.filter((p) => p.lo < p.hi || (p.lo === p.hi && p.loClosed))
     // on a side that continues, only the parts wholly inside the window
     ps = ps.filter((p) => (!per.left || p.lo >= wLo) && (!per.right || p.hi <= wHi))
     return { parts: ps, periodic: per }
+  }
+  // A guard against listing a sampled pattern as if it were the formula's
+  // own points. Far out (|x| > FAR_EVENT) the scan and the singularity
+  // search see only a sparse subset of a periodic set of exclusions — tan's
+  // poles near ±5493, ±25970, … once read as "(−∞, −1301000) ∪ …". A
+  // formula names a handful of far points at most; more than that is a
+  // pattern this scan could not recognise, and the domain is not stated.
+  const far = events.filter((e) => Math.abs(e.x) > FAR_EVENT).length +
+    pointEvents.filter((e) => Math.abs(e.x) > FAR_EVENT).length
+  if (far > ISOLATED_MAX) return { parts: [], periodic: null, unknown: true }
+  // The same in the window: many exclusions crowding closer than a few
+  // sample steps (tan(eˣ), whose poles ln(π/2 + kπ) bunch up faster than
+  // any scan can follow) are a list the scan cannot vouch for — the ones
+  // between its samples are missing.
+  {
+    const xsIn = [...events, ...pointEvents].map((e) => e.x).filter(inWin).sort((a, b) => a - b)
+    const step = width / n
+    let crowded = 0
+    for (let i = 1; i < xsIn.length; i++) if (xsIn[i] - xsIn[i - 1] < 4 * step) crowded++
+    if (xsIn.length > 12 && crowded > ISOLATED_MAX) return { parts: [], periodic: null, unknown: true }
   }
   parts = removePoints(base, pointEvents.map((e) => ({ x: e.x, exact: e.exact })))
   // a lone non-analytic sample (|x| at 0 read through jets) splits nothing
@@ -972,26 +1037,69 @@ function scanDomain(ctx: Ctx, wLo: number, wHi: number, mode: ScanMode = 'curve'
   return { parts, periodic: null }
 }
 
-/** Excluded points alone repeating with a period, out to one or both window edges. */
+/**
+ * The most excluded points that may sit OFF a periodic pattern and still let
+ * it be one: tan(x)/x is tan's π/2 + kπ plus the 0 its denominator takes
+ * out. A formula naming more lone points than this beside a pattern is
+ * listed point by point, as before.
+ */
+const PATTERN_EXTRA_MAX = 3
+
+/**
+ * Excluded points alone repeating with a period, out to one or both window
+ * edges — allowing up to PATTERN_EXTRA_MAX points that are not part of it
+ * (they come back in `extra`).
+ */
 function detectPointPeriod(points: Event[], wLo: number, wHi: number): PeriodicInfo | null {
   if (points.length < 4) return null
-  const xs = points.map((e) => e.x)
+  const all = points.map((e) => e.x)
   const width = wHi - wLo
-  for (let j = 1; j < Math.min(xs.length, 7); j++) {
-    const P0 = xs[j] - xs[0]
-    if (!(P0 > 0) || P0 > width / 3) continue
+  // candidate periods: the gaps among the first few points, smallest first
+  // (the first point may be one of the extras, so not only gaps from it)
+  const head = all.slice(0, 8)
+  const cands: number[] = []
+  for (let i = 0; i < head.length; i++) {
+    for (let j = i + 1; j < head.length; j++) {
+      const P = head[j] - head[i]
+      if (P > 0 && P <= width / 3 && !cands.some((c) => Math.abs(c - P) <= 1e-9 * Math.max(1, P))) cands.push(P)
+    }
+  }
+  cands.sort((a, b) => a - b)
+  for (const P0 of cands) {
     const tol = 1e-7 * Math.max(1, P0)
-    const has = (x: number) => xs.some((q) => Math.abs(q - x) <= tol * Math.max(1, Math.abs(x)))
-    if (!xs.every((x) => x + P0 > wHi - tol || has(x + P0))) continue
+    const near = (q: number, x: number) => Math.abs(q - x) <= tol * Math.max(1, Math.abs(x))
+    const hasIn = (list: number[], x: number) => list.some((q) => near(q, x))
+    // a point with neither neighbour one period away is not in the pattern
+    const extraIdx = new Set<number>()
+    all.forEach((x, i) => { if (!hasIn(all, x + P0) && !hasIn(all, x - P0)) extraIdx.add(i) })
+    if (extraIdx.size > PATTERN_EXTRA_MAX) continue
+    const rest = points.filter((_, i) => !extraIdx.has(i))
+    const xs = rest.map((e) => e.x)
+    if (xs.length < 4 || extraIdx.size * 4 > xs.length) continue
+    if (!xs.every((x) => x + P0 > wHi - tol || hasIn(xs, x + P0))) continue
     const left = xs[0] - wLo <= P0 + tol
     const right = wHi - xs[xs.length - 1] <= P0 + tol
     if (!left && !right) continue
     // at least three periods of the pattern inside the window
     if (xs[xs.length - 1] - xs[0] < 3 * P0 - tol) continue
     const Ps = snapX(P0, 1e-9)
-    return { period: Ps.x, periodExact: Ps.exact, left, right, offsets: offsetsOf(points, Ps.x) }
+    const info: PeriodicInfo = { period: Ps.x, periodExact: Ps.exact, left, right, offsets: offsetsOf(rest, Ps.x) }
+    if (extraIdx.size > 0) {
+      info.extra = points.filter((_, i) => extraIdx.has(i)).map((e) => ({ value: e.x, exact: e.exact }))
+    }
+    return info
   }
   return null
+}
+
+/** Is x one of the pattern's points (an offset + kP)? */
+function onPattern(per: PeriodicInfo, x: number): boolean {
+  if (!per.offsets) return false
+  const P = per.period
+  return per.offsets.some((o) => {
+    const k = Math.round((x - o.value) / P)
+    return Math.abs(x - o.value - k * P) <= 1e-7 * Math.max(1, Math.abs(x))
+  })
 }
 
 /** One representative per class mod P, the one nearest 0 (π/2 before −π/2). */
@@ -1480,7 +1588,8 @@ function sampleStretchUncached(ctx: Ctx, s: IntervalPart): {
         if (x === e) break
         seq.push(f(x))
       }
-      const c = classifyEnd(seq, noise, LADDER_RUN, coreMin, coreMax)
+      const fe = formulaEnd(ctx, e, sgn > 0 ? -1 : 1)
+      const c = fe ? { end: fe } : classifyEnd(seq, noise, LADDER_RUN, coreMin, coreMax)
       return { pts: [], end: c.end, run: 0 }
     }
     // doubling out from the core's edge
@@ -1507,6 +1616,14 @@ function sampleStretchUncached(ctx: Ctx, s: IntervalPart): {
         if (overflowEdge(f, inX, lastPt.x) !== null) minRun = Math.min(TAIL_RUN, Math.max(3, fin.length))
       }
       let c = classifyEnd(seq, noise, minRun, coreMin, coreMax)
+      // A tail the samples read as settling (or running off) is stated by the
+      // formula's limit laws where they decide it: 1/ln x → 0 as x → ∞, which
+      // crawls in too slowly for any extrapolation (it read 0.0287). The run
+      // the samples found still says where the extrema stop.
+      if (c.end.kind === 'conv' || c.end.kind === 'div') {
+        const fe = formulaEnd(ctx, sgn > 0 ? Infinity : -Infinity, sgn > 0 ? -1 : 1)
+        if (fe) c = { ...c, end: c.end.wobbly && (fe.kind === 'conv' || fe.kind === 'div') ? { ...fe, wobbly: true } : fe }
+      }
       // A tail whose samples never move (every step 0 or rounding) says
       // nothing about direction. When the core next to it is not flat —
       // floor(x)/x reads exactly 1 at every doubling (they are integers)
@@ -1538,7 +1655,8 @@ function sampleStretchUncached(ctx: Ctx, s: IntervalPart): {
       if (x === e) break
       lseq.push(f(x))
     }
-    const c = classifyEnd(lseq, noise, LADDER_RUN, coreMin, coreMax)
+    const fe = formulaEnd(ctx, e, sgn > 0 ? -1 : 1)
+    const c = fe ? { end: fe } : classifyEnd(lseq, noise, LADDER_RUN, coreMin, coreMax)
     return { pts: pts.filter((p) => Number.isFinite(p.v)), end: c.end, run: pts.length }
   }
   const L = side(-1)
@@ -1555,6 +1673,34 @@ function sampleStretchUncached(ctx: Ctx, s: IntervalPart): {
     coreMax,
     noise,
   }
+}
+
+/**
+ * An open finite end read off the FORMULA rather than its samples — first by
+ * the limit laws on its tree (src/core/endLimit.ts: (e²ˣ − 1)/ln(1 + x) →
+ * (e⁻² − 1)/(−∞) = 0 as x → −1⁺, an end that crawls in like 1/ln h and that
+ * a ladder of samples extrapolates to 0.0156), then by its Taylor jet there
+ * (a removable 0/0: the same curve's hole at 0, where the samples a hair
+ * away are cancellation noise and the jet says 2). Null when neither
+ * decides: the ladder reads the end as before. `approach` is the side x
+ * comes from: +1 for a stretch's left end, −1 for its right.
+ */
+function formulaEnd(ctx: Ctx, e: number, approach: 1 | -1): EndKind | null {
+  if (Number.isNaN(e)) return null
+  const node = ctx.spec.formula
+  if (node) {
+    const L = formulaLimit(node, ctx.params, e, approach)
+    if (L) return L.kind === 'fin' ? { kind: 'conv', L: L.v } : { kind: 'div', sign: L.sign }
+  }
+  if (!Number.isFinite(e)) return null
+  const jet = ctx.spec.taylor
+  if (typeof jet === 'function') {
+    let c: number[] | null = null
+    try { c = jet.call(ctx.spec, ctx.params, e, 0) } catch { c = null }
+    const c0 = Array.isArray(c) ? c[0] : Number.NaN
+    if (typeof c0 === 'number' && Number.isFinite(c0)) return { kind: 'conv', L: c0 }
+  }
+  return null
 }
 
 interface Jump { x: number; exact: ExactForm | null; v: number; vl: number; vr: number }
@@ -2050,10 +2196,50 @@ function curveRangeIn(curve: FittedCurve, models: Record<string, ModelSpec>): Re
   try {
     const ctx = ctxOf(curve, models)
     if (!ctx) return null
-    return rangeSet(analysisOf(ctx, curve))
+    const set = rangeSet(analysisOf(ctx, curve))
+    // A periodic domain is read over its core window, which is the whole
+    // story only when f repeats with the domain. 1/(x sin x) does not: its
+    // branches flatten toward 0 as |x| grows, so the window's
+    // [0.0706, ∞) is not its range. Unless the window already takes every
+    // value, such a range is unknown rather than a guess.
+    const per = domainInfo(ctx, curve).periodic
+    if (per && (per.left || per.right) && set.kind === 'intervals' && !wholeLine(set) && !repeatsWith(ctx, per)) {
+      return unknownSet()
+    }
+    return set
   } catch {
     return null
   }
+}
+
+const wholeLine = (s: RealSet): boolean =>
+  s.parts.length === 1 && s.parts[0].lo === -Infinity && s.parts[0].hi === Infinity
+
+/**
+ * Does f itself repeat with the domain — f(x + kmP) = f(x) at a spread of
+ * samples, for some small multiple m of the domain's period P (sec x has
+ * excluded points every π but repeats every 2π)?
+ */
+function repeatsWith(ctx: Ctx, per: PeriodicInfo): boolean {
+  if (per.extra && per.extra.length > 0) return false
+  const P = per.period
+  for (let m = 1; m <= 4; m++) {
+    const T = m * P
+    let seen = 0
+    let ok = true
+    for (let i = 0; i < 16 && ok; i++) {
+      const x = (T * (i + 0.37)) / 16
+      const v = ctx.f(x)
+      if (!Number.isFinite(v)) continue
+      for (const k of [-3, 1, 5]) {
+        const w = ctx.f(x + k * T)
+        if (!Number.isFinite(w) || Math.abs(w - v) > 1e-6 * Math.max(1, Math.abs(v))) { ok = false; break }
+      }
+      seen++
+    }
+    if (ok && seen >= 4) return true
+  }
+  return false
 }
 
 // ============================================================================

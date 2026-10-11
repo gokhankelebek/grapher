@@ -43,7 +43,7 @@ import { ComplexZerosSection } from './ComplexZerosSection'
 import type { ZeroInterval } from '../core/analyze'
 import { exactForm } from '../core/exact'
 import { Latex } from './Latex'
-import { APPROX, exactDetail, formatCoord, parseNumeric, pointParts } from './numeric'
+import { APPROX, exactDetail, formatCoord, openEndText, parseNumeric, pointParts } from './numeric'
 import { alignedValues, curveScale, curveXScale, derivesFromInk, pointScale } from './curveState'
 import { axisKeys, featureAxes } from './featureEdit'
 import { curveEquationText, displayEquationLatex } from './equationText'
@@ -380,13 +380,18 @@ const ANALYSIS_ROWS: {
   label: string
   plural?: string
   readOnly?: boolean
+  /** Only the points of `kind` this row holds (a hole vs an open end). */
+  match?: (p: SpecialPoint) => boolean
 }[] = [
   { kind: 'zero', label: 'Zero', plural: 'Zeros' },
   { kind: 'maximum', label: 'Maximum', plural: 'Maxima' },
   { kind: 'minimum', label: 'Minimum', plural: 'Minima' },
   { kind: 'inflection', label: 'Inflection', plural: 'Inflections' },
   { kind: 'y-intercept', label: 'y-intercept' },
-  { kind: 'hole', label: 'Hole', plural: 'Holes', readOnly: true },
+  { kind: 'hole', label: 'Hole', plural: 'Holes', readOnly: true, match: (p) => !p.side },
+  // x·ln x at 0: the formula exists on one side only, so the open ring there
+  // is where the graph ENDS, stated as where it heads — "y → 0 as x → 0⁺"
+  { kind: 'hole', label: 'Open end', plural: 'Open ends', readOnly: true, match: (p) => !!p.side },
   { kind: 'extreme', label: 'Extreme', plural: 'Extremes' },
   { kind: 'petal-tip', label: 'Petal tip', plural: 'Petal tips' },
 ]
@@ -1426,7 +1431,7 @@ export function CurveCard({
     return ANALYSIS_ROWS.map((row) => {
       const items = analysis
         .map((point, index) => ({ point, index }))
-        .filter(({ point }) => point.kind === row.kind)
+        .filter(({ point }) => point.kind === row.kind && (!row.match || row.match(point)))
       const spans = row.kind === 'zero' ? zeroSpans : []
       type Entry =
         | { point: SpecialPoint; index: number; span?: undefined }
@@ -2906,7 +2911,7 @@ export function CurveCard({
                   />
                 )}
                 {analysisGroups.map((g) => (
-                  <div className="an-row" key={g.kind}>
+                  <div className="an-row" key={g.label}>
                     <span className="an-label">
                       {g.seq.length > 1 ? (g.plural ?? g.label) : g.label}
                     </span>
@@ -2970,13 +2975,18 @@ export function CurveCard({
                         // the formula has no value, so there is nothing for an
                         // editor to move. No button, no hover, no hint.
                         if (g.readOnly) {
+                          // an open end says where the graph heads, not a point it has
+                          const endText = point.side
+                            ? openEndText(point, { scale: pointScale(curve, spec, point.pos.x, scale), xScale }, domainPanel?.variable ?? 'x') + comma
+                            : null
                           return (
                             <Answer k={answerKey} key={index}>
                               <span
                                 className="an-value an-value-static"
-                                data-value={parts.exact === null ? undefined : text}
+                                data-value={endText !== null || parts.exact === null ? undefined : text}
+                                data-testid={endText !== null ? 'open-end' : undefined}
                               >
-                                {valueNode}
+                                {endText ?? valueNode}
                               </span>
                             </Answer>
                           )

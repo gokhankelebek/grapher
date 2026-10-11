@@ -9,9 +9,11 @@
 import { useCallback, useMemo } from 'react'
 import { levelCrossings } from '../core/domainRange'
 import { curveXScale } from '../ui/curveState'
+import { lineVariable } from '../ui/familyLine'
 import {
   drawnExtent,
   hltVerdict,
+  inCurveVariable,
   inVariable,
   inverseCurveLine,
   oneToOneChips,
@@ -94,6 +96,8 @@ export function useDomainPanel({ board, docState, refs, derived, calc, domain, n
       }
     }
     const restrict = restrictModeOf(owner)
+    // C(t) = {…}: every row, chip and editor in t
+    const v = lineVariable(exprSources[owner.id])
     const chipScale = (c: typeof owner): number | undefined => {
       try {
         return curveXScale(c, models[c.modelId])
@@ -127,19 +131,20 @@ export function useDomainPanel({ board, docState, refs, derived, calc, domain, n
       role: 'function',
       ownerId: owner.id,
       name,
-      domain: facts.domain,
+      domain: inCurveVariable(facts.domain, v),
       range: facts.range,
       oneToOne: facts.one,
       restrict,
       current,
       restricted,
       // labelled at the curve's x-scale, as the card's rows are
-      chips: oneToOneChips(facts.one, chipScale(owner)),
+      chips: oneToOneChips(facts.one, chipScale(owner), v),
       ghost: l?.ghost === true,
       hlt,
       reflect: l?.reflect !== undefined,
       inverse,
       drawn: restrict.kind === 'sketch' ? drawnExtent(owner) : null,
+      variable: v,
     }
     // The facts are keyed on values, so these say WHEN to ask; historyTick
     // is the end of a gesture (a committed drag), when stale facts refresh.

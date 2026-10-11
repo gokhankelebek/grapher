@@ -66,6 +66,7 @@ import type { Overlay } from '../render/overlays'
 import type { ValueTableFigure } from '../render/valueTable'
 import { explicitF, familyF } from './domainLinks'
 import { parseNumeric } from './numeric'
+import { lineVariable } from './familyLine'
 import { maskValueTable, tableKey } from './reveal'
 import type { TablePart } from './reveal'
 
@@ -516,6 +517,8 @@ export interface TablePanel {
   division: DivisionView | null
   /** "x = 0 … 5, 6 rows" — the folded header. */
   summary: string
+  /** The function's own variable: 't' for C(t) = {…}, else 'x' (absent: x). */
+  variable?: 'x' | 't'
 }
 
 const fix2 = (v: number): string => {
@@ -1036,11 +1039,12 @@ export function tablePanel(curve: FittedCurve, stored: ValueTableView | undefine
   const coeffs = polyOf(curve, ctx.models)
   const division = coeffs ? divisionView(coeffs, s.div, name, plain) : null
 
+  const v = lineVariable(ctx.sources?.[curve.id])
   const summary =
     t && t.xs.length > 0
       ? s.list !== null
-        ? `x = ${t.x.map((c) => c.text).slice(0, 4).join(', ')}${t.xs.length > 4 ? ', …' : ''}`
-        : `x = ${t.x[0].text} … ${t.x[t.x.length - 1].text}, ${t.xs.length} rows`
+        ? `${v} = ${t.x.map((c) => c.text).slice(0, 4).join(', ')}${t.xs.length > 4 ? ', …' : ''}`
+        : `${v} = ${t.x[0].text} … ${t.x[t.x.length - 1].text}, ${t.xs.length} rows`
       : 'table of values'
 
   return {
@@ -1056,6 +1060,7 @@ export function tablePanel(curve: FittedCurve, stored: ValueTableView | undefine
     others,
     division,
     summary,
+    variable: v,
   }
 }
 
@@ -1135,8 +1140,9 @@ export const maskTableFigure = maskValueTable
 /** The headers and rows a panel puts on the figure. */
 export function panelFigure(panel: TablePanel, color: string, hidden = false): ValueTableFigure | null {
   if (panel.rows.length === 0) return null
-  const heads = ['x', `${panel.name}(x)`]
-  if (panel.compare) heads.push(`${panel.compare.otherName}(x)`)
+  const v = panel.variable ?? 'x'
+  const heads = [v, `${panel.name}(${v})`]
+  if (panel.compare) heads.push(`${panel.compare.otherName}(${v})`)
   for (const c of panel.cols) heads.push(FIG_HEAD[c])
   const rows = panel.rows.map((r) => {
     const cells = [r.x.text, r.y.text]

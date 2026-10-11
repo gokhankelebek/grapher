@@ -431,6 +431,13 @@ export interface SpecialPoint {
    * the case naive sign-change root finding silently misses.
    */
   tangent?: boolean
+  /**
+   * For kind 'hole' only: set when the formula exists on ONE side of x — an
+   * open END of the graph, not a removable discontinuity. x·ln x has no
+   * value left of 0 and approaches 0 as x → 0⁺: side 1 (the side it exists
+   * on). The card states it as "y → 0 as x → 0⁺". Absent for a true hole.
+   */
+  side?: 1 | -1
 }
 
 // ============================================================================

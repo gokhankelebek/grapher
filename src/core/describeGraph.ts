@@ -90,6 +90,8 @@ export interface DescribeHole {
   y: number
   exactX?: string
   exactY?: string
+  /** an open END of the graph (x·ln x at 0), not a hole: the side it exists on */
+  side?: 1 | -1
 }
 
 /** A break between two pieces (or at a step) where the one-sided limits differ. */
@@ -502,7 +504,7 @@ function curveClauses(c: DescribeCurve, answers: boolean, multi: boolean, group:
   }
   if (answers || markersShown(c)) {
     for (const h of c.holes ?? []) {
-      add(5, `${answers ? 'hole' : 'open circle'} at ${pointShort(h.x, h.y, h.exactX, h.exactY)}`)
+      add(5, `${answers ? (h.side ? 'open end' : 'hole') : 'open circle'} at ${pointShort(h.x, h.y, h.exactX, h.exactY)}`)
       said.push(h)
     }
     for (const j of c.jumps ?? []) add(5, answers ? jumpShort(j) : jumpMarks(j))
@@ -827,7 +829,12 @@ function curveLong(c: DescribeCurve, answers: boolean): string {
     }
   }
   if (answers || markersShown(c)) {
-    const holes = c.holes ?? []
+    // an open end (x·ln x at 0) is where the graph stops, not a hole in it
+    for (const h of (c.holes ?? []).filter((q) => q.side)) {
+      s.push(sentence(`Its graph ends at an open circle at ${pointSpoken(h.x, h.y, h.exactX, h.exactY)}`))
+      said.push(h)
+    }
+    const holes = (c.holes ?? []).filter((q) => !q.side)
     if (holes.length) {
       const at = list(holes.map((h) => pointSpoken(h.x, h.y, h.exactX, h.exactY)))
       s.push(sentence(answers

@@ -97,6 +97,8 @@ export function DomainSection({ panel, actions, notation }: Props) {
   const reveal = useReveal()
   const restrict = panel.restrict
   const sketch = restrict.kind === 'sketch'
+  // the function's own variable: C(t) is restricted, charted and tested in t
+  const v = panel.variable ?? 'x'
 
   const domainText = setRowText(panel.domain, notation)
   const rangeText = setRowText(panel.range, notation)
@@ -154,7 +156,7 @@ export function DomainSection({ panel, actions, notation }: Props) {
         spellCheck={false}
         autoComplete="off"
         placeholder={which === 'lo' ? '−∞' : '∞'}
-        aria-label={which === 'lo' ? 'Domain from' : 'Domain to'}
+        aria-label={which === 'lo' ? `Domain from (smallest ${v})` : `Domain to (largest ${v})`}
         value={b.text}
         onChange={(e) => set({ text: e.target.value })}
         onKeyDown={(e) => {
@@ -215,10 +217,10 @@ export function DomainSection({ panel, actions, notation }: Props) {
           type="button"
           className="calc-chip dr-notation"
           data-testid="set-notation"
-          title={other === 'builder' ? 'Write as set-builder (x ≥ 0)' : 'Write in interval notation ([0, ∞))'}
+          title={other === 'builder' ? `Write as set-builder (${v} ≥ 0)` : 'Write in interval notation ([0, ∞))'}
           onClick={() => actions.onNotation(other)}
         >
-          {other === 'builder' ? 'x ≥' : '[ , )'}
+          {other === 'builder' ? `${v} ≥` : '[ , )'}
         </button>
       </Row>
       {isFn && panel.drawn && !draft && (
@@ -234,10 +236,10 @@ export function DomainSection({ panel, actions, notation }: Props) {
               type="button"
               className="calc-chip"
               data-testid="extend-all-x"
-              title="Draw this function for every x, not only where the sketch was drawn"
+              title={`Draw this function for every ${v}, not only where the sketch was drawn`}
               onClick={() => actions.onRestrict(id, null)}
             >
-              Extend to all x
+              {`Extend to all ${v}`}
             </button>
           </div>
         </div>
@@ -280,7 +282,7 @@ export function DomainSection({ panel, actions, notation }: Props) {
       {isFn && (
         <Row
           label="One-to-one"
-          value={oneToOneText(panel.oneToOne)}
+          value={oneToOneText(panel.oneToOne, v)}
           why={WHY_NO_ONE_TO_ONE}
           testId="one-to-one-row"
           answerKey={oneToOneKey(id)}

@@ -100,7 +100,7 @@ export function usePresentAnswers(deps: PresentAnswersDeps): AnswerLine[] {
         return {
           domain: setRowText(p.domain, setNotation),
           range: setRowText(p.range, setNotation),
-          oneToOne: oneToOneText(p.oneToOne),
+          oneToOne: oneToOneText(p.oneToOne, p.variable),
           inverse: p.inverse?.text ? `${p.name}⁻¹(x) = ${p.inverse.text}` : (p.inverse?.why ?? null),
         }
       },

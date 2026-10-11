@@ -115,8 +115,10 @@ export function TableSection({ panel, actions }: Props) {
   const kCompare = tableKey(id, 'compare')
   const kDivide = tableKey(id, 'divide')
   const valuesHidden = reveal.on && reveal.hidden(kValues)
-  const fx = `${panel.name}(x)`
-  const gx = panel.compare ? `${panel.compare.otherName}(x)` : null
+  // the function's own variable: a table of C(t) has a t column
+  const v = panel.variable ?? 'x'
+  const fx = `${panel.name}(${v})`
+  const gx = panel.compare ? `${panel.compare.otherName}(${v})` : null
   const listMode = s.list !== null
 
   const toggleCol = (c: ValueTableCol): void => {
@@ -132,7 +134,7 @@ export function TableSection({ panel, actions }: Props) {
     <CardSection
       kind="table"
       title="Table"
-      titleHint="Table of values: f(x) at chosen x's, differences and ratios, Evaluate, compare, divide"
+      titleHint={`Table of values: ${fx} at chosen ${v}'s, differences and ratios, Evaluate, compare, divide`}
       summary={panel.summary}
       defaultOpen={false}
       className="vt-section"
@@ -142,8 +144,8 @@ export function TableSection({ panel, actions }: Props) {
       <div className="calc-controls">
         <select
           className="calc-select"
-          aria-label="Which x values"
-          title="x from a start by a step, or a list you type"
+          aria-label={`Which ${v} values`}
+          title={`${v} from a start by a step, or a list you type`}
           value={listMode ? 'list' : 'step'}
           data-testid="table-mode"
           onChange={(e) =>
@@ -152,17 +154,17 @@ export function TableSection({ panel, actions }: Props) {
               : patch({ list: undefined })
           }
         >
-          <option value="step">x from … by …</option>
-          <option value="list">a list of x’s</option>
+          <option value="step">{`${v} from … by …`}</option>
+          <option value="list">{`a list of ${v}’s`}</option>
         </select>
       </div>
       <div className="calc-controls">
         {listMode ? (
           <Field
-            label="x ="
+            label={`${v} =`}
             value={s.list ?? ''}
             width={180}
-            title="The x values, separated by commas: −2, −1, 0, 1/2, pi"
+            title={`The ${v} values, separated by commas: −2, −1, 0, 1/2, pi`}
             placeholder="−2, −1, 0, 1/2, π"
             testId="table-list"
             onCommit={(t) => patch({ list: t })}
@@ -170,10 +172,10 @@ export function TableSection({ panel, actions }: Props) {
         ) : (
           <>
             <Field
-              label="x from"
+              label={`${v} from`}
               value={s.start}
               width={48}
-              title="The first x — type 0, −2, 1/2 or pi/6"
+              title={`The first ${v} — type 0, −2, 1/2 or pi/6`}
               testId="table-start"
               onCommit={(t) => patch({ start: t.trim() === '' ? undefined : t })}
             />
@@ -235,7 +237,7 @@ export function TableSection({ panel, actions }: Props) {
           <table className="limit-table vt-table" data-testid="value-table">
             <thead>
               <tr>
-                <th>x</th>
+                <th>{v}</th>
                 <th>{fx}</th>
                 {gx && <th>{gx}</th>}
                 {panel.cols.map((c) => (
@@ -419,7 +421,7 @@ export function TableSection({ panel, actions }: Props) {
         <button
           type="button"
           className="calc-chip"
-          title="A new data table holding these (x, f(x)) rows — for a scatter plot or a regression"
+          title={`A new data table holding these (${v}, ${fx}) rows — for a scatter plot or a regression`}
           data-testid="table-copy-data"
           disabled={panel.rows.length === 0}
           onClick={() => actions.copyToData(id)}

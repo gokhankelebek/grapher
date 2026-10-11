@@ -24,7 +24,7 @@
 // ============================================================================
 
 import type { SpecialPoint } from '../core/types'
-import { pointText } from './numeric'
+import { openEndText, pointText } from './numeric'
 import type { RevealState } from './reveal'
 
 export type AnswerPlace = 'board' | 'panel'
@@ -184,6 +184,8 @@ export function answerLine(key: string, src: AnswerSources): AnswerLine {
     const [, id, what, idx] = parts
     if (KIND_WORD[what] !== undefined) {
       const p = safe(() => src.point?.(key) ?? null)
+      // an open end of the graph (x·ln x at 0) is where it heads, not a hole
+      if (p?.side) return line(named(id, 'open end'), openEndText(p), colorOf(id), 'board')
       return line(named(id, KIND_WORD[what]), p ? labelOf(key, p, src) : '', colorOf(id), 'board')
     }
     if (what === 'asym') {

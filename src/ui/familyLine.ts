@@ -120,6 +120,24 @@ function lineVar(src: string): 'x' | 't' {
   return c.ok && c.expr.vars.includes('t') && !c.expr.vars.includes('x') ? 't' : 'x'
 }
 
+/**
+ * The independent variable of a function curve, from the line as typed:
+ * 't' for C(t) = {…} or d(t) = 3sin(πt/6) + 8 {0 <= t <= 24}, else 'x' (a
+ * sketch, a library family, anything without a source). The Domain rows,
+ * the Restrict editor and the Table speak in it.
+ */
+export function lineVariable(src: string | undefined | null): 'x' | 't' {
+  if (typeof src !== 'string' || src.trim() === '') return 'x'
+  try {
+    const s = split(src)
+    if (lineVar(s ? s.base : src) === 't') return 't'
+    // a piecewise body the expression compiler does not read: y = {… if 0 < t <= 1, …}
+    return /(?<![A-Za-z_])t(?![A-Za-z_(])/.test(src) && !/(?<![A-Za-z_])x(?![A-Za-z_(])/.test(src) ? 't' : 'x'
+  } catch {
+    return 'x'
+  }
+}
+
 /** `next` written in t: f(x) = … → f(t) = …, every x → t. Null when that does not parse as a function. */
 function inT(next: string): string | null {
   const out = next.replace(/\bx\b/g, 't')

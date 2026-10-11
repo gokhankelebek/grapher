@@ -1653,8 +1653,13 @@ function analyzeExplicit(
   // `{x != 2}`): SpecialPoint has ONE exact flag and the y here is a limit,
   // never an exact value, so claiming exactness would overstate the y.
   for (const h of holes.slice().sort((a, b) => a.x - b.x)) {
-    const q = pt('hole', h.x, h.y, 'hole', false)
-    if (q) kept.push(q)
+    // a hole the formula reaches from one side only is an open END of the
+    // graph (x·ln x at 0): the same open ring, stated as where f heads
+    const q = pt('hole', h.x, h.y, h.side ? 'open end' : 'hole', false)
+    if (q) {
+      if (h.side) q.side = h.side
+      kept.push(q)
+    }
   }
   return attachExpForms(attachExactForms(inDomain(kept, curve, models, f), curve, f, lo, hi), curve, spec, null)
 }
