@@ -86,8 +86,8 @@ type Fn = (x: number) => number
 // One analyzeCurve call opens it; nested calls share it.
 // ---------------------------------------------------------------------------
 
-/** The most one analyzeCurve call may spend refining points (ms). */
-const ANALYSIS_BUDGET_MS = 120
+/** The most one analyzeCurve call may spend refining points (ms) — a backstop; see domainRange BUDGET_MS. */
+const ANALYSIS_BUDGET_MS = 400
 
 const clock = (): number =>
   typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now()

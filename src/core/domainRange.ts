@@ -624,8 +624,13 @@ function memo<T>(spec: ModelSpec, key: string, make: () => T): T {
 // it.
 // ============================================================================
 
-/** The most one public call may spend before its searches give up (ms). */
-const BUDGET_MS = 120
+/**
+ * The most one public call may spend before its searches give up (ms). A
+ * backstop, not the normal stop: a school Chromebook (or a CI runner) is
+ * several times slower than a laptop, so this must leave ordinary curves
+ * plenty of room (floor(x)/x ran out at 120 ms on CI).
+ */
+const BUDGET_MS = 400
 
 let budgetEnd = Infinity
 

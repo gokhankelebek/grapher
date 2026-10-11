@@ -97,7 +97,7 @@ const NASTY = [
 ]
 
 describe('every analysis entry point finishes on nasty formulas', () => {
-  it('in a child process, under 200 ms per call — a hang is killed, not waited on', () => {
+  it('in a child process, under 500 ms per call (the 400 ms backstop plus margin) — a hang is killed, not waited on', () => {
     const here = path.dirname(fileURLToPath(import.meta.url))
     const root = path.resolve(here, '..')
     const res = spawnSync(
@@ -115,7 +115,7 @@ describe('every analysis entry point finishes on nasty formulas', () => {
     for (const src of NASTY) {
       const row = times[src]
       expect(row, src).toBeDefined()
-      for (const [call, ms] of Object.entries(row)) if (!(ms < 200 * PERF)) slow.push(`${src} ${call} ${ms.toFixed(0)} ms`)
+      for (const [call, ms] of Object.entries(row)) if (!(ms < 500 * PERF)) slow.push(`${src} ${call} ${ms.toFixed(0)} ms`)
     }
     expect(slow).toEqual([])
   }, 120_000 * PERF)
