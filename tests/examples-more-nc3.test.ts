@@ -18,8 +18,9 @@ import { boardIntersections } from '../src/ui/intersections'
 import { inverseInfo } from '../src/ui/nameLinks'
 import { solveInequality } from '../src/core/solveInequality'
 import { routeOf } from '../src/ui/nlSolve'
-import { safeReadPiecewise } from '../src/ui/piecewiseLinks'
-import { safeReadSinusoid } from '../src/ui/sinLinks'
+import { safeReadPiecewise, verdictsFor } from '../src/ui/piecewiseLinks'
+import { keyRows, safeReadSinusoid, safeSinFeatures, sinKeyMarks } from '../src/ui/sinLinks'
+import { familyRestriction } from '../src/ui/familyLine'
 
 const load = (id: string) => {
   const def = exampleById(id)
@@ -105,10 +106,22 @@ describe('NC Math 3 additions', () => {
     expect(meets).toEqual([[-40, -40]])
   })
 
-  it('F-IF.2: C(2.5) = 7, C(3) = 7, C(3.01) = 9, $15 after 6 hours; jumps of 2 at x = 1 … 6', () => {
+  it('F-IF.2: C(2.5) = 7, C(3) = 7, C(3.01) = 9, $15 after 6 hours; jumps of 2 at t = 1 … 6', () => {
     const { board, models } = load('m3-parking-piecewise')
     const c = board.curves[0]
-    expect(safeReadPiecewise(board.exprSources[c.id])).not.toBeNull()
+    expect(board.exprSources[c.id]).toBe('C(t) = {3 + 2ceil(t - 1) if 0 < t <= 6, 15 if 6 < t <= 12}')
+    // a function of t keeps its Piecewise section: the pieces, in t, and the breakpoint sentences
+    const spec = safeReadPiecewise(board.exprSources[c.id])!
+    expect(spec).toMatchObject({ name: 'C', v: 't' })
+    expect(spec.pieces.map((p) => [p.lo, p.hi, p.loClosed, p.hiClosed])).toEqual([
+      ['0', '6', false, true],
+      ['6', '12', false, true],
+    ])
+    expect(verdictsFor(spec).map((v) => v.text)).toEqual([
+      'C starts at t = 0: right limit 3, C(0) is not defined',
+      'jump of 2 at t = 6: left limit 13, right limit 15, C(6) = 13',
+      'C ends at t = 12: left limit 15, C(12) = 15',
+    ])
     const ctx = { curves: board.curves, models, letters: board.names, sources: board.exprSources }
     const p = tablePanel(c, board.curveViews[c.id]!.table!, ctx)!
     expect(p.evaluate).toMatchObject({ ok: true, text: 'C(2.5) = 7' })
@@ -134,7 +147,17 @@ describe('NC Math 3 additions', () => {
   it('F-TF.5: amplitude 3, period 12, midline 8; high 11 at t = 3, low 5 at t = 9; depth 9.5 at t = 1, 5, 13, 17', () => {
     const { board, models } = load('m3-tide-sinusoid')
     const d = board.curves[0]
-    expect(safeReadSinusoid(board.exprSources[d.id])).toMatchObject({ fn: 'sin', a: '3', b: 'pi/6', h: '0', k: '8' })
+    // restricted to the day it models, and still a sinusoid on its card
+    expect(board.exprSources[d.id]).toBe('d(t) = 3sin(pi t/6) + 8 {0 <= t <= 24}')
+    // t is in hours: a decimal axis, not the π axis a line with pi in it would suggest
+    expect(board.axisUnits.x).toBe('decimal')
+    const sin = safeReadSinusoid(board.exprSources[d.id])!
+    expect(sin).toMatchObject({ fn: 'sin', a: '3', b: 'pi/6', h: '0', k: '8' })
+    expect(safeSinFeatures(sin)!.sentences.slice(0, 4)).toEqual(['amplitude 3', 'period 12', 'no phase shift', 'midline y = 8'])
+    const r = familyRestriction(board.exprSources[d.id])!
+    expect([r.lo, r.hi, r.within(0), r.within(24), r.within(24.5)]).toEqual([0, 24, true, true, false])
+    expect(keyRows(safeSinFeatures(sin), r).map((k) => `(${k.x}, ${k.y})`)).toEqual(['(0, 8)', '(3, 11)', '(6, 8)', '(9, 5)', '(12, 8)'])
+    expect(sinKeyMarks(sin, r)).toHaveLength(5)
     const D = (t: number): number => models[d.modelId].evalExplicit!(d.params, t)
     expect(D(3)).toBeCloseTo(11, 12)
     expect(D(9)).toBeCloseTo(5, 12)

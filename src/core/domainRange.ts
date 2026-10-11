@@ -225,6 +225,11 @@ const ISOLATED_MAX = 4
 const MAX_MONOTONE = 24
 /** The internal memo lives this long (ms): one card render, not one drag. */
 const MEMO_MS = 60
+/**
+ * Integers past this are not walked one by one: p + 1 === p beyond 2^53, so
+ * a `p++` loop over them never ends.
+ */
+const MAX_GRID = 2 ** 52
 
 // ============================================================================
 // Small helpers
@@ -600,9 +605,41 @@ function memo<T>(spec: ModelSpec, key: string, make: () => T): T {
   if (hit && hit.spec === spec && t - hit.at <= MEMO_MS) return hit.value as T
   const value = make()
   if (memos.size > 64) memos.clear()
-  memos.set(key, { spec, key, at: t, value })
+  // stamped when the value is READY: a make() that took longer than MEMO_MS
+  // (a budget-capped analysis) is still there for the sibling call after it
+  memos.set(key, { spec, key, at: now(), value })
   return value
 }
+
+// ============================================================================
+// TIME BUDGET — no call may hang the card
+//
+// Every search below is bounded by an iteration cap first (deterministic:
+// the same curve always gets the same answer). The wall-clock budget is the
+// backstop for a formula nasty enough to make even the capped work slow —
+// hundreds of stretches of tan(x)/x, thousands of monotone pieces of
+// tan(e^x). Past it, the searches stop and the call reports what it has:
+// a range or a one-to-one verdict it could not finish is "unknown" or left
+// out, never guessed. One public call opens the budget; calls it makes share
+// it.
+// ============================================================================
+
+/** The most one public call may spend before its searches give up (ms). */
+const BUDGET_MS = 120
+
+let budgetEnd = Infinity
+
+function budgeted<T>(make: () => T): T {
+  if (budgetEnd !== Infinity) return make()
+  budgetEnd = now() + BUDGET_MS
+  try {
+    return make()
+  } finally {
+    budgetEnd = Infinity
+  }
+}
+
+const overBudget = (): boolean => budgetEnd !== Infinity && now() > budgetEnd
 
 // ============================================================================
 // NATURAL DOMAIN
@@ -1109,6 +1146,10 @@ function realSetOfDomain(info: DomainInfo): RealSet {
 
 /** Where the formula as written has a value (see the header). Null for a non-explicit curve. */
 export function naturalDomain(curve: FittedCurve, models: Record<string, ModelSpec>): RealSet | null {
+  return budgeted(() => naturalDomainIn(curve, models))
+}
+
+function naturalDomainIn(curve: FittedCurve, models: Record<string, ModelSpec>): RealSet | null {
   try {
     const ctx = ctxOf(curve, models)
     if (!ctx) return null
@@ -1121,6 +1162,10 @@ export function naturalDomain(curve: FittedCurve, models: Record<string, ModelSp
 
 /** The natural domain ∩ the teacher's restriction. Null for a non-explicit curve. */
 export function curveDomain(curve: FittedCurve, models: Record<string, ModelSpec>): RealSet | null {
+  return budgeted(() => curveDomainIn(curve, models))
+}
+
+function curveDomainIn(curve: FittedCurve, models: Record<string, ModelSpec>): RealSet | null {
   try {
     const ctx = ctxOf(curve, models)
     if (!ctx) return null
@@ -1357,8 +1402,25 @@ function refineExtremum(ctx: Ctx, a: number, b: number, sg: 1 | -1): { x: number
   return { x, exact: null, v: fx }
 }
 
+type StretchSamples = ReturnType<typeof sampleStretchUncached>
+
+/**
+ * One stretch's samples, once per analysis: stepValues, analyzePart and
+ * analyzeStretch all read the same part, and a curve with a hundred
+ * stretches (tan(x)/x) paid for each of them three times.
+ */
+const stretchCache = new WeakMap<IntervalPart, { ctx: Ctx; value: StretchSamples }>()
+
+function sampleStretch(ctx: Ctx, s: IntervalPart): StretchSamples {
+  const hit = stretchCache.get(s)
+  if (hit && hit.ctx === ctx) return hit.value
+  const value = sampleStretchUncached(ctx, s)
+  stretchCache.set(s, { ctx, value })
+  return value
+}
+
 /** Build the samples of a stretch and read its ends. */
-function sampleStretch(ctx: Ctx, s: IntervalPart): {
+function sampleStretchUncached(ctx: Ctx, s: IntervalPart): {
   core: Sampled[]
   left: Sampled[]
   right: Sampled[]
@@ -1851,6 +1913,7 @@ function stepValues(ctx: Ctx, parts: IntervalPart[]): Analysis['step'] {
   let pairs = 0, equal = 0
   let unboundedLo = false, unboundedHi = false
   for (const p of parts) {
+    if (overBudget()) return null
     const smp = sampleStretch(ctx, p)
     const core = smp.core
     for (let i = 0; i + 1 < core.length; i++) {
@@ -1906,7 +1969,11 @@ function analysisOf(ctx: Ctx, curve: FittedCurve): Analysis {
     if (step) return { stretches: [], points: [], step, unknown: false }
     const stretches: Stretch[] = []
     const points: number[] = []
-    for (const p of parts) stretches.push(...analyzePart(ctx, p, points))
+    for (const p of parts) {
+      // out of time: what is left unread makes the whole range unknown
+      if (overBudget()) return { stretches, points, step: null, unknown: true }
+      stretches.push(...analyzePart(ctx, p, points))
+    }
     return { stretches, points, step: null, unknown: stretches.some((s) => s.unknown) }
   })
 }
@@ -1971,6 +2038,10 @@ function rangeSet(an: Analysis): RealSet {
 
 /** The values f takes on its curve domain (see the header). Null for a non-explicit curve. */
 export function curveRange(curve: FittedCurve, models: Record<string, ModelSpec>): RealSet | null {
+  return budgeted(() => curveRangeIn(curve, models))
+}
+
+function curveRangeIn(curve: FittedCurve, models: Record<string, ModelSpec>): RealSet | null {
   try {
     const ctx = ctxOf(curve, models)
     if (!ctx) return null
@@ -2066,9 +2137,13 @@ function nicestIn(a: number, b: number): number | null {
       if (step > Math.max(Math.abs(lo), Math.abs(hi)) * 4 && k > 0) continue
       const first = Math.ceil(lo / step)
       const last = Math.floor(hi / step)
+      // Past 2^53 an integer p has no successor (p + 1 === p), so a `p++`
+      // walk never ends — (e^(2x) − 1)/sin(x) froze the card that way. Such a
+      // grid is far finer than a double can tell apart: skip it.
+      if (!Number.isFinite(first) || !Number.isFinite(last) || Math.abs(first) > MAX_GRID || Math.abs(last) > MAX_GRID) continue
       let best: number | null = null
-      for (let p = first; p <= last && p - first < 64; p++) {
-        const v = Number((p * step).toPrecision(12))
+      for (let i = 0; i < 64 && first + i <= last; i++) {
+        const v = Number(((first + i) * step).toPrecision(12))
         if (inside(v) && (best === null || Math.abs(v) < Math.abs(best) || (Math.abs(v) === Math.abs(best) && v > best))) best = v
       }
       if (best === null && last - first >= 64) {
@@ -2115,6 +2190,17 @@ function chipOrder(a: IntervalPart, b: IntervalPart): number {
 
 /** The horizontal line test (see the header). Null for a non-explicit curve. */
 export function oneToOneInfo(curve: FittedCurve, models: Record<string, ModelSpec>): OneToOne | null {
+  return budgeted(() => oneToOneIn(curve, models))
+}
+
+/**
+ * The witness search pairs up monotone pieces; tan(e^x) has thousands of
+ * them. The pieces nearest 0 are where the nicest shared height is found
+ * (and where a reader looks), so only these many take part.
+ */
+const WITNESS_PIECES = 48
+
+function oneToOneIn(curve: FittedCurve, models: Record<string, ModelSpec>): OneToOne | null {
   try {
     const ctx = ctxOf(curve, models)
     if (!ctx) return null
@@ -2153,9 +2239,14 @@ export function oneToOneInfo(curve: FittedCurve, models: Record<string, ModelSpe
       const score = niceScore(y)
       if (!best || score < best.score) best = { y, score }
     }
-    for (let i = 0; i < mono.length; i++) {
-      for (let j = i + 1; j < mono.length; j++) {
-        const a = pieceValues(mono[i]), b = pieceValues(mono[j])
+    const dist = (p: MonoPiece): number => (p.lo <= 0 && p.hi >= 0 ? 0 : Math.min(Math.abs(p.lo), Math.abs(p.hi)))
+    const near = mono.length <= WITNESS_PIECES
+      ? mono
+      : mono.slice().sort((a, b) => dist(a) - dist(b)).slice(0, WITNESS_PIECES)
+    pairs: for (let i = 0; i < near.length; i++) {
+      for (let j = i + 1; j < near.length; j++) {
+        if ((best as { score: number } | null)?.score === 0 || overBudget()) break pairs // 0 cannot be beaten
+        const a = pieceValues(near[i]), b = pieceValues(near[j])
         const lo = Math.max(a.lo, b.lo), hi = Math.min(a.hi, b.hi)
         if (hi > lo && !same(hi, lo)) consider(nicestIn(lo, hi))
       }
@@ -2166,6 +2257,7 @@ export function oneToOneInfo(curve: FittedCurve, models: Record<string, ModelSpe
       const y = snapY(chosen.y)
       const xs: number[] = []
       for (const pc of mono) {
+        if (overBudget() && xs.length >= 2) break
         const r = pieceValues(pc)
         const inside =
           (y.v > r.lo || (r.loIn && same(y.v, r.lo))) && (y.v < r.hi || (r.hiIn && same(y.v, r.hi)))
@@ -2188,7 +2280,12 @@ export function oneToOneInfo(curve: FittedCurve, models: Record<string, ModelSpe
       const x1 = fl.xs.length > 1 ? fl.xs[Math.floor(fl.xs.length / 2)] : fl.hi
       witness = { y: y.v, exactY: y.exact, xs: [x0, x1].sort((p, q) => p - q) }
     }
-    return witness ? { oneToOne: false, witness, monotone } : { oneToOne: false, monotone }
+    if (witness) return { oneToOne: false, witness, monotone }
+    // No height that fails the test, and an analysis that could not finish
+    // (an end it could not read, or out of time): "No" would be a guess, so
+    // the row is left out rather than stated.
+    if (an.unknown) return null
+    return { oneToOne: false, monotone }
   } catch {
     return null
   }
@@ -2240,8 +2337,11 @@ function stepWitness(ctx: Ctx, parts: IntervalPart[]): OneToOne['witness'] {
   const b = ib >= 0 && ib + 1 < all.length ? all[ib + 1] : list[end]
   const cands: number[] = []
   for (const q of [1, 2, 4, 10]) {
-    for (let p = Math.ceil(a * q); p <= Math.floor(b * q) && cands.length < 400; p++) {
-      const x = p / q + 0
+    const p0 = Math.ceil(a * q), p1 = Math.floor(b * q)
+    if (!Number.isFinite(p0) || !Number.isFinite(p1) || Math.abs(p0) > MAX_GRID || Math.abs(p1) > MAX_GRID) continue
+    // a counted walk: p + 1 === p past 2^53, and `cands` stops growing then
+    for (let i = 0; i < 400 && p0 + i <= p1 && cands.length < 400; i++) {
+      const x = (p0 + i) / q + 0
       if (!cands.some((c) => same(c, x))) cands.push(x)
     }
   }
@@ -2290,6 +2390,15 @@ function levelSamples(ctx: Ctx, parts: IntervalPart[]): { levels: Map<number, nu
  * ends inside the span are reported (its first and last point the scan saw).
  */
 export function levelCrossings(
+  curve: FittedCurve,
+  models: Record<string, ModelSpec>,
+  y: number,
+  span: [number, number],
+): number[] {
+  return budgeted(() => levelCrossingsIn(curve, models, y, span))
+}
+
+function levelCrossingsIn(
   curve: FittedCurve,
   models: Record<string, ModelSpec>,
   y: number,

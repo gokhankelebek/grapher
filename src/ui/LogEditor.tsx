@@ -30,6 +30,8 @@ import type {
   LogTab,
   RebaseKey,
 } from './logLinks'
+import { factsWithin } from './familyLine'
+import type { FamilyRestriction } from './familyLine'
 
 // ============================================================================
 // src/ui/LogEditor.tsx — a logarithmic function, stated the precalculus way.
@@ -378,9 +380,15 @@ interface SectionProps {
   onShowInverse?(): void
   /** The card's Analysis states the domain and range as rows: do not say them twice here. */
   hideDomainRange?: boolean
+  /**
+   * The line's domain restriction (src/ui/familyLine.ts), or null: then only
+   * the points inside the domain are stated, and the domain, range and end
+   * behaviour are left to the card's Domain rows.
+   */
+  restriction?: FamilyRestriction | null
 }
 
-export function LogSection({ spec, onRestate, onShowInverse, hideDomainRange = false }: SectionProps) {
+export function LogSection({ spec, onRestate, onShowInverse, hideDomainRange = false, restriction = null }: SectionProps) {
   const [error, setError] = useState<string | null>(null)
   useEffect(() => setError(null), [spec])
 
@@ -433,8 +441,8 @@ export function LogSection({ spec, onRestate, onShowInverse, hideDomainRange = f
             </select>
           </div>
           <ExpFacts
-            sentences={hideDomainRange ? withoutDomainRange(facts.sentences) : facts.sentences}
-            features={hideDomainRange ? withoutDomainRange(facts.features) : facts.features}
+            sentences={factsWithin(hideDomainRange ? withoutDomainRange(facts.sentences) : facts.sentences, restriction)}
+            features={factsWithin(hideDomainRange ? withoutDomainRange(facts.features) : facts.features, restriction)}
             testPrefix="log"
           />
           {error && <div className="expr-error">{error}</div>}

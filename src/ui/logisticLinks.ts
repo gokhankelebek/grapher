@@ -38,15 +38,17 @@ import type { LogisticFeatures, LogisticSpec, LogisticValues } from '../core/log
 import { parseExpression } from '../core/parse'
 import { evalText } from './factorLinks'
 import { minus, numOut } from './expLinks'
+import { familyBase } from './familyLine'
 
 // ---------------------------------------------------------------------------
 // the core, never throwing
 // ---------------------------------------------------------------------------
 
+/** The line's family reading — a restricted line's formula without its restriction (src/ui/familyLine.ts). */
 export function safeReadLogistic(src: string | undefined): LogisticSpec | null {
   if (!src || !src.trim()) return null
   try {
-    const s = readLogistic(src)
+    const s = readLogistic(familyBase(src))
     return s && logisticValues(s) ? s : null
   } catch {
     return null

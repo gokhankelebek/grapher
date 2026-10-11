@@ -287,7 +287,7 @@ export default function App() {
     seqDefaultName, setTableCalc, sortTableByX,
   } = tables
   const {
-    buildFromRoots, restateFactors, dropFactorThrough, factorThroughFor, buildExponential,
+    buildFromRoots, restateFactors, restateLine, dropFactorThrough, factorThroughFor, buildExponential,
     convertToTyped, buildLogistic, showLogisticField, buildLogarithm, buildSinusoid,
     buildTransformation, buildPiecewise, piecewiseEnvFor, piecewiseBuildEnv, buildConic,
     setConicConstruction, conicConstructionFor, buildMotion, commitMotionInterval, patchMotion,
@@ -539,7 +539,7 @@ export default function App() {
         motionScalesFor={motionScalesFor}
         onMotionPlay={patchMotion}
         onMotionInterval={commitMotionInterval}
-        onPiecewiseRestate={restateFactors}
+        onPiecewiseRestate={restateLine}
         piecewiseEnvFor={piecewiseEnvFor}
         piecewiseBuildEnv={piecewiseBuildEnv}
         piecewiseName={piecewiseName}

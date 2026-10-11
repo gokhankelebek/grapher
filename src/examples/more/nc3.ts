@@ -68,13 +68,13 @@ export const MORE_NC3: readonly ExampleDef[] = [
     unit: 'M3',
     help: ['m3-functions', 'm3-ineq'],
     title: 'A parking garage’s step function',
-    short: 'parking cost C(x)',
+    short: 'parking cost C(t)',
     note:
-      'The garage charges $3 for the first hour or any part of it, $2 for each extra hour or part, and never more than $15 a day, so for x hours C(x) = 3 + 2⌈x − 1⌉ up to 6 hours and 15 after that. The table evaluates C(2.5) = 7, and every step ends in a closed dot: C(3) = 7 but C(3.01) = 9. Ask the class where C jumps and by how much, and why the cap starts just after 6 hours.',
+      'The garage charges $3 for the first hour or any part of it, $2 for each extra hour or part, and never more than $15 a day, so for t hours C(t) = 3 + 2⌈t − 1⌉ up to 6 hours and 15 after that. The table evaluates C(2.5) = 7, and every step ends in a closed dot: C(3) = 7 but C(3.01) = 9. Ask the class where C jumps and by how much, and why the cap starts just after 6 hours.',
     keywords: ['piecewise', 'step function', 'ceiling', 'jump', 'jump discontinuity', 'open dot', 'closed dot', 'cost', 'context', 'F-IF.2', 'NC.M3.F-IF.2', 'F-IF.7', 'NC.M3.F-IF.7'],
     build: (b) => {
       b.frame([-0.8, 12.8], [-1.5, 17], { independent: true })
-      const c = b.line('C(x) = {3 + 2ceil(x - 1) if 0 < x <= 6, 15 if 6 < x <= 12}')
+      const c = b.line('C(t) = {3 + 2ceil(t - 1) if 0 < t <= 6, 15 if 6 < t <= 12}')
       b.view(c, { table: { ev: 'C(2.5)' } })
       b.select(c)
     },
@@ -103,11 +103,13 @@ export const MORE_NC3: readonly ExampleDef[] = [
     title: 'Modeling the tide with a sine function',
     short: 'the tide: 3 sin(πt/6) + 8',
     note:
-      'd(t) = 3 sin(πt/6) + 8 is the water depth in feet t hours after 9 AM: amplitude 3, period 2π ÷ (π/6) = 12 hours, midline 8 ft, so high tide is 11 ft at noon and low tide 5 ft at 6 PM. A boat needs 9.5 ft, and the line y = 9.5 meets the curve at t = 1, 5, 13 and 17. Ask the class to solve sin(πt/6) = 1/2 by hand and turn the answer into clock times.',
+      'd(t) = 3 sin(πt/6) + 8 is the water depth in feet t hours after 9 AM, over the next day (0 ≤ t ≤ 24): amplitude 3, period 2π ÷ (π/6) = 12 hours, midline 8 ft, so high tide is 11 ft at noon and low tide 5 ft at 6 PM. A boat needs 9.5 ft, and the line y = 9.5 meets the curve at t = 1, 5, 13 and 17. Ask the class to solve sin(πt/6) = 1/2 by hand and turn the answer into clock times.',
     keywords: ['sinusoid', 'sine', 'tide', 'periodic', 'amplitude', 'period', 'midline', 'model', 'context', 'F-TF.5', 'NC.M3.F-TF.5', 'F-IF.4'],
     build: (b) => {
+      // hours, not radians: the tick marks read 0, 5, 10 … rather than π, 2π …
+      b.decimalAxis()
       b.frame([-1, 25], [-1, 13], { independent: true })
-      const d = b.line('d(t) = 3sin(pi t/6) + 8')
+      const d = b.line('d(t) = 3sin(pi t/6) + 8 {0 <= t <= 24}')
       b.line('y = 9.5', { color: '#9aa4b2', strokeWidth: 2 })
       b.select(d)
     },

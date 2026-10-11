@@ -31,6 +31,7 @@ import type { Factor, FactoredRoot, FactoredSpec, RootBehaviour } from '../core/
 import { parseExpression } from '../core/parse'
 import { parseNumeric } from './numeric'
 import { numText } from './shapeLinks'
+import { familyBase } from './familyLine'
 
 export type FactorSide = 'num' | 'den'
 
@@ -359,7 +360,7 @@ export function safeRootsOf(spec: FactoredSpec): FactoredRoot[] {
 export function safeReadFactored(src: string | undefined): FactoredSpec | null {
   if (!src || !src.trim()) return null
   try {
-    return readFactored(src)
+    return readFactored(familyBase(src))
   } catch {
     return null
   }

@@ -21,6 +21,9 @@ import type { UnitCircleFigure } from '../render/unitCircle'
 import type { RelatedRatesFigure } from '../render/relatedRates'
 import type { StatsFigure } from '../render/stats'
 import { asymptoteTexts } from './CurveCard'
+import { boardPointText } from './renderBoard'
+import type { BoardLabelScale } from './renderBoard'
+import { curveScale, curveXScale, pointScale } from './curveState'
 import { complexZerosOf } from './complexLinks'
 import { zeroLine } from '../core/complexZeros'
 import { familyFactLines } from './familyFacts'
@@ -186,6 +189,12 @@ export interface AnswerInputs {
    * shown": the link's `as`). Absent or null: the curve is f itself.
    */
   signAs?(curveId: string): 'f1' | 'f2' | null
+  /**
+   * The window's span on each axis (renderBoard viewSpans), for the board's
+   * last resort on a value tiny against the window. Absent: the curve's own
+   * scales alone.
+   */
+  view?: { viewScale: number; viewXScale: number }
 }
 
 /** The name a curve's own facts go by: f′ for a curve a sign chart takes as f′, f″ as f″. */
@@ -224,7 +233,40 @@ export function answerSourcesOf(i: AnswerInputs): AnswerSources {
       return null
     }
   }
+  // A point's text is the board chip's: rounded at its curve's scales (and
+  // at the window's, for what is tiny against it), never raw digits.
+  const scaleCache = new Map<string, BoardLabelScale>()
+  const scalesOf = (id: string): BoardLabelScale | null => {
+    const hit = scaleCache.get(id)
+    if (hit) return hit
+    const c = curveById.get(id)
+    if (!c) return null
+    const spec = i.models[c.modelId]
+    let scale: number | undefined
+    let xScale: number | undefined
+    try {
+      scale = curveScale(c, spec)
+      xScale = curveXScale(c, spec)
+    } catch {
+      /* no extent: the window's alone */
+    }
+    const out: BoardLabelScale = {
+      scale,
+      xScale,
+      viewScale: i.view?.viewScale ?? 0,
+      viewXScale: i.view?.viewXScale ?? 0,
+      ...(spec?.evalExplicit ? { local: (x: number) => pointScale(c, spec, x, scale) } : {}),
+    }
+    scaleCache.set(id, out)
+    return out
+  }
   return {
+    pointLabel(key, p) {
+      const parts = key.split(':')
+      const id = parts[0] === 'curve' || parts[0] === 'cross' ? parts[1] : undefined
+      const at = id ? scalesOf(id) : null
+      return at ? boardPointText(p, at) : null
+    },
     curve(id) {
       const c = curveById.get(id)
       if (!c) return null
@@ -252,7 +294,7 @@ export function answerSourcesOf(i: AnswerInputs): AnswerSources {
     },
     family(id) {
       const c = curveById.get(id)
-      return c ? familyFactLines(c.kind, i.exprSources[id]) : []
+      return c ? familyFactLines(c.kind, i.exprSources[id], c, i.models) : []
     },
     calc: (linkId) => i.calcLines.get(linkId) ?? null,
     table: (id, part) => tablePartText(i.tablePanelFor(id), part),

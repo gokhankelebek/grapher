@@ -93,7 +93,18 @@ export interface PieceSpec {
 export interface PiecewiseSpec {
   /** The function's name when typed as f(x) = …; absent for y = … */
   name?: string
+  /**
+   * The independent variable when it is not x: 't' for C(t) = {3 if 0 < t <= 1, …}
+   * (the parser plots a line in t exactly as one in x). Absent: x. Every
+   * formula and bound is then in that variable, and so is every sentence.
+   */
+  v?: 't'
   pieces: PieceSpec[]
+}
+
+/** The spec's independent variable: x unless it says otherwise. */
+export function varOf(spec: Pick<PiecewiseSpec, 'v'>): 'x' | 't' {
+  return spec.v === 't' ? 't' : 'x'
 }
 
 export type BreakKind = 'continuous' | 'jump' | 'removable' | 'infinite' | 'gap' | 'overlap' | 'end'
@@ -161,16 +172,16 @@ function snap(v: number): number {
 // piecewiseSource
 // ----------------------------------------------------------------------------
 
-/** The condition of one piece in input syntax; null for a piece with no bounds. */
-function condSource(p: PieceSpec): string | null {
+/** The condition of one piece in input syntax (in `v`); null for a piece with no bounds. */
+function condSource(p: PieceSpec, v = 'x'): string | null {
   const lo = boundText(p.lo)
   const hi = boundText(p.hi)
   if (lo !== undefined && hi !== undefined) {
-    if (lo === hi && p.loClosed && p.hiClosed) return `x = ${lo}`
-    return `${lo} ${p.loClosed ? '<=' : '<'} x ${p.hiClosed ? '<=' : '<'} ${hi}`
+    if (lo === hi && p.loClosed && p.hiClosed) return `${v} = ${lo}`
+    return `${lo} ${p.loClosed ? '<=' : '<'} ${v} ${p.hiClosed ? '<=' : '<'} ${hi}`
   }
-  if (lo !== undefined) return `x ${p.loClosed ? '>=' : '>'} ${lo}`
-  if (hi !== undefined) return `x ${p.hiClosed ? '<=' : '<'} ${hi}`
+  if (lo !== undefined) return `${v} ${p.loClosed ? '>=' : '>'} ${lo}`
+  if (hi !== undefined) return `${v} ${p.hiClosed ? '<=' : '<'} ${hi}`
   return null
 }
 
@@ -181,20 +192,21 @@ function condSource(p: PieceSpec): string | null {
  * part of the meaning); formulas and bounds exactly as the teacher typed them.
  */
 export function piecewiseSource(spec: PiecewiseSpec): string {
-  const head = spec.name ? `${spec.name}(x) = ` : 'y = '
+  const v = varOf(spec)
+  const head = spec.name ? `${spec.name}(${v}) = ` : 'y = '
   const pieces = spec.pieces ?? []
   const expr = (p: PieceSpec): string => (p.expr ?? '').trim() || '0'
   if (pieces.length === 0) return `${head}0`
   if (pieces.length === 1) {
-    const c = condSource(pieces[0])
+    const c = condSource(pieces[0], v)
     return c === null ? `${head}${expr(pieces[0])}` : `${head}${expr(pieces[0])} {${c}}`
   }
   const rows = pieces.map((p, i) => {
-    const c = condSource(p)
+    const c = condSource(p, v)
     if (c !== null) return `${expr(p)} if ${c}`
     // No bounds: last, it is `otherwise`; earlier (first match wins) it
     // claims every x no earlier piece did, which is also what -inf < x < inf says.
-    return i === pieces.length - 1 ? `${expr(p)} otherwise` : `${expr(p)} if -inf < x < inf`
+    return i === pieces.length - 1 ? `${expr(p)} otherwise` : `${expr(p)} if -inf < ${v} < inf`
   })
   return `${head}{${rows.join(', ')}}`
 }
@@ -203,7 +215,7 @@ export function piecewiseSource(spec: PiecewiseSpec): string {
 // readPiecewise
 // ----------------------------------------------------------------------------
 
-const NAME_HEAD_RE = /^([A-Za-z])\s*\(\s*x\s*\)$/
+const NAME_HEAD_RE = /^([A-Za-z])\s*\(\s*([xt])\s*\)$/
 
 /** One interval of a condition → a PieceSpec, bounds as typed. */
 function pieceOf(expr: string, q: Piece): PieceSpec {
@@ -219,12 +231,12 @@ function pieceOf(expr: string, q: Piece): PieceSpec {
   return out
 }
 
-/** A condition on x, constant bounds only; null when it is anything else. */
-function constCondition(cond: string): Piece[] | null {
+/** A condition on `v` (x or t), constant bounds only; null when it is anything else. */
+function constCondition(cond: string, v = 'x'): Piece[] | null {
   try {
     const ctx = newCtx(analyzeExpr)
     const ps = parseCondition(cond, ctx)
-    if (ctx.name !== null && ctx.name !== 'x') return null
+    if (ctx.name !== null && ctx.name !== v) return null
     return ps
   } catch {
     return null
@@ -232,8 +244,8 @@ function constCondition(cond: string): Piece[] | null {
 }
 
 /** A single-interval condition whose bounds may be sliders (x < a). */
-function sliderCondition(expr: string, cond: string): PieceSpec | null {
-  const cl = liveClause(cond, newCtx(analyzeExpr), 'x', (text) => {
+function sliderCondition(expr: string, cond: string, v = 'x'): PieceSpec | null {
+  const cl = liveClause(cond, newCtx(analyzeExpr), v, (text) => {
     const c = compileExpr(text)
     if (!c.ok || c.expr.vars.length > 0) return null
     return { tex: c.expr.latex, live: c.expr.paramNames.length > 0 }
@@ -309,15 +321,27 @@ export function readPiecewise(src: string): PiecewiseSpec | null {
   if (!parts || parts.branches.length === 0) return null
 
   let name: string | undefined
+  let headVar: 'x' | 't' | undefined
   if (parts.head !== '' && parts.head !== 'y') {
     const m = NAME_HEAD_RE.exec(parts.head)
     if (!m) return null
     name = m[1]
+    headVar = m[2] === 't' ? 't' : 'x'
   }
+  // The variable: the head's (C(t) = …), else t when a formula is written in
+  // t — the parser plots such a line exactly as one in x — else x.
+  const v: 'x' | 't' =
+    headVar ??
+    (parts.branches.some((b) => {
+      const c = compileExpr(b.expr)
+      return c.ok && c.expr.vars.includes('t')
+    })
+      ? 't'
+      : 'x')
 
   // Constant bounds everywhere: what each branch OWNS, sorted.
   const sets: (Piece[] | null)[] = parts.branches.map((b) =>
-    b.otherwise || b.cond === '' ? null : constCondition(b.cond),
+    b.otherwise || b.cond === '' ? null : constCondition(b.cond, v),
   )
   let pieces: PieceSpec[]
   if (sets.every((s, i) => s !== null || parts.branches[i].otherwise || parts.branches[i].cond === '')) {
@@ -347,13 +371,14 @@ export function readPiecewise(src: string): PiecewiseSpec | null {
         pieces.push(pieceOf(b.expr, set[0]))
         continue
       }
-      const live = sliderCondition(b.expr, b.cond)
+      const live = sliderCondition(b.expr, b.cond, v)
       if (!live) return null
       pieces.push(live)
     }
   }
   if (pieces.length === 0) return null
   const spec: PiecewiseSpec = name ? { name, pieces } : { pieces }
+  if (v === 't') spec.v = 't'
   return verify(src, spec) ? spec : null
 }
 
@@ -420,8 +445,8 @@ function sideLimit(f: (x: number) => number, c: number, dir: -1 | 1): number | n
 }
 
 /** "2 < x < 3", "2 ≤ x < 3" — the stretch a gap leaves undefined. */
-function stretch(a: number, aIn: boolean, b: number, bIn: boolean): string {
-  return `${numText(a)} ${aIn ? '<' : '≤'} x ${bIn ? '<' : '≤'} ${numText(b)}`
+function stretch(a: number, aIn: boolean, b: number, bIn: boolean, v = 'x'): string {
+  return `${numText(a)} ${aIn ? '<' : '≤'} ${v} ${bIn ? '<' : '≤'} ${numText(b)}`
 }
 
 /**
@@ -444,6 +469,7 @@ export function breakpoints(
     pieces.push(q)
   })
   const fname = spec.name ?? 'f'
+  const vn = varOf(spec)
   const ev = (i: number, x: number): number => {
     try {
       const v = evalPiece(i, x)
@@ -488,34 +514,34 @@ export function breakpoints(
     if (incl.length > 1 && differ(vals)) {
       kind = 'overlap'
       sentence =
-        `overlap at x = ${xt}: two pieces both include x = ${xt} and disagree — ` +
+        `overlap at ${vn} = ${xt}: two pieces both include ${vn} = ${xt} and disagree — ` +
         vals.map((v) => (v === null ? 'undefined' : `${fAt} = ${numText(v)}`)).join(' and ')
     } else if (lefts.length > 1 && differ(lLims)) {
       kind = 'overlap'
-      sentence = `overlap at x = ${xt}: two pieces both define ${fname} just left of x = ${xt} ` +
+      sentence = `overlap at ${vn} = ${xt}: two pieces both define ${fname} just left of ${vn} = ${xt} ` +
         `(limits ${lLims.map((v) => (v === null ? 'undefined' : numText(v))).join(' and ')})`
     } else if (rights.length > 1 && differ(rLims)) {
       kind = 'overlap'
-      sentence = `overlap at x = ${xt}: two pieces both define ${fname} just right of x = ${xt} ` +
+      sentence = `overlap at ${vn} = ${xt}: two pieces both define ${fname} just right of ${vn} = ${xt} ` +
         `(limits ${rLims.map((v) => (v === null ? 'undefined' : numText(v))).join(' and ')})`
     } else if (inf(leftLimit) || inf(rightLimit)) {
       kind = 'infinite'
-      sentence = `infinite discontinuity at x = ${xt}`
+      sentence = `infinite discontinuity at ${vn} = ${xt}`
     } else if (lefts.length > 0 && rights.length > 0) {
       if (leftLimit === null || rightLimit === null) {
         kind = 'gap'
-        sentence = `gap: ${fname} has no values just ${leftLimit === null ? 'left' : 'right'} of x = ${xt}`
+        sentence = `gap: ${fname} has no values just ${leftLimit === null ? 'left' : 'right'} of ${vn} = ${xt}`
       } else if (!same(leftLimit, rightLimit)) {
         kind = 'jump'
         sentence =
-          `jump of ${numText(snap(Math.abs(rightLimit - leftLimit)))} at x = ${xt}: ` +
+          `jump of ${numText(snap(Math.abs(rightLimit - leftLimit)))} at ${vn} = ${xt}: ` +
           `left limit ${numText(leftLimit)}, right limit ${numText(rightLimit)}, ${valueText}`
       } else if (value === null || !same(value, leftLimit)) {
         kind = 'removable'
-        sentence = `removable discontinuity at x = ${xt}: limit ${numText(leftLimit)}, ${valueText}`
+        sentence = `removable discontinuity at ${vn} = ${xt}: limit ${numText(leftLimit)}, ${valueText}`
       } else {
         kind = 'continuous'
-        sentence = `continuous at x = ${xt}`
+        sentence = `continuous at ${vn} = ${xt}`
       }
     } else {
       // One side (or neither) is claimed: an end, or the edge of a gap.
@@ -524,23 +550,23 @@ export function breakpoints(
       if (rights.length === 0 && next !== null) {
         kind = 'gap'
         const nextIn = pieces.some((p) => contains(p, next))
-        sentence = `gap: ${fname} is not defined on ${stretch(c, value !== null, next, nextIn)}`
+        sentence = `gap: ${fname} is not defined on ${stretch(c, value !== null, next, nextIn, vn)}`
       } else if (lefts.length > 0) {
         kind = 'end'
-        sentence = `${fname} ends at x = ${xt}: left limit ${leftLimit === null ? 'undefined' : numText(leftLimit)}, ${valueText}`
+        sentence = `${fname} ends at ${vn} = ${xt}: left limit ${leftLimit === null ? 'undefined' : numText(leftLimit)}, ${valueText}`
       } else if (rights.length > 0) {
         kind = 'end'
         const earlier = pieces.some((p) => p.hi < c)
         sentence =
-          `${fname} ${earlier ? 'resumes' : 'starts'} at x = ${xt}: ` +
+          `${fname} ${earlier ? 'resumes' : 'starts'} at ${vn} = ${xt}: ` +
           `right limit ${rightLimit === null ? 'undefined' : numText(rightLimit)}, ${valueText}`
       } else {
         kind = 'end'
-        sentence = value === null ? `${valueText}` : `isolated point at x = ${xt}: ${valueText}`
+        sentence = value === null ? `${valueText}` : `isolated point at ${vn} = ${xt}: ${valueText}`
       }
     }
     if (kind !== 'overlap' && incl.length > 1 && value !== null) {
-      sentence += ` (two pieces include x = ${xt} and agree: ${fAt} = ${numText(value)})`
+      sentence += ` (two pieces include ${vn} = ${xt} and agree: ${fAt} = ${numText(value)})`
     }
     out.push({ x: c, xText: xt, leftLimit, rightLimit, value, kind, sentence })
   }

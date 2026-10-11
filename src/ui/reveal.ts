@@ -735,7 +735,19 @@ export function applyReveal(scene: BoardScene, r: SceneReveal | null | undefined
   if (an && an.points.length > 0) {
     const kept: number[] = []
     const shown: SpecialPoint[] = []
+    // A construction mark (no answer key of its own) drawn where a hidden
+    // answer sits would print that answer's coordinates beside its "?" — a
+    // key point at (12, 8) on a hidden inflection. It hides with the answer.
+    const hiddenAt = an.points.filter((p) => {
+      if (!p?.pos || p.kind === 'hole') return false
+      const key = p.kind === 'intersection' && p.withId ? r.crossKey(an.curve.id, p.withId, p) : r.pointKey(an.curve.id, p)
+      return key !== null && r.hidden(key)
+    })
     an.points.forEach((p, i) => {
+      if (p?.pos && hiddenAt.length > 0 && p.kind !== 'intersection' && p.kind !== 'hole' && r.pointKey(an.curve.id, p) === null) {
+        const tol = 1e-6 * Math.max(1, Math.abs(p.pos.x), Math.abs(p.pos.y))
+        if (hiddenAt.some((q) => Math.abs(q.pos.x - p.pos.x) <= tol && Math.abs(q.pos.y - p.pos.y) <= tol)) return
+      }
       const s = splitPoints(an.curve, [p], r, marks, pulses)
       if (s.length > 0) {
         kept.push(i)

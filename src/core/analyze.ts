@@ -27,6 +27,7 @@ import type {
 } from './types'
 import { conicToCenterForm } from './fit/optimize'
 import { findHoles } from './holes'
+import { curveDomain } from './domainRange'
 // The x's of an intersection are the zeros of f − g, and calculus.ts already
 // hands that difference back to analyzeCurve as a curve of its own. The import
 // is circular by construction — calculus.ts imports analyzeCurve — and safe:
@@ -74,6 +75,36 @@ const H2 = Math.pow(EPS, 0.25)
 // ---------------------------------------------------------------------------
 
 type Fn = (x: number) => number
+
+// ---------------------------------------------------------------------------
+// Time budget
+//
+// Every search here is bounded by its sample counts; the clock is the
+// backstop for a formula whose every sample is a refinement (sin(1/x),
+// sin(50x)/x) on a slow device. Past the budget the scans stop refining and
+// the analysis reports the points it has already confirmed — never a guess.
+// One analyzeCurve call opens it; nested calls share it.
+// ---------------------------------------------------------------------------
+
+/** The most one analyzeCurve call may spend refining points (ms). */
+const ANALYSIS_BUDGET_MS = 120
+
+const clock = (): number =>
+  typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now()
+
+let analysisEnd = Infinity
+
+function withAnalysisBudget<T>(make: () => T): T {
+  if (analysisEnd !== Infinity) return make()
+  analysisEnd = clock() + ANALYSIS_BUDGET_MS
+  try {
+    return make()
+  } finally {
+    analysisEnd = Infinity
+  }
+}
+
+const analysisLate = (): boolean => analysisEnd !== Infinity && clock() > analysisEnd
 
 function pt(
   kind: SpecialPointKind,
@@ -687,6 +718,7 @@ function analyzeExplicitNumeric(
         }
       }
       for (let i = i0; i < i1; i++) {
+        if (analysisLate()) break
         const ya = ys[i]
         const yb = ys[i + 1]
         if (ya === 0) {
@@ -706,6 +738,7 @@ function analyzeExplicitNumeric(
       // to find. Look for local minima of |f| and refine them properly before
       // deciding — at the sampling grid (x-2)^2 is ~1e-5 from its own root.
       for (let i = i0 + 1; i < i1; i++) {
+        if (analysisLate()) break
         const a = Math.abs(ys[i - 1])
         const b = Math.abs(ys[i])
         const c = Math.abs(ys[i + 1])
@@ -732,6 +765,7 @@ function analyzeExplicitNumeric(
     // maximum: a monotonic run has no interior sign change, so it yields none.
     if (opts.extrema) {
       for (let i = i0 + 1; i < i1; i++) {
+        if (analysisLate()) break
         const dPrev = ys[i] - ys[i - 1]
         const dNext = ys[i + 1] - ys[i]
         if (dPrev === 0 && dNext === 0) continue
@@ -771,6 +805,7 @@ function analyzeExplicitNumeric(
       let jPrev = -1
       let sPrevSign = 0
       for (let i = i0 + 1; i < i1; i++) {
+        if (analysisLate()) break
         const s = ys[i + 1] - 2 * ys[i] + ys[i - 1]
         if (!Number.isFinite(s) || Math.abs(s) <= curvFloor) continue
         const sign = s > 0 ? 1 : -1
@@ -929,7 +964,9 @@ function forEachK(
   const b = Math.floor(Math.max(kLo, kHi) + 1)
   if (!Number.isFinite(a) || !Number.isFinite(b)) return
   if (b - a > 4096) return // absurd frequency: fall back to numerics elsewhere
-  for (let k = a; k <= b; k++) fn(k)
+  // a counted walk: past 2^53, k + 1 === k and `k++` would never reach b
+  if (Math.abs(a) > 2 ** 52 || Math.abs(b) > 2 ** 52) return
+  for (let i = 0; a + i <= b && i <= 4097; i++) fn(a + i)
 }
 
 /**
@@ -1482,6 +1519,8 @@ function attachExactForms(
       attachY(p, p.pos.y)
       continue
     }
+    // out of time: the rest keep their decimals (a closed form is never guessed)
+    if (analysisLate()) continue
     const check = checkFor(p.kind, f, der, scales)
     if (!check) continue
     // Polish: the printed decimal becomes the decimal of the printed form.
@@ -1617,7 +1656,46 @@ function analyzeExplicit(
     const q = pt('hole', h.x, h.y, 'hole', false)
     if (q) kept.push(q)
   }
-  return attachExpForms(attachExactForms(kept, curve, f, lo, hi), curve, spec, null)
+  return attachExpForms(attachExactForms(inDomain(kept, curve, models, f), curve, f, lo, hi), curve, spec, null)
+}
+
+/**
+ * Only points whose x is in the curve's domain.
+ *
+ * An evaluator can hand back a value where the formula has none: (e²ˣ − 1)/
+ * ln(1 + x) at x = −1 is (e⁻² − 1)/(−∞), which IEEE arithmetic calls 0, so
+ * the scan found a "zero" at −1 — where ln(1 + x) does not exist. A point
+ * that sits at the edge of where f is defined (f has no value just to one
+ * side of it) is checked against curveDomain, which settles a boundary by
+ * exact arithmetic and by how f arrives there: √x keeps its zero at 0,
+ * ln(1 + x) loses its point at −1. Holes are not on the curve by definition
+ * and are kept. Interior points never pay for the domain scan.
+ */
+function inDomain(
+  points: SpecialPoint[],
+  curve: FittedCurve,
+  models: Record<string, ModelSpec>,
+  f: Fn,
+): SpecialPoint[] {
+  let dom: ReturnType<typeof curveDomain> | undefined
+  return points.filter((p) => {
+    if (p.kind === 'hole') return true
+    const x = p.pos.x
+    const d = 1e-7 * Math.max(1, Math.abs(x))
+    if (Number.isFinite(f(x - d)) && Number.isFinite(f(x + d))) return true
+    if (dom === undefined) dom = curveDomain(curve, models)
+    if (!dom || dom.kind !== 'intervals' || dom.parts.length === 0) return true
+    const parts = dom.parts
+    // a periodic domain lists only the parts of its core window: beyond them, keep
+    if (x < parts[0].lo || x > parts[parts.length - 1].hi) return dom.periodic !== undefined
+    const near = (a: number, b: number): boolean =>
+      Number.isFinite(b) && Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(b))
+    return parts.some((q) => {
+      if (near(x, q.lo)) return q.loClosed
+      if (near(x, q.hi)) return q.hiClosed
+      return x > q.lo && x < q.hi
+    })
+  })
 }
 
 /** Dedupe within each kind, drop non-finite, sort left to right. */
@@ -1775,9 +1853,29 @@ function polarTips(curve: FittedCurve, spec: ModelSpec): SpecialPoint[] {
   const evalR = spec.evalPolar
   if (!evalR) return []
   const out: SpecialPoint[] = []
+  // A tip is only a tip of THIS curve when its θ window sweeps it: the tips
+  // come from the family's closed form over a whole turn, and a rose drawn on
+  // 0 ≤ θ ≤ π/3 has one petal, not six. The same point is reached at θ + kπ
+  // (r(θ + π) = −r(θ) for an odd rose traces it again), so any such θ inside
+  // the window counts.
+  const dom = curve.domain
+  const swept = (x: number, y: number, t: number): boolean => {
+    if (!dom) return true
+    const a = Math.min(dom[0], dom[1]), b = Math.max(dom[0], dom[1])
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return true
+    const tol = 1e-9 * Math.max(1, Math.hypot(x, y))
+    const k0 = Math.ceil((a - t) / Math.PI - 1e-9)
+    for (let k = k0, i = 0; i < 64; k++, i++) {
+      const th = t + k * Math.PI
+      if (th > b + 1e-9 * Math.max(1, Math.abs(b))) break
+      const r = evalR.call(spec, curve.params, Math.min(b, Math.max(a, th)))
+      if (Number.isFinite(r) && Math.hypot(r * Math.cos(th) - x, r * Math.sin(th) - y) <= tol) return true
+    }
+    return false
+  }
   const push = (r: number, t: number) => {
     const p = pt('petal-tip', r * Math.cos(t), r * Math.sin(t), 'petal tip', true)
-    if (p) out.push(p)
+    if (p && swept(p.pos.x, p.pos.y, t)) out.push(p)
   }
 
   if (curve.modelId === 'polarRose') {
@@ -1839,15 +1937,23 @@ function analyzeParametric(curve: FittedCurve, spec: ModelSpec): SpecialPoint[] 
     if (v.y > maxY) { maxY = v.y; iMaxY = i }
   }
   const step = (hi - lo) / n
+  // The search never leaves the curve's own t-interval: (t² − 4t, t − 1) on
+  // 0 ≤ t ≤ 5 is rightmost at its END, t = 5 → (5, 4), and a bracket that
+  // ran past the end used to find (5.042, 4.007) — a point the curve does
+  // not reach. An extreme on the first or last sample is compared with the
+  // end itself, which wins when it is at least as extreme.
   const refine = (i: number, key: 'x' | 'y', wantMax: boolean): Vec2 => {
-    const a = lo + (i - 1) * step
-    const b = lo + (i + 1) * step
+    const a = Math.max(lo, lo + (i - 1) * step)
+    const b = Math.min(hi, lo + (i + 1) * step)
     const g = (t: number) => {
       const v = evalP.call(spec, curve.params, t)
       const c = key === 'x' ? v.x : v.y
       return Number.isFinite(c) ? (wantMax ? -c : c) : Infinity
     }
-    const t = goldenMin(g, a, b)
+    let t = goldenMin(g, a, b)
+    for (const end of [a === lo ? lo : null, b === hi ? hi : null]) {
+      if (end !== null && g(end) <= g(t)) t = end
+    }
     return evalP.call(spec, curve.params, t)
   }
   const out: SpecialPoint[] = []
@@ -1921,6 +2027,13 @@ function piecesOf(curve: FittedCurve, spec: ModelSpec): PieceInfo[] | null {
 // ---------------------------------------------------------------------------
 
 export function analyzeCurve(
+  curve: FittedCurve,
+  models: Record<string, ModelSpec>,
+): SpecialPoint[] {
+  return withAnalysisBudget(() => analyzeCurveIn(curve, models))
+}
+
+function analyzeCurveIn(
   curve: FittedCurve,
   models: Record<string, ModelSpec>,
 ): SpecialPoint[] {

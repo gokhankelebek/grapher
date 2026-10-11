@@ -73,6 +73,7 @@ import type { ModelsApi } from './useModels'
 import type { NoticesApi } from './useNotices'
 import type { HistoryApi } from './useHistory'
 import type { TypedLinesApi } from './useTypedLines'
+import { keepRestriction } from '../ui/familyLine'
 
 /** What useBuilders reads from the hooks App calls before it. */
 export interface BuildersDeps {
@@ -127,10 +128,26 @@ export function useBuilders({ board, refs, derived, notices, history, typed }: B
     [addExpression],
   )
 
-  /** One committed edit from a card's Roots section. */
+  /**
+   * A family section or board handle rewrote a typed line's formula: its
+   * domain restriction stays on (d(t) = … {0 <= t <= 24} is still a
+   * sinusoid — src/ui/familyLine.ts).
+   */
+  const restateFamily = useCallback(
+    (id: string, src: string, label: string, live: boolean): string | null =>
+      restateTypedCurve(id, keepRestriction(exprSourcesRef.current[id], src), label, live),
+    [restateTypedCurve],
+  )
+
+  /** One committed edit from a card's family section (Roots, Exponential, Sinusoidal …). */
   const restateFactors = useCallback(
-    (id: string, src: string, label: string): string | null =>
-      restateTypedCurve(id, src, label, false),
+    (id: string, src: string, label: string): string | null => restateFamily(id, src, label, false),
+    [restateFamily],
+  )
+
+  /** One committed edit that states the whole line, restriction included (the Piecewise section). */
+  const restateLine = useCallback(
+    (id: string, src: string, label: string): string | null => restateTypedCurve(id, src, label, false),
     [restateTypedCurve],
   )
 
@@ -177,7 +194,7 @@ export function useBuilders({ board, refs, derived, notices, history, typed }: B
       } catch {
         return
       }
-      const err = restateTypedCurve(
+      const err = restateFamily(
         curveId,
         src,
         side === 'num' ? 'move root' : 'move asymptote',
@@ -185,7 +202,7 @@ export function useBuilders({ board, refs, derived, notices, history, typed }: B
       )
       if (!err) s.spec = next
     },
-    [restateTypedCurve],
+    [restateFamily],
   )
 
   // ======================================================= exponentials
@@ -257,9 +274,9 @@ export function useBuilders({ board, refs, derived, notices, history, typed }: B
       } catch {
         return
       }
-      restateTypedCurve(curveId, src, EXP_HANDLE_LABEL[which], true)
+      restateFamily(curveId, src, EXP_HANDLE_LABEL[which], true)
     },
-    [restateTypedCurve],
+    [restateFamily],
   )
 
   // ======================================================= logistics
@@ -315,9 +332,9 @@ export function useBuilders({ board, refs, derived, notices, history, typed }: B
       } catch {
         return
       }
-      restateTypedCurve(curveId, src, LOGISTIC_HANDLE_LABEL[which], true)
+      restateFamily(curveId, src, LOGISTIC_HANDLE_LABEL[which], true)
     },
-    [restateTypedCurve],
+    [restateFamily],
   )
 
   /**
@@ -419,9 +436,9 @@ export function useBuilders({ board, refs, derived, notices, history, typed }: B
       } catch {
         return
       }
-      restateTypedCurve(curveId, src, LOG_HANDLE_LABEL[which], true)
+      restateFamily(curveId, src, LOG_HANDLE_LABEL[which], true)
     },
-    [restateTypedCurve],
+    [restateFamily],
   )
 
   // ======================================================= sinusoids
@@ -484,9 +501,9 @@ export function useBuilders({ board, refs, derived, notices, history, typed }: B
       } catch {
         return
       }
-      restateTypedCurve(curveId, src, SIN_HANDLE_LABEL[which], true)
+      restateFamily(curveId, src, SIN_HANDLE_LABEL[which], true)
     },
-    [restateTypedCurve],
+    [restateFamily],
   )
 
   // ======================================================= transformations
@@ -599,9 +616,9 @@ export function useBuilders({ board, refs, derived, notices, history, typed }: B
       } catch {
         return
       }
-      restateTypedCurve(curveId, src, CONIC_HANDLE_LABEL[which], true)
+      restateFamily(curveId, src, CONIC_HANDLE_LABEL[which], true)
     },
-    [restateTypedCurve],
+    [restateFamily],
   )
 
   const setConicConstruction = useCallback((id: string, on: boolean): void => {
@@ -698,9 +715,9 @@ export function useBuilders({ board, refs, derived, notices, history, typed }: B
       } catch {
         return
       }
-      restateTypedCurve(curveId, src, TRANSFORM_HANDLE_LABEL[which], true)
+      restateFamily(curveId, src, TRANSFORM_HANDLE_LABEL[which], true)
     },
-    [restateTypedCurve],
+    [restateFamily],
   )
 
   const setTransformShowParent = useCallback((id: string, on: boolean): void => {
@@ -713,7 +730,7 @@ export function useBuilders({ board, refs, derived, notices, history, typed }: B
   )
 
   return {
-    buildFromRoots, restateFactors, dropFactorThrough, factorThroughFor, dragFactorRoot,
+    buildFromRoots, restateFactors, restateLine, dropFactorThrough, factorThroughFor, dragFactorRoot,
     buildExponential, convertToTyped, dragExp, buildLogistic, dragLogistic, showLogisticField,
     buildLogarithm, dragLog, buildSinusoid, dragSin, buildTransformation, buildPiecewise,
     piecewiseEnvFor, piecewiseBuildEnv, buildConic, dragConic, setConicConstruction,

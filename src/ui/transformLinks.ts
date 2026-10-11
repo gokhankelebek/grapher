@@ -44,6 +44,7 @@ import { evalText } from './factorLinks'
 import type { FactoredSpec } from '../core/factored'
 import { minus, numOut } from './expLinks'
 import { xSource } from './sinLinks'
+import { familyBase } from './familyLine'
 
 // ---------------------------------------------------------------------------
 // the parent library, as the UI names it
@@ -188,10 +189,11 @@ export function transformProblems(spec: TransformSpec): TransformProblem[] {
 // the core, never throwing
 // ---------------------------------------------------------------------------
 
+/** The line's family reading — a restricted line's formula without its restriction (src/ui/familyLine.ts). */
 export function safeReadTransform(src: string | undefined): TransformSpec | null {
   if (!src || !src.trim()) return null
   try {
-    const s = readTransform(src)
+    const s = readTransform(familyBase(src))
     return s && transformProblems(s).length === 0 ? s : null
   } catch {
     return null

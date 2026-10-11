@@ -895,9 +895,14 @@ describe('the Asymptotes row', () => {
     expect(rowOf('y = 1/x')).toEqual(['x = 0', 'y = 0'])
   })
 
-  it('rounds to four significant digits — arctan is ±1.571', () => {
-    expect(rowOf('y = atan(x)')).toEqual(['y = −1.571', 'y = 1.571'])
-    expect(rowOf('y = 3atan(x)')).toEqual(['y = −4.712', 'y = 4.712'])
+  it('writes a closed form when the value has one — arctan is ±π/2', () => {
+    expect(rowOf('y = atan(x)')).toEqual(['y = −π/2', 'y = π/2'])
+    expect(rowOf('y = 3atan(x)')).toEqual(['y = −3π/2', 'y = 3π/2'])
+  })
+
+  it('rounds to four significant digits when there is no closed form', () => {
+    // 1 ± 3/π: no simple form, so the decimal
+    expect(rowOf('y = 3/(2atan(x)) + 1')).toEqual(['x = 0', 'y = 0.04507', 'y = 1.955'])
   })
 
   it('drops a unit slope and a zero intercept, as an equation is written', () => {
@@ -928,7 +933,7 @@ describe('the Asymptotes row', () => {
   it('reads the vertical ones over the curve’s own domain, or [−10, 10]', () => {
     // tan x has six poles on [−10, 10] and one on [0, 2]
     expect(rowOf('y = tan(x)')).toHaveLength(6)
-    expect(rowOf('y = tan(x)', [0, 2])).toEqual(['x = 1.571'])
+    expect(rowOf('y = tan(x)', [0, 2])).toEqual(['x = π/2'])
   })
 })
 

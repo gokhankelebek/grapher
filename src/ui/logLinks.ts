@@ -40,6 +40,7 @@ import { expSource } from '../core/exponential'
 import { parseExpression } from '../core/parse'
 import { evalText } from './factorLinks'
 import { fittedExp, minus, numOut, safeReadExponential } from './expLinks'
+import { familyBase } from './familyLine'
 
 // ---------------------------------------------------------------------------
 // numbers
@@ -123,10 +124,11 @@ export function logProblems(spec: LogSpec): LogProblem[] {
 // the core, never throwing
 // ---------------------------------------------------------------------------
 
+/** The line's family reading — a restricted line's formula without its restriction (src/ui/familyLine.ts). */
 export function safeReadLogarithmic(src: string | undefined): LogSpec | null {
   if (!src || !src.trim()) return null
   try {
-    const s = readLogarithmic(src)
+    const s = readLogarithmic(familyBase(src))
     return s && logValues(s) ? s : null
   } catch {
     return null

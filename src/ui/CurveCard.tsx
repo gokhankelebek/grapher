@@ -33,9 +33,10 @@ import { motionKindOf } from './motionLinks'
 import type { MotionPlayState, MotionScales } from './motionLinks'
 import { conicSectionInfo, fittedCircle, fittedEllipse } from './conicLinks'
 import { piecewiseOpenByDefault, piecewiseSectionSpec } from './piecewiseLinks'
+import { familyRestriction } from './familyLine'
 import type { FunctionEnv } from '../core/functionEnv'
 import { fitQuality } from '../core/fit/recognize'
-import { findAsymptotes } from '../core/holes'
+import { asymptoteForm, findAsymptotes } from '../core/holes'
 import { zeroIntervals } from '../core/analyze'
 import { complexZerosOf } from './complexLinks'
 import { ComplexZerosSection } from './ComplexZerosSection'
@@ -43,7 +44,7 @@ import type { ZeroInterval } from '../core/analyze'
 import { exactForm } from '../core/exact'
 import { Latex } from './Latex'
 import { APPROX, exactDetail, formatCoord, parseNumeric, pointParts } from './numeric'
-import { alignedValues, curveScale, curveXScale, derivesFromInk } from './curveState'
+import { alignedValues, curveScale, curveXScale, derivesFromInk, pointScale } from './curveState'
 import { axisKeys, featureAxes } from './featureEdit'
 import { curveEquationText, displayEquationLatex } from './equationText'
 import { N_MAX, N_MIN, RIEMANN_METHODS, trimmed } from './calcLinks'
@@ -461,8 +462,28 @@ function exactTitle(p: SpecialPoint, exact: string): string {
 }
 
 /**
+ * An asymptote's number on its own merit: its closed form when it has a
+ * simple one (2/π, −π/2), else four significant digits — and never rounded
+ * against the curve's height. The line is a fact about the curve at
+ * infinity, not a coordinate in its table: (e²ˣ − 1)/arctan x climbs to 10⁵
+ * on the card's window, and rounding at that size printed its asymptote
+ * y = 2/π ≈ 0.6366 as "y = 0". The core already snaps a limit that is 0 to
+ * within its own tolerance to exactly 0.
+ */
+function asymptoteNumber(v: number): string {
+  if (!Number.isFinite(v)) return '—'
+  if (Math.abs(v) <= 1e-12) return '0'
+  // a short decimal that IS the value (1.5, −2, 0.25) is already exact
+  const short = Number(v.toPrecision(4))
+  if (Math.abs(short - v) <= 1e-12 * Math.max(1, Math.abs(v))) return coefText(v)
+  const form = asymptoteForm(v)
+  if (form) return form.text.startsWith('-') ? '−' + form.text.slice(1) : form.text
+  return coefText(v)
+}
+
+/**
  * One asymptote, as a teacher writes it: `x = 1`, `y = 2`, `y = 2x + 2`,
- * `y = −0.5x − 1`.
+ * `y = −0.5x − 1`, `y = 2/π`.
  *
  * Every kind of `Asymptote` has to come out in the same language, because the
  * card lists them together: a vertical one names its x, a horizontal one its
@@ -471,10 +492,10 @@ function exactTitle(p: SpecialPoint, exact: string): string {
  * polar line that happens to be vertical is written `x = c` for the same
  * reason: "y = 4.5e15·x" is not a sentence about a graph.
  */
-export function asymptoteText(a: Asymptote, scale?: number): string {
+export function asymptoteText(a: Asymptote, _scale?: number): string {
   if (!a) return ''
   if (a.kind === 'vertical') {
-    return Number.isFinite(a.x) ? `x = ${coefText(a.x, scale)}` : ''
+    return Number.isFinite(a.x) ? `x = ${asymptoteNumber(a.x)}` : ''
   }
   if (a.kind !== 'line') return ''
   const { a: p, dir } = a
@@ -486,15 +507,15 @@ export function asymptoteText(a: Asymptote, scale?: number): string {
   if (Math.abs(dir.x / len) <= VERTICAL_DIR) {
     // Straight up: the line is x = (wherever it crosses), and its own point
     // already names that x.
-    return `x = ${coefText(p.x, scale)}`
+    return `x = ${asymptoteNumber(p.x)}`
   }
   const m = dir.y / dir.x
   const b = p.y - m * p.x
   if (!Number.isFinite(m) || !Number.isFinite(b)) return ''
   const mText = coefText(m)
-  if (mText === '0') return `y = ${coefText(b, scale)}`
+  if (mText === '0') return `y = ${asymptoteNumber(b)}`
   const slope = mText === '1' ? 'x' : mText === '−1' ? '−x' : `${mText}x`
-  const bText = coefText(b, scale)
+  const bText = asymptoteNumber(b)
   if (bText === '0') return `y = ${slope}`
   const negative = bText.startsWith('−')
   return `y = ${slope} ${negative ? '−' : '+'} ${negative ? bText.slice(1) : bText}`
@@ -1098,6 +1119,16 @@ export function CurveCard({
     factored !== null || exponential !== null || logarithmic !== null || sinusoidal !== null || logistic !== null
   /** The card's Analysis states domain and range as rows of their own. */
   const domainRows = Boolean(domainPanel && domainActions)
+  /**
+   * A single restricted formula (d(t) = … {0 <= t <= 24}): its family
+   * sections read the formula and state only what lies in the domain
+   * (src/ui/familyLine.ts).
+   */
+  const restriction = useMemo(
+    () => (isExpression && readable && curve.kind === 'explicit' ? familyRestriction(exprSource) : null),
+    [isExpression, readable, curve.kind, exprSource],
+  )
+  const familyDomainRange = domainRows || restriction !== null
 
   /**
    * A SKETCH that fitted the library's a·e^{bx} + c, stated the precalculus
@@ -1504,7 +1535,7 @@ export function CurveCard({
     onAnalysisHover(index)
     setFeatureEdit({
       index,
-      texts: keys.map((k) => formatCoord(point.pos[k], { scale, exact: point.exact })
+      texts: keys.map((k) => formatCoord(point.pos[k], { scale: pointScale(curve, spec, point.pos.x, scale), exact: point.exact })
         .replace(/−/g, '-')),
       bad: keys.map(() => false),
       flash: 0,
@@ -2663,7 +2694,15 @@ export function CurveCard({
       )}
 
       {selected && (
-        <FamilyAnswerContext.Provider value={transform || (conic && conic.kind !== 'class') ? familyKey(curve.id) : null}>
+        <FamilyAnswerContext.Provider
+          value={
+            // the same readings as familyKeyOf (src/ui/familyFacts.ts) — the reveal key exists exactly then
+            transform || exponential || logarithmic || sinusoidal || logistic || motionKind ||
+            (conic && conic.kind !== 'class')
+              ? familyKey(curve.id)
+              : null
+          }
+        >
         <div className="card-body card-body-sections" onClick={(e) => e.stopPropagation()}>
           {inequality && <InequalitySection info={inequality} />}
           {/* A function built piece by piece is edited BY its pieces. */}
@@ -2691,7 +2730,8 @@ export function CurveCard({
               spec={exponential}
               onRestate={onExpRestate}
               onShowInverse={onShowInverse}
-              hideDomainRange={domainRows}
+              hideDomainRange={familyDomainRange}
+              restriction={restriction}
             />
           )}
           {logarithmic && onLogRestate && (
@@ -2699,18 +2739,25 @@ export function CurveCard({
               spec={logarithmic}
               onRestate={onLogRestate}
               onShowInverse={onShowInverse}
-              hideDomainRange={domainRows}
+              hideDomainRange={familyDomainRange}
+              restriction={restriction}
             />
           )}
           {sinusoidal && onSinRestate && (
-            <SinSection spec={sinusoidal} onRestate={onSinRestate} hideDomainRange={domainRows} />
+            <SinSection
+              spec={sinusoidal}
+              onRestate={onSinRestate}
+              hideDomainRange={familyDomainRange}
+              restriction={restriction}
+            />
           )}
           {logistic && onLogisticRestate && (
             <LogisticSection
               spec={logistic}
               onRestate={onLogisticRestate}
               onShowField={onShowLogisticField}
-              hideDomainRange={domainRows}
+              hideDomainRange={familyDomainRange}
+              restriction={restriction}
             />
           )}
           {fittedLg && onConvertTyped && (
@@ -2738,7 +2785,8 @@ export function CurveCard({
               onShowParent={onTransformShowParent}
               handles={transformOwnsHandles(transformOthers)}
               onRestate={onTransformRestate}
-              hideDomainRange={domainRows}
+              hideDomainRange={familyDomainRange}
+              restriction={restriction}
             />
           )}
           {conic && (
@@ -2887,7 +2935,7 @@ export function CurveCard({
                         // The separator is part of the value's own text: a
                         // comma that can wrap on its own ends a line with a
                         // dangling punctuation mark.
-                        const parts = pointParts(point, { scale, xScale })
+                        const parts = pointParts(point, { scale: pointScale(curve, spec, point.pos.x, scale), xScale })
                         // Both readings in one attribute, for a copy or a test
                         // that wants the value as a value. Only emitted where
                         // there IS a closed form, so a row of plain decimals
@@ -3107,7 +3155,7 @@ export function CurveCard({
                       </Answer>
                     )}
                     {g.points.map((point, n) => {
-                      const parts = pointParts(point, { scale, xScale })
+                      const parts = pointParts(point, { scale: pointScale(curve, spec, point.pos.x, scale), xScale })
                       const comma = n === g.points.length - 1 ? '' : ','
                       return (
                         <Answer k={revealApi.crossKey(curve.id, g.id, point)} key={`${g.id}-${n}`} what="this intersection">

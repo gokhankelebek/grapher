@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { appSource } from './appSource'
+import { readFileSync } from 'node:fs'
 import { deserializeDoc, docFromBoard, serializeDoc } from '../src/core/persist'
 import type { BoardInput, DocMeta } from '../src/core/persist'
 import {
@@ -404,7 +405,12 @@ describe('the Transformation section is masked like every other answer', () => {
   it('the board keeps the image marks and arrows off while the facts are hidden', () => {
     const src = appSource()
     expect(src).toMatch(/isHidden\(reveal, familyKey\(selectedTransform\.id\)\)/)
-    expect(src).toMatch(/selectedTransform\?\.marks && !transformHidden/)
+    // the image marks go through src/ui/familyMarks.ts, which draws no family mark while the facts are hidden
+    expect(src).toMatch(/familyMarks\(c, exprSources\[c\.id\], \{[^}]*hidden: \(k\) => isHidden\(reveal, k\)/)
+    expect(src).toMatch(/transform: selectedTransform\?\.marks === true/)
+    expect(readFileSync(new URL('../src/ui/familyMarks.ts', import.meta.url), 'utf8')).toMatch(
+      /if \(!curve\.visible \|\| opts\.hidden\?\.\(familyKey\(curve\.id\)\)\) return NO_MARKS/,
+    )
     expect(src).toMatch(/if \(!transformHidden\) \{\s*out\.push\(\.\.\.keyPointArrows/)
   })
 })

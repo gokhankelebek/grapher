@@ -40,6 +40,8 @@ import type { SinFeatures, SinFn, SinSpec, SinStart } from '../core/sinusoidal'
 import { parseExpression } from '../core/parse'
 import { evalText } from './factorLinks'
 import { minus, numOut } from './expLinks'
+import { familyBase } from './familyLine'
+import type { FamilyRestriction } from './familyLine'
 
 // ---------------------------------------------------------------------------
 // numbers
@@ -280,10 +282,11 @@ export function sinProblems(spec: SinSpec): SinProblem[] {
 // the core, never throwing
 // ---------------------------------------------------------------------------
 
+/** The line's family reading — a restricted line's formula without its restriction (src/ui/familyLine.ts). */
 export function safeReadSinusoid(src: string | undefined): SinSpec | null {
   if (!src || !src.trim()) return null
   try {
-    const s = readSinusoid(src)
+    const s = readSinusoid(familyBase(src))
     return s && sinProblems(s).length === 0 ? s : null
   } catch {
     return null
@@ -323,9 +326,34 @@ export interface KeyRow {
   kind: 'max' | 'min' | 'mid'
 }
 
-export function keyRows(f: SinFeatures | null): KeyRow[] {
+export function keyRows(f: SinFeatures | null, r: FamilyRestriction | null = null): KeyRow[] {
   if (!f) return []
-  return f.keyPoints.map((p) => ({ x: p.xText, y: p.yText, kind: p.kind }))
+  return keyPointsWithin(f, r).map((p) => ({ x: p.xText, y: p.yText, kind: p.kind }))
+}
+
+/**
+ * The key points a restricted sinusoid states: the cycle that starts at
+ * x = h when h is in the domain, else the first cycle that starts in it
+ * (moved by whole periods — the same five points, one period on), and of
+ * those only the ones in the domain. Unrestricted: the cycle at h, as is.
+ */
+export function keyPointsWithin(f: SinFeatures, r: FamilyRestriction | null): SinFeatures['keyPoints'] {
+  const pts = f.keyPoints
+  if (!r || pts.length === 0) return pts.slice()
+  const P = f.period
+  const x0 = pts[0].x
+  let n = 0
+  if (Number.isFinite(P) && P > 0 && !r.within(x0)) {
+    if (Number.isFinite(r.lo)) n = Math.ceil((r.lo - x0) / P - 1e-9)
+    else if (Number.isFinite(r.hi) && x0 > r.hi) n = Math.floor((r.hi - x0) / P + 1e-9) - 1
+  }
+  const moved = n === 0
+    ? pts
+    : pts.map((p) => {
+        const x = p.x + n * P
+        return { ...p, x, xText: prettyText(xSource(x)).replace(/pi/g, 'π') }
+      })
+  return moved.filter((p) => r.within(p.x))
 }
 
 export const KIND_WORD: Record<KeyRow['kind'], string> = {
@@ -721,10 +749,10 @@ const MARK_KIND: Record<KeyRow['kind'], SpecialPoint['kind']> = {
  * the ring and the exact-text chip the board already draws for a special
  * point ("(π/4, 1)").
  */
-export function sinKeyMarks(spec: SinSpec): SpecialPoint[] {
+export function sinKeyMarks(spec: SinSpec, r: FamilyRestriction | null = null): SpecialPoint[] {
   const f = safeSinFeatures(spec)
   if (!f) return []
-  return f.keyPoints
+  return keyPointsWithin(f, r)
     .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y))
     .map((p) => ({
       kind: MARK_KIND[p.kind],

@@ -32,6 +32,8 @@ import type {
 } from './expLinks'
 import { evalText } from './factorLinks'
 import { RevealPill, useFamilyMask } from './RevealAnswer'
+import { factsWithin } from './familyLine'
+import type { FamilyRestriction } from './familyLine'
 
 // ============================================================================
 // src/ui/ExpEditor.tsx — an exponential function, stated the precalculus way.
@@ -606,9 +608,15 @@ interface SectionProps {
   onShowInverse?(): void
   /** The card's Analysis states the domain and range as rows: do not say them twice here. */
   hideDomainRange?: boolean
+  /**
+   * The line's domain restriction (src/ui/familyLine.ts), or null: then only
+   * the points inside the domain are stated, and the domain, range and end
+   * behaviour are left to the card's Domain rows.
+   */
+  restriction?: FamilyRestriction | null
 }
 
-export function ExpSection({ spec, onRestate, onShowInverse, hideDomainRange = false }: SectionProps) {
+export function ExpSection({ spec, onRestate, onShowInverse, hideDomainRange = false, restriction = null }: SectionProps) {
   const [error, setError] = useState<string | null>(null)
   useEffect(() => setError(null), [spec])
 
@@ -622,7 +630,7 @@ export function ExpSection({ spec, onRestate, onShowInverse, hideDomainRange = f
 
   const rate = safeRate(spec)
   const allFeatures = featureLines(safeFeatures(spec))
-  const features = hideDomainRange ? withoutDomainRange(allFeatures) : allFeatures
+  const features = factsWithin(hideDomainRange ? withoutDomainRange(allFeatures) : allFeatures, restriction)
   // The line cannot always say which statement it is — y = 100(1.05)^x is a
   // factor AND a percent — so the picker remembers what the teacher chose for
   // as long as the line is the one that choice wrote.
@@ -687,7 +695,7 @@ export function ExpSection({ spec, onRestate, onShowInverse, hideDomainRange = f
             </select>
           </div>
           <ExpFacts
-            sentences={hideDomainRange ? withoutDomainRange(rate?.sentences ?? []) : (rate?.sentences ?? [])}
+            sentences={factsWithin(hideDomainRange ? withoutDomainRange(rate?.sentences ?? []) : (rate?.sentences ?? []), restriction)}
             features={features}
           />
           {error && <div className="expr-error">{error}</div>}

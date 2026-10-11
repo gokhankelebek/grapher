@@ -1024,11 +1024,13 @@ describe('readPiecewise', () => {
 
   it('null for everything that is not a piecewise or restricted explicit line', () => {
     for (const src of [
-      'y = x^2', 'x^2 + y^2 = 4', 'r = 1 + cos(theta) {0 <= theta <= pi}', 'y = t^2 {t > 0}',
+      'y = x^2', 'x^2 + y^2 = 4', 'r = 1 + cos(theta) {0 <= theta <= pi}', 'y = t^2 {x > 0}',
       'y = x^2 {x < 0', 'y = { x^2 ; 2x }', '', 'hello', 'y = x^2 {3}',
     ]) {
       expect(readPiecewise(src), src).toBeNull()
     }
+    // a line in t is read in t (tests/cardFixes.test.ts)
+    expect(readPiecewise('y = t^2 {t > 0}')).toEqual({ v: 't', pieces: [{ expr: 't^2', lo: '0', loClosed: false, hiClosed: false }] })
   })
 })
 

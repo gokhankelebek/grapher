@@ -71,6 +71,7 @@ import { drawnExtent, inverseRestriction, oneToOneText, setRowText, splitTyped }
 import { curveEquationText } from './equationText'
 import { dependencyKeys } from './nameLinks'
 import { curveSpecSerial } from './valueKeys'
+import { viewSpans } from './renderBoard'
 
 const residualFit = makeFitCache()
 
@@ -285,6 +286,7 @@ function linesFor(m: DocModel, inv: RevealInventory, overlays: readonly Overlay[
     names: m.names,
     exprSources: board.exprSources,
     pointOf: (key) => inv.pointOf(key),
+    view: viewSpans(m.vp),
     domainRows: (id) => (domain && id === board.selectedId ? domain : null),
     calcLines: calcLinesOf(calcCards),
     tablePanelFor: (id) => {

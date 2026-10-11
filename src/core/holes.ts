@@ -107,6 +107,45 @@
 
 import type { Asymptote, FittedCurve, ModelSpec, PieceInfo, Vec2 } from './types'
 import { endBehaviour } from './fit/models'
+import { exactForm } from './exact'
+import type { ExactForm } from './exact'
+
+/**
+ * Relative tolerance for reading an asymptote's value as a closed form. The
+ * value is a LIMIT read off a ladder (the end ladder stops at x = 10⁸, so a
+ * 1/x approach is good to ~1e−8): (e²ˣ − 1)/arctan x leans on 0.63661977642
+ * as x → −∞, which is 2/π = 0.63661977237 to 6e−9. exactForm's complexity
+ * charge still applies, so only a simple form fits this loosely.
+ */
+const ASYMPTOTE_FORM_TOL = 1e-7
+
+/**
+ * The closed form of an asymptote's number — the c of x = c or y = c, or a
+ * slant line's intercept — when it has a simple one (2/π, π/2, −3/2), else
+ * null. Shared by every surface that writes an asymptote (the card, the
+ * answer key, the screen-reader description) so they agree.
+ */
+export function asymptoteForm(v: number): ExactForm | null {
+  if (!Number.isFinite(v)) return null
+  const direct = exactForm(v, { tol: ASYMPTOTE_FORM_TOL })
+  if (direct) return direct
+  // A rational over π — the 2/π of a quotient with arctan in it, 1/π, 3/(2π).
+  // exactForm does not propose these (it knows pπ/q, not p/(qπ)), so read
+  // v·π as a plain fraction and divide back.
+  const r = exactForm(v * Math.PI, { tol: ASYMPTOTE_FORM_TOL })
+  if (!r) return null
+  const m = /^([-−]?)(\d+)(?:\/(\d+))?$/.exec(r.text.trim())
+  if (!m) return null
+  const sign = m[1] ? '−' : ''
+  const p = m[2]
+  const q = m[3]
+  if (p === '0') return null
+  return {
+    text: q ? `${sign}${p}/(${q}π)` : `${sign}${p}/π`,
+    tex: `${sign ? '-' : ''}\\frac{${p}}{${q ?? ''}\\pi}`,
+    value: r.value / Math.PI,
+  }
+}
 
 export interface Hole {
   /** CARTESIAN x of the point — for a polar hole, r0·cos θ0 */
@@ -306,6 +345,37 @@ interface Context {
   f: Fn
   xs: number[]
   mag: number
+  /**
+   * The value of the formula's Taylor jet at x0 (ModelSpec.taylor, the
+   * parser's Taylor-mode AD), or null where it has none — a pole, a kink, a
+   * jump, anything not analytic there. A typed line only.
+   */
+  jet0: ((x: number) => number | null) | null
+}
+
+/**
+ * Sort a candidate the way `classify` does, but ask the formula's own jet
+ * first. A jet that EXISTS at x0 is the analytic continuation across it: the
+ * zeros of numerator and denominator cancelled to every order the walk
+ * carries (L'Hôpital, as many times as it takes), so x0 is a hole and the
+ * jet's constant term is its y — exactly, with no h ladder at all.
+ *
+ * That matters past first order. (eˣ − 1 − x)/x² at h = 1e−8 has a numerator
+ * of 5e−17 against rounding of 1e−16: the ladder's last rungs read 0.4943,
+ * −0.6077, the "values" grow, and the log rule called it a vertical
+ * asymptote. (1 − cos x)/x² reads 0 at the last rung and (sin x − x)/x³
+ * reads 0 too. The jet sees 1/2, 1/2 and −1/6.
+ *
+ * No jet (null) is not a verdict — √, |x|, ln at 0 and every genuine pole
+ * have none — and the numeric rule decides as before.
+ */
+function classifyAt(ctx: Context, x0: number): Classified {
+  if (ctx.jet0) {
+    let c0: number | null = null
+    try { c0 = ctx.jet0(x0) } catch { c0 = null }
+    if (typeof c0 === 'number' && Number.isFinite(c0)) return { verdict: 'hole', y: c0 }
+  }
+  return classify(ctx.f, x0, ctx.mag)
 }
 
 /**
@@ -369,7 +439,18 @@ function contextFor(
     !atEnd(x, domLo) && !atEnd(x, domHi))
   if (xs.length === 0) return null
   xs.sort((p, q) => p - q)
-  return { f, xs, mag: magnitudeOf(f, lo, hi) }
+  // The formula as written, by its Taylor jet — a typed line with ONE
+  // formula (a piecewise of several has no `taylor`). A candidate on the edge
+  // of a restriction gate reads the same either way: one side converges, the
+  // other is absent, and that is a hole by the numeric rule too.
+  const taylor = spec.taylor
+  const jet0 = typeof taylor === 'function'
+    ? (x: number): number | null => {
+        const c = taylor.call(spec, curve.params, x, 0)
+        return Array.isArray(c) && typeof c[0] === 'number' && Number.isFinite(c[0]) ? c[0] : null
+      }
+    : null
+  return { f, xs, mag: magnitudeOf(f, lo, hi), jet0 }
 }
 
 // ---------------------------------------------------------------------------
@@ -807,7 +888,7 @@ export function findHoles(
     if (!ctx) return []
     const out: Hole[] = []
     for (const x of ctx.xs) {
-      const c = classify(ctx.f, x, ctx.mag)
+      const c = classifyAt(ctx, x)
       if (c.verdict !== 'hole') continue
       if (!Number.isFinite(x) || !Number.isFinite(c.y)) continue
       // f finite AT the point means the formula never broke there: the x was
@@ -843,7 +924,7 @@ export function findPoles(
         out.push(x)
         continue
       }
-      if (classify(ctx.f, x, ctx.mag).verdict === 'pole') out.push(x)
+      if (classifyAt(ctx, x).verdict === 'pole') out.push(x)
     }
     return out
   } catch {

@@ -34,6 +34,7 @@ import { analyzeExpr, compileExpr, parseExpression, piecewiseParts } from '../co
 import { complementOf, type Piece } from '../core/parse/condition'
 import {
   breakpoints,
+  varOf,
   piecewiseSource,
   readPiecewise,
   stepSpec,
@@ -175,12 +176,17 @@ function pieceOfRow(r: PieceRow, otherwise: boolean): PieceSpec {
   return p
 }
 
-/** The rows as the core's spec; an "otherwise" row has no bounds. */
-export function tableToSpec(t: PieceTable, name?: string): PiecewiseSpec {
+/** The independent variable a table's formulas and bounds are in: x, or t (C(t) = …). */
+export type PieceVar = 'x' | 't'
+
+/** The rows as the core's spec; an "otherwise" row has no bounds. `v`: the variable (x unless t). */
+export function tableToSpec(t: PieceTable, name?: string, v: PieceVar = 'x'): PiecewiseSpec {
   const last = t.rows.length - 1
   const pieces = t.rows.map((r, i) => pieceOfRow(r, t.otherwise && i === last))
   const n = (name ?? '').trim()
-  return n ? { name: n, pieces } : { pieces }
+  const spec: PiecewiseSpec = n ? { name: n, pieces } : { pieces }
+  if (v === 't') spec.v = 't'
+  return spec
 }
 
 /** The spec's pieces as rows. A last piece with no bounds reads as "otherwise". */
@@ -198,11 +204,14 @@ export function tableFromSpec(spec: PiecewiseSpec): PieceTable {
   return { rows, otherwise }
 }
 
-/** A typed line → its table (and name); null when the core does not read it. */
-export function tableFromSource(src: string | undefined | null): { table: PieceTable; name?: string } | null {
+/** A typed line → its table (and name, and its variable); null when the core does not read it. */
+export function tableFromSource(
+  src: string | undefined | null,
+): { table: PieceTable; name?: string; v: PieceVar } | null {
   const spec = safeReadPiecewise(src)
   if (!spec) return null
-  return spec.name ? { table: tableFromSpec(spec), name: spec.name } : { table: tableFromSpec(spec) }
+  const v = varOf(spec)
+  return spec.name ? { table: tableFromSpec(spec), name: spec.name, v } : { table: tableFromSpec(spec), v }
 }
 
 /** readPiecewise, never throwing. */
@@ -249,14 +258,20 @@ export interface CellProblem {
 /** Variables a formula may not use (x is the one it is in). */
 const NOT_X = new Set(['y', 'r', 'θ', 't'])
 
-/** One formula field: null when fine, else what is wrong with it. */
-export function exprProblem(text: string, env?: Env): string | null {
+/** Every variable but the table's own: x's table may not use t, t's may not use x. */
+function notVar(v: PieceVar): Set<string> {
+  return v === 't' ? new Set(['x', 'y', 'r', 'θ']) : NOT_X
+}
+
+/** One formula field (in `v`): null when fine, else what is wrong with it. */
+export function exprProblem(text: string, env?: Env, v: PieceVar = 'x'): string | null {
   const s = text.trim()
   if (s === '') return "Type this piece's formula"
   const c = compileExpr(s, env)
   if (!c.ok) return c.error
-  const bad = c.expr.vars.find((v) => NOT_X.has(v))
-  if (bad) return `A piece is a formula in x — ${bad} cannot appear in it`
+  const not = notVar(v)
+  const bad = c.expr.vars.find((u) => not.has(u))
+  if (bad) return `A piece is a formula in ${v} — ${bad} cannot appear in it`
   return null
 }
 
@@ -269,25 +284,25 @@ export function boundValue(text: string, absent: number): number | null {
 }
 
 /** One bound field: null when fine (empty = unbounded), else what is wrong. */
-export function boundProblem(text: string): string | null {
+export function boundProblem(text: string, v: PieceVar = 'x'): string | null {
   if (isOpenEnded(text)) return null
   const a = analyzeExpr(text.trim())
   if (!a.ok) return a.error
-  const vars = a.free.filter((v) => v === 'x' || NOT_X.has(v))
-  if (vars.length > 0) return `A bound is a number, not ${vars.includes('x') ? 'a formula in x' : vars[0]}`
+  const vars = a.free.filter((u) => u === 'x' || NOT_X.has(u))
+  if (vars.length > 0) return `A bound is a number, not ${vars.includes(v) ? `a formula in ${v}` : vars[0]}`
   if (a.free.length === 0 && !Number.isFinite(a.value)) return 'This bound is not a finite number'
   return null
 }
 
-/** Every bad cell of the table, in row order. */
-export function tableProblems(t: PieceTable, env?: Env): CellProblem[] {
+/** Every bad cell of the table (formulas in `v`), in row order. */
+export function tableProblems(t: PieceTable, env?: Env, v: PieceVar = 'x'): CellProblem[] {
   const out: CellProblem[] = []
   t.rows.forEach((r, i) => {
-    const e = exprProblem(r.expr, env)
+    const e = exprProblem(r.expr, env, v)
     if (e) out.push({ row: i, cell: 'expr', message: e })
     if (isOtherwiseRow(t, i)) return
-    const lp = boundProblem(r.lo)
-    const hp = boundProblem(r.hi)
+    const lp = boundProblem(r.lo, v)
+    const hp = boundProblem(r.hi, v)
     if (lp) out.push({ row: i, cell: 'lo', message: lp })
     if (hp) out.push({ row: i, cell: 'hi', message: hp })
     if (lp || hp) return
@@ -295,9 +310,9 @@ export function tableProblems(t: PieceTable, env?: Env): CellProblem[] {
     const hi = boundValue(r.hi, Number.POSITIVE_INFINITY)
     if (lo === null || hi === null) return // a slider bound: the parser decides
     if (lo > hi) {
-      out.push({ row: i, cell: 'hi', message: `No x has ${r.lo.trim()} < x < ${r.hi.trim()}: the bounds are the wrong way round` })
+      out.push({ row: i, cell: 'hi', message: `No ${v} has ${r.lo.trim()} < ${v} < ${r.hi.trim()}: the bounds are the wrong way round` })
     } else if (lo === hi && !(r.loClosed && r.hiClosed)) {
-      out.push({ row: i, cell: 'hi', message: `This piece is empty — make both ends ≤ for the single point x = ${r.lo.trim()}` })
+      out.push({ row: i, cell: 'hi', message: `This piece is empty — make both ends ≤ for the single point ${v} = ${r.lo.trim()}` })
     }
   })
   return out
@@ -663,10 +678,11 @@ export function commitTable(
   t: PieceTable,
   name: string | undefined,
   envFor?: (src: string) => Env,
+  v: PieceVar = 'x',
 ): { src: string; error: null } | { src: null; error: string; cell: boolean } {
-  const src = piecewiseSource(tableToSpec(t, name))
+  const src = piecewiseSource(tableToSpec(t, name, v))
   const env = envFor?.(src)
-  const problems = tableProblems(t, env)
+  const problems = tableProblems(t, env, v)
   if (problems.length > 0) return { src: null, error: problems[0].message, cell: true }
   const p = parseLatex(src, env)
   if (p.error) return { src: null, error: p.error, cell: false }

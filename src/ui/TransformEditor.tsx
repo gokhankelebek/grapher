@@ -28,6 +28,17 @@ import {
   withParent,
 } from './transformLinks'
 import type { PointRow, TransformDraft, TransformField } from './transformLinks'
+import { factsWithin, pointX } from './familyLine'
+import type { FamilyRestriction } from './familyLine'
+
+/** The image rows whose image lies in the domain (all of them when unrestricted). */
+function pointRowsWithin(rows: PointRow[], r: FamilyRestriction | null): PointRow[] {
+  if (!r) return rows
+  return rows.filter((row) => {
+    const x = pointX(row.to)
+    return x === null || r.within(x)
+  })
+}
 
 // ============================================================================
 // src/ui/TransformEditor.tsx — a function as a TRANSFORMED PARENT.
@@ -383,6 +394,12 @@ interface SectionProps {
   secondary?: boolean
   /** The card's Analysis states the domain and range as rows: do not say them twice here. */
   hideDomainRange?: boolean
+  /**
+   * The line's domain restriction (src/ui/familyLine.ts), or null: then only
+   * the points inside the domain are stated, and the domain, range and end
+   * behaviour are left to the card's Domain rows.
+   */
+  restriction?: FamilyRestriction | null
 }
 
 export function TransformSection({
@@ -390,6 +407,7 @@ export function TransformSection({
   defaultOpen,
   secondary = false,
   hideDomainRange = false,
+  restriction = null,
   showParent,
   onShowParent,
   handles = true,
@@ -436,7 +454,7 @@ export function TransformSection({
             <XField value={spec.k || '0'} mode="commit" label={FIELD_HELP.k} className="fe-input-part" onCommit={field('k')} />
           </div>
           <StepList steps={stepSentences(spec)} />
-          <MapTable rows={pointRows(spec)} masked={mask.hidden} />
+          <MapTable rows={pointRowsWithin(pointRows(spec), restriction)} masked={mask.hidden} />
           {mask.hidden && mask.key ? (
             // The images and the features (vertex, asymptotes, domain, range)
             // are worked out from a, b, h, k: in reveal mode, one pill for them.
@@ -444,7 +462,9 @@ export function TransformSection({
               <RevealPill k={mask.key} what="the image points and features" />
             </div>
           ) : (
-            <FeatureList lines={hideDomainRange ? withoutDomainRange(featureLines(spec)) : featureLines(spec)} />
+            <FeatureList
+              lines={factsWithin(hideDomainRange ? withoutDomainRange(featureLines(spec)) : featureLines(spec), restriction)}
+            />
           )}
           {error && <div className="expr-error">{error}</div>}
           {onShowParent && (

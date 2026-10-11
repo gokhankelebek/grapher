@@ -3,6 +3,7 @@ import type { CSSProperties, ReactNode } from 'react'
 import { CardSection, withoutDomainRange } from './CardSection'
 import type { FittedCurve, ModelSpec } from '../core/types'
 import { Latex } from './Latex'
+import { RevealPill, useFamilyMask } from './RevealAnswer'
 import { ExpFacts, XField, badText } from './ExpEditor'
 import {
   CUSTOM,
@@ -429,6 +430,11 @@ export function MotionSection({ curve, models, kind, src, depKey, play, scales, 
   // max |r|, the area and whether the curve retraces itself).
   const rows = f ? featureRows(f, kind) : []
   const sentences = f ? f.sentences.filter((t) => t.trim() !== '' && !rows.some((r) => r.covers?.test(t))) : []
+  // Reveal mode: the features (the tangent points, the pole, the start, the
+  // sentences) are worked out from the line — one answer, curve:<id>:family,
+  // as the board's marks of them are (src/ui/familyMarks.ts).
+  const mask = useFamilyMask()
+  const masked = mask.hidden && mask.key !== null && (rows.length > 0 || sentences.length > 0)
 
   return (
     <CardSection kind={`motion`} title={`Motion · ${kind === 'parametric' ? 'parametric' : 'polar'}`} className="field-section fe-section xe-section mo-section" testId="motion-section" data={{ kind: kind }}>
@@ -456,7 +462,12 @@ export function MotionSection({ curve, models, kind, src, depKey, play, scales, 
             </div>
           )}
 
-          {rows.length > 0 && (
+          {masked && mask.key && (
+            <div className="reveal-pill-row" data-testid="motion-features-hidden">
+              <RevealPill k={mask.key} what="the curve’s features" />
+            </div>
+          )}
+          {!masked && rows.length > 0 && (
             <div className="mo-features" data-testid="motion-features">
               {rows.map((r) => (
                 <div className="an-row" key={r.key} data-feature={r.key}>
@@ -472,7 +483,7 @@ export function MotionSection({ curve, models, kind, src, depKey, play, scales, 
               ))}
             </div>
           )}
-          <ExpFacts sentences={sentences} features={[]} testPrefix="motion" />
+          {!masked && <ExpFacts sentences={sentences} features={[]} testPrefix="motion" />}
 
           <div className="mo-player" data-testid="motion-player">
             <button

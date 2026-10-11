@@ -34,6 +34,7 @@ import {
 import type { ExpFeatures, ExpRate, ExpSpec, RateStatement } from '../core/exponential'
 import { parseExpression } from '../core/parse'
 import { evalText, niceNumber } from './factorLinks'
+import { familyBase } from './familyLine'
 
 // ---------------------------------------------------------------------------
 // numbers
@@ -200,10 +201,11 @@ export function expProblems(spec: ExpSpec): ExpProblem[] {
 // the core, never throwing
 // ---------------------------------------------------------------------------
 
+/** The line's family reading — a restricted line's formula without its restriction (src/ui/familyLine.ts). */
 export function safeReadExponential(src: string | undefined): ExpSpec | null {
   if (!src || !src.trim()) return null
   try {
-    const s = readExponential(src)
+    const s = readExponential(familyBase(src))
     return s && expValues(s) ? s : null
   } catch {
     return null

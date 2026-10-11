@@ -19,7 +19,7 @@ import type { Asymptote, FittedCurve, ModelSpec, Shape, SpecialPoint, Vec2 } fro
 import { triangleCentres } from './triangleCentres'
 import { pointText as geoPoint, polygonReport, segmentReport, withApprox, distance, slope as geoSlope, midpoint as geoMid } from './geometry'
 import { analyzeCurve, pairMeeting } from './analyze'
-import { findAsymptotes, findHoles } from './holes'
+import { asymptoteForm, findAsymptotes, findHoles } from './holes'
 import { curveDomain, curveRange, type RealSet } from './domainRange'
 import { exactForm } from './exact'
 import { areaBetween, areaUnder, polynomialOf, riemann, tangentAt, type RiemannMethod } from './calculus'
@@ -359,22 +359,27 @@ function pointOf(p: SpecialPoint): DescribePoint | null {
   return out
 }
 
+/** An asymptote's number as the card writes it (src/core/holes.ts asymptoteForm): 2/π, π/2. */
+function asyEx(v: number): string | undefined {
+  return asymptoteForm(v)?.text
+}
+
 function asymptoteOf(a: Asymptote): DescribeAsymptote | null {
   if (a.kind === 'vertical') {
     const out: DescribeAsymptote = { kind: 'vertical', x: a.x }
-    const e = ex(a.x)
+    const e = asyEx(a.x)
     if (e) out.exact = e
     return out
   }
   const { a: p, dir } = a
   if (Math.abs(dir.x) < 1e-12) {
-    return { kind: 'line', text: `x = ${ex(p.x) ?? fmtN(p.x)}` }
+    return { kind: 'line', text: `x = ${asyEx(p.x) ?? fmtN(p.x)}` }
   }
   const m = dir.y / dir.x
   const b = p.y - m * p.x
   if (Math.abs(m) < 1e-12) {
     const out: DescribeAsymptote = { kind: 'horizontal', y: b }
-    const e = ex(b)
+    const e = asyEx(b)
     if (e) out.exact = e
     return out
   }

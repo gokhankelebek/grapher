@@ -15,7 +15,6 @@ import type { TransformSpec } from '../core/transform'
 import type { SpecialPoint, Vec2 } from '../core/types'
 import type { ExtraHandle } from '../ui/CanvasStage'
 import {
-  conicKeyMarks,
   constructionPolylines,
   constructionShapes,
   safeReadConic,
@@ -27,9 +26,7 @@ import {
   fittedLogistic,
   logisticAsymptotes,
   logisticDot,
-  logisticMarks,
   safeReadLogistic,
-  withLogisticMarks,
 } from '../ui/logisticLinks'
 import { safeReadLogarithmic } from '../ui/logLinks'
 import {
@@ -49,7 +46,7 @@ import {
 } from '../ui/motionLinks'
 import type { MotionPlayState, MotionScales } from '../ui/motionLinks'
 import type { Polyline, Shape } from '../ui/renderBoard'
-import { midlinePolyline, safeReadSinusoid, sinKeyMarks, withKeyMarks } from '../ui/sinLinks'
+import { midlinePolyline, safeReadSinusoid } from '../ui/sinLinks'
 import { snapCoord } from '../ui/snap'
 import { playClock } from '../ui/motionPref'
 import {
@@ -57,10 +54,10 @@ import {
   keyPointArrows,
   parentGhost,
   safeReadTransform,
-  transformKeyMarks,
   transformOpenByDefault,
 } from '../ui/transformLinks'
 import { EMPTY_ANALYSIS } from './constants'
+import { boardMarks, familyMarks, NO_MARKS } from '../ui/familyMarks'
 import type { BoardStateApi } from './useBoardState'
 import type { DocumentStateApi } from './useDocumentState'
 import type { SessionStateApi } from './useSessionState'
@@ -144,10 +141,6 @@ export function useSelectionMarks({ board, docState, session, refs, derived, fie
     return spec ? { spec, color: c.color, id: c.id } : null
   }, [kind, selectedCurve, exprSources, calls])
 
-  const sinMarks = useMemo<SpecialPoint[]>(
-    () => (selectedSin ? sinKeyMarks(selectedSin.spec) : []),
-    [selectedSin],
-  )
 
   // ----------------------------------------------- a selected logistic, marked
   //
@@ -175,13 +168,6 @@ export function useSelectionMarks({ board, docState, session, refs, derived, fie
     return spec ? { spec, color: c.color, id: c.id, typed: true } : null
   }, [kind, selectedCurve, exprSources, calls])
 
-  // A typed logistic's inflection, exact. (A sketch's analysis already marks
-  // the library's own closed-form inflection; its rounded spec would only
-  // add a second ring next to it.)
-  const logisticMarksNow = useMemo<SpecialPoint[]>(
-    () => (selectedLogistic?.typed ? logisticMarks(selectedLogistic.spec) : []),
-    [selectedLogistic],
-  )
 
   // ----------------------------------------------- a selected conic, marked
   //
@@ -201,10 +187,6 @@ export function useSelectionMarks({ board, docState, session, refs, derived, fie
     return spec ? { spec, color: c.color, id: c.id } : null
   }, [kind, selectedCurve, exprSources, calls])
 
-  const conicMarks = useMemo<SpecialPoint[]>(
-    () => (selectedConic ? conicKeyMarks(selectedConic.spec) : []),
-    [selectedConic],
-  )
 
   /** The conics whose construction is on: figure content, on screen and in the export. */
   const constructionConics = useMemo<{ spec: ConicSpec; color: string; id: string }[]>(() => {
@@ -287,13 +269,6 @@ export function useSelectionMarks({ board, docState, session, refs, derived, fie
    * those are revealed. The dashed parent is the given and stays.
    */
   const transformHidden = selectedTransform !== null && isHidden(reveal, familyKey(selectedTransform.id))
-  const transformMarks = useMemo<SpecialPoint[]>(
-    () =>
-      selectedTransform?.marks && !transformHidden
-        ? transformKeyMarks(selectedTransform.spec)
-        : [],
-    [selectedTransform, transformHidden],
-  )
 
   // ------------------------------------- a selected parametric / polar curve
   //
@@ -510,16 +485,28 @@ export function useSelectionMarks({ board, docState, session, refs, derived, fie
     return more.length > 0 ? [...extraHandles, ...more] : extraHandles
   }, [extraHandles, motionHandle, domainHandles, ucHandle, sysTestHandle, statsHandles])
 
+  /**
+   * The selected curve's family marks — a sinusoid's key points, a conic's
+   * centre / vertices / foci, a typed logistic's inflection, a
+   * transformation's images (src/ui/familyMarks.ts): only inside a restricted
+   * line's domain, and none in reveal mode while its family facts are hidden.
+   */
+  const famMarks = useMemo(() => {
+    if (kind !== 'cartesian' || !selectedCurve) return NO_MARKS
+    const c = selectedCurve
+    return familyMarks(c, exprSources[c.id], {
+      calls: (calls[c.id]?.length ?? 0) > 0,
+      hidden: (k) => isHidden(reveal, k),
+      transform: selectedTransform?.marks === true,
+      motion: motionFeatureMarks,
+    })
+  }, [kind, selectedCurve, exprSources, calls, reveal, selectedTransform, motionFeatureMarks])
+
   /** What the board marks for the selected curve. */
-  const boardAnalysis = useMemo<SpecialPoint[]>(() => {
-    const base = markersOn ? analysis : EMPTY_ANALYSIS
-    const withSin = sinMarks.length > 0 ? withKeyMarks(base, sinMarks) : base
-    const withConic = conicMarks.length > 0 ? withKeyMarks(withSin, conicMarks) : withSin
-    const withMotion = motionFeatureMarks.length > 0 ? withKeyMarks(withConic, motionFeatureMarks) : withConic
-    const withLogistic =
-      logisticMarksNow.length > 0 && markersOn ? withLogisticMarks(withMotion, logisticMarksNow) : withMotion
-    return transformMarks.length > 0 ? withKeyMarks(withLogistic, transformMarks) : withLogistic
-  }, [markersOn, analysis, sinMarks, conicMarks, motionFeatureMarks, transformMarks, logisticMarksNow])
+  const boardAnalysis = useMemo<SpecialPoint[]>(
+    () => boardMarks(analysis, famMarks, markersOn, EMPTY_ANALYSIS),
+    [markersOn, analysis, famMarks],
+  )
 
   /**
    * The on-screen polylines: the fields' solutions, a sinusoid's midline, and

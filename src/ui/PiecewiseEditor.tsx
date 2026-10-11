@@ -32,6 +32,7 @@ import type {
   BoundSide,
   Env,
   CellProblem,
+  PieceVar,
   PieceCell,
   PieceTable,
   PiecewiseDraft,
@@ -167,7 +168,9 @@ function RelButton({
   bound,
   onToggle,
   testId,
+  v = 'x',
 }: {
+  v?: PieceVar
   side: BoundSide
   closed: boolean
   /** The bound is empty (±∞): nothing to include, nothing to toggle. */
@@ -179,7 +182,7 @@ function RelButton({
   const c = !open && closed
   const title = open
     ? `${side === 'lo' ? 'No lower' : 'No upper'} bound — type one to choose < or ≤`
-    : `${c ? 'Includes' : 'Excludes'} x = ${bound.trim()} (${c ? 'closed ●' : 'open ○'}) — click for ${c ? '<' : '≤'}`
+    : `${c ? 'Includes' : 'Excludes'} ${v} = ${bound.trim()} (${c ? 'closed ●' : 'open ○'}) — click for ${c ? '<' : '≤'}`
   const dot = open ? null : <span className="pw-dot" aria-hidden="true">{dotGlyph(c)}</span>
   return (
     <button
@@ -211,10 +214,13 @@ function PieceTableView({
   firstRef,
   testPrefix,
   onChange,
+  v = 'x',
 }: {
   table: PieceTable
   mode: Mode
   problems: readonly CellProblem[]
+  /** The variable the formulas and bounds are in: x, or t for C(t) = {…}. */
+  v?: PieceVar
   /** What the first cell holds: a piece's "formula" or a step's "value". */
   valueWord?: string
   firstRef?: (el: HTMLInputElement | null) => void
@@ -279,7 +285,7 @@ function PieceTableView({
                 value={r.expr}
                 mode={mode}
                 label={`Piece ${i + 1} ${valueWord}`}
-                placeholder={valueWord === 'value' ? 'value' : 'formula in x'}
+                placeholder={valueWord === 'value' ? 'value' : `formula in ${v}`}
                 problem={shown('expr')}
                 className="pw-expr"
                 inputRef={i === 0 ? firstRef : undefined}
@@ -330,7 +336,7 @@ function PieceTableView({
             </div>
             <div className="fe-a-row pw-line pw-cond">
               {other ? (
-                <span className="calc-tag pw-otherwise">otherwise — every x no piece above covers</span>
+                <span className="calc-tag pw-otherwise">otherwise — every {v} no piece above covers</span>
               ) : (
                 <>
                   <span className="calc-tag">if</span>
@@ -350,15 +356,17 @@ function PieceTableView({
                     open={isOpenEnded(r.lo)}
                     bound={r.lo}
                     testId={`${testPrefix}-lorel-${i}`}
+                    v={v}
                     onToggle={() => onChange(toggleClosed(table, i, 'lo'), 'toggle endpoint')}
                   />
-                  <span className="calc-tag">x</span>
+                  <span className="calc-tag">{v}</span>
                   <RelButton
                     side="hi"
                     closed={r.hiClosed}
                     open={isOpenEnded(r.hi)}
                     bound={r.hi}
                     testId={`${testPrefix}-hirel-${i}`}
+                    v={v}
                     onToggle={() => onChange(toggleClosed(table, i, 'hi'), 'toggle endpoint')}
                   />
                   <PwField
@@ -730,20 +738,22 @@ export function PiecewiseSection({ src, onRestate, params, defaultOpen = true, e
   }, [src, spec])
 
   const name = spec?.name
+  /** C(t) = {…}: the table, its checks and its sentences are in t. */
+  const v: PieceVar = spec?.v === 't' ? 't' : 'x'
   const env = useMemo(() => envFor?.(src), [envFor, src])
-  const problems = useMemo(() => (table ? tableProblems(table, env) : []), [table, env])
+  const problems = useMemo(() => (table ? tableProblems(table, env, v) : []), [table, env, v])
   const sliders = useMemo(() => slidersOf(src, params, env), [src, params, env])
   const verdicts = useMemo(() => {
     if (!spec) return []
-    const judged = table && problems.length === 0 ? tableToSpec(table, name) : spec
+    const judged = table && problems.length === 0 ? tableToSpec(table, name, v) : spec
     return verdictsFor(judged, sliders, env)
-  }, [spec, table, problems, name, sliders, env])
+  }, [spec, table, problems, name, v, sliders, env])
 
   if (!spec || !table) return null
 
   const change = (next: PieceTable, label: string): void => {
     setTable(next)
-    const c = commitTable(next, name, envFor)
+    const c = commitTable(next, name, envFor, v)
     if (c.error !== null) {
       // The row shows its own problem; anything else is said below the table.
       setError(c.cell ? null : c.error)
@@ -761,7 +771,7 @@ export function PiecewiseSection({ src, onRestate, params, defaultOpen = true, e
 
   return (
     <CardSection kind={defaultOpen ? 'piecewise' : 'piecewise:secondary'} title="Piecewise" summary={`${table.rows.length} piece${table.rows.length === 1 ? '' : 's'}`} defaultOpen={defaultOpen} className="field-section fe-section xe-section pw-section" testId="piecewise-section">
-          <PieceTableView table={table} mode="commit" problems={problems} testPrefix="pws" onChange={change} />
+          <PieceTableView table={table} mode="commit" problems={problems} testPrefix="pws" v={v} onChange={change} />
           <VerdictList verdicts={verdicts} testId="pws-verdicts" />
           {error && <div className="expr-error">{error}</div>}
           <div className="field-hint">

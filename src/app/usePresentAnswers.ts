@@ -15,6 +15,7 @@ import { useMemo } from 'react'
 import { oneToOneText, setRowText } from '../ui/domainLinks'
 import { revealedLines } from '../ui/revealedAnswers'
 import type { AnswerLine } from '../ui/revealedAnswers'
+import { viewSpans } from '../ui/renderBoard'
 import { answerSourcesOf, calcLinesOf, circlePartText, shapePartText, signAsOf, tablePartText } from '../ui/answerSources'
 import type { CalcLine } from '../ui/answerSources'
 import type { RevealInventory } from '../ui/reveal'
@@ -92,6 +93,7 @@ export function usePresentAnswers(deps: PresentAnswersDeps): AnswerLine[] {
       names,
       exprSources,
       pointOf: (key) => revealInv.pointOf(key),
+      view: viewSpans(derived.vpRef.current),
       domainRows(id) {
         const p = domainPanel
         if (!p || p.ownerId !== id) return null

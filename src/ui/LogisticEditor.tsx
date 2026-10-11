@@ -18,6 +18,8 @@ import {
   specFromLogisticDraft,
 } from './logisticLinks'
 import type { LogisticDraft, LogisticField, LogisticForm } from './logisticLinks'
+import { factsWithin } from './familyLine'
+import type { FamilyRestriction } from './familyLine'
 
 // ============================================================================
 // src/ui/LogisticEditor.tsx — a logistic function, stated the AP way.
@@ -214,9 +216,15 @@ interface SectionProps {
   sketched?: boolean
   /** The card's Analysis states the domain and range as rows: do not say them twice here. */
   hideDomainRange?: boolean
+  /**
+   * The line's domain restriction (src/ui/familyLine.ts), or null: then only
+   * the points inside the domain are stated, and the domain, range and end
+   * behaviour are left to the card's Domain rows.
+   */
+  restriction?: FamilyRestriction | null
 }
 
-export function LogisticSection({ spec, onRestate, onShowField, sketched = false, hideDomainRange = false }: SectionProps) {
+export function LogisticSection({ spec, onRestate, onShowField, sketched = false, hideDomainRange = false, restriction = null }: SectionProps) {
   const [error, setError] = useState<string | null>(null)
   const [form, setForm] = useState<LogisticForm>(() => defaultForm(spec))
   useEffect(() => setError(null), [spec])
@@ -236,7 +244,7 @@ export function LogisticSection({ spec, onRestate, onShowField, sketched = false
   const vals = logisticFieldValues(spec)
   const features = safeLogisticFeatures(spec)
   const allFacts = logisticFactLines(spec, form)
-  const facts = hideDomainRange ? withoutDomainRange(allFacts) : allFacts
+  const facts = factsWithin(hideDomainRange ? withoutDomainRange(allFacts) : allFacts, restriction)
   const base = spec.b !== undefined && spec.b.trim() !== ''
   const t = spec.v === 't' ? 't' : 'x'
   const input = (f: LogisticField, label: string, value = vals[f]): JSX.Element => (

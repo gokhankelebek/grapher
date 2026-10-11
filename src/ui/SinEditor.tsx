@@ -35,6 +35,8 @@ import type {
   SinPartFields,
   SinTab,
 } from './sinLinks'
+import { factsWithin } from './familyLine'
+import type { FamilyRestriction } from './familyLine'
 
 // ============================================================================
 // src/ui/SinEditor.tsx — a sinusoid, stated the precalculus way.
@@ -442,9 +444,15 @@ interface SectionProps {
   onRestate(src: string, label: string): string | null
   /** The card's Analysis states the domain and range as rows: do not say them twice here. */
   hideDomainRange?: boolean
+  /**
+   * The line's domain restriction (src/ui/familyLine.ts), or null: then only
+   * the points inside the domain are stated, and the domain, range and end
+   * behaviour are left to the card's Domain rows.
+   */
+  restriction?: FamilyRestriction | null
 }
 
-export function SinSection({ spec, onRestate, hideDomainRange = false }: SectionProps) {
+export function SinSection({ spec, onRestate, hideDomainRange = false, restriction = null }: SectionProps) {
   const [error, setError] = useState<string | null>(null)
   useEffect(() => setError(null), [spec])
 
@@ -523,12 +531,14 @@ export function SinSection({ spec, onRestate, hideDomainRange = false }: Section
           </div>
           <ExpFacts
             sentences={
-              features ? (hideDomainRange ? withoutDomainRange(features.sentences) : features.sentences) : []
+              features
+                ? factsWithin(hideDomainRange ? withoutDomainRange(features.sentences) : features.sentences, restriction)
+                : []
             }
             features={[]}
             testPrefix="sin"
           />
-          <KeyPointTable rows={keyRows(features)} />
+          <KeyPointTable rows={keyRows(features, restriction)} />
           {error && <div className="expr-error">{error}</div>}
           <div className="field-hint">
             Drag the midline, the first maximum (up/down: amplitude, sideways: phase shift) or the

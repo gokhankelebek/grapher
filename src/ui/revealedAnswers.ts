@@ -50,6 +50,13 @@ export interface AnswerSources {
   curve?(id: string): { name: string; color: string } | null
   /** The point behind a point or crossing key (reveal mode's inventory). */
   point?(key: string): SpecialPoint | null
+  /**
+   * That point as the board's chip prints it — rounded at its curve's scale
+   * (src/ui/renderBoard.ts boardPointText), so the key never says
+   * "(−1.11e-7, 3.81e-5)" where the board says (0, 0). Absent: the point's
+   * own text, unrounded.
+   */
+  pointLabel?(key: string, p: SpecialPoint): string | null
   /** The asymptotes a curve's card lists, in its order. */
   asymptotes?(curveId: string): readonly string[]
   /** The Domain rows of a curve's card. */
@@ -68,6 +75,11 @@ export interface AnswerSources {
   object?(key: string): { label: string; value: Text; color?: string | null; board?: boolean } | null
   /** The texts the board's answer chips carry for this key (overlay labels), if any. */
   chips?(key: string): readonly string[]
+}
+
+/** A point's text: the board's rounding when the sources know it, else its own. */
+function labelOf(key: string, p: SpecialPoint, src: AnswerSources): string {
+  return safe(() => src.pointLabel?.(key, p) ?? null) ?? pointText(p, { decimal: false })
 }
 
 const KIND_WORD: Record<string, string> = {
@@ -172,7 +184,7 @@ export function answerLine(key: string, src: AnswerSources): AnswerLine {
     const [, id, what, idx] = parts
     if (KIND_WORD[what] !== undefined) {
       const p = safe(() => src.point?.(key) ?? null)
-      return line(named(id, KIND_WORD[what]), p ? pointText(p, { decimal: false }) : '', colorOf(id), 'board')
+      return line(named(id, KIND_WORD[what]), p ? labelOf(key, p, src) : '', colorOf(id), 'board')
     }
     if (what === 'asym') {
       const list = safe(() => src.asymptotes?.(id) ?? null) ?? []
@@ -199,7 +211,7 @@ export function answerLine(key: string, src: AnswerSources): AnswerLine {
     const nb = curveOf(b)?.name ?? 'another'
     if (idx === 'same') return line(`${na} and ${nb}`, 'the same function — they coincide', null, 'panel')
     const p = safe(() => src.point?.(key) ?? null)
-    return line(`${na} and ${nb} meet`, p ? pointText(p, { decimal: false }) : '', null, 'board')
+    return line(`${na} and ${nb} meet`, p ? labelOf(key, p, src) : '', null, 'board')
   }
 
   if (head === 'calc') {

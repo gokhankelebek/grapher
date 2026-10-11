@@ -84,7 +84,7 @@ import { drawSolveFigure } from '../render/nlSolve'
 import { solveBlocks } from './nlSolve'
 import type { NLPart } from '../render/numberline'
 import { pointText } from './numeric'
-import { curveScale, curveXScale } from './curveState'
+import { curveScale, curveXScale, pointScale } from './curveState'
 import type { RevealMark, RevealPulse } from './reveal'
 import { nlToScreenX, numberLineAxisY } from '../render/numberline'
 import { readSinusoid } from '../core/sinusoidal'
@@ -728,6 +728,11 @@ export interface BoardLabelScale {
   xScale?: number
   viewScale: number
   viewXScale: number
+  /**
+   * The y-scale for a chip at this x (curveState pointScale): the card's
+   * scale, or the curve's size around x when the curve is explosive there.
+   */
+  local?: (x: number) => number | undefined
 }
 
 /** The window's span on each axis. Pure. */
@@ -764,7 +769,11 @@ export function boardLabelScale(
   models?: Record<string, ModelSpec>,
 ): BoardLabelScale {
   const card = curve && models ? cardScales(curve, models) : {}
-  return { ...card, ...viewSpans(vp) }
+  const spec = curve && models ? models[curve.modelId] : undefined
+  const local = curve && spec?.evalExplicit
+    ? (x: number): number | undefined => pointScale(curve, spec, x, card.scale)
+    : undefined
+  return { ...card, ...viewSpans(vp), ...(local ? { local } : {}) }
 }
 
 /** An exponent in a formatted coordinate: "−2.32e−4", "5.09e-4". */
@@ -783,11 +792,12 @@ const E_NOTATION = /\de[-+\u2212]?\d/
  * a zero-snap of the point itself: display only. Pure.
  */
 export function boardPointText(p: SpecialPoint, at: BoardLabelScale): string {
-  const card = pointText(p, { decimal: false, scale: at.scale, xScale: at.xScale })
+  const scale = at.local ? at.local(p.pos.x) : at.scale
+  const card = pointText(p, { decimal: false, scale, xScale: at.xScale })
   if (!E_NOTATION.test(card)) return card
   return pointText(p, {
     decimal: false,
-    scale: Math.max(at.scale ?? 0, at.viewScale),
+    scale: Math.max(scale ?? 0, at.viewScale),
     xScale: Math.max(at.xScale ?? 0, at.viewXScale),
   })
 }

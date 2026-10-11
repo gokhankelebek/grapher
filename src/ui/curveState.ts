@@ -177,6 +177,53 @@ export function curveScale(
   return scale
 }
 
+/** How much taller than a point's neighbourhood the whole curve must be before the point is read against its neighbourhood. */
+const LOCAL_RATIO = 100
+
+/**
+ * The scale one point's y is rounded at: the curve's scale (curveScale) —
+ * unless the curve is explosive and this point lives somewhere small.
+ *
+ * (e²ˣ − 1)/ln(1 + x) reaches 10⁵ on the card's window, so its scale is ~5e5
+ * and the zero floor (four significant digits of that) is 45: its inflection
+ * at (−0.7853, 0.5148) printed as "(−0.7853, 0)" — a false statement about a
+ * point that is nowhere near the axis. A value is only "zero at this
+ * table's resolution" against the size the curve has AROUND it: here the
+ * curve's extent over a sixteenth of the window each side of x (2.6), when
+ * the whole curve is more than LOCAL_RATIO times that. Everywhere else —
+ * a wave's midline offset of 5e−4 on a wave of height 6.5 — the curve's own
+ * scale stands, exactly as before. Pure.
+ */
+export function pointScale(
+  curve: FittedCurve,
+  spec: ModelSpec | undefined,
+  x: number,
+  scale: number | undefined,
+  fallback: [number, number] = [-8, 8],
+): number | undefined {
+  if (scale === undefined || !spec?.evalExplicit || !Number.isFinite(x)) return scale
+  try {
+    const [lo, hi] = windowOf(curve.domain, fallback)
+    const r = (hi - lo) / 16
+    if (!(r > 0)) return scale
+    let min = Infinity
+    let max = -Infinity
+    const n = 32
+    for (let i = 0; i <= n; i++) {
+      const t = x - r + (2 * r * i) / n
+      const y = spec.evalExplicit(curve.params, t)
+      if (!finite(t) || !finite(y)) continue
+      if (y < min) min = y
+      if (y > max) max = y
+    }
+    const local = max - min
+    if (!Number.isFinite(local) || !(local > 0)) return scale
+    return local * LOCAL_RATIO < scale ? local : scale
+  } catch {
+    return scale
+  }
+}
+
 /**
  * The size of the x-range a curve's points are read over: its x-extent.
  * Floors x readouts the way curveScale floors y — a sketched vertex at
