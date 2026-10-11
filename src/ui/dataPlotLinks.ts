@@ -222,6 +222,8 @@ interface Layout {
 
 const TITLE_BAND = 0.95
 const AXIS_BAND = 0.95
+/** The tallest band (board units) a row keeps under its box plot for the five-number labels. */
+const LABEL_BAND = 0.55
 
 function layout(p: BoardDataPlot, index: number): Layout {
   const panel = panelBox(index)
@@ -267,11 +269,22 @@ function layout(p: BoardDataPlot, index: number): Layout {
     let distBase = bottom + padY
     let boxY = (top + bottom) / 2
     let boxHalf = Math.min(0.3, rowH * 0.2)
-    if (p.box && p.dist !== 'none') {
-      const band = Math.min(rowH * 0.4, 1.4)
-      boxY = bottom + band / 2
-      boxHalf = Math.min(band * 0.25, 0.3)
-      distBase = bottom + band
+    if (p.box) {
+      // From the bottom up: the band the five-number labels hang in (down to
+      // the row's bottom edge — the axis line on the lowest row), the box,
+      // then the distribution. The labels' type is in px, so the renderer
+      // places them in this band at paint time (src/render/stats.ts
+      // placeUnderLabels); the band only has to be roomy at ordinary zooms.
+      const lab = Math.min(LABEL_BAND, Math.max(0.3, rowH * (p.dist === 'none' ? 0.3 : 0.2)))
+      if (p.dist !== 'none') {
+        const sec = Math.min(rowH * 0.3, 1)
+        boxY = bottom + lab + sec / 2
+        boxHalf = Math.min(sec * 0.25, 0.3)
+        distBase = bottom + lab + sec
+      } else {
+        boxY = bottom + lab + (rowH - lab) / 2
+        boxHalf = Math.min(0.3, (rowH - lab) * 0.25)
+      }
     }
     rows.push({ top, bottom, distBase, distTop: top - padY, boxY, boxHalf })
   }
@@ -395,7 +408,9 @@ export function dataPlotFigure(p: BoardDataPlot, index: number): StatsFigure {
     const row = rows[si]
     const color = v.color
     if (views.length > 1) {
-      prims.push({ k: 'text', at: { x: plot.x0 - 0.2, y: (row.top + row.bottom) / 2 }, text: v.name, ink: 'main', color, rise: 0, align: 'end', bold: true })
+      // level with its box when the box is all the row shows
+      const nameY = p.dist === 'none' && p.box ? row.boxY : (row.top + row.bottom) / 2
+      prims.push({ k: 'text', at: { x: plot.x0 - 0.2, y: nameY }, text: v.name, ink: 'main', color, rise: 0, align: 'end', bold: true })
     }
     if (p.dist !== 'none') {
       prims.push({ k: 'curve', pts: [{ x: plot.x0, y: row.distBase }, { x: plot.x1, y: row.distBase }], ink: 'axis', w: 0.8 })
@@ -421,13 +436,16 @@ export function dataPlotFigure(p: BoardDataPlot, index: number): StatsFigure {
         const a = L.binStart + k * L.binW
         const y1 = row.distBase + (c / maxCount) * H * 0.86
         prims.push({ k: 'rect', x0: toX(a), x1: toX(a + L.binW), y0: row.distBase, y1, ink: 'main', color, alpha: 0.45 })
-        if (L.bins <= 30) prims.push({ k: 'text', at: { x: toX(a + L.binW / 2), y: y1 + 0.17 }, text: String(c), ink: 'axis', small: true, rise: 0, avoid: true })
+        // a few px over its bar at any zoom, never above its own row
+        if (L.bins <= 30) prims.push({ k: 'text', at: { x: toX(a + L.binW / 2), y: y1 }, text: String(c), ink: 'axis', small: true, rise: 0, avoid: true, lift: 2, ceil: row.top })
       })
     }
     // the mean, as the balance point under the distribution (an answer)
     if (p.dist !== 'none' && v.live.n > 0) {
       const mx = toX(v.live.mean)
-      const h = Math.max(0.08, Math.min(0.16, row.distBase - row.bottom))
+      // in the gap between the distribution's base line and the box under it
+      const room = p.box ? row.distBase - (row.boxY + row.boxHalf) - 0.02 : row.distBase - row.bottom
+      const h = Math.max(0.04, Math.min(0.16, room))
       prims.push({ k: 'fill', pts: [{ x: mx, y: row.distBase }, { x: mx - h * 0.6, y: row.distBase - h }, { x: mx + h * 0.6, y: row.distBase - h }], ink: 'obs', alpha: 1, answer: true })
     }
     if (p.box && v.live.n > 0) {
@@ -456,10 +474,25 @@ export function dataPlotFigure(p: BoardDataPlot, index: number): StatsFigure {
           prims.push({ k: 'vline', x: toX(fx), y0: y - hh * 1.5, y1: y + hh * 1.5, ink: 'rule', w: 1.1, dash: [3, 3] })
         }
       }
-      // the five-number summary under the box (answers)
-      const labelY = y - hh - 0.2
-      for (const val of [s.median, s.q1, s.q3, f.whiskerLo, f.whiskerHi]) {
-        prims.push({ k: 'text', at: { x: toX(val), y: labelY }, text: short(val), ink: 'main', color, small: true, rise: 0, avoid: true, answer: true })
+      // the five-number summary hung under the box, down to
+      // the row's bottom edge (answers): median first, so it wins any
+      // crowding; the quartiles and whisker ends give way outward. A value
+      // already labeled (Q3 = max) is not labeled twice.
+      // (A fence's dashed rule reaching into the band is stepped around.)
+      const under = { group: `${p.id}:${si}`, top: y - hh - 0.02, floor: row.bottom }
+      const said = new Set<string>()
+      const five: [number, -1 | 0 | 1, number][] = [
+        [s.median, 0, y - hh],
+        [s.q1, -1, y - hh],
+        [s.q3, 1, y - hh],
+        [f.whiskerLo, -1, y - hh * 0.55],
+        [f.whiskerHi, 1, y - hh * 0.55],
+      ]
+      for (const [val, side, from] of five) {
+        const text = short(val)
+        if (said.has(text)) continue
+        said.add(text)
+        prims.push({ k: 'text', at: { x: toX(val), y: under.top }, text, ink: 'main', color, small: true, rise: 0, answer: true, under: { ...under, side, from } })
       }
     }
   })
@@ -471,13 +504,11 @@ export function dataPlotFigure(p: BoardDataPlot, index: number): StatsFigure {
   for (let v = Math.ceil(L.lo / step) * step; v <= L.hi + 1e-9 * step; v += step) {
     ticks.push({ x: toX(v), text: fixed(Math.abs(v) < step * 1e-9 ? 0 : v, dTick), z: '' })
   }
-  if (p.dist === 'hist') {
-    prims.push({ k: 'text', at: { x: plot.x1, y: plot.y1 }, text: `bin width ${short(L.binW, 6)}`, ink: 'axis', small: true, rise: 0, align: 'right' })
-  }
 
   // ---- the title: what is shown, and its centre / spread (the answer)
   const live = views.filter((v) => v.live.n > 0)
-  const shows = [p.dist === 'dots' ? 'Dot plot' : p.dist === 'hist' ? 'Histogram' : '', p.box ? (p.dist === 'none' ? 'Box plot' : 'box plot') : '']
+  // the bin width is stated in the title, where no bar or count can crowd it
+  const shows = [p.dist === 'dots' ? 'Dot plot' : p.dist === 'hist' ? `Histogram (bin width ${short(L.binW, 6)})` : '', p.box ? (p.dist === 'none' ? 'Box plot' : 'box plot') : '']
     .filter(Boolean)
     .join(' and ')
   let question: string

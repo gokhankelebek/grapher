@@ -144,10 +144,11 @@ describe('the figure', () => {
     const counts = f.prims.filter((q) => q.k === 'text' && /^\d+$/.test(q.text)).map((q) => (q.k === 'text' ? Number(q.text) : 0))
     expect(counts.reduce((a, b) => a + b, 0)).toBe(40)
     expect(bars.length).toBe(counts.length)
-    expect(f.prims.some((q) => q.k === 'text' && q.text === 'bin width 10')).toBe(true)
+    // the bin width is stated in the title, where no bar or count can crowd it
+    expect(f.title.question).toContain('Histogram (bin width 10)')
     const narrow = dataPlotFigure({ ...p, binWidth: 2.5 }, 0)
     expect(narrow.prims.filter((q) => q.k === 'rect').length).toBeGreaterThan(bars.length)
-    expect(narrow.prims.some((q) => q.k === 'text' && q.text === 'bin width 2.5')).toBe(true)
+    expect(narrow.title.question).toContain('bin width 2.5')
   })
   it('values left out are dashed rings, not dots', () => {
     const f = dataPlotFigure(toggleOff(twoClasses(), 0, 14), 0)
@@ -401,6 +402,7 @@ describe('worksheets and exports', () => {
     expect(resid).toBeDefined()
     const halfY = f.scene.vp.heightPx / 2 / (f.scene.vp.pxPerUnitY ?? f.scene.vp.pxPerUnit)
     expect(f.scene.vp.center.y - halfY).toBeLessThan(resid.panel.y0 + 1e-6)
-    expect(texts(recordFigure(f)).some((t) => t.includes('Residual plot'))).toBe(true)
+    // this panel is about 40 px across, so its title is fitted: shrunk, then cut short with "…"
+    expect(texts(recordFigure(f)).some((t) => t.includes('Residual plot') || /^Res.*…$/.test(t))).toBe(true)
   })
 })

@@ -71,6 +71,13 @@ export type StatPrim =
    * 'right' as before ('right' hangs from its point); 'start' / 'end' are
    * left- / right-aligned on the middle line. `avoid`: skipped when it would
    * overlap text already placed. `answer`: reveal mode masks it.
+   *
+   * `lift`: the text's BOTTOM sits this many px (before `present.type`) above
+   * `at` instead of its middle line on it — a count over a bar, at any zoom.
+   * `ceil`: its top never rises above this board y (its row's top edge).
+   *
+   * `under`: a label hung under a box plot (see UnderSpec) — laid out with
+   * the rest of its group in px, not at `at.y`.
    */
   | {
       k: 'text'
@@ -84,7 +91,32 @@ export type StatPrim =
       avoid?: boolean
       answer?: boolean
       bold?: boolean
+      lift?: number
+      ceil?: number
+      under?: UnderSpec
     }
+
+/**
+ * A box plot's five-number labels. Their room is a band in BOARD units (from
+ * `top`, just under the box and its fences, down to `floor`, the row's bottom
+ * edge — the axis line on the lowest row), but their size is in PX, so where
+ * they go can only be settled at paint time, at the zoom and type scale in
+ * force. The labels of one `group` are placed together, in prim order (the
+ * first wins any crowding): under their value when there is room, otherwise
+ * dropped to a lower tier or nudged to the side (`side`: −1 left, 1 right,
+ * 0 either), joined to their value by a hairline leader; they step around
+ * any vertical rule that reaches into the band (an outlier fence). A label
+ * that fits nowhere is not drawn — a label never lands on the box, the axis,
+ * its ticks, another row or another label.
+ */
+export interface UnderSpec {
+  group: string
+  top: number
+  floor: number
+  side: -1 | 0 | 1
+  /** Board y a leader starts from: the bottom of the box or whisker cap the label names. */
+  from?: number
+}
 
 export interface StatsFigure {
   id: string
@@ -126,13 +158,380 @@ export interface StatsPaintOpts {
   font?: 'sans' | 'serif' | null
 }
 
-interface Rect {
+/** A rectangle in px (y down). */
+export interface Rect {
   x: number
   y: number
   w: number
   h: number
 }
-const overlaps = (a: Rect, b: Rect): boolean => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+export const overlaps = (a: Rect, b: Rect): boolean => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+
+/** A line segment in px. */
+export interface Seg2 {
+  x0: number
+  y0: number
+  x1: number
+  y1: number
+}
+
+/** Does the segment pass through the rectangle's inside? (Liang–Barsky.) */
+export function segHitsRect(s: Seg2, r: Rect): boolean {
+  const dx = s.x1 - s.x0
+  const dy = s.y1 - s.y0
+  let t0 = 0
+  let t1 = 1
+  const clip = (p: number, q: number): boolean => {
+    if (p === 0) return q > 0
+    const t = q / p
+    if (p < 0) {
+      if (t > t1) return false
+      if (t > t0) t0 = t
+    } else {
+      if (t < t0) return false
+      if (t < t1) t1 = t
+    }
+    return true
+  }
+  if (!clip(-dx, s.x0 - r.x)) return false
+  if (!clip(dx, r.x + r.w - s.x0)) return false
+  if (!clip(-dy, s.y0 - r.y)) return false
+  if (!clip(dy, r.y + r.h - s.y0)) return false
+  return t1 - t0 > 1e-9
+}
+
+/** One run of a title line: its text, and whether it is the answer (the object's ink, masked in reveal). */
+export interface TitleRun {
+  text: string
+  answer: boolean
+  /** px from the line's left edge. */
+  dx: number
+  w: number
+}
+
+export interface TitleLayout {
+  /** Type size in px. */
+  size: number
+  /** Line height in px. */
+  lineH: number
+  /** Each line's runs; a line's width is its last run's dx + w. */
+  lines: TitleRun[][]
+  /** The widest line, px. */
+  width: number
+}
+
+/**
+ * Fit a panel's title (its question, then its answer) into `maxW` px across
+ * and `maxH` px down, at `size` px or less: one line at full size if it fits;
+ * else one line shrunk, down to `minSize`; else two lines, broken between
+ * " · " parts (the break that balances them best), as large as fits, when
+ * the band is tall enough; else one line shrunk down to 10px; else one line
+ * at 10px cut short with "…". `measure(text, px)` is the bold title face's
+ * width. Pure.
+ */
+export function layoutTitle(
+  question: string,
+  answer: string,
+  maxW: number,
+  maxH: number,
+  size: number,
+  minSize: number,
+  measure: (text: string, px: number) => number,
+): TitleLayout {
+  const LH = 1.22
+  // the parts, each " · …" piece separately, tagged question / answer
+  const parts: { text: string; answer: boolean }[] = []
+  for (const [text, isAnswer] of [[question, false], [answer, true]] as const) {
+    if (!text) continue
+    for (const bit of text.split(/(?= · )/)) if (bit) parts.push({ text: bit, answer: isAnswer })
+  }
+  const lineOf = (ps: readonly { text: string; answer: boolean }[], px: number): TitleRun[] => {
+    // one run per colour (a line never starts with its separator)
+    const merged: { text: string; answer: boolean }[] = []
+    ps.forEach((p, i) => {
+      const text = i === 0 ? p.text.replace(/^ · /, '') : p.text
+      const last = merged[merged.length - 1]
+      if (last && last.answer === p.answer) last.text += text
+      else merged.push({ text, answer: p.answer })
+    })
+    const out: TitleRun[] = []
+    let dx = 0
+    for (const m of merged) {
+      // a run's leading space is advanced over, not drawn (an SVG would drop it)
+      const text = m.text.replace(/^\s+/, '')
+      if (text.length < m.text.length) dx += measure(m.text, px) - measure(text, px)
+      const w = measure(text, px)
+      out.push({ text, answer: m.answer, dx, w })
+      dx += w
+    }
+    return out
+  }
+  const widthOf = (l: readonly TitleRun[]): number => (l.length ? l[l.length - 1].dx + l[l.length - 1].w : 0)
+  const make = (lines: TitleRun[][], px: number): TitleLayout => ({ size: px, lineH: px * LH, lines, width: Math.max(0, ...lines.map(widthOf)) })
+  // sizes in tenths of a px, rounded down, so the font string is exact and never wider than measured
+  const tenth = (v: number): number => Math.floor(v * 10 + 1e-9) / 10
+  const tallest = maxH / LH
+  const top = Math.floor(Math.min(size, tallest) * 10 + 1e-9) / 10
+  if (parts.length === 0) return make([], top)
+
+  // The largest size ≤ `from` at which these lines fit `maxW` — re-measured,
+  // since type does not scale exactly (a system face tracks by size).
+  const fit = (groups: readonly (readonly { text: string; answer: boolean }[])[], from: number): number => {
+    let px = from
+    for (let k = 0; k < 12; k++) {
+      const w = Math.max(...groups.map((g) => widthOf(lineOf(g, px))))
+      if (w <= maxW || px <= 1) break
+      px = Math.min(tenth((px * maxW) / w), tenth(px - 0.1))
+    }
+    return px
+  }
+
+  // one line: full size, else shrunk
+  const one = fit([parts], top)
+  if (one >= Math.min(minSize, top) - 1e-9) return make([lineOf(parts, one)], one)
+
+  // two lines, broken between parts
+  if (parts.length > 1 && maxH / 2 / LH >= minSize * 0.85) {
+    const two = Math.min(size, maxH / 2 / LH)
+    let best: { k: number; px: number } | null = null
+    for (let k = 1; k < parts.length; k++) {
+      const px = fit([parts.slice(0, k), parts.slice(k)], tenth(two))
+      if (!best || px > best.px) best = { k, px }
+    }
+    if (best && best.px >= minSize * 0.85 - 1e-9) {
+      return make([lineOf(parts.slice(0, best.k), best.px), lineOf(parts.slice(best.k), best.px)], best.px)
+    }
+  }
+
+  // one line again, smaller still — down to a size that can still be read
+  const floorPx = Math.min(10, top)
+  if (one >= floorPx - 1e-9) return make([lineOf(parts, one)], one)
+
+  // last resort: one line at that size, cut short with "…" (never on a bare separator)
+  const px = floorPx
+  const chars = parts.flatMap((p) => [...p.text].map((ch) => ({ ch, answer: p.answer })))
+  const runsOf = (n: number): { text: string; answer: boolean }[] => {
+    const out: { text: string; answer: boolean }[] = []
+    for (const c of chars.slice(0, n)) {
+      const last = out[out.length - 1]
+      if (last && last.answer === c.answer) last.text += c.ch
+      else out.push({ text: c.ch, answer: c.answer })
+    }
+    const last = out[out.length - 1]
+    if (last) last.text = last.text.replace(/[\s·]+$/, '') + '…'
+    return out.filter((r) => r.text.length > 0)
+  }
+  let n = chars.length
+  let out = lineOf(runsOf(n), px)
+  while (n > 0 && widthOf(out) > maxW) out = lineOf(runsOf(--n), px)
+  return make([out], px)
+}
+
+/** One label to hang under a box plot: its value's x and its text width, in px. */
+export interface UnderItem {
+  x: number
+  w: number
+  /** Which way it prefers to move when crowded: −1 left, 1 right, 0 either. */
+  side: -1 | 0 | 1
+  /** Where a leader starts (px y): the bottom of what the label names; the band's top when absent. */
+  from?: number
+}
+
+/** The band under a box plot, in px (y down). */
+export interface UnderBand {
+  /** Just under the box and its fences. */
+  top: number
+  /** The row's bottom edge — the axis line on the lowest row. */
+  floor: number
+  /** A label's box height. */
+  h: number
+  /** Air between labels, and between a label and the band's edges. */
+  gap: number
+  /** How far left / right a label's box may reach. */
+  xMin: number
+  xMax: number
+}
+
+/** Where one label went: its box (centre and size), and its leader to the value (null: right under it). */
+export interface UnderPlace {
+  cx: number
+  cy: number
+  w: number
+  h: number
+  leader: Seg2 | null
+}
+
+/**
+ * Hang a box plot's labels in the band under it (src/ui/dataPlotLinks.ts).
+ *
+ * First as ONE ROW: each label under its value, and labels that would touch
+ * spread apart just enough (a run of crowded labels centred on its values,
+ * order kept, inside xMin…xMax) — a label pushed off its value hangs a little
+ * lower and is joined to it by a hairline leader from `from`. The row is
+ * kept when every label clears `taken` (other rows' labels, the fences
+ * reaching into the band) and no leader crosses a box.
+ *
+ * Otherwise — or when the row would push a label far off its value and the
+ * band has room for more tiers — label by label, in order, the first winning
+ * any crowding: right under its value, else nudged a little (still under
+ * it), else straight down a tier (staggered), else pushed outward (`side`)
+ * on each tier, else inward; leaders as above. A label with no clear place
+ * gets null and is not drawn.
+ *
+ * A place is clear when the label's box (with `gap` of air) meets no box in
+ * `taken` and no leader, and its own leader crosses no box. Every box stays
+ * inside the band. `taken` and `leaders` are added to. Pure; px only.
+ */
+export function placeUnderLabels(
+  items: readonly UnderItem[],
+  band: UnderBand,
+  taken: Rect[] = [],
+  leaders: Seg2[] = [],
+): (UnderPlace | null)[] {
+  const row = spreadRow(items, band, taken, leaders)
+  const tiers = tierCentres(band)
+  if (row && (tiers.length < 2 || row.far <= 0)) return commit(row.places, taken, leaders)
+  // a dry run label by label; kept when it states every label (or there is no row)
+  const t2 = taken.slice()
+  const l2 = leaders.slice()
+  const each = placeEach(items, band, tiers, t2, l2)
+  if (!row || each.every((q) => q !== null)) return commit(each, taken, leaders)
+  return commit(row.places, taken, leaders)
+}
+
+function commit(places: (UnderPlace | null)[], taken: Rect[], leaders: Seg2[]): (UnderPlace | null)[] {
+  for (const q of places) {
+    if (!q) continue
+    taken.push({ x: q.cx - q.w / 2, y: q.cy - q.h / 2, w: q.w, h: q.h })
+    if (q.leader) leaders.push(q.leader)
+  }
+  return places
+}
+
+function tierCentres(band: UnderBand): number[] {
+  const { h, gap } = band
+  const tiers: number[] = []
+  for (let k = 0; k < 6; k++) {
+    const cy = band.top + gap + h / 2 + k * (h + gap)
+    if (cy + h / 2 > band.floor - gap + 1e-6) break
+    tiers.push(cy)
+  }
+  return tiers
+}
+
+const usable = (it: UnderItem, band: UnderBand): boolean =>
+  it.w > 0 && band.xMax - band.xMin >= it.w && Number.isFinite(it.x)
+
+/** Is the box (with air) and its leader clear of everything placed? */
+function isClear(r: Rect, lead: Seg2 | null, gap: number, taken: readonly Rect[], leaders: readonly Seg2[]): boolean {
+  const air = { x: r.x - gap, y: r.y - gap / 2, w: r.w + 2 * gap, h: r.h + gap }
+  if (taken.some((q) => overlaps(q, air))) return false
+  if (leaders.some((s) => segHitsRect(s, air))) return false
+  if (lead && taken.some((q) => segHitsRect(lead, q))) return false
+  return true
+}
+
+/** The leader from a value to its label's box: null when the box is right under the value. */
+function leaderTo(it: UnderItem, r: Rect, band: UnderBand, under: boolean): Seg2 | null {
+  const spans = r.x + 1 <= it.x && it.x <= r.x + r.w - 1
+  if (spans && under) return null
+  const y0 = Math.min(it.from ?? band.top + 1, r.y - 1)
+  // below it: straight down to its top; beside it: to its nearest top corner
+  return spans
+    ? { x0: it.x, y0, x1: it.x, y1: r.y - 1 }
+    : { x0: it.x, y0, x1: it.x < r.x ? r.x + Math.min(2, r.w / 2) : r.x + r.w - Math.min(2, r.w / 2), y1: r.y - 1 }
+}
+
+/** The one-row layout, or null when it does not fit or is not clear. `far`: how far past a label width the worst push is. */
+function spreadRow(
+  items: readonly UnderItem[],
+  band: UnderBand,
+  taken: readonly Rect[],
+  leaders: readonly Seg2[],
+): { places: UnderPlace[]; far: number } | null {
+  const { h, gap, xMin, xMax } = band
+  const room = band.floor - gap - (band.top + gap)
+  if (items.length === 0 || room < h - 1e-6 || !items.every((it) => usable(it, band))) return null
+  const total = items.reduce((a, it) => a + it.w, 0) + gap * (items.length - 1)
+  if (total > xMax - xMin) return null
+  const order = items.map((_, i) => i).sort((a, b) => items[a].x - items[b].x)
+  // runs of touching labels, each centred on its values, merged until none touch
+  let runs = order.map((i) => ({ ids: [i], width: items[i].w, lo: items[i].x - items[i].w / 2 }))
+  for (let guard = 0; guard <= items.length; guard++) {
+    for (const r of runs) r.lo = Math.max(xMin, Math.min(xMax - r.width, r.lo))
+    const k = runs.findIndex((a, j) => j + 1 < runs.length && a.lo + a.width + gap > runs[j + 1].lo)
+    if (k < 0) break
+    const ids = [...runs[k].ids, ...runs[k + 1].ids]
+    let off = 0
+    let sum = 0
+    for (const i of ids) {
+      sum += items[i].x - items[i].w / 2 - off
+      off += items[i].w + gap
+    }
+    runs = [...runs.slice(0, k), { ids, width: off - gap, lo: sum / ids.length }, ...runs.slice(k + 2)]
+  }
+  const cxs: number[] = new Array(items.length)
+  for (const r of runs) {
+    let x = r.lo
+    for (const i of r.ids) {
+      cxs[i] = x + items[i].w / 2
+      x += items[i].w + gap
+    }
+  }
+  const pushed = items.map((it, i) => !(cxs[i] - it.w / 2 + 1 <= it.x && it.x <= cxs[i] + it.w / 2 - 1))
+  // a pushed label hangs a little lower, so its leader reads as one
+  const cy = band.top + gap + h / 2 + (pushed.some(Boolean) ? Math.min(h * 0.6, room - h) : 0)
+  const places: UnderPlace[] = []
+  let far = 0
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i]
+    const r = { x: cxs[i] - it.w / 2, y: cy - h / 2, w: it.w, h }
+    const lead = pushed[i] ? leaderTo(it, r, band, false) : null
+    if (!isClear(r, lead, gap, taken, leaders)) return null
+    far = Math.max(far, Math.abs(cxs[i] - it.x) - it.w)
+    places.push({ cx: cxs[i], cy, w: it.w, h, leader: lead })
+  }
+  return { places, far }
+}
+
+/** Label by label, in order, onto the tiers (see placeUnderLabels). */
+function placeEach(
+  items: readonly UnderItem[],
+  band: UnderBand,
+  tiers: readonly number[],
+  taken: Rect[],
+  leaders: Seg2[],
+): (UnderPlace | null)[] {
+  const { h, gap } = band
+  return items.map((it) => {
+    const w = it.w
+    if (tiers.length === 0 || !usable(it, band)) return null
+    const step = w / 2 + gap
+    const out = it.side === 0 ? [1, -1] : [it.side]
+    const cands: { k: number; s: number }[] = []
+    // under its value: centred, then nudged a little either way
+    cands.push({ k: 0, s: 0 })
+    for (const d of [...out, ...out.map((v) => -v)]) cands.push({ k: 0, s: d * w * 0.3 })
+    // staggered: straight down a tier
+    for (let k = 1; k < tiers.length; k++) cands.push({ k, s: 0 })
+    // pushed outward on each tier, then inward
+    for (const dirs of [out, it.side === 0 ? [] : [-it.side]])
+      tiers.forEach((_, k) => {
+        for (let m = 1; m <= 4; m++) for (const d of dirs) cands.push({ k, s: d * m * step })
+      })
+    for (const { k, s } of cands) {
+      const cx = Math.max(band.xMin + w / 2, Math.min(band.xMax - w / 2, it.x + s))
+      const cy = tiers[k]
+      const r = { x: cx - w / 2, y: cy - h / 2, w, h }
+      const lead = leaderTo(it, r, band, k === 0)
+      if (!isClear(r, lead, gap, taken, leaders)) continue
+      taken.push(r)
+      if (lead) leaders.push(lead)
+      return { cx, cy, w, h, leader: lead }
+    }
+    return null
+  })
+}
 
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
   ctx.beginPath()
@@ -183,6 +582,43 @@ function drawOne(ctx: CanvasRenderingContext2D, f: StatsFigure, toPx: (p: Vec2) 
 
   const placed: Rect[] = []
   const later: (() => void)[] = []
+
+  // ---- the title band's layout (drawn last): it fits the panel at any type
+  // scale (layoutTitle), and nothing else is placed on it
+  const titlePad = 6 + 2 * t
+  // the band ends at the plot's top, or higher where a word of the figure
+  // (a tree's "Draw 1", a table's header) reaches above it
+  let bandBottom = Math.min(pa.y, panel.y + panel.h)
+  for (const p of f.prims) {
+    if (p.k !== 'text' || !p.text || p.under) continue
+    const th = (p.small ? 12 : 15) * t
+    const at = toPx(p.at)
+    const y = p.lift !== undefined ? at.y - p.lift * t - th / 2 : at.y - p.rise * plotH
+    const top = p.align === 'right' ? y + 4 * t : y - th / 2
+    if (top < bandBottom && top > panel.y + 11) bandBottom = top - 1
+  }
+  // a full-size line sits where it always has; a shallow band starts it higher
+  const titleTop = panel.y + Math.max(2, Math.min(7 * t, (bandBottom - panel.y - 13 * t * 1.22) / 2))
+  const title = layoutTitle(
+    f.title.question,
+    f.title.answer,
+    panel.w - 2 * titlePad,
+    // the band down to the plot's top (at least one 9px line)
+    Math.max(11, bandBottom - titleTop - 2),
+    13 * t,
+    Math.max(9, 13 * t * 0.72),
+    (text, px) => {
+      ctx.font = `bold ${labelFont(st.face, px)}`
+      return ctx.measureText(text).width
+    },
+  )
+  const titleBottom = title.lines.length > 0 ? titleTop + title.lines.length * title.lineH : panel.y
+  if (title.lines.length > 0) {
+    placed.push({ x: panel.x + panel.w / 2 - title.width / 2 - 2, y: titleTop, w: title.width + 4, h: titleBottom - titleTop })
+  }
+  const under: { p: Extract<StatPrim, { k: 'text' }>; u: UnderSpec }[] = []
+  /** Every vertical rule (a fence, a whisker cap), which a hung label steps around. */
+  const vbars: Rect[] = []
   const small = labelFont(st.face, 11 * t)
   const font = labelFont(st.face, 13 * t)
   const bold = `bold ${labelFont(st.face, 13 * t)}`
@@ -199,13 +635,19 @@ function drawOne(ctx: CanvasRenderingContext2D, f: StatsFigure, toPx: (p: Vec2) 
     const off = len > 0 ? Math.abs(u.x) * (w / 2) + Math.abs(u.y) * (h / 2) + 6 * t : 0
     let cx = at.x + u.x * off
     let cy = at.y + u.y * off
-    // keep inside the panel
+    // keep inside the panel, under its title
+    const hi = titleBottom + h / 2 + 3
+    const lo = panel.y + panel.h - h / 2 - 3
     cx = Math.max(panel.x + w / 2 + 3, Math.min(panel.x + panel.w - w / 2 - 3, cx))
-    cy = Math.max(panel.y + h / 2 + 3, Math.min(panel.y + panel.h - h / 2 - 3, cy))
-    for (let k = 0; k < 8; k++) {
-      const r = { x: cx - w / 2 - 2, y: cy - h / 2 - 2, w: w + 4, h: h + 4 }
-      if (!placed.some((q) => overlaps(q, r))) break
-      cy -= h + 3
+    cy = Math.max(hi, Math.min(lo, cy))
+    // crowded: step up while there is room under the title, then down
+    const free = (y: number): boolean => !placed.some((q) => overlaps(q, { x: cx - w / 2 - 2, y: y - h / 2 - 2, w: w + 4, h: h + 4 }))
+    if (!free(cy)) {
+      const steps: number[] = []
+      for (let k = 1; k <= 8; k++) steps.push(cy - k * (h + 3))
+      for (let k = 1; k <= 8; k++) steps.push(cy + k * (h + 3))
+      const ok = steps.find((y) => y >= hi - 1e-6 && y <= lo + 1e-6 && free(y))
+      if (ok !== undefined) cy = ok
     }
     placed.push({ x: cx - w / 2 - 2, y: cy - h / 2 - 2, w: w + 4, h: h + 4 })
     roundRect(ctx, cx - w / 2, cy - h / 2, w, h, 4 * t)
@@ -356,9 +798,14 @@ function drawOne(ctx: CanvasRenderingContext2D, f: StatsFigure, toPx: (p: Vec2) 
       case 'curve':
         line(p.pts.map(toPx), inkOf(p.ink, p.color), p.w, p.dash)
         break
-      case 'vline':
-        line([P(p.x, p.y0), P(p.x, p.y1)], inkOf(p.ink, p.color), p.w ?? 1.5, p.dash)
+      case 'vline': {
+        const a = P(p.x, p.y0)
+        const b = P(p.x, p.y1)
+        line([a, b], inkOf(p.ink, p.color), p.w ?? 1.5, p.dash)
+        const half = ((p.w ?? 1.5) * s) / 2 + 0.5
+        vbars.push({ x: a.x - half, y: Math.min(a.y, b.y), w: 2 * half, h: Math.abs(b.y - a.y) })
         break
+      }
       case 'bracket': {
         const l = P(p.x0, p.y)
         const r = P(p.x1, p.y)
@@ -382,19 +829,39 @@ function drawOne(ctx: CanvasRenderingContext2D, f: StatsFigure, toPx: (p: Vec2) 
         break
       }
       case 'text': {
+        if (p.under) {
+          if (p.text) under.push({ p, u: p.under })
+          break
+        }
         const at = toPx(p.at)
-        const y = at.y - p.rise * plotH
+        const th = (p.small ? 12 : 15) * t
+        let y = p.lift !== undefined ? at.y - p.lift * t - th / 2 : at.y - p.rise * plotH
+        // no room above under the ceiling: just inside the bar's top instead
+        if (p.ceil !== undefined && y - th / 2 < P(p.at.x, p.ceil).y + 1) y = p.lift !== undefined ? at.y + p.lift * t + th / 2 : P(p.at.x, p.ceil).y + th / 2 + 1
         const color = inkOf(p.ink, p.color)
         const text = p.text
         const align = p.align ?? 'center'
         later.push(() => {
           if (!text) return
           ctx.font = p.bold ? (p.small ? `bold ${small}` : bold) : p.small ? small : font
+          // a word that would run out of the panel (a set's name on a small
+          // figure) takes smaller type, down to 60%, rather than being cut
+          if (!p.avoid) {
+            const w = ctx.measureText(text).width
+            const l = panel.x + 3
+            const r = panel.x + panel.w - 3
+            const room = align === 'end' || align === 'right' ? at.x - l : align === 'start' ? r - at.x : 2 * Math.min(at.x - l, r - at.x)
+            if (w > room && room > 0) {
+              const px = (p.small ? 11 : 13) * t * Math.max(0.6, room / w)
+              ctx.font = `${p.bold ? 'bold ' : ''}${labelFont(st.face, Math.round(px * 10) / 10)}`
+            }
+          }
           if (p.avoid) {
             const w = ctx.measureText(text).width
-            const h = (p.small ? 12 : 15) * t
+            const h = th
             const x0 = align === 'center' ? at.x - w / 2 : align === 'start' ? at.x : at.x - w
-            const r = { x: x0 - 1, y: y - h / 2, w: w + 2, h }
+            // 'right' hangs from its point (drawn top-aligned 4px below it)
+            const r = { x: x0 - 1, y: align === 'right' ? y + 4 * t - 1 : y - h / 2, w: w + 2, h }
             if (placed.some((q) => overlaps(q, r))) return
             placed.push(r)
           }
@@ -496,28 +963,75 @@ function drawOne(ctx: CanvasRenderingContext2D, f: StatsFigure, toPx: (p: Vec2) 
     ctx.fillText(f.axisLabel, axisR.x, row2)
   }
 
+  // ---- a box plot's labels, hung in the band under it (placeUnderLabels);
+  // first, so the texts that `avoid` crowding step around them
+  const groups = new Map<string, typeof under>()
+  for (const e of under) {
+    const g = groups.get(e.u.group)
+    if (g) g.push(e)
+    else groups.set(e.u.group, [e])
+  }
+  const leaders: Seg2[] = []
+  for (const g of groups.values()) {
+    const top = P(0, g[0].u.top).y
+    const floor = P(0, g[0].u.floor).y
+    // a band too shallow for the type takes smaller type, and below 6.5px none
+    let size = 11 * t
+    let gap = 3 * t
+    const need = size * 1.15 + 2 * gap
+    if (floor - top < need) {
+      const k = Math.max(0, floor - top) / need
+      size *= k
+      gap *= k
+    }
+    if (size < 6.5) continue
+    const face = labelFont(st.face, Math.round(size * 10) / 10)
+    ctx.font = face
+    const items = g.map((e) => ({
+      x: toPx(e.p.at).x,
+      w: ctx.measureText(e.p.text).width,
+      side: e.u.side,
+      from: e.u.from !== undefined ? P(0, e.u.from).y + 1 : undefined,
+    }))
+    const spots = placeUnderLabels(
+      items,
+      { top, floor, h: size * 1.15, gap, xMin: panel.x + 3, xMax: panel.x + panel.w - 3 },
+      [...placed, ...vbars],
+      leaders,
+    )
+    spots.forEach((spot, i) => {
+      if (!spot) return
+      placed.push({ x: spot.cx - spot.w / 2, y: spot.cy - spot.h / 2, w: spot.w, h: spot.h })
+      const color = inkOf(g[i].p.ink, g[i].p.color)
+      if (spot.leader) {
+        const prev = ctx.globalAlpha
+        ctx.globalAlpha = prev * 0.75
+        line([{ x: spot.leader.x0, y: spot.leader.y0 }, { x: spot.leader.x1, y: spot.leader.y1 }], color, 0.9)
+        ctx.globalAlpha = prev
+      }
+      ctx.font = face
+      ctx.fillStyle = color
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(g[i].p.text, spot.cx, spot.cy)
+    })
+  }
+
   for (const l of later) l()
 
   // ---- the title band
-  const q = f.title.question
-  const ans = f.title.answer
-  if (q || ans) {
-    ctx.font = bold
-    const qw = ctx.measureText(q).width
-    const aw = ans ? ctx.measureText(ans).width : 0
-    const cx = panel.x + panel.w / 2
-    const y = panel.y + 15 * t
-    let x = cx - (qw + aw) / 2
-    if (x < panel.x + 6) x = panel.x + 6
-    ctx.textAlign = 'left'
-    ctx.textBaseline = 'middle'
-    ctx.fillStyle = st.mono ? st.theme.axis : st.theme.label
-    ctx.fillText(q, x, y)
-    if (ans) {
-      ctx.fillStyle = st.ink('main')
-      ctx.fillText(ans, x + qw, y)
+  ctx.font = `bold ${labelFont(st.face, title.size)}`
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'middle'
+  title.lines.forEach((runs, i) => {
+    const lw = runs.length ? runs[runs.length - 1].dx + runs[runs.length - 1].w : 0
+    const x = panel.x + panel.w / 2 - lw / 2
+    const y = titleTop + (i + 0.5) * title.lineH
+    for (const r of runs) {
+      ctx.fillStyle = r.answer ? st.ink('main') : st.mono ? st.theme.axis : st.theme.label
+      ctx.fillText(r.text, x + r.dx, y)
     }
-  }
+  })
   ctx.restore()
 }
 
