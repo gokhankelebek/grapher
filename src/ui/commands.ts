@@ -2127,6 +2127,11 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     { id: 'build-motion', note: 'Polar curves r = f(θ)' },
     { id: 'grid-polar' },
   ] },
+  { id: 'pc-4', course: 'AP Precalculus', title: 'Unit 4 · Functions involving parameters, vectors and matrices', entries: [
+    { id: 'build-motion', note: 'Parametric functions: a particle’s position (x(t), y(t)) and its direction of motion' },
+    { id: 'calc-pcalc', note: 'Rates of change dx/dt and dy/dt at an instant' },
+    { id: 'build-conic', note: 'Conic sections, implicitly defined and parametrized' },
+  ] },
   // ---------------------------------------------------- NC Math 3
   { id: 'm3-functions', course: 'NC Math 3', title: 'Functions, inverses and transformations', entries: [
     { id: 'build-transform' },

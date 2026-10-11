@@ -221,11 +221,11 @@ describe('the registry', () => {
     }
   })
 
-  it('the help sheet covers AP Calculus units 1–10 and AP Precalculus units 1–3', () => {
+  it('the help sheet covers AP Calculus units 1–10 and AP Precalculus units 1–4', () => {
     const titles = HELP_SECTIONS.map((s) => s.title)
     for (let u = 1; u <= 10; u++) expect(titles.some((t) => t.startsWith(`Unit ${u} ·`) && t.length > 0)).toBe(true)
     const pc = HELP_SECTIONS.filter((s) => s.course === 'AP Precalculus').map((s) => s.title)
-    expect(pc.map((t) => t.slice(0, 6))).toEqual(['Unit 1', 'Unit 2', 'Unit 3'])
+    expect(pc.map((t) => t.slice(0, 6))).toEqual(['Unit 1', 'Unit 2', 'Unit 3', 'Unit 4'])
     expect(HELP_SECTIONS.some((s) => s.course === 'NC Math 3')).toBe(true)
     for (const course of ['NC Math 1', 'NC Math 2']) {
       const n = HELP_SECTIONS.filter((s) => s.course === course).length

@@ -85,7 +85,8 @@ import { newProb } from '../core/probPersist'
 import type { ProbTable, ProbTree, ProbVenn, ProbView } from '../core/probPersist'
 import { newDataPlot } from '../ui/dataPlotLinks'
 import { probCard, settleProb } from '../ui/probLinks'
-import { statsBox } from '../ui/statsLinks'
+import { newSim, simCard, statsBox } from '../ui/statsLinks'
+import type { BoardSim } from '../core/statsPersist'
 import { compileShapes, namedPointMap } from '../ui/shapeLinks'
 import { imageSrc, shapeByName } from '../ui/shapeXform'
 import { dataBox } from '../ui/dataLinks'
@@ -248,6 +249,13 @@ export class ExampleBoard {
   piAxis(): this {
     this.requireGraph('π on the x-axis')
     this.axisX = 'pi'
+    return this
+  }
+
+  /** The x axis in decimals where the board would suggest π (a unit circle read as coordinates). */
+  decimalAxis(): this {
+    this.requireGraph('a decimal x-axis')
+    this.axisX = 'decimal'
     return this
   }
 
@@ -1004,6 +1012,16 @@ export class ExampleBoard {
     if (view === 'venn' && card.venn.error) throw new Error(`example: the Venn diagram cannot be read: ${card.venn.error}`)
     if (view === 'tree' && card.tree.problems.length > 0) throw new Error(`example: the tree cannot be read: ${card.tree.problems.join('; ')}`)
     return this.addStat(p)
+  }
+
+  /**
+   * Build ▾ → Simulation (S-IC.4–5): the card's settings over newSim's, with
+   * a FIXED seed so the example draws the same samples every time it opens.
+   */
+  simulation(o: Partial<Omit<BoardSim, 'id' | 'type' | 'seed'>> & { seed: number }): string {
+    const s: BoardSim = { ...newSim(this.id(), o.seed), ...o }
+    if (simCard(s).error) throw new Error(`example: the simulation cannot run: ${simCard(s).error}`)
+    return this.addStat(s)
   }
 
   // ------------------------------------------------------------ the number line

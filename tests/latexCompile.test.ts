@@ -20,7 +20,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { execFileSync, spawn } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { cpus, homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { CorpusTex } from './latexCorpus'
@@ -45,7 +45,9 @@ function findPdflatex(): string | null {
 }
 
 const PDFLATEX = findPdflatex()
-const OUT = process.env.LATEX_OUT ?? join(tmpdir(), 'grapher-latex')
+// Each run gets its own folder unless LATEX_OUT names one: parallel runs
+// (several agents, or vitest workers) must not wipe each other's files.
+const OUT = process.env.LATEX_OUT ?? mkdtempSync(join(tmpdir(), 'grapher-latex-'))
 
 /** One compiled document: its figures, in order, and what the log said about each. */
 interface Finding {

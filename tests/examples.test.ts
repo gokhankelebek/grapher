@@ -485,7 +485,7 @@ describe('the gallery', () => {
     expect(g[2].units.map((u) => u.id)).toEqual(['m1-linexp', 'm1-quad', 'm1-systems', 'm1-functions', 'm1-coord', 'm1-stats', 'm1-bivariate'])
     expect(g[3].units.map((u) => u.id)).toEqual(['m2-quad', 'm2-radical', 'm2-functions', 'm2-xform', 'm2-trig', 'm2-prob'])
     // triangle centres are NC.M3.G-CO.10 in the 2016 NC SCOS: a Math 3 unit
-    expect(g[4].units.map((u) => u.id)).toEqual(['m3-ineq', 'm3-functions', 'm3-poly', 'm3-explog', 'm3-geo', 'm3-centres'])
+    expect(g[4].units.map((u) => u.id)).toEqual(['m3-ineq', 'm3-functions', 'm3-poly', 'm3-explog', 'm3-geo', 'm3-centres', 'm3-trig', 'm3-stats'])
     expect(g.flatMap((x) => x.units.flatMap((u) => u.examples)).length).toBe(EXAMPLE_DEFS.length)
   })
 
@@ -501,7 +501,14 @@ describe('the gallery', () => {
   })
 
   it('the help sheet’s units link to their examples', () => {
-    expect(examplesForSection('calc-5').map((d) => d.id)).toEqual(['calc-u5-graph-of-fprime', 'calc-u5-mvt', 'calc-u8-table-velocity'])
+    expect(examplesForSection('calc-5').map((d) => d.id)).toEqual([
+      'calc-u5-graph-of-fprime',
+      'calc-u5-mvt',
+      'calc-u8-table-velocity',
+      'calc-u3-implicit-ellipse',
+      'calc-u4-particle-motion',
+      'calc-u5-candidates',
+    ])
     for (const s of ['calc-1', 'calc-2', 'calc-3', 'calc-4', 'calc-5', 'calc-6', 'calc-7', 'calc-8', 'calc-9', 'calc-10', 'pc-1', 'pc-2', 'pc-3']) {
       expect(examplesForSection(s).length, s).toBeGreaterThan(0)
     }
